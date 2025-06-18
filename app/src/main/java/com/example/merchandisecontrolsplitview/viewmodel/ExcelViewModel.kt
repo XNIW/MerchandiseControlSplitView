@@ -80,8 +80,12 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             isLoading.value = true
             loadError.value = null
             try {
-                val data = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
-                excelData.clear(); excelData.addAll(data)
+                val (header, dataRows) = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
+                excelData.clear()
+                if (header.isNotEmpty()) {
+                    excelData.add(header)   // Prima riga: intestazione
+                    excelData.addAll(dataRows)  // Dati: dalla seconda riga in poi
+                }
                 generated.value = false
                 initPreGenerateState()
             } catch (e: Exception) {
@@ -206,13 +210,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Salva il file Excel su URI. */
-    fun saveFile(context: Context, uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            saveExcelFileInternal(context, uri, excelData, editableValues, completeStates)
-        }
-    }
-
     /**
      * Resetta completamente lo stato del ViewModel per prepararlo a un nuovo file.
      */
@@ -226,14 +223,18 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         loadError.value = null
         currentIndex = null
     }
+
+    suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
+        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates)
+    }
 }
 
-// ——— Utility private ———
-// (Il resto del file rimane invariato)
-
-private fun readAndAnalyzeExcel(context: Context, uri: Uri): List<List<String>> {
-    data class RowInfo(val values: List<String>, val nonEmptyCount: Int)
-    val rows = mutableListOf<RowInfo>()
+private fun readAndAnalyzeExcel(
+    context: Context,
+    uri: Uri
+): Pair<List<String>, List<List<String>>> {
+    // 1) Lettura grezza di tutte le righe
+    val rows = mutableListOf<List<String>>()
     context.contentResolver.openInputStream(uri)?.use { stream ->
         val wb = WorkbookFactory.create(stream)
         val sheet = wb.getSheetAt(0)
@@ -245,27 +246,153 @@ private fun readAndAnalyzeExcel(context: Context, uri: Uri): List<List<String>> 
                 val txt = when {
                     cell == null -> ""
                     cell.cellType == CellType.STRING  -> cell.stringCellValue ?: ""
-                    cell.cellType == CellType.NUMERIC -> cell.numericCellValue.toString()
+                    cell.cellType == CellType.NUMERIC -> {
+                        val n = cell.numericCellValue
+                        if (n == n.toLong().toDouble())
+                            n.toLong().toString()
+                        else
+                            n.toBigDecimal().toPlainString()
+                    }
                     cell.cellType == CellType.BOOLEAN -> cell.booleanCellValue.toString()
-                    else                               -> ""
+                    else -> ""
                 }.trim()
                 temp.add(txt)
             }
             val trimmed = temp.dropLastWhile { it.isEmpty() }
             if (!trimmed.all { it.isEmpty() }) {
-                rows.add(RowInfo(trimmed, trimmed.count { it.isNotEmpty() }))
+                rows.add(trimmed)
             }
         }
         wb.close()
     }
-    if (rows.isEmpty()) return emptyList()
-    val freq = rows.groupingBy { it.nonEmptyCount }.eachCount()
-    val mode = freq.maxByOrNull { it.value }!!.key
-    val idx  = rows.indexOfFirst { it.nonEmptyCount == mode }
-    return if (idx >= 0)
-        rows.drop(idx).filter { it.nonEmptyCount == mode }.map { it.values }
-    else
-        rows.filter { it.nonEmptyCount == mode }.map { it.values }
+
+    // 2) Trova la prima riga "intestazione dati"
+    var dataRowIdx = -1
+    for ((idx, row) in rows.withIndex()) {
+        val numericCount = row.count { it.toLongOrNull() != null }
+        val textCount = row.count { it.isNotBlank() && it.toLongOrNull() == null }
+        if (numericCount >= 3 && textCount >= 1) {
+            dataRowIdx = idx
+            break
+        }
+    }
+    if (dataRowIdx <= 0 || dataRowIdx >= rows.size) {
+        return Pair(emptyList(), emptyList())
+    }
+
+    // 3) Intestazione (riga sopra dataRowIdx) e dati utili
+    val header = rows[dataRowIdx - 1].toMutableList()
+    val dataRows = rows
+        .drop(dataRowIdx)
+        .filter { row ->
+            val numericCount = row.count { it.toLongOrNull() != null }
+            val textCount = row.count { it.isNotBlank() && it.toLongOrNull() == null }
+            numericCount >= 3 && textCount >= 1
+        }
+    if (dataRows.isEmpty()) return Pair(header, dataRows)
+
+    val colCount = header.size
+    val threshold = (dataRows.size * 0.5).toInt()
+
+    // 4) Rilevazione automatica di barcode, quantità, prezzo, totale, nome, codice
+    var barcodeIdx: Int? = null
+    var qtyIdx: Int? = null
+    var priceUnitIdx: Int? = null
+    var totalIdx: Int? = null
+    var nameIdx: Int? = null
+    var codeIdx: Int? = null
+
+    // — barcode
+    for (col in 0 until colCount) {
+        val matches = dataRows.count { row ->
+            val v = row.getOrNull(col) ?: ""
+            (v.length in listOf(8,12,13) && v.all(Char::isDigit))
+        }
+        if (matches >= threshold) {
+            barcodeIdx = col; break
+        }
+    }
+    barcodeIdx?.takeIf { it < header.size }?.let { header[it] = "条码" }
+
+    // — quantità
+    for (col in 0 until colCount) {
+        if (col == barcodeIdx) continue
+        val nums = dataRows.mapNotNull { it.getOrNull(col)?.toLongOrNull() }
+        if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
+            qtyIdx = col; break
+        }
+    }
+    qtyIdx?.takeIf { it < header.size }?.let { header[it] = "数量" }
+
+    // — prezzo unitario
+    for (col in 0 until colCount) {
+        if (col == barcodeIdx || col == qtyIdx) continue
+        val nums = dataRows.mapNotNull { it.getOrNull(col)?.toLongOrNull() }
+        val qtyAvg = qtyIdx?.let { idx -> dataRows.mapNotNull { it.getOrNull(idx)?.toLongOrNull() }.average() } ?: 0.0
+        if (
+            nums.isNotEmpty() &&
+            nums.all { it > 0 } &&
+            nums.count { it % 10L == 0L } >= nums.size * 0.7 &&
+            nums.average() > qtyAvg &&
+            nums.size >= dataRows.size * 0.7
+        ) {
+            priceUnitIdx = col; break
+        }
+    }
+    priceUnitIdx?.takeIf { it < header.size }?.let { header[it] = "进价" }
+
+    // — totale
+    if (qtyIdx != null && priceUnitIdx != null) {
+        for (col in 0 until colCount) {
+            if (col in listOf(barcodeIdx, qtyIdx, priceUnitIdx)) continue
+            val matches = dataRows.count { row ->
+                val q = row.getOrNull(qtyIdx)?.toLongOrNull() ?: return@count false
+                val p = row.getOrNull(priceUnitIdx)?.toLongOrNull() ?: return@count false
+                val tot = row.getOrNull(col)?.toLongOrNull() ?: return@count false
+                tot in ((q * p) * 0.98).toLong()..((q * p) * 1.02).toLong()
+            }
+            if (matches >= dataRows.size * 0.7) {
+                totalIdx = col; break
+            }
+        }
+    }
+    totalIdx?.takeIf { it < header.size }?.let { header[it] = "总价" }
+
+    // — nome prodotto
+    for (col in 0 until colCount) {
+        val matches = dataRows.count { row ->
+            val v = row.getOrNull(col) ?: ""
+            v.length >= 10 && v.any { !it.isDigit() }
+        }
+        if (matches >= dataRows.size * 0.5) {
+            nameIdx = col; break
+        }
+    }
+    nameIdx?.takeIf { it < header.size }?.let { header[it] = "品名" }
+
+    // — codice prodotto
+    for (col in 0 until colCount) {
+        if (col in listOf(barcodeIdx, qtyIdx, priceUnitIdx, totalIdx, nameIdx)) continue
+        val matches = dataRows.count { row ->
+            val v = row.getOrNull(col) ?: ""
+            v.length in 4..12 && (v.any { it.isDigit() } || v.any { it.isLetter() })
+        }
+        if (matches >= dataRows.size * 0.5) {
+            codeIdx = col; break
+        }
+    }
+    codeIdx?.takeIf { it < header.size }?.let { header[it] = "货号" }
+
+    // 5) Filtra via le colonne completamente vuote sui dati
+    val nonEmptyCols = header.indices.filter { col ->
+        dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+    }
+    val filteredHeader = nonEmptyCols.map { header[it] }
+    val filteredDataRows = dataRows.map { row ->
+        nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" }
+    }
+
+    return Pair(filteredHeader, filteredDataRows)
 }
 
 private fun saveExcelFileInternal(

@@ -36,6 +36,7 @@ import java.time.format.DateTimeFormatter
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity // se hai questa classe nel tuo package
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
+import kotlinx.coroutines.launch
 
 
 /**
@@ -48,6 +49,8 @@ fun GeneratedScreen(
     onBackToStart: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     // ViewModel state
     val excelData by remember { derivedStateOf { viewModel.excelData } }
     val selectedColumns by remember { derivedStateOf { viewModel.selectedColumns } }
@@ -80,13 +83,14 @@ fun GeneratedScreen(
         } ?: Toast.makeText(context, "Nessun risultato dallo scanner", Toast.LENGTH_SHORT).show()
     }
 
-    // Save dialog
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ) { uri ->
-        uri?.let {
-            viewModel.saveFile(context, it)
-            onBackToStart()
+        uri?.let { targetUri ->
+            scope.launch {                      // 2) lancio la coroutine qui
+                viewModel.saveFileSuspend(context, targetUri)
+                onBackToStart()                 // 3) navigo indietro **dopo** il salvataggio
+            }
         }
     }
 
@@ -248,7 +252,7 @@ fun GeneratedScreen(
                     }
                 },
                 confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text("Completo") } },
-                dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Annulla") } }
+                dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Conferma") } }
             )
         }
     }
