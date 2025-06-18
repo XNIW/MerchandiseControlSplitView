@@ -1,0 +1,319 @@
+package com.example.merchandisecontrolsplitview.viewmodel
+
+import android.app.Application
+import android.content.Context
+import android.net.Uri
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit // IMPORT AGGIUNTO per SharedPreferences.edit
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.ss.usermodel.FillPatternType
+import org.apache.poi.ss.usermodel.IndexedColors
+import org.apache.poi.ss.usermodel.WorkbookFactory
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+/** Un singolo record di cronologia. */
+data class HistoryEntry(
+    val id: String,                // es. "2025-06-17_16:59:07.xlsx"
+    val timestamp: String,
+    val data: List<List<String>>,
+    val editable: List<List<String>>,
+    val complete: List<Boolean>
+)
+
+/**
+ * ViewModel per gestione griglia Excel e cronologia persistente.
+ */
+class ExcelViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs = application.getSharedPreferences("history_prefs", Context.MODE_PRIVATE)
+    private val gson  = Gson()
+
+    // --- Stato griglia ---
+    val excelData       = mutableStateListOf<List<String>>()
+    val selectedColumns = mutableStateListOf<Boolean>()
+    val editableValues  = mutableStateListOf<MutableList<MutableState<String>>>()
+    val completeStates  = mutableStateListOf<Boolean>()
+
+    // --- Flag UI ---
+    val generated = mutableStateOf(false)
+    val isLoading = mutableStateOf(false)
+    val loadError = mutableStateOf<String?>(null)
+
+    // --- Cronologia persistente ---
+    val historyEntries  = mutableStateListOf<HistoryEntry>()
+    private var currentIndex: Int? = null
+
+    init {
+        loadHistoryFromPrefs()
+    }
+
+    private fun loadHistoryFromPrefs() {
+        prefs.getString("history_list", null)?.let { json ->
+            val type = object : TypeToken<List<HistoryEntry>>() {}.type
+            val list: List<HistoryEntry> = gson.fromJson(json, type)
+            historyEntries.clear()
+            historyEntries.addAll(list)
+        }
+    }
+
+    private fun saveHistoryToPrefs() {
+        val json = gson.toJson(historyEntries.toList())
+        // MODIFICATO: Utilizzo della funzione KTX "edit"
+        prefs.edit {
+            putString("history_list", json)
+        }
+    }
+
+    /** Carica e analizza un file Excel da URI. */
+    fun loadFromUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            isLoading.value = true
+            loadError.value = null
+            try {
+                val data = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
+                excelData.clear(); excelData.addAll(data)
+                generated.value = false
+                initPreGenerateState()
+            } catch (e: Exception) {
+                loadError.value = "Errore nel leggere il file Excel"
+            }
+            isLoading.value = false
+        }
+    }
+
+    private fun initPreGenerateState() {
+        selectedColumns.clear()
+        excelData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+        editableValues.clear()
+        excelData.forEach { _ -> editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
+        completeStates.clear()
+        repeat(excelData.size) { completeStates.add(false) }
+    }
+
+    /**
+     * Filtra colonne, aggiunge Quantità/Prezzo/Completo,
+     * registra un entry in cronologia e persiste.
+     */
+    // MODIFICATO: Rimosso il parametro "context" non utilizzato
+    fun generateFiltered() {
+        val filtered = excelData.mapIndexed { idx, row ->
+            if (idx == 0) {
+                row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
+                    .plus(listOf("Quantità", "Prezzo", "Completo"))
+            } else {
+                row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
+                    .plus(listOf(
+                        editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(),
+                        editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(),
+                        ""
+                    ))
+            }
+        }
+        excelData.clear(); excelData.addAll(filtered)
+
+        // Ricostruisco valori editabili
+        editableValues.clear()
+        editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        filtered.drop(1).forEach { row ->
+            val q = row.getOrNull(row.size - 3) ?: ""
+            val p = row.getOrNull(row.size - 2) ?: ""
+            editableValues.add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
+        }
+
+        // Reset complete e colonne
+        completeStates.clear(); repeat(filtered.size) { completeStates.add(false) }
+        selectedColumns.clear(); filtered.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+
+        generated.value = true
+        addHistoryEntry()
+        saveHistoryToPrefs()
+    }
+
+    /** Aggiunge un nuovo entry con secondi e persiste. */
+    // MODIFICATO: La funzione è ora privata
+    private fun addHistoryEntry() {
+        val now   = LocalDateTime.now()
+        val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
+        val id    = "$stamp.xlsx"
+        val entry = HistoryEntry(
+            id, stamp,
+            excelData.map { it.toList() },
+            editableValues.map { row -> row.map { it.value } },
+            completeStates.toList()
+        )
+        historyEntries.add(0, entry)
+        currentIndex = 0
+    }
+
+    /**
+     * Rinomina un entry di cronologia e persiste.
+     */
+    fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
+        val idx = historyEntries.indexOfFirst { it.id == entry.id }
+        if (idx >= 0) {
+            val old = historyEntries[idx]
+            historyEntries[idx] = old.copy(id = newName)
+            saveHistoryToPrefs()
+        }
+    }
+
+    /**
+     * Elimina un entry di cronologia e persiste.
+     */
+    fun deleteHistoryEntry(entry: HistoryEntry) {
+        historyEntries.remove(entry)
+        saveHistoryToPrefs()
+    }
+
+    /**
+     * Aggiorna l’entry corrente di cronologia con lo stato attuale della griglia.
+     */
+    fun updateHistoryEntry() {
+        currentIndex?.takeIf { it in historyEntries.indices }?.let { idx ->
+            val e = historyEntries[idx]
+            historyEntries[idx] = e.copy(
+                data     = excelData.map { it.toList() },
+                editable = editableValues.map { row -> row.map { it.value } },
+                complete = completeStates.toList()
+            )
+            saveHistoryToPrefs()
+        }
+    }
+
+    /**
+     * Carica uno HistoryEntry senza modificarne l’ordine,
+     * memorizza l’indice per update futuri e ripristina stato.
+     */
+    fun loadHistoryEntry(entry: HistoryEntry) {
+        val idx = historyEntries.indexOfFirst { it.id == entry.id }
+        if (idx >= 0) {
+            currentIndex = idx
+            excelData.clear(); excelData.addAll(entry.data)
+            selectedColumns.clear(); excelData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+            editableValues.clear(); entry.editable.forEach { row -> editableValues.add(row.map { mutableStateOf(it) }.toMutableList()) }
+            completeStates.clear(); completeStates.addAll(entry.complete)
+            generated.value = true
+        }
+    }
+
+    /** Salva il file Excel su URI. */
+    fun saveFile(context: Context, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            saveExcelFileInternal(context, uri, excelData, editableValues, completeStates)
+        }
+    }
+
+    /**
+     * Resetta completamente lo stato del ViewModel per prepararlo a un nuovo file.
+     */
+    fun resetState() {
+        excelData.clear()
+        selectedColumns.clear()
+        editableValues.clear()
+        completeStates.clear()
+        generated.value = false
+        isLoading.value = false
+        loadError.value = null
+        currentIndex = null
+    }
+}
+
+// ——— Utility private ———
+// (Il resto del file rimane invariato)
+
+private fun readAndAnalyzeExcel(context: Context, uri: Uri): List<List<String>> {
+    data class RowInfo(val values: List<String>, val nonEmptyCount: Int)
+    val rows = mutableListOf<RowInfo>()
+    context.contentResolver.openInputStream(uri)?.use { stream ->
+        val wb = WorkbookFactory.create(stream)
+        val sheet = wb.getSheetAt(0)
+        sheet.forEach { row ->
+            val temp = mutableListOf<String>()
+            val last = row.lastCellNum.toInt()
+            for (i in 0 until last) {
+                val cell = row.getCell(i)
+                val txt = when {
+                    cell == null -> ""
+                    cell.cellType == CellType.STRING  -> cell.stringCellValue ?: ""
+                    cell.cellType == CellType.NUMERIC -> cell.numericCellValue.toString()
+                    cell.cellType == CellType.BOOLEAN -> cell.booleanCellValue.toString()
+                    else                               -> ""
+                }.trim()
+                temp.add(txt)
+            }
+            val trimmed = temp.dropLastWhile { it.isEmpty() }
+            if (!trimmed.all { it.isEmpty() }) {
+                rows.add(RowInfo(trimmed, trimmed.count { it.isNotEmpty() }))
+            }
+        }
+        wb.close()
+    }
+    if (rows.isEmpty()) return emptyList()
+    val freq = rows.groupingBy { it.nonEmptyCount }.eachCount()
+    val mode = freq.maxByOrNull { it.value }!!.key
+    val idx  = rows.indexOfFirst { it.nonEmptyCount == mode }
+    return if (idx >= 0)
+        rows.drop(idx).filter { it.nonEmptyCount == mode }.map { it.values }
+    else
+        rows.filter { it.nonEmptyCount == mode }.map { it.values }
+}
+
+private fun saveExcelFileInternal(
+    context: Context,
+    uri: Uri,
+    data: List<List<String>>,
+    editable: List<List<MutableState<String>>>,
+    complete: List<Boolean>
+) {
+    val wb = XSSFWorkbook()
+    val sheet = wb.createSheet("Export")
+    val styleComplete = wb.createCellStyle().apply {
+        fillForegroundColor = IndexedColors.LIGHT_GREEN.index
+        fillPattern         = FillPatternType.SOLID_FOREGROUND
+    }
+    val styleFilled = wb.createCellStyle().apply {
+        fillForegroundColor = IndexedColors.LIGHT_YELLOW.index
+        fillPattern         = FillPatternType.SOLID_FOREGROUND
+    }
+
+    // Header
+    val headerRow = sheet.createRow(0)
+    data.firstOrNull()?.forEachIndexed { ci, name ->
+        headerRow.createCell(ci).setCellValue(name)
+    }
+
+    // Data rows
+    data.drop(1).forEachIndexed { ri, row ->
+        val excelRow = sheet.createRow(ri + 1)
+        row.forEachIndexed { ci, txt ->
+            val cell = excelRow.createCell(ci)
+            when (ci) {
+                row.size - 3, row.size - 2 ->
+                    cell.setCellValue(editable[ri + 1][ci - (row.size - 3)].value)
+                else ->
+                    cell.setCellValue(txt)
+            }
+            when {
+                complete.getOrNull(ri + 1) == true ->
+                    cell.cellStyle = styleComplete
+                editable.getOrNull(ri + 1)
+                    ?.let { it[0].value.isNotEmpty() && it[1].value.isNotEmpty() } == true
+                        && ci < row.size - 1 ->
+                    cell.cellStyle = styleFilled
+            }
+        }
+    }
+
+    context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
+    wb.close()
+}
