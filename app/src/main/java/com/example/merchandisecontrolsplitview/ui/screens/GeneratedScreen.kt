@@ -77,6 +77,19 @@ fun GeneratedScreen(
     var calcResult by remember { mutableStateOf("") }
     var calcRowIndex by remember { mutableIntStateOf(-1) }
 
+    // PRIORITÀ BACKHANDLER — SOLO UNO ATTIVO ALLA VOLTA
+    when {
+        showCalcDialog && calcRowIndex == infoRowIndex -> {
+            BackHandler { showCalcDialog = false }
+        }
+        showInfoDialog && infoRowIndex in excelData.indices -> {
+            BackHandler { showInfoDialog = false }
+        }
+        else -> {
+            BackHandler { onBackToStart() }
+        }
+    }
+
     // Scanner
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
@@ -104,9 +117,6 @@ fun GeneratedScreen(
             }
         }
     }
-
-    // Override back
-    BackHandler { onBackToStart() }
 
     // Manual search
     fun performSearch() {
@@ -225,6 +235,7 @@ fun GeneratedScreen(
 
         // Info dialog (quantità/prezzo)
         if (showInfoDialog && infoRowIndex in excelData.indices) {
+
             val header = excelData.first()
             val row = excelData[infoRowIndex]
             val qtyReq = remember { FocusRequester() }
@@ -233,7 +244,7 @@ fun GeneratedScreen(
                 if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
             }
             AlertDialog(
-                onDismissRequest = {},
+                onDismissRequest = {showInfoDialog = false},
                 title = { Text("Informazioni riga") },
                 text = {
                     Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
