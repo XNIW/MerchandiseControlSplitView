@@ -46,7 +46,7 @@ fun AppNavGraph() {
             PreGenerateScreen(
                 viewModel = viewModel,
                 onGenerate = {
-                    viewModel.generateFilteredWithOldPrices(context)
+                    viewModel.generateFilteredWithOldPrices()
                     navController.navigate(Screen.Generated.route)
                 },
                 onBack = {

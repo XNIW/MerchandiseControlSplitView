@@ -90,12 +90,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // CSV invece di Excel: molto più semplice e leggero!
-    private fun readProductsFromExcel(context: Context, uri: Uri): List<Product> {
-        // Qui puoi implementare la lettura del CSV/Excel: vuoi un esempio funzionante per CSV?
-        return listOf() // TODO: Implementa!
-    }
-
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
         // Qui puoi implementare la scrittura su CSV/Excel: vuoi un esempio funzionante per CSV?
     }

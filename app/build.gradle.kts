@@ -41,7 +41,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.room:room-paging:2.6.1")
+
     // BOM
     implementation(platform(libs.androidx.compose.bom))
 
@@ -69,6 +69,8 @@ dependencies {
     // Room & Paging
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.paging.runtime.ktx)
     implementation(libs.androidx.paging.compose)

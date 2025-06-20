@@ -106,14 +106,14 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         repeat(excelData.size) { completeStates.add(false) }
     }
 
-    fun generateFilteredWithOldPrices(context: Context) {
+    fun generateFilteredWithOldPrices() {
         viewModelScope.launch {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
                     // HEADER: inserisci le nuove colonne prima di "Quantità", "Prezzo", "Completo"
-                    val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
-                    val beforeEditable = original
-                    beforeEditable + listOf("oldPurchasePrice", "oldRetailPrice", "Quantità", "Prezzo", "Completo")
+                    // BLOCCO CORRETTO
+                    row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
+                            listOf("oldPurchasePrice", "oldRetailPrice", "Quantità", "Prezzo", "Completo")
                 } else {
                     // Trova il barcode
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }

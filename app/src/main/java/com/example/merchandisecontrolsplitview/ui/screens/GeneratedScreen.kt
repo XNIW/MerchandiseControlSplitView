@@ -39,6 +39,10 @@ import com.example.merchandisecontrolsplitview.PortraitCaptureActivity // se hai
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import java.util.Locale
 
 
 /**
@@ -67,6 +71,11 @@ fun GeneratedScreen(
     var showInfoDialog by remember { mutableStateOf(false) }
     var infoRowIndex by remember { mutableIntStateOf(-1) }
     var infoDialogFocusField by remember { mutableIntStateOf(0) }
+
+    var showCalcDialog by remember { mutableStateOf(false) }
+    var calcInput by remember { mutableStateOf("") }
+    var calcResult by remember { mutableStateOf("") }
+    var calcRowIndex by remember { mutableIntStateOf(-1) }
 
     // Scanner
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -229,48 +238,82 @@ fun GeneratedScreen(
                 text = {
                     Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
                         header.forEachIndexed { ci, name ->
-                            if (name == "Quantità" || name == "Prezzo") {
-                                val idx = if (name == "Quantità") 0 else 1
-                                val req = if (idx == 0) qtyReq else priceReq
-                                var tf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][idx].value, TextRange(editableValues[infoRowIndex][idx].value.length))) }
-                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    TextField(
-                                        value = tf,
-                                        onValueChange = { nv -> tf = nv; editableValues[infoRowIndex][idx].value = nv.text; viewModel.updateHistoryEntry() },
-                                        singleLine = true,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onNext = { if (idx == 0) priceReq.requestFocus() }, onDone = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }),
-                                        modifier = Modifier.weight(1f).height(48.dp).border(1.dp, Color.Gray, RoundedCornerShape(4.dp)).clip(RoundedCornerShape(4.dp)).focusRequester(req)
-                                    )
+                            // BLOCCO CORRETTO CON 'when'
+                            when (name) {
+                                "Quantità", "Prezzo" -> {
+                                    val idx = if (name == "Quantità") 0 else 1
+                                    val req = if (idx == 0) qtyReq else priceReq
+                                    var tf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][idx].value, TextRange(editableValues[infoRowIndex][idx].value.length))) }
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        TextField(
+                                            value = tf,
+                                            onValueChange = { nv -> tf = nv; editableValues[infoRowIndex][idx].value = nv.text; viewModel.updateHistoryEntry() },
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done),
+                                            keyboardActions = KeyboardActions(onNext = { if (idx == 0) priceReq.requestFocus() }, onDone = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }),
+                                            modifier = Modifier.weight(1f).height(48.dp).border(1.dp, Color.Gray, RoundedCornerShape(4.dp)).clip(RoundedCornerShape(4.dp)).focusRequester(req)
+                                        )
+                                    }
                                 }
-                            } else {
-                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                    Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    val value = row.getOrNull(ci) ?: ""
-                                    if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                "purchasePrice" -> {
+                                    val idx = header.indexOf("purchasePrice")
+                                    val value = row.getOrNull(idx) ?: ""
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         Text(
                                             value,
-                                            Modifier.weight(1f)
+                                            Modifier
+                                                .weight(1f)
                                                 .background(
-                                                    if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
+                                                    MaterialTheme.colorScheme.surfaceVariant,
                                                     RoundedCornerShape(4.dp)
                                                 )
                                                 .padding(horizontal = 8.dp, vertical = 2.dp),
                                             style = MaterialTheme.typography.bodyMedium.copy(
-                                                color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
                                             )
                                         )
-                                    } else {
-                                        Text(
-                                            value,
-                                            Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
+                                        IconButton(
+                                            onClick = {
+                                                calcInput = value
+                                                calcResult = value
+                                                calcRowIndex = infoRowIndex
+                                                showCalcDialog = true
+                                            }
+                                        ) {
+                                            Icon(Icons.Filled.Calculate, contentDescription = "Calcola nuovo valore")
+                                        }
                                     }
                                 }
-
+                                else -> {
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        val value = row.getOrNull(ci) ?: ""
+                                        if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                            Text(
+                                                value,
+                                                Modifier.weight(1f)
+                                                    .background(
+                                                        if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
+                                                        RoundedCornerShape(4.dp)
+                                                    )
+                                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                    fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            )
+                                        } else {
+                                            Text(
+                                                value,
+                                                Modifier.weight(1f),
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -279,5 +322,230 @@ fun GeneratedScreen(
                 dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Conferma") } }
             )
         }
+
+        if (showCalcDialog && calcRowIndex == infoRowIndex) {
+            CalculatorDialog(
+                value = calcInput,
+                onValueChange = { calcInput = it },
+                onResult = { res ->
+                    // Aggiorna la cella della purchasePrice SOLO per questa riga
+                    val idx = viewModel.excelData.first().indexOf("purchasePrice")
+                    if (idx > -1) {
+                        viewModel.excelData[infoRowIndex] =
+                            viewModel.excelData[infoRowIndex].toMutableList().also { it[idx] = formatDecimal(res) }
+                        viewModel.updateHistoryEntry()
+                    }
+                },
+                onDismiss = { showCalcDialog = false }
+            )
+        }
     }
 }
+
+
+fun evalSimpleExpr(expr: String): Double {
+    val clean = expr.replace(",", ".").replace(" ", "")
+    return object : Any() {
+        var pos = -1; var ch = 0
+        fun nextChar() { ch = if (++pos < clean.length) clean[pos].code else -1 }
+        fun eat(charToEat: Int): Boolean {
+            while (ch == ' '.code) nextChar()
+            if (ch == charToEat) { nextChar(); return true }
+            return false
+        }
+        fun parse(): Double {
+            nextChar()
+            val x = parseExpression()
+            if (pos < clean.length) throw RuntimeException("Unexpected: " + clean[pos])
+            return x
+        }
+        fun parseExpression(): Double {
+            var x = parseTerm()
+            while (true) {
+                when {
+                    eat('+'.code) -> x += parseTerm()
+                    eat('-'.code) -> x -= parseTerm()
+                    else -> return x
+                }
+            }
+        }
+        fun parseTerm(): Double {
+            var x = parseFactor()
+            while (true) {
+                when {
+                    eat('*'.code) -> x *= parseFactor()
+                    eat('/'.code) -> x /= parseFactor()
+                    else -> return x
+                }
+            }
+        }
+        fun parseFactor(): Double {
+            if (eat('+'.code)) return parseFactor()
+            if (eat('-'.code)) return -parseFactor()
+            val x: Double
+            val startPos = pos
+            if (eat('('.code)) {
+                x = parseExpression()
+                eat(')'.code)
+            } else if ((ch in '0'.code..'9'.code) || ch == '.'.code) {
+                while ((ch in '0'.code..'9'.code) || ch == '.'.code) nextChar()
+                x = clean.substring(startPos, pos).toDouble()
+            } else throw RuntimeException("Unexpected: " + ch.toChar())
+            return x
+        }
+    }.parse()
+}
+
+@Composable
+fun CalculatorDialog(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onResult: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var input by remember { mutableStateOf(value) }
+    var result by remember { mutableStateOf("") }
+
+    fun updateResult(str: String) {
+        result = try {
+            if (str.trim().endsWith("=")) {
+                evalSimpleExpr(str.trim().removeSuffix("=")).toString()
+            } else ""
+        } catch (e: Exception) { "Errore" }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Modifica purchasePrice") },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = {
+                        input = it
+                        updateResult(it)
+                        onValueChange(it)
+                    },
+                    label = { Text("Calcolo") },
+                    singleLine = true,
+                    readOnly = true, // SOLO tramite tastiera custom
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                )
+                // --- RISULTATO appena sotto il campo input ---
+                Text(
+                    text = if (result.isNotBlank() && result != "Errore") {
+                        "Risultato: ${result.toDoubleOrNull()?.let { String.format(Locale.US, "%.2f", it) } ?: result}"
+                    } else "Risultato:",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp)
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(8.dp)
+                )
+                // --- PIÙ SPAZIO SOPRA LA TASTIERA ---
+                Spacer(Modifier.height(8.dp))
+                // --- TASTIERA con tasti più GRANDI e distanziati ---
+                CalculatorKeyboard(
+                    onKey = { key ->
+                        when (key) {
+                            "C" -> { input = ""; result = ""; onValueChange("") }
+                            "<" -> {
+                                if (input.isNotEmpty()) {
+                                    input = input.dropLast(1)
+                                    updateResult(input)
+                                    onValueChange(input)
+                                }
+                            }
+                            "=" -> {
+                                if (input.isNotBlank()) {
+                                    val toEval = if (input.trim().endsWith("=")) input.trim() else input.trim() + "="
+                                    updateResult(toEval)
+                                    input = toEval
+                                    onValueChange(toEval)
+                                }
+                            }
+                            else -> {
+                                input += key
+                                updateResult(input)
+                                onValueChange(input)
+                            }
+                        }
+                    },
+                    buttonSize = 68.dp,    // <--- PIÙ GRANDE!
+                    buttonFontSize = MaterialTheme.typography.headlineSmall.fontSize
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (result.isNotBlank() && result != "Errore") {
+                    onResult(result)
+                } else {
+                    onResult(input)
+                }
+                onDismiss()
+            }) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onDismiss() }) { Text("Annulla") }
+        }
+    )
+}
+
+@Composable
+fun CalculatorKeyboard(
+    onKey: (String) -> Unit,
+    buttonSize: Dp = 56.dp,
+    buttonFontSize: TextUnit = MaterialTheme.typography.titleLarge.fontSize
+) {
+    val buttons = listOf(
+        listOf("C", "<"),
+        listOf("+", "7", "8", "9"),
+        listOf("-", "4", "5", "6"),
+        listOf("*", "1", "2", "3"),
+        listOf("/", ".", "0", "="),
+
+    )
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        buttons.forEach { row ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp), // più spazio tra righe
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                row.forEach { label ->
+                    Button(
+                        onClick = { onKey(label) },
+                        modifier = Modifier
+                            .size(buttonSize)
+                            .padding(2.dp),
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text(label, fontWeight = FontWeight.Bold, fontSize = buttonFontSize)
+                    }
+                }
+                // Per le righe più corte, aggiungi spaziatori
+                repeat(4 - row.size) { Spacer(Modifier.size(buttonSize)) }
+            }
+        }
+    }
+}
+
+fun formatDecimal(num: Double, digits: Int = 2): String =
+    String.format(Locale.US, "%.${digits}f", num)
+
+fun formatDecimal(num: String, digits: Int = 2): String =
+    num.toDoubleOrNull()?.let { formatDecimal(it, digits) } ?: num
