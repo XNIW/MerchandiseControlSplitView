@@ -110,10 +110,10 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
-                    // HEADER: inserisci le nuove colonne prima di "Quantità", "Prezzo", "Completo"
+                    // HEADER: inserisci le nuove colonne prima di "autocount", "newRetailPrice", "complete"
                     // BLOCCO CORRETTO
                     row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
-                            listOf("oldPurchasePrice", "oldRetailPrice", "Quantità", "Prezzo", "Completo")
+                            listOf("oldPurchasePrice", "oldRetailPrice", "autocount", "newRetailPrice", "complete")
                 } else {
                     // Trova il barcode
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
@@ -140,7 +140,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             excelData.clear()
             excelData.addAll(filtered)
 
-            // Ricostruisci i valori editabili (quantità/prezzo)
+            // Ricostruisci i valori editabili (autocount/newRetailPrice)
             editableValues.clear()
             editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
             filtered.drop(1).forEach { row ->

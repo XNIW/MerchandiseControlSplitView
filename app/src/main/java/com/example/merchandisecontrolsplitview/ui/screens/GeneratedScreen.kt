@@ -233,7 +233,7 @@ fun GeneratedScreen(
             )
         }
 
-        // Info dialog (quantità/prezzo)
+        // Info dialog (autocount/newRetailPrice)
         if (showInfoDialog && infoRowIndex in excelData.indices) {
 
             val header = excelData.first()
@@ -251,8 +251,8 @@ fun GeneratedScreen(
                         header.forEachIndexed { ci, name ->
                             // BLOCCO CORRETTO CON 'when'
                             when (name) {
-                                "Quantità", "Prezzo" -> {
-                                    val idx = if (name == "Quantità") 0 else 1
+                                "autocount", "newRetailPrice" -> {
+                                    val idx = if (name == "autocount") 0 else 1
                                     val req = if (idx == 0) qtyReq else priceReq
                                     var tf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][idx].value, TextRange(editableValues[infoRowIndex][idx].value.length))) }
                                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -329,7 +329,7 @@ fun GeneratedScreen(
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text("Completo") } },
+                confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text("complete") } },
                 dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Conferma") } }
             )
         }
