@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -40,54 +41,47 @@ android {
 }
 
 dependencies {
+    implementation("androidx.room:room-paging:2.6.1")
+    // BOM
+    implementation(platform(libs.androidx.compose.bom))
 
-    // BOM per allineare tutte le versioni Compose
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+    // Core Compose
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.runtime.livedata)
 
-    // Core UI
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
+    // Foundation & Material
+    implementation(libs.androidx.foundation)
+    implementation(libs.androidx.foundation.layout)
+    implementation(libs.androidx.material)
+    implementation(libs.androidx.material.icons.core)
+    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.androidx.material3)
 
-    // Gesti, layout, LazyColumn, ecc.
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.foundation:foundation-layout")
-
-    // Material “classico” (SwipeToDismiss, DismissDirection, rememberDismissState…)
-    implementation("androidx.compose.material:material")
-    implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.compose.material:material-icons-extended")
-
-    // Material3 (TopAppBar, Card, AlertDialog, CardDefaults…)
-    implementation("androidx.compose.material3:material3")
-
-    // Fondamentale per layout, gesti e lazy lists
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.foundation:foundation-layout")
-
-
-    implementation("androidx.navigation:navigation-compose:2.9.0")
-    implementation("androidx.core:core-ktx:1.16.0")
-    implementation("com.google.code.gson:gson:2.11.0")
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-    implementation("androidx.compose.material:material-icons-extended:1.7.8")
-    implementation("androidx.compose.runtime:runtime-livedata:1.8.2")
-    implementation("androidx.compose.foundation:foundation:1.4.3")
-    implementation("androidx.activity:activity-compose:1.8.0")
-    implementation("androidx.compose.ui:ui:1.8.2")
-    implementation("androidx.compose.material3:material3:1.3.2")
-    implementation("org.apache.poi:poi:5.2.5")
-    implementation("org.apache.poi:poi-ooxml:5.2.5")
-    implementation("org.apache.commons:commons-collections4:4.4")
-    implementation("com.google.android.material:material:1.12.0")
+    // Navigation, Activity, Core-ktx, Lifecycle
+    implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
+
+    // Room & Paging
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.paging.runtime.ktx)
+    implementation(libs.androidx.paging.compose)
+
+    // Extra libs
+    implementation(libs.zxing)
+    implementation(libs.poi)
+    implementation(libs.poi.ooxml)
+    implementation(libs.commons.collections4)
+    implementation(libs.gson)
+    implementation(libs.material)
+
+    // Test
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

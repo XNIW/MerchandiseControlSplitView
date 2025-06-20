@@ -21,6 +21,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 fun FilePickerScreen(
     onFilePicked: (Uri) -> Unit,
     onViewHistory: () -> Unit,
+    onDatabase: () -> Unit,         // AGGIUNGI QUESTA!
     viewModel: ExcelViewModel
 ) {
     LaunchedEffect(Unit) {
@@ -59,6 +60,13 @@ fun FilePickerScreen(
             ) {
                 Text("Carica file Excel")
             }
+            Button(
+                onClick = { onDatabase() },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Text("Database")
+            }
+
         }
     }
 }

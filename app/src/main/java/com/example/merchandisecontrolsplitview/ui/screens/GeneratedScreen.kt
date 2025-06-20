@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -245,8 +247,30 @@ fun GeneratedScreen(
                             } else {
                                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                     Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                    Text(row.getOrNull(ci) ?: "", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                    val value = row.getOrNull(ci) ?: ""
+                                    if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                        Text(
+                                            value,
+                                            Modifier.weight(1f)
+                                                .background(
+                                                    if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
+                                                    RoundedCornerShape(4.dp)
+                                                )
+                                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        )
+                                    } else {
+                                        Text(
+                                            value,
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
                                 }
+
                             }
                         }
                     }

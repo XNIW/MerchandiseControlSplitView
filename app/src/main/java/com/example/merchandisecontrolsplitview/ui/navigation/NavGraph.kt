@@ -6,6 +6,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.merchandisecontrolsplitview.ui.screens.DatabaseScreen
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreen
 import com.example.merchandisecontrolsplitview.ui.screens.PreGenerateScreen
@@ -34,6 +35,9 @@ fun AppNavGraph() {
                 onViewHistory = {
                     navController.navigate(Screen.History.route)
                 },
+                onDatabase = {
+                    navController.navigate("databaseScreen") // AGGIUNGI QUESTO
+                },
                 viewModel = viewModel
             )
         }
@@ -42,7 +46,7 @@ fun AppNavGraph() {
             PreGenerateScreen(
                 viewModel = viewModel,
                 onGenerate = {
-                    viewModel.generateFiltered()
+                    viewModel.generateFilteredWithOldPrices(context)
                     navController.navigate(Screen.Generated.route)
                 },
                 onBack = {
@@ -81,6 +85,10 @@ fun AppNavGraph() {
                     navController.popBackStack()
                 }
             )
+        }
+
+        composable("databaseScreen") {
+            DatabaseScreen(navController = navController)
         }
     }
 }
