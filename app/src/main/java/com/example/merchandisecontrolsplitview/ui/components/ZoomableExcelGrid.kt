@@ -20,8 +20,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip               // ← per clip()
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.merchandisecontrolsplitview.R
 /**
  * A zoomable and scrollable grid for displaying Excel-like data.
  */
@@ -155,7 +157,7 @@ fun ZoomableExcelGrid(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Check,
-                                                contentDescription = "Completo",
+                                                contentDescription = stringResource(R.string.header_complete), // aggiungi questa stringa nel file xml
                                                 tint = if (isComplete) Color.White else Color.Gray
                                             )
                                         }

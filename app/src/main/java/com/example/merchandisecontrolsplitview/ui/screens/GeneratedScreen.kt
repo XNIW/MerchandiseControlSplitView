@@ -40,8 +40,11 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import java.util.Locale
 
 
@@ -77,18 +80,7 @@ fun GeneratedScreen(
     var calcResult by remember { mutableStateOf("") }
     var calcRowIndex by remember { mutableIntStateOf(-1) }
 
-    // PRIORITÀ BACKHANDLER — SOLO UNO ATTIVO ALLA VOLTA
-    when {
-        showCalcDialog && calcRowIndex == infoRowIndex -> {
-            BackHandler { showCalcDialog = false }
-        }
-        showInfoDialog && infoRowIndex in excelData.indices -> {
-            BackHandler { showInfoDialog = false }
-        }
-        else -> {
-            BackHandler { onBackToStart() }
-        }
-    }
+    BackHandler { onBackToStart() }
 
     // Scanner
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -102,9 +94,9 @@ fun GeneratedScreen(
                 showInfoDialog = true
                 showSearchDialog = false
             } else {
-                Toast.makeText(context, "Numero non trovato", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
             }
-        } ?: Toast.makeText(context, "Nessun risultato dallo scanner", Toast.LENGTH_SHORT).show()
+        } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
     }
 
     val saveLauncher = rememberLauncherForActivityResult(
@@ -132,7 +124,7 @@ fun GeneratedScreen(
             showSearchDialog = false
         } else {
             searchText = ""
-            Toast.makeText(context, "Numero non trovato", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -148,29 +140,38 @@ fun GeneratedScreen(
                         saveLauncher.launch(name)
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp)
-                ) { Text("Salva file") }
+                ) { Text(stringResource(R.string.save_file)) }
             }
 
-            // Griglia
-            ZoomableExcelGrid(
-                data = excelData,
-                cellWidth = 120.dp,
-                cellHeight = 48.dp,
-                selectedColumns = selectedColumns,
-                editableValues = editableValues,
-                completeStates = completeStates,
-                searchMatches = searchMatches,
-                generated = true,
-                editMode = false,
-                onCompleteToggle = { row ->
-                    completeStates[row] = !completeStates[row]
-                    viewModel.updateHistoryEntry() // aggiorna stato nella cronologia
-                },
-                onCellEditRequest = { _, _ -> },
-                onQuantityCellClick = { r -> infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true },
-                onPriceCellClick = { r -> infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true },
-                onRowCellClick = { r -> infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true }
-            )
+            if (excelData.isNotEmpty()) {
+                val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
+                val localizedData = listOf(localizedHeader) + excelData.drop(1)
+                ZoomableExcelGrid(
+                    data = localizedData,
+                    cellWidth = 120.dp,
+                    cellHeight = 48.dp,
+                    selectedColumns = selectedColumns,
+                    editableValues = editableValues,
+                    completeStates = completeStates,
+                    searchMatches = searchMatches,
+                    generated = true,
+                    editMode = false,
+                    onCompleteToggle = { row ->
+                        completeStates[row] = !completeStates[row]
+                        viewModel.updateHistoryEntry() // aggiorna stato nella cronologia
+                    },
+                    onCellEditRequest = { _, _ -> },
+                    onQuantityCellClick = { r ->
+                        infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                    },
+                    onPriceCellClick = { r ->
+                        infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true
+                    },
+                    onRowCellClick = { r ->
+                        infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                    }
+                )
+            }
         }
 
         // FAB Scanner e Cerca
@@ -186,13 +187,13 @@ fun GeneratedScreen(
                         setCaptureActivity(PortraitCaptureActivity::class.java)
                         setOrientationLocked(true)
                         setBeepEnabled(true)
-                        setPrompt("Inquadra un barcode")
+                        setPrompt(context.getString(R.string.scan_prompt))
                     }
                     scanLauncher.launch(opts)
-                }) { Icon(Icons.Filled.CameraAlt, contentDescription = "Scannerizza codice") }
+                }) { Icon(Icons.Filled.CameraAlt, contentDescription = R.string.scan_icon_desc.toString()) }
 
                 FloatingActionButton(onClick = { searchText = ""; showSearchDialog = true }) {
-                    Icon(Icons.Filled.Search, contentDescription = "Cerca numero")
+                    Icon(Icons.Filled.Search, contentDescription = R.string.search_icon_desc.toString())
                 }
             }
         }
@@ -201,7 +202,7 @@ fun GeneratedScreen(
         if (showSearchDialog) {
             AlertDialog(
                 onDismissRequest = {},
-                title = { Text("Cerca numero") },
+                title = { Text(stringResource(R.string.search_number)) },
                 text = {
                     Column {
                         Button(onClick = { scanLauncher.launch(
@@ -210,17 +211,17 @@ fun GeneratedScreen(
                                 setCaptureActivity(PortraitCaptureActivity::class.java)
                                 setOrientationLocked(true)
                                 setBeepEnabled(true)
-                                setPrompt("Inquadra un barcode")
+                                setPrompt(context.getString(R.string.scan_prompt))
                             }
                         )}, Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                             Icon(Icons.Filled.CameraAlt, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Scanner")
+                            Text(stringResource(R.string.scanner))
                         }
                         TextField(
                             value = searchText,
                             onValueChange = { searchText = it },
-                            label = { Text("Inserisci numero") },
+                            label = { Text(stringResource(R.string.insert_number)) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { performSearch() }),
@@ -228,8 +229,8 @@ fun GeneratedScreen(
                         )
                     }
                 },
-                confirmButton = { TextButton(onClick = { performSearch() }) { Text("Cerca") } },
-                dismissButton = { TextButton(onClick = { showSearchDialog = false }) { Text("Cancella") } }
+                confirmButton = { TextButton(onClick = { performSearch() }) {Text(stringResource(R.string.search_number)) } },
+                dismissButton = { TextButton(onClick = { showSearchDialog = false }) { Text(stringResource(R.string.clear)) } }
             )
         }
 
@@ -245,7 +246,7 @@ fun GeneratedScreen(
             }
             AlertDialog(
                 onDismissRequest = {showInfoDialog = false},
-                title = { Text("Informazioni riga") },
+                title = { Text(stringResource(R.string.row_info)) },
                 text = {
                     Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
                         header.forEachIndexed { ci, name ->
@@ -256,7 +257,7 @@ fun GeneratedScreen(
                                     val req = if (idx == 0) qtyReq else priceReq
                                     var tf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][idx].value, TextRange(editableValues[infoRowIndex][idx].value.length))) }
                                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         TextField(
                                             value = tf,
                                             onValueChange = { nv -> tf = nv; editableValues[infoRowIndex][idx].value = nv.text; viewModel.updateHistoryEntry() },
@@ -271,7 +272,7 @@ fun GeneratedScreen(
                                     val idx = header.indexOf("purchasePrice")
                                     val value = row.getOrNull(idx) ?: ""
                                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         Text(
                                             value,
                                             Modifier
@@ -300,7 +301,7 @@ fun GeneratedScreen(
                                 }
                                 else -> {
                                     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                        Text("$name:", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                                         val value = row.getOrNull(ci) ?: ""
                                         if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
                                             Text(
@@ -329,8 +330,8 @@ fun GeneratedScreen(
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text("complete") } },
-                dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text("Conferma") } }
+                confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text(getLocalizedHeader(context, "complete")) } },
+                dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text(stringResource(R.string.confirm)) } }
             )
         }
 
@@ -427,7 +428,7 @@ fun CalculatorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Modifica purchasePrice") },
+        title = { Text(stringResource(R.string.calc_title)) },
         text = {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -440,7 +441,7 @@ fun CalculatorDialog(
                         updateResult(it)
                         onValueChange(it)
                     },
-                    label = { Text("Calcolo") },
+                    label = { Text(stringResource(R.string.calc_label)) },
                     singleLine = true,
                     readOnly = true, // SOLO tramite tastiera custom
                     modifier = Modifier
@@ -450,8 +451,8 @@ fun CalculatorDialog(
                 // --- RISULTATO appena sotto il campo input ---
                 Text(
                     text = if (result.isNotBlank() && result != "Errore") {
-                        "Risultato: ${result.toDoubleOrNull()?.let { String.format(Locale.US, "%.2f", it) } ?: result}"
-                    } else "Risultato:",
+                        stringResource(R.string.result) + " ${result.toDoubleOrNull()?.let { String.format(Locale.US, "%.2f", it) } ?: result}"
+                    } else stringResource(R.string.result),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -504,10 +505,10 @@ fun CalculatorDialog(
                     onResult(input)
                 }
                 onDismiss()
-            }) { Text("OK") }
+            }) { Text(stringResource(R.string.ok)) }
         },
         dismissButton = {
-            TextButton(onClick = { onDismiss() }) { Text("Annulla") }
+            TextButton(onClick = { onDismiss() }) { Text(stringResource(R.string.cancel)) }
         }
     )
 }

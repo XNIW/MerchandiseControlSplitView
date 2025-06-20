@@ -1,0 +1,84 @@
+<resources>
+    <!-- 通用 -->
+    <string name="app_name">货物管理</string>
+    <string name="back">返回</string>
+    <string name="exit">退出</string>
+    <string name="ok">确定</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="delete">删除</string>
+    <string name="clear">清除</string>
+    <string name="save_file">保存文件</string>
+
+    <!-- 设置页面 -->
+    <string name="options">选项</string>
+    <string name="select_language">选择语言</string>
+    <string name="chinese">中文</string>
+    <string name="italian">意大利语</string>
+    <string name="spanish">西班牙语</string>
+    <string name="english">英语</string>
+
+    <!-- 文件选择页面 -->
+    <string name="file_history">文件历史</string>
+    <string name="load_excel_file">加载Excel文件</string>
+    <string name="database">数据库</string>
+
+    <!-- 历史页面 -->
+    <string name="history_title">文件历史</string>
+    <string name="rename_file">重命名文件</string>
+    <string name="new_name">新名称</string>
+    <string name="delete_confirm">确定要删除该文件吗？</string>
+
+    <!-- 生成前页面 -->
+    <string name="select_all">全选</string>
+    <string name="edit">编辑</string>
+    <string name="exit_edit">退出编辑</string>
+    <string name="generate_filtered_sheet">生成筛选表</string>
+    <string name="exit_confirm_title">确定要退出吗？已加载数据将丢失。</string>
+
+    <!-- 生成页面 -->
+    <string name="row_info">行信息</string>
+    <string name="search_number">查找编号</string>
+    <string name="insert_number">输入编号</string>
+    <string name="scanner">扫码</string>
+    <string name="result">结果：</string>
+    <string name="calc_title">修改进价</string>
+    <string name="calc_label">计算</string>
+    <string name="not_found">未找到编号</string>
+    <string name="no_scanner_result">扫码无结果</string>
+    <string name="scan_prompt">请对准条码</string>
+    <!-- 图标无障碍 -->
+    <string name="scan_icon_desc">扫码</string>
+    <string name="search_icon_desc">查找编号</string>
+
+    <!-- 表头（ExcelUtils/列） -->
+    <string name="header_barcode">条码</string>
+    <string name="header_quantity">数量</string>
+    <string name="header_purchase_price">进价</string>
+    <string name="header_retail_price">零售价</string>
+    <string name="header_total_price">总价</string>
+    <string name="header_product_name">品名</string>
+    <string name="header_item_number">货号</string>
+    <string name="header_supplier">供应商</string>
+    <string name="header_complete">完成</string>
+    <string name="header_old_purchase_price">旧进价</string>
+    <string name="header_old_retail_price">旧零售价</string>
+    <string name="header_new_retail_price">新零售价</string>
+    <string name="header_autocount">实点数量</string>
+
+    <!-- 数据库页面 -->
+    <string name="database_screen_title">商品管理</string>
+    <string name="import_file">导入</string>
+    <string name="export_file">导出</string>
+    <string name="barcode_filter_label">条码, 名称, 货号, 供应商</string>
+    <string name="retry">重试</string>
+    <string name="scan_barcode">扫描条码</string>
+    <string name="barcode">条码</string>
+    <string name="item_number">货号</string>
+    <string name="product_name">商品名称</string>
+    <string name="new_purchase_price">新进价</string>
+    <string name="new_retail_price">新零售价</string>
+    <string name="old_purchase_price">旧进价</string>
+    <string name="old_retail_price">旧零售价</string>
+    <string name="supplier">供应商</string>
+</resources>

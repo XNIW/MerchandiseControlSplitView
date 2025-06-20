@@ -11,9 +11,13 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 
 /**
  * Screen for selecting columns before generating the filtered sheet.
@@ -31,6 +35,7 @@ fun PreGenerateScreen(
     val completeStates = viewModel.completeStates
     val isLoading by viewModel.isLoading
     val loadError by viewModel.loadError
+    val context = LocalContext.current
 
     // Local UI state
     var editMode by remember { mutableStateOf(false) }
@@ -61,8 +66,10 @@ fun PreGenerateScreen(
                 )
             }
             excelData.isNotEmpty() -> {
+                val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
+                val localizedData = listOf(localizedHeader) + excelData.drop(1)
                 ZoomableExcelGrid(
-                    data = excelData,
+                    data = localizedData,
                     cellWidth = 120.dp,
                     cellHeight = 48.dp,
                     selectedColumns = selectedColumns,
@@ -98,7 +105,7 @@ fun PreGenerateScreen(
                     }) {
                         Icon(
                             imageVector = Icons.Default.DoneAll,
-                            contentDescription = "Seleziona tutto"
+                            contentDescription = stringResource(R.string.select_all)
                         )
                     }
                 }
@@ -107,14 +114,14 @@ fun PreGenerateScreen(
                 }) {
                     Icon(
                         imageVector = if (editMode) Icons.Default.Check else Icons.Default.Edit,
-                        contentDescription = if (editMode) "Esci da modifica" else "Modifica"
+                        contentDescription = if (editMode) stringResource(R.string.exit_edit) else stringResource(R.string.edit)
                     )
                 }
                 if (!editMode) {
                     FloatingActionButton(onClick = onGenerate) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Genera foglio filtrato"
+                            contentDescription = stringResource(R.string.generate_filtered_sheet)
                         )
                     }
                 }
@@ -125,18 +132,18 @@ fun PreGenerateScreen(
         if (showExitDialog) {
             AlertDialog(
                 onDismissRequest = { showExitDialog = false },
-                title = { Text("Sei sicuro di uscire? Perderai i dati caricati.") },
+                title = { Text(stringResource(R.string.exit_confirm_title)) },
                 confirmButton = {
                     TextButton(onClick = {
                         showExitDialog = false
                         onBack()
                     }) {
-                        Text("Esci")
+                        Text(stringResource(R.string.exit))
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showExitDialog = false }) {
-                        Text("Annulla")
+                        Text(stringResource(R.string.cancel))
                     }
                 }
             )

@@ -10,8 +10,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.R
 
 /**
  * Screen that allows the user to pick an Excel file from device storage.
@@ -21,7 +23,8 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 fun FilePickerScreen(
     onFilePicked: (Uri) -> Unit,
     onViewHistory: () -> Unit,
-    onDatabase: () -> Unit,         // AGGIUNGI QUESTA!
+    onDatabase: () -> Unit,
+    onOptions: () -> Unit,
     viewModel: ExcelViewModel
 ) {
     LaunchedEffect(Unit) {
@@ -47,7 +50,7 @@ fun FilePickerScreen(
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
             ) {
-                Text("File storico")
+                Text(stringResource(id = R.string.file_history))
             }
             Button(
                 onClick = {
@@ -58,13 +61,21 @@ fun FilePickerScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Carica file Excel")
+                Text(stringResource(id = R.string.load_excel_file))
             }
             Button(
                 onClick = { onDatabase() },
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
             ) {
-                Text("Database")
+                Text(stringResource(id = R.string.database))
+            }
+            Button(
+                onClick = onOptions,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                Text(stringResource(id = R.string.options))
             }
 
         }

@@ -24,8 +24,10 @@ import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
-
+import com.example.merchandisecontrolsplitview.R
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,6 +38,7 @@ fun DatabaseScreen(
     val uiState by viewModel.uiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
+    val context = LocalContext.current
 
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -56,10 +59,10 @@ fun DatabaseScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Gestione Prodotti") },
+                title = { Text(stringResource(R.string.database_screen_title)) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Torna indietro")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
@@ -69,10 +72,10 @@ fun DatabaseScreen(
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         ))
                     }) {
-                        Icon(Icons.Default.FileUpload, contentDescription = "Importa")
+                        Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.import_file))
                     }
                     IconButton(onClick = { downloadLauncher.launch("prodotti.csv") }) {
-                        Icon(Icons.Default.FileDownload, contentDescription = "Esporta")
+                        Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
                     }
                 }
             )
@@ -89,7 +92,7 @@ fun DatabaseScreen(
                 OutlinedTextField(
                     value = filter ?: "",
                     onValueChange = { viewModel.setFilter(it) },
-                    label = { Text("barcode, nome, item number, fornitore") },
+                    label = { Text(stringResource(R.string.barcode_filter_label)) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp)
@@ -108,7 +111,7 @@ fun DatabaseScreen(
                 val msg = (uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Error).message
                 Snackbar(
                     action = {
-                        TextButton(onClick = { /* retry? */ }) { Text("Riprova") }
+                        TextButton(onClick = { /* retry? */ }) { Text(stringResource(R.string.retry)) }
                     },
                     modifier = Modifier.align(Alignment.BottomCenter) // Puoi allineare la Snackbar se vuoi
                 ) { Text(msg) }
@@ -127,7 +130,7 @@ fun DatabaseScreen(
                         setCaptureActivity(PortraitCaptureActivity::class.java)
                         setOrientationLocked(true)
                         setBeepEnabled(true)
-                        setPrompt("Inquadra un barcode")
+                        setPrompt(context.getString(R.string.scan_prompt))
                     }
                     scanLauncher.launch(opts)
                 },
@@ -135,7 +138,7 @@ fun DatabaseScreen(
                     .align(Alignment.BottomEnd) // <-- Ora questo funziona!
                     .padding(end = 24.dp, bottom = 24.dp)
             ) {
-                Icon(Icons.Filled.CameraAlt, contentDescription = "Scansiona barcode")
+                Icon(Icons.Filled.CameraAlt, contentDescription = stringResource(R.string.scan_barcode))
             }
         }
         // ***** FINE DELLA MODIFICA *****
@@ -152,35 +155,35 @@ fun ProductRow(product: Product) {
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Barcode:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.barcode) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.barcode, style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Item Number:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.item_number) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.itemNumber ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Product Name:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.product_name) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.productName ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("New Purchase Price:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.new_purchase_price) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.newPurchasePrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("New Retail Price:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.new_retail_price) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.newRetailPrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Old Purchase Price:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.old_purchase_price) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.oldPurchasePrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Old Retail Price:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.old_retail_price) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.oldRetailPrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Supplier:", style = MaterialTheme.typography.labelMedium)
+                Text(stringResource(R.string.supplier) + ":", style = MaterialTheme.typography.labelMedium)
                 Text(product.supplier ?: "-", style = MaterialTheme.typography.bodyMedium)
             }
         }

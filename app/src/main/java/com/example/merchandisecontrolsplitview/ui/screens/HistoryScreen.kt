@@ -31,6 +31,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.ui.res.stringResource
+import com.example.merchandisecontrolsplitview.R
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -53,10 +55,10 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Cronologia file") },
+                title = { Text(stringResource(R.string.history_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 }
             )
@@ -162,12 +164,12 @@ fun HistoryScreen(
     if (showRenameDialog && renameEntry != null) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
-            title = { Text("Rinomina file") },
+            title = { Text(stringResource(R.string.rename_file)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = { renameText = it },
-                    label = { Text("Nuovo nome") },
+                    label = { Text(stringResource(R.string.new_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -177,12 +179,12 @@ fun HistoryScreen(
                     renameEntry?.let { onRename(it, renameText) }
                     showRenameDialog = false
                 }) {
-                    Text("Conferma")
+                    Text(stringResource(R.string.confirm))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) {
-                    Text("Annulla")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
@@ -192,18 +194,18 @@ fun HistoryScreen(
     if (showDeleteDialog && deleteEntry != null) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Sei sicuro di eliminare il file?") },
+            title = { Text(stringResource(R.string.delete_confirm)) },
             confirmButton = {
                 TextButton(onClick = {
                     deleteEntry?.let(onDelete)
                     showDeleteDialog = false
                 }) {
-                    Text("Elimina")
+                    Text(stringResource(R.string.delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
-                    Text("Annulla")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )

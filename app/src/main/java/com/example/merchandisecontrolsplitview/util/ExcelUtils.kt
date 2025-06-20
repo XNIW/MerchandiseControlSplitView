@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.util
 
 import android.content.Context
 import android.net.Uri
+import com.example.merchandisecontrolsplitview.R
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.WorkbookFactory
 
@@ -241,4 +242,23 @@ fun readAndAnalyzeExcel(
     }
 
     return Pair(filteredHeader, filteredDataRows)
+}
+
+fun getLocalizedHeader(context: Context, key: String): String {
+    return when (key) {
+        "barcode"      -> context.getString(R.string.header_barcode)
+        "quantity"     -> context.getString(R.string.header_quantity)
+        "purchasePrice"-> context.getString(R.string.header_purchase_price)
+        "retailPrice"  -> context.getString(R.string.header_retail_price)
+        "totalPrice"   -> context.getString(R.string.header_total_price)
+        "productName"  -> context.getString(R.string.header_product_name)
+        "itemNumber"   -> context.getString(R.string.header_item_number)
+        "supplier"     -> context.getString(R.string.header_supplier)
+        "oldPurchasePrice" -> context.getString(R.string.header_old_purchase_price)
+        "oldRetailPrice" -> context.getString(R.string.header_old_retail_price)
+        "newRetailPrice" -> context.getString(R.string.header_new_retail_price)
+        "autocount"      -> context.getString(R.string.header_autocount)
+        "complete" -> context.getString(R.string.header_complete)
+        else           -> key // fallback: mostra la chiave originale
+    }
 }

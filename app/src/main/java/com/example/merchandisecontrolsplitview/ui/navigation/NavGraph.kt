@@ -12,6 +12,7 @@ import com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreen
 import com.example.merchandisecontrolsplitview.ui.screens.PreGenerateScreen
 import com.example.merchandisecontrolsplitview.ui.screens.GeneratedScreen
 import com.example.merchandisecontrolsplitview.ui.screens.HistoryScreen
+import com.example.merchandisecontrolsplitview.ui.screens.OptionsScreen
 
 /**
  * Navigation graph for the MerchandiseControlSplitView app.
@@ -37,6 +38,9 @@ fun AppNavGraph() {
                 },
                 onDatabase = {
                     navController.navigate("databaseScreen") // AGGIUNGI QUESTO
+                },
+                onOptions = {
+                    navController.navigate("optionsScreen") // Navigate to your OptionsScreen
                 },
                 viewModel = viewModel
             )
@@ -89,6 +93,12 @@ fun AppNavGraph() {
 
         composable("databaseScreen") {
             DatabaseScreen(navController = navController)
+        }
+
+        composable("optionsScreen") {
+            OptionsScreen(
+                onBack = { navController.popBackStack() }
+            )
         }
     }
 }

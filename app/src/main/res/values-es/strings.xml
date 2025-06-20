@@ -1,0 +1,84 @@
+<resources>
+    <!-- General -->
+    <string name="app_name">Control de Mercancía</string>
+    <string name="back">Atrás</string>
+    <string name="exit">Salir</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Cancelar</string>
+    <string name="confirm">Confirmar</string>
+    <string name="delete">Eliminar</string>
+    <string name="clear">Borrar</string>
+    <string name="save_file">Guardar archivo</string>
+
+    <!-- Pantalla de Opciones -->
+    <string name="options">Opciones</string>
+    <string name="select_language">Seleccionar idioma</string>
+    <string name="chinese">Chino</string>
+    <string name="italian">Italiano</string>
+    <string name="spanish">Español</string>
+    <string name="english">Inglés</string>
+
+    <!-- Pantalla FilePickerScreen -->
+    <string name="file_history">Historial de archivos</string>
+    <string name="load_excel_file">Cargar archivo Excel</string>
+    <string name="database">Base de datos</string>
+
+    <!-- Pantalla HistoryScreen -->
+    <string name="history_title">Historial de archivos</string>
+    <string name="rename_file">Renombrar archivo</string>
+    <string name="new_name">Nuevo nombre</string>
+    <string name="delete_confirm">¿Seguro que deseas eliminar este archivo?</string>
+
+    <!-- Pantalla PreGenerateScreen -->
+    <string name="select_all">Seleccionar todo</string>
+    <string name="edit">Editar</string>
+    <string name="exit_edit">Salir de edición</string>
+    <string name="generate_filtered_sheet">Generar hoja filtrada</string>
+    <string name="exit_confirm_title">¿Seguro que deseas salir? Los datos cargados se perderán.</string>
+
+    <!-- Pantalla GenerateScreen -->
+    <string name="row_info">Información de fila</string>
+    <string name="search_number">Buscar número</string>
+    <string name="insert_number">Ingresar número</string>
+    <string name="scanner">Escáner</string>
+    <string name="result">Resultado:</string>
+    <string name="calc_title">Modificar precio de compra</string>
+    <string name="calc_label">Cálculo</string>
+    <string name="not_found">Número no encontrado</string>
+    <string name="no_scanner_result">Sin resultados del escáner</string>
+    <string name="scan_prompt">Apunta a un código de barras</string>
+    <!-- Accesibilidad de iconos -->
+    <string name="scan_icon_desc">Escanear código</string>
+    <string name="search_icon_desc">Buscar número</string>
+
+    <!-- Cabeceras tabla (ExcelUtils/columnas) -->
+    <string name="header_barcode">Código de barras</string>
+    <string name="header_quantity">Cantidad</string>
+    <string name="header_purchase_price">Precio de compra</string>
+    <string name="header_retail_price">Precio de venta</string>
+    <string name="header_total_price">Precio total</string>
+    <string name="header_product_name">Nombre del producto</string>
+    <string name="header_item_number">Código del artículo</string>
+    <string name="header_supplier">Proveedor</string>
+    <string name="header_complete">Completo</string>
+    <string name="header_old_purchase_price">Precio de compra anterior</string>
+    <string name="header_old_retail_price">Precio de venta anterior</string>
+    <string name="header_new_retail_price">Nuevo precio de venta</string>
+    <string name="header_autocount">Cantidad contada</string>
+
+    <!-- Pantalla de Base de Datos -->
+    <string name="database_screen_title">Gestión de Productos</string>
+    <string name="import_file">Importar</string>
+    <string name="export_file">Exportar</string>
+    <string name="barcode_filter_label">código de barras, nombre, número de artículo, proveedor</string>
+    <string name="retry">Reintentar</string>
+    <string name="scan_barcode">Escanear código de barras</string>
+    <string name="barcode">Código de barras</string>
+    <string name="item_number">Número de artículo</string>
+    <string name="product_name">Nombre del producto</string>
+    <string name="new_purchase_price">Nuevo precio de compra</string>
+    <string name="new_retail_price">Nuevo precio de venta</string>
+    <string name="old_purchase_price">Precio de compra anterior</string>
+    <string name="old_retail_price">Precio de venta anterior</string>
+    <string name="supplier">Proveedor</string>
+</resources>
