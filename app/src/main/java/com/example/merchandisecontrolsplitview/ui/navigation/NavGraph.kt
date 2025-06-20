@@ -50,8 +50,10 @@ fun AppNavGraph() {
             PreGenerateScreen(
                 viewModel = viewModel,
                 onGenerate = {
-                    viewModel.generateFilteredWithOldPrices()
-                    navController.navigate(Screen.Generated.route)
+                    viewModel.generateFilteredWithOldPrices { entryId ->
+                        // qui dentro hai l'entryId
+                        navController.navigate("generatedScreen/$entryId")
+                    }
                 },
                 onBack = {
                     navController.popBackStack()
@@ -59,7 +61,20 @@ fun AppNavGraph() {
             )
         }
 
-        composable(Screen.Generated.route) {
+//        composable(Screen.Generated.route) {
+//            GeneratedScreen(
+//                viewModel = viewModel,
+//                onBackToStart = {
+//                    viewModel.resetState()
+//                    navController.popBackStack(
+//                        Screen.FilePicker.route,
+//                        inclusive = false
+//                    )
+//                }
+//            )
+//        }
+        composable("generatedScreen/{entryId}") { backStackEntry ->
+            val entryId = backStackEntry.arguments?.getString("entryId") ?: ""
             GeneratedScreen(
                 viewModel = viewModel,
                 onBackToStart = {
@@ -68,7 +83,8 @@ fun AppNavGraph() {
                         Screen.FilePicker.route,
                         inclusive = false
                     )
-                }
+                },
+                entryId = entryId
             )
         }
 
@@ -77,7 +93,7 @@ fun AppNavGraph() {
                 historyList = viewModel.historyEntries,
                 onSelect    = { entry ->
                     viewModel.loadHistoryEntry(entry)
-                    navController.navigate(Screen.Generated.route)
+                    navController.navigate("generatedScreen/${entry.id}")
                 },
                 onRename    = { entry, newName ->
                     viewModel.renameHistoryEntry(entry, newName)

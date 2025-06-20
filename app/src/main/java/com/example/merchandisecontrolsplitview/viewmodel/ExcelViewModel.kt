@@ -106,7 +106,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         repeat(excelData.size) { completeStates.add(false) }
     }
 
-    fun generateFilteredWithOldPrices() {
+    fun generateFilteredWithOldPrices(onResult: (String) -> Unit) {
         viewModelScope.launch {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
@@ -156,8 +156,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             filtered.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
 
             generated.value = true
-            addHistoryEntry()
+            val id = addHistoryEntryAndReturnId() // Nuova funzione qui sotto!
             saveHistoryToPrefs()
+            onResult(id)
         }
     }
 
@@ -165,7 +166,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Aggiunge un nuovo entry con secondi e persiste. */
     // MODIFICATO: La funzione è ora privata
-    private fun addHistoryEntry() {
+    private fun addHistoryEntryAndReturnId(): String {
         val now   = LocalDateTime.now()
         val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
         val id    = "$stamp.xlsx"
@@ -177,6 +178,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         )
         historyEntries.add(0, entry)
         currentIndex = 0
+        return id
     }
 
     /**

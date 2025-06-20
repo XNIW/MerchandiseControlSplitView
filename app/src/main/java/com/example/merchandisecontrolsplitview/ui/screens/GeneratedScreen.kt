@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
@@ -33,13 +35,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity // se hai questa classe nel tuo package
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -52,10 +53,12 @@ import java.util.Locale
  * Schermata per visualizzare e modificare la griglia generata.
  * Ogni modifica viene salvata nella cronologia corrente.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneratedScreen(
     viewModel: ExcelViewModel,
-    onBackToStart: () -> Unit
+    onBackToStart: () -> Unit,
+    entryId: String
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -79,6 +82,10 @@ fun GeneratedScreen(
     var calcInput by remember { mutableStateOf("") }
     var calcResult by remember { mutableStateOf("") }
     var calcRowIndex by remember { mutableIntStateOf(-1) }
+
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf(entryId) }
+    var titleText by remember { mutableStateOf(entryId) }
 
     BackHandler { onBackToStart() }
 
@@ -129,229 +136,372 @@ fun GeneratedScreen(
     }
 
     // UI
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            // Salva file
-            if (excelData.isNotEmpty() && generated) {
-                Button(
-                    onClick = {
-                        val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm"))
-                        val name = "$stamp.xlsx"
-                        saveLauncher.launch(name)
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp)
-                ) { Text(stringResource(R.string.save_file)) }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = titleText,
+                        modifier = Modifier
+                            .clickable {
+                                renameText = entryId // Precompila il campo dialog
+                                showRenameDialog = true
+                            }
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = { onBackToStart() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                    }
+                },
+                actions = {
+                    if (excelData.isNotEmpty() && generated) {
+                        IconButton(onClick = { saveLauncher.launch(entryId) }) {
+                            Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
+                        }
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Box(Modifier.fillMaxSize()
+            .padding(paddingValues)) {
+            Column(Modifier.fillMaxSize()) {
+                if (excelData.isNotEmpty()) {
+                    val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
+                    val localizedData = listOf(localizedHeader) + excelData.drop(1)
+                    ZoomableExcelGrid(
+                        data = localizedData,
+                        cellWidth = 120.dp,
+                        cellHeight = 48.dp,
+                        selectedColumns = selectedColumns,
+                        editableValues = editableValues,
+                        completeStates = completeStates,
+                        searchMatches = searchMatches,
+                        generated = true,
+                        editMode = false,
+                        onCompleteToggle = { row ->
+                            completeStates[row] = !completeStates[row]
+                            viewModel.updateHistoryEntry()  // UGUALE alla dialog!
+                        },
+                        onCellEditRequest = { _, _ -> },
+                        onQuantityCellClick = { r ->
+                            infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                        },
+                        onPriceCellClick = { r ->
+                            infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true
+                        },
+                        onRowCellClick = { r ->
+                            infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                        }
+                    )
+                }
             }
 
-            if (excelData.isNotEmpty()) {
-                val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
-                val localizedData = listOf(localizedHeader) + excelData.drop(1)
-                ZoomableExcelGrid(
-                    data = localizedData,
-                    cellWidth = 120.dp,
-                    cellHeight = 48.dp,
-                    selectedColumns = selectedColumns,
-                    editableValues = editableValues,
-                    completeStates = completeStates,
-                    searchMatches = searchMatches,
-                    generated = true,
-                    editMode = false,
-                    onCompleteToggle = { row ->
-                        completeStates[row] = !completeStates[row]
-                        viewModel.updateHistoryEntry() // aggiorna stato nella cronologia
+            // FAB Scanner e Cerca
+            if (excelData.isNotEmpty() && generated) {
+                Column(
+                    Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.End
+                ) {
+                    FloatingActionButton(onClick = {
+                        val opts = ScanOptions().apply {
+                            setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                            setCaptureActivity(PortraitCaptureActivity::class.java)
+                            setOrientationLocked(true)
+                            setBeepEnabled(true)
+                            setPrompt(context.getString(R.string.scan_prompt))
+                        }
+                        scanLauncher.launch(opts)
+                    }) {
+                        Icon(
+                            Icons.Filled.CameraAlt,
+                            contentDescription = R.string.scan_icon_desc.toString()
+                        )
+                    }
+
+                    FloatingActionButton(onClick = { searchText = ""; showSearchDialog = true }) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = R.string.search_icon_desc.toString()
+                        )
+                    }
+                }
+            }
+
+            // Dialog di ricerca
+            if (showSearchDialog) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(stringResource(R.string.search_number)) },
+                    text = {
+                        Column {
+                            Button(onClick = {
+                                scanLauncher.launch(
+                                    ScanOptions().apply {
+                                        setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                        setCaptureActivity(PortraitCaptureActivity::class.java)
+                                        setOrientationLocked(true)
+                                        setBeepEnabled(true)
+                                        setPrompt(context.getString(R.string.scan_prompt))
+                                    }
+                                )
+                            }, Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                Icon(Icons.Filled.CameraAlt, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.scanner))
+                            }
+                            TextField(
+                                value = searchText,
+                                onValueChange = { searchText = it },
+                                label = { Text(stringResource(R.string.insert_number)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                    imeAction = ImeAction.Search
+                                ),
+                                keyboardActions = KeyboardActions(onSearch = { performSearch() }),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     },
-                    onCellEditRequest = { _, _ -> },
-                    onQuantityCellClick = { r ->
-                        infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                    confirmButton = {
+                        TextButton(onClick = { performSearch() }) {
+                            Text(
+                                stringResource(R.string.search_number)
+                            )
+                        }
                     },
-                    onPriceCellClick = { r ->
-                        infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true
-                    },
-                    onRowCellClick = { r ->
-                        infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                    dismissButton = {
+                        TextButton(onClick = { showSearchDialog = false }) {
+                            Text(
+                                stringResource(R.string.clear)
+                            )
+                        }
                     }
                 )
             }
-        }
 
-        // FAB Scanner e Cerca
-        if (excelData.isNotEmpty() && generated) {
-            Column(
-                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 88.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                horizontalAlignment = Alignment.End
-            ) {
-                FloatingActionButton(onClick = {
-                    val opts = ScanOptions().apply {
-                        setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                        setCaptureActivity(PortraitCaptureActivity::class.java)
-                        setOrientationLocked(true)
-                        setBeepEnabled(true)
-                        setPrompt(context.getString(R.string.scan_prompt))
-                    }
-                    scanLauncher.launch(opts)
-                }) { Icon(Icons.Filled.CameraAlt, contentDescription = R.string.scan_icon_desc.toString()) }
+            // Info dialog (autocount/newRetailPrice)
+            if (showInfoDialog && infoRowIndex in excelData.indices) {
 
-                FloatingActionButton(onClick = { searchText = ""; showSearchDialog = true }) {
-                    Icon(Icons.Filled.Search, contentDescription = R.string.search_icon_desc.toString())
+                val header = excelData.first()
+                val row = excelData[infoRowIndex]
+                val qtyReq = remember { FocusRequester() }
+                val priceReq = remember { FocusRequester() }
+                LaunchedEffect(showInfoDialog, infoDialogFocusField) {
+                    if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
                 }
-            }
-        }
-
-        // Dialog di ricerca
-        if (showSearchDialog) {
-            AlertDialog(
-                onDismissRequest = {},
-                title = { Text(stringResource(R.string.search_number)) },
-                text = {
-                    Column {
-                        Button(onClick = { scanLauncher.launch(
-                            ScanOptions().apply {
-                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                setCaptureActivity(PortraitCaptureActivity::class.java)
-                                setOrientationLocked(true)
-                                setBeepEnabled(true)
-                                setPrompt(context.getString(R.string.scan_prompt))
-                            }
-                        )}, Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                            Icon(Icons.Filled.CameraAlt, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text(stringResource(R.string.scanner))
-                        }
-                        TextField(
-                            value = searchText,
-                            onValueChange = { searchText = it },
-                            label = { Text(stringResource(R.string.insert_number)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { performSearch() }),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                },
-                confirmButton = { TextButton(onClick = { performSearch() }) {Text(stringResource(R.string.search_number)) } },
-                dismissButton = { TextButton(onClick = { showSearchDialog = false }) { Text(stringResource(R.string.clear)) } }
-            )
-        }
-
-        // Info dialog (autocount/newRetailPrice)
-        if (showInfoDialog && infoRowIndex in excelData.indices) {
-
-            val header = excelData.first()
-            val row = excelData[infoRowIndex]
-            val qtyReq = remember { FocusRequester() }
-            val priceReq = remember { FocusRequester() }
-            LaunchedEffect(showInfoDialog, infoDialogFocusField) {
-                if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
-            }
-            AlertDialog(
-                onDismissRequest = {showInfoDialog = false},
-                title = { Text(stringResource(R.string.row_info)) },
-                text = {
-                    Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
-                        header.forEachIndexed { ci, name ->
-                            // BLOCCO CORRETTO CON 'when'
-                            when (name) {
-                                "autocount", "newRetailPrice" -> {
-                                    val idx = if (name == "autocount") 0 else 1
-                                    val req = if (idx == 0) qtyReq else priceReq
-                                    var tf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][idx].value, TextRange(editableValues[infoRowIndex][idx].value.length))) }
-                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                        TextField(
-                                            value = tf,
-                                            onValueChange = { nv -> tf = nv; editableValues[infoRowIndex][idx].value = nv.text; viewModel.updateHistoryEntry() },
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done),
-                                            keyboardActions = KeyboardActions(onNext = { if (idx == 0) priceReq.requestFocus() }, onDone = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }),
-                                            modifier = Modifier.weight(1f).height(48.dp).border(1.dp, Color.Gray, RoundedCornerShape(4.dp)).clip(RoundedCornerShape(4.dp)).focusRequester(req)
-                                        )
-                                    }
-                                }
-                                "purchasePrice" -> {
-                                    val idx = header.indexOf("purchasePrice")
-                                    val value = row.getOrNull(idx) ?: ""
-                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                        Text(
-                                            value,
-                                            Modifier
-                                                .weight(1f)
-                                                .background(
-                                                    MaterialTheme.colorScheme.surfaceVariant,
-                                                    RoundedCornerShape(4.dp)
+                AlertDialog(
+                    onDismissRequest = { showInfoDialog = false },
+                    title = { Text(stringResource(R.string.row_info)) },
+                    text = {
+                        Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
+                            header.forEachIndexed { ci, name ->
+                                // BLOCCO CORRETTO CON 'when'
+                                when (name) {
+                                    "autocount", "newRetailPrice" -> {
+                                        val idx = if (name == "autocount") 0 else 1
+                                        val req = if (idx == 0) qtyReq else priceReq
+                                        var tf by remember {
+                                            mutableStateOf(
+                                                TextFieldValue(
+                                                    editableValues[infoRowIndex][idx].value,
+                                                    TextRange(editableValues[infoRowIndex][idx].value.length)
                                                 )
-                                                .padding(horizontal = 8.dp, vertical = 2.dp),
-                                            style = MaterialTheme.typography.bodyMedium.copy(
-                                                color = MaterialTheme.colorScheme.primary,
-                                                fontWeight = FontWeight.Bold
                                             )
-                                        )
-                                        IconButton(
-                                            onClick = {
-                                                calcInput = value
-                                                calcResult = value
-                                                calcRowIndex = infoRowIndex
-                                                showCalcDialog = true
-                                            }
+                                        }
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(Icons.Filled.Calculate, contentDescription = "Calcola nuovo valore")
+                                            Text(
+                                                getLocalizedHeader(context, name) + ":",
+                                                Modifier.weight(1f),
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            TextField(
+                                                value = tf,
+                                                onValueChange = { nv ->
+                                                    tf =
+                                                        nv; editableValues[infoRowIndex][idx].value =
+                                                    nv.text; viewModel.updateHistoryEntry()
+                                                },
+                                                singleLine = true,
+                                                keyboardOptions = KeyboardOptions(
+                                                    keyboardType = KeyboardType.Number,
+                                                    imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done
+                                                ),
+                                                keyboardActions = KeyboardActions(
+                                                    onNext = { if (idx == 0) priceReq.requestFocus() },
+                                                    onDone = {
+                                                        completeStates[infoRowIndex] =
+                                                            !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog =
+                                                        false
+                                                    }),
+                                                modifier = Modifier.weight(1f).height(48.dp).border(
+                                                    1.dp,
+                                                    Color.Gray,
+                                                    RoundedCornerShape(4.dp)
+                                                ).clip(RoundedCornerShape(4.dp)).focusRequester(req)
+                                            )
                                         }
                                     }
-                                }
-                                else -> {
-                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                        Text(getLocalizedHeader(context, name) + ":", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                                        val value = row.getOrNull(ci) ?: ""
-                                        if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+
+                                    "purchasePrice" -> {
+                                        val idx = header.indexOf("purchasePrice")
+                                        val value = row.getOrNull(idx) ?: ""
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                getLocalizedHeader(context, name) + ":",
+                                                Modifier.weight(1f),
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
                                             Text(
                                                 value,
-                                                Modifier.weight(1f)
+                                                Modifier
+                                                    .weight(1f)
                                                     .background(
-                                                        if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
+                                                        MaterialTheme.colorScheme.surfaceVariant,
                                                         RoundedCornerShape(4.dp)
                                                     )
                                                     .padding(horizontal = 8.dp, vertical = 2.dp),
                                                 style = MaterialTheme.typography.bodyMedium.copy(
-                                                    color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                    fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = FontWeight.Bold
                                                 )
                                             )
-                                        } else {
+                                            IconButton(
+                                                onClick = {
+                                                    calcInput = value
+                                                    calcResult = value
+                                                    calcRowIndex = infoRowIndex
+                                                    showCalcDialog = true
+                                                }
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Calculate,
+                                                    contentDescription = "Calcola nuovo valore"
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    else -> {
+                                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                             Text(
-                                                value,
+                                                getLocalizedHeader(context, name) + ":",
                                                 Modifier.weight(1f),
                                                 style = MaterialTheme.typography.bodyMedium
                                             )
+                                            val value = row.getOrNull(ci) ?: ""
+                                            if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                                Text(
+                                                    value,
+                                                    Modifier.weight(1f)
+                                                        .background(
+                                                            if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(
+                                                                alpha = 0.10f
+                                                            ) else Color.Transparent,
+                                                            RoundedCornerShape(4.dp)
+                                                        )
+                                                        .padding(
+                                                            horizontal = 8.dp,
+                                                            vertical = 2.dp
+                                                        ),
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                        fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                    )
+                                                )
+                                            } else {
+                                                Text(
+                                                    value,
+                                                    Modifier.weight(1f),
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            completeStates[infoRowIndex] =
+                                !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog =
+                            false
+                        }) { Text(getLocalizedHeader(context, "complete")) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showInfoDialog = false }) {
+                            Text(
+                                stringResource(R.string.confirm)
+                            )
+                        }
                     }
-                },
-                confirmButton = { TextButton(onClick = { completeStates[infoRowIndex] = !completeStates[infoRowIndex]; viewModel.updateHistoryEntry(); showInfoDialog = false }) { Text(getLocalizedHeader(context, "complete")) } },
-                dismissButton = { TextButton(onClick = { showInfoDialog = false }) { Text(stringResource(R.string.confirm)) } }
-            )
-        }
+                )
+            }
 
-        if (showCalcDialog && calcRowIndex == infoRowIndex) {
-            CalculatorDialog(
-                value = calcInput,
-                onValueChange = { calcInput = it },
-                onResult = { res ->
-                    // Aggiorna la cella della purchasePrice SOLO per questa riga
-                    val idx = viewModel.excelData.first().indexOf("purchasePrice")
-                    if (idx > -1) {
-                        viewModel.excelData[infoRowIndex] =
-                            viewModel.excelData[infoRowIndex].toMutableList().also { it[idx] = formatDecimal(res) }
-                        viewModel.updateHistoryEntry()
-                    }
-                },
-                onDismiss = { showCalcDialog = false }
-            )
+            if (showCalcDialog && calcRowIndex == infoRowIndex) {
+                CalculatorDialog(
+                    value = calcInput,
+                    onValueChange = { calcInput = it },
+                    onResult = { res ->
+                        // Aggiorna la cella della purchasePrice SOLO per questa riga
+                        val idx = viewModel.excelData.first().indexOf("purchasePrice")
+                        if (idx > -1) {
+                            viewModel.excelData[infoRowIndex] =
+                                viewModel.excelData[infoRowIndex].toMutableList()
+                                    .also { it[idx] = formatDecimal(res) }
+                            viewModel.updateHistoryEntry()
+                        }
+                    },
+                    onDismiss = { showCalcDialog = false }
+                )
+            }
         }
     }
+
+    // Dialog rinomina file
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text(stringResource(R.string.rename_file)) },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text(stringResource(R.string.new_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val entry = viewModel.historyEntries.find { it.id == entryId }
+                    if (entry != null && renameText.isNotBlank()) {
+                        viewModel.renameHistoryEntry(entry, renameText)
+                        titleText = renameText
+                        showRenameDialog = false
+                    }
+                }) {
+                    Text(stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
 }
 
 
