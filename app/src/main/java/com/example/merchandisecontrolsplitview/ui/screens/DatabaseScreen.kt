@@ -39,20 +39,32 @@ fun DatabaseScreen(
     val filter by viewModel.filter.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { viewModel.importFromExcel(it) }
+        uri?.let { viewModel.importFromExcel(context, it) }
     }
+
     val downloadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/csv"),
-        onResult = { uri: Uri? -> uri?.let { viewModel.exportToExcel(it) } }
+        onResult = { uri: Uri? -> uri?.let { viewModel.exportToExcel(context, it) } } // <-- passa context!
     )
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
             viewModel.setFilter(code)
+        }
+    }
+
+    LaunchedEffect(uiState) {
+        when (uiState) {
+            is com.example.merchandisecontrolsplitview.viewmodel.UiState.Success ->
+                snackbarHostState.showSnackbar((uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Success).message)
+            is com.example.merchandisecontrolsplitview.viewmodel.UiState.Error ->
+                snackbarHostState.showSnackbar((uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Error).message)
+            else -> {}
         }
     }
 
@@ -79,7 +91,8 @@ fun DatabaseScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues -> // Ho rinominato 'padding' in 'paddingValues' per chiarezza, non è obbligatorio
         // ***** INIZIO DELLA MODIFICA *****
         // Avvolgi il contenuto della schermata e il FAB in una Box
@@ -106,21 +119,6 @@ fun DatabaseScreen(
                         HorizontalDivider()
                     }
                 }
-            }
-            if (uiState is com.example.merchandisecontrolsplitview.viewmodel.UiState.Error) {
-                val msg = (uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Error).message
-                Snackbar(
-                    action = {
-                        TextButton(onClick = { /* retry? */ }) { Text(stringResource(R.string.retry)) }
-                    },
-                    modifier = Modifier.align(Alignment.BottomCenter) // Puoi allineare la Snackbar se vuoi
-                ) { Text(msg) }
-            }
-            if (uiState is com.example.merchandisecontrolsplitview.viewmodel.UiState.Success) {
-                val msg = (uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Success).message
-                Snackbar(
-                    modifier = Modifier.align(Alignment.BottomCenter) // Puoi allineare la Snackbar se vuoi
-                ) { Text(msg) }
             }
 
             FloatingActionButton(

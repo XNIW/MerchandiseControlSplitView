@@ -35,6 +35,8 @@
     <string name="exit_edit">退出编辑</string>
     <string name="generate_filtered_sheet">生成筛选表</string>
     <string name="exit_confirm_title">确定要退出吗？已加载数据将丢失。</string>
+    <string name="supplier_dialog_title">请输入供应商名称</string>
+    <string name="supplier_label">供应商</string>
 
     <!-- 生成页面 -->
     <string name="row_info">行信息</string>
@@ -81,4 +83,11 @@
     <string name="old_purchase_price">旧进价</string>
     <string name="old_retail_price">旧零售价</string>
     <string name="supplier">供应商</string>
+
+    <!-- viewmodel DatabaseViewModel -->
+    <string name="import_success">导入完成</string>
+    <string name="export_success">导出完成</string>
+    <string name="import_error">导入错误：%1$s</string>
+    <string name="export_error">导出错误：%1$s</string>
+
 </resources>

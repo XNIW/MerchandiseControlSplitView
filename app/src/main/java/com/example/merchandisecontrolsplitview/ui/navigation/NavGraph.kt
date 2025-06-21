@@ -49,9 +49,8 @@ fun AppNavGraph() {
         composable(Screen.PreGenerate.route) {
             PreGenerateScreen(
                 viewModel = viewModel,
-                onGenerate = {
-                    viewModel.generateFilteredWithOldPrices { entryId ->
-                        // qui dentro hai l'entryId
+                onGenerate = { supplierName -> // ACCETTA IL PARAMETRO!
+                    viewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
                         navController.navigate("generatedScreen/$entryId")
                     }
                 },
@@ -61,18 +60,6 @@ fun AppNavGraph() {
             )
         }
 
-//        composable(Screen.Generated.route) {
-//            GeneratedScreen(
-//                viewModel = viewModel,
-//                onBackToStart = {
-//                    viewModel.resetState()
-//                    navController.popBackStack(
-//                        Screen.FilePicker.route,
-//                        inclusive = false
-//                    )
-//                }
-//            )
-//        }
         composable("generatedScreen/{entryId}") { backStackEntry ->
             val entryId = backStackEntry.arguments?.getString("entryId") ?: ""
             GeneratedScreen(

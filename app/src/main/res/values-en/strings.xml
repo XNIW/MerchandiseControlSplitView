@@ -35,6 +35,8 @@
     <string name="exit_edit">Exit edit</string>
     <string name="generate_filtered_sheet">Generate filtered sheet</string>
     <string name="exit_confirm_title">Are you sure you want to exit? Loaded data will be lost.</string>
+    <string name="supplier_dialog_title">Enter the supplier name</string>
+    <string name="supplier_label">Supplier</string>
 
     <!-- GenerateScreen -->
     <string name="row_info">Row information</string>
@@ -81,4 +83,10 @@
     <string name="old_purchase_price">Old Purchase Price</string>
     <string name="old_retail_price">Old Retail Price</string>
     <string name="supplier">Supplier</string>
+
+    <!-- viewmodel DatabaseViewModel -->
+    <string name="import_success">Import completed</string>
+    <string name="export_success">Export completed</string>
+    <string name="import_error">Import error: %1$s</string>
+    <string name="export_error">Export error: %1$s</string>
 </resources>

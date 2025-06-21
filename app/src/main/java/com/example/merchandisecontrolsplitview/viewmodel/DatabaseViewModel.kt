@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.R
 
 sealed class UiState {
     data object Idle : UiState()
@@ -37,7 +38,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _filter.value = text.ifBlank { null }
     }
 
-    fun importFromExcel(uri: Uri) {
+    fun importFromExcel(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -63,14 +64,16 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     if (processed % 10 == 0)
                         _uiState.value = UiState.Loading(progress = processed * 100 / products.size)
                 }
-                _uiState.value = UiState.Success("Importazione completata")
+                // FIX: Use getApplication() to get the Context
+                _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("Errore importazione: ${e.message}")
+                // FIX: Use getApplication() to get the Context
+                _uiState.value = UiState.Error(context.getString(R.string.import_error, e.message ?: ""))
             }
         }
     }
 
-    fun exportToExcel(uri: Uri) {
+    fun exportToExcel(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -83,9 +86,11 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     products.addAll(result.data)
                 }
                 writeProductsToExcel(getApplication(), uri, products)
-                _uiState.value = UiState.Success("Esportazione completata")
+                // FIX: Use getApplication() to get the Context
+                _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("Errore esportazione: ${e.message}")
+                // FIX: Use getApplication() to get the Context
+                _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: ""))
             }
         }
     }

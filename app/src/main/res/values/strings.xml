@@ -35,6 +35,8 @@
     <string name="exit_edit">Esci da modifica</string>
     <string name="generate_filtered_sheet">Genera foglio filtrato</string>
     <string name="exit_confirm_title">Sei sicuro di uscire? Perderai i dati caricati.</string>
+    <string name="supplier_dialog_title">Scrivi il nome del fornitore</string>
+    <string name="supplier_label">Fornitore</string>
 
     <!-- Schermata GenerateScreen -->
     <string name="row_info">Informazioni riga</string>
@@ -81,4 +83,10 @@
     <string name="old_purchase_price">Prezzo vecchio acquisto</string>
     <string name="old_retail_price">Prezzo vecchio vendita</string>
     <string name="supplier">Fornitore</string>
+
+    <!-- viewmodel DatabaseViewModel -->
+    <string name="import_success">Importazione completata</string>
+    <string name="export_success">Esportazione completata</string>
+    <string name="import_error">Errore importazione: %1$s</string>
+    <string name="export_error">Errore esportazione: %1$s</string>
 </resources>

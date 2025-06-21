@@ -108,15 +108,42 @@ fun ZoomableExcelGrid(
                         row.forEachIndexed { ci, cell ->
                             val isMatch = searchMatches.contains(r to ci)
                             when {
-                                // Modalità edit: tutte le celle editabili
-                                editMode -> {
-                                    val text = when (ci) {
-                                        indexQuantita -> editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty()
-                                        indexPrezzo -> editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty()
-                                        else -> row.getOrNull(ci).orEmpty()
+                                // PreGenerateScreen: selezione colonne
+                                !generated -> TableCell(
+                                    text = row.getOrNull(ci).orEmpty(),
+                                    width = cellWidth,
+                                    height = cellHeight,
+                                    isHeader = false,
+                                    isSelectedColumn = selectedColumns.getOrElse(ci) { false },
+                                    isRowFilled = false,
+                                    isSearchMatch = isMatch,
+                                    isRowComplete = false,
+                                    onCellClick = { selectedColumns[ci] = !selectedColumns[ci] }
+                                )
+                                // GeneratedScreen: colonne speciali
+                                generated -> when {
+                                    // Edit mode: tutte le celle editabili
+                                    editMode -> {
+                                        val text = when (ci) {
+                                            indexQuantita -> editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty()
+                                            indexPrezzo -> editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty()
+                                            else -> row.getOrNull(ci).orEmpty()
+                                        }
+                                        TableCell(
+                                            text = text,
+                                            width = cellWidth,
+                                            height = cellHeight,
+                                            isHeader = false,
+                                            isSelectedColumn = false,
+                                            isRowFilled = bothFilled,
+                                            isSearchMatch = isMatch,
+                                            isRowComplete = isComplete,
+                                            onCellClick = { onCellEditRequest(r, ci) }
+                                        )
                                     }
-                                    TableCell(
-                                        text = text,
+                                    // Colonna Quantità (prima delle ultime 3)
+                                    hasEditable && ci == indexQuantita -> TableCell(
+                                        text = editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty(),
                                         width = cellWidth,
                                         height = cellHeight,
                                         isHeader = false,
@@ -124,65 +151,53 @@ fun ZoomableExcelGrid(
                                         isRowFilled = bothFilled,
                                         isSearchMatch = isMatch,
                                         isRowComplete = isComplete,
-                                        onCellClick = { onCellEditRequest(r, ci) }
+                                        onCellClick = { onQuantityCellClick(r) }
                                     )
-                                }
-                                // Colonna Quantità (prima delle ultime 3)
-                                hasEditable && ci == indexQuantita -> TableCell(
-                                    text = editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty(),
-                                    width = cellWidth,
-                                    height = cellHeight,
-                                    isHeader = false,
-                                    isSelectedColumn = false,
-                                    isRowFilled = bothFilled,
-                                    isSearchMatch = isMatch,
-                                    isRowComplete = isComplete,
-                                    onCellClick = { onQuantityCellClick(r) }
-                                )
-                                // Colonna Prezzo
-                                hasEditable && ci == indexPrezzo -> TableCell(
-                                    text = editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty(),
-                                    width = cellWidth,
-                                    height = cellHeight,
-                                    isHeader = false,
-                                    isSelectedColumn = false,
-                                    isRowFilled = bothFilled,
-                                    isSearchMatch = isMatch,
-                                    isRowComplete = isComplete,
-                                    onCellClick = { onPriceCellClick(r) }
-                                )
-                                // Colonna Completo (spunta cliccabile)
-                                hasEditable && ci == indexCompleto -> Box(
-                                    modifier = Modifier
-                                        .width(cellWidth)
-                                        .height(cellHeight)
-                                        .background(if (isComplete) Color.Green else Color.White)
-                                        .border(1.dp, Color.Gray)
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .clickable { onCompleteToggle(r) },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = stringResource(R.string.header_complete),
-                                        tint = if (isComplete) Color.White else Color.Gray
+                                    // Colonna Prezzo
+                                    hasEditable && ci == indexPrezzo -> TableCell(
+                                        text = editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty(),
+                                        width = cellWidth,
+                                        height = cellHeight,
+                                        isHeader = false,
+                                        isSelectedColumn = false,
+                                        isRowFilled = bothFilled,
+                                        isSearchMatch = isMatch,
+                                        isRowComplete = isComplete,
+                                        onCellClick = { onPriceCellClick(r) }
                                     )
-                                }
-                                // Celle normali
-                                else -> TableCell(
-                                    text = row.getOrNull(ci).orEmpty(),
-                                    width = cellWidth,
-                                    height = cellHeight,
-                                    isHeader = false,
-                                    isSelectedColumn = selectedColumns.getOrElse(ci) { false },
-                                    isRowFilled = bothFilled,
-                                    isSearchMatch = isMatch,
-                                    isRowComplete = isComplete,
-                                    onCellClick = {
-                                        if (hasEditable || generated) onRowCellClick(r)
-                                        else selectedColumns[ci] = !selectedColumns[ci]
+                                    // Colonna Completo (spunta cliccabile)
+                                    hasEditable && ci == indexCompleto -> Box(
+                                        modifier = Modifier
+                                            .width(cellWidth)
+                                            .height(cellHeight)
+                                            .background(if (isComplete) Color.Green else Color.White)
+                                            .border(1.dp, Color.Gray)
+                                            .clip(RoundedCornerShape(2.dp))
+                                            .clickable { onCompleteToggle(r) },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = stringResource(R.string.header_complete),
+                                            tint = if (isComplete) Color.White else Color.Gray
+                                        )
                                     }
-                                )
+                                    // Celle normali
+                                    else -> TableCell(
+                                        text = row.getOrNull(ci).orEmpty(),
+                                        width = cellWidth,
+                                        height = cellHeight,
+                                        isHeader = false,
+                                        isSelectedColumn = selectedColumns.getOrElse(ci) { false },
+                                        isRowFilled = bothFilled,
+                                        isSearchMatch = isMatch,
+                                        isRowComplete = isComplete,
+                                        onCellClick = {
+                                            if (hasEditable || generated) onRowCellClick(r)
+                                            else selectedColumns[ci] = !selectedColumns[ci]
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

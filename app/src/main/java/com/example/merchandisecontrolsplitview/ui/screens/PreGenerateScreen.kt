@@ -25,7 +25,7 @@ import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 @Composable
 fun PreGenerateScreen(
     viewModel: ExcelViewModel,
-    onGenerate: () -> Unit,
+    onGenerate: (String) -> Unit,
     onBack: () -> Unit
 ) {
     // State from ViewModel
@@ -40,6 +40,9 @@ fun PreGenerateScreen(
     // Local UI state
     var editMode by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
+
+    var showSupplierDialog by remember { mutableStateOf(false) }
+    var supplierName by remember { mutableStateOf("") }
 
     // Intercept back gesture to confirm exit
     BackHandler {
@@ -118,7 +121,10 @@ fun PreGenerateScreen(
                     )
                 }
                 if (!editMode) {
-                    FloatingActionButton(onClick = onGenerate) {
+                    FloatingActionButton(onClick = {
+                        supplierName = ""
+                        showSupplierDialog = true
+                    }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                             contentDescription = stringResource(R.string.generate_filtered_sheet)
@@ -145,6 +151,35 @@ fun PreGenerateScreen(
                     TextButton(onClick = { showExitDialog = false }) {
                         Text(stringResource(R.string.cancel))
                     }
+                }
+            )
+        }
+
+        if (showSupplierDialog) {
+            AlertDialog(
+                onDismissRequest = { showSupplierDialog = false },
+                title = { Text(stringResource(R.string.supplier_dialog_title)) },
+                text = {
+                    OutlinedTextField(
+                        value = supplierName,
+                        onValueChange = { supplierName = it },
+                        label = { Text(stringResource(R.string.supplier_label)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (supplierName.isNotBlank()) {
+                                showSupplierDialog = false
+                                onGenerate(supplierName) // passa il fornitore!
+                            }
+                        }
+                    ) { Text(stringResource(R.string.confirm)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSupplierDialog = false }) { Text(stringResource(R.string.cancel)) }
                 }
             )
         }

@@ -21,6 +21,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 
 /** Un singolo record di cronologia. */
 data class HistoryEntry(
@@ -28,7 +29,8 @@ data class HistoryEntry(
     val timestamp: String,
     val data: List<List<String>>,
     val editable: List<List<String>>,
-    val complete: List<Boolean>
+    val complete: List<Boolean>,
+    val supplier: String = ""
 )
 
 /**
@@ -54,6 +56,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     private var currentIndex: Int? = null
 
     private val db = AppDatabase.getDatabase(application)
+
+    var currentSupplierName: String = ""
 
     init {
         loadHistoryFromPrefs()
@@ -106,7 +110,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         repeat(excelData.size) { completeStates.add(false) }
     }
 
-    fun generateFilteredWithOldPrices(onResult: (String) -> Unit) {
+    fun generateFilteredWithOldPrices(supplierName: String, onResult: (String) -> Unit) {
         viewModelScope.launch {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
@@ -156,7 +160,16 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             filtered.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
 
             generated.value = true
-            val id = addHistoryEntryAndReturnId() // Nuova funzione qui sotto!
+
+            // --- CREA IL NOME FILE CON FORNITORE ---
+            val now   = LocalDateTime.now()
+            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
+            val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
+            val id    = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
+
+            currentSupplierName = supplierName // <--- Salva il fornitore!
+
+            addHistoryEntryWithId(id, supplierName)
             saveHistoryToPrefs()
             onResult(id)
         }
@@ -166,21 +179,19 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Aggiunge un nuovo entry con secondi e persiste. */
     // MODIFICATO: La funzione è ora privata
-    private fun addHistoryEntryAndReturnId(): String {
+    private fun addHistoryEntryWithId(id: String, supplier: String) {
         val now   = LocalDateTime.now()
         val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
-        val id    = "$stamp.xlsx"
         val entry = HistoryEntry(
             id, stamp,
             excelData.map { it.toList() },
             editableValues.map { row -> row.map { it.value } },
-            completeStates.toList()
+            completeStates.toList(),
+            supplier
         )
         historyEntries.add(0, entry)
         currentIndex = 0
-        return id
     }
-
     /**
      * Rinomina un entry di cronologia e persiste.
      */
@@ -247,7 +258,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates)
+        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName)
     }
 }
 
@@ -256,7 +267,8 @@ private fun saveExcelFileInternal(
     uri: Uri,
     data: List<List<String>>,
     editable: List<List<MutableState<String>>>,
-    complete: List<Boolean>
+    complete: List<Boolean>,
+    supplier: String
 ) {
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet("Export")
@@ -268,14 +280,17 @@ private fun saveExcelFileInternal(
         fillForegroundColor = IndexedColors.LIGHT_YELLOW.index
         fillPattern         = FillPatternType.SOLID_FOREGROUND
     }
-
-    // Header
     val headerRow = sheet.createRow(0)
-    data.firstOrNull()?.forEachIndexed { ci, name ->
+
+    // Header localizzato: aggiungi supplier in fondo
+    val localizedHeader = data.firstOrNull()?.map { getLocalizedHeader(context, it) } ?: emptyList()
+    localizedHeader.forEachIndexed { ci, name ->
         headerRow.createCell(ci).setCellValue(name)
     }
+    headerRow.createCell(localizedHeader.size)
+        .setCellValue(getLocalizedHeader(context, "supplier"))
 
-    // Data rows
+    // Data rows: aggiungi supplier in fondo
     data.drop(1).forEachIndexed { ri, row ->
         val excelRow = sheet.createRow(ri + 1)
         row.forEachIndexed { ci, txt ->
@@ -295,6 +310,8 @@ private fun saveExcelFileInternal(
                     cell.cellStyle = styleFilled
             }
         }
+        // Supplier nell'ultima colonna
+        excelRow.createCell(row.size).setCellValue(supplier)
     }
 
     context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
