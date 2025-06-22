@@ -37,6 +37,11 @@
     <string name="exit_confirm_title">Are you sure you want to exit? Loaded data will be lost.</string>
     <string name="supplier_dialog_title">Enter the supplier name</string>
     <string name="supplier_label">Supplier</string>
+    <string name="custom_header_dialog_title">Enter column name</string>
+    <string name="custom_header_label">Custom name</string>
+    <string name="select_column_type">Select column type</string>
+    <string name="custom_column_type">Custom name</string>
+    <string name="close">Close</string>
 
     <!-- GenerateScreen -->
     <string name="row_info">Row information</string>

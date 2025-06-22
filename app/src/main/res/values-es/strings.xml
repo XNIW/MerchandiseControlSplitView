@@ -37,6 +37,11 @@
     <string name="exit_confirm_title">¿Seguro que deseas salir? Los datos cargados se perderán.</string>
     <string name="supplier_dialog_title">Escribe el nombre del proveedor</string>
     <string name="supplier_label">Proveedor</string>
+    <string name="custom_header_dialog_title">Ingrese el nombre de la columna</string>
+    <string name="custom_header_label">Nombre personalizado</string>
+    <string name="select_column_type">Seleccione el tipo de columna</string>
+    <string name="custom_column_type">Nombre personalizado</string>
+    <string name="close">Cerrar</string>
 
     <!-- Pantalla GenerateScreen -->
     <string name="row_info">Información de fila</string>

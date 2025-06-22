@@ -59,7 +59,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
 
-    var currentSupplierName: String = ""
+    private var currentSupplierName: String = ""
 
     init {
         loadHistoryFromPrefs()
@@ -264,6 +264,23 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
         saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName)
+    }
+
+    fun setHeaderType(colIdx: Int, type: String?) {
+        // Aggiorna la tipologia riconoscimento (colore)
+        if (colIdx in headerTypes.indices) {
+            headerTypes[colIdx] = type ?: "unknown"
+        }
+
+        // MODIFICATO: Controllo più robusto per l'accesso a excelData[0]
+        val headerRow = excelData.firstOrNull()?.toMutableList()
+        if (headerRow != null && colIdx in headerRow.indices) { // Usa headerRow.indices, che sarà valido se headerRow non è null
+            if (type != null) {
+                // Sostituisci con la chiave selezionata ("barcode", "quantity", ecc)
+                headerRow[colIdx] = type
+                excelData[0] = headerRow // Aggiorna la riga dell'intestazione in excelData
+            }
+        }
     }
 }
 

@@ -37,6 +37,11 @@
     <string name="exit_confirm_title">确定要退出吗？已加载数据将丢失。</string>
     <string name="supplier_dialog_title">请输入供应商名称</string>
     <string name="supplier_label">供应商</string>
+    <string name="custom_header_dialog_title">请输入列名</string>
+    <string name="custom_header_label">自定义名称</string>
+    <string name="select_column_type">选择列类型</string>
+    <string name="custom_column_type">自定义名称</string>
+    <string name="close">关闭</string>
 
     <!-- 生成页面 -->
     <string name="row_info">行信息</string>

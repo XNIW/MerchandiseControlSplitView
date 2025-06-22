@@ -47,7 +47,8 @@ fun ZoomableExcelGrid(
     onQuantityCellClick: (Int) -> Unit,
     onPriceCellClick: (Int) -> Unit,
     onRowCellClick: (Int) -> Unit,
-    headerTypes: List<String>? = null // nuovo parametro opzionale
+    headerTypes: List<String>? = null,
+    onHeaderClick: ((colIndex: Int) -> Unit)? = null
 ) {
     if (data.isEmpty()) return
 
@@ -89,7 +90,11 @@ fun ZoomableExcelGrid(
                                     .background(bgColor)
                                     .border(1.dp, Color.DarkGray)
                                     .width(cellWidth)
-                                    .height(cellHeight),
+                                    .height(cellHeight)
+                                    .then(
+                                        if (onHeaderClick != null) Modifier.clickable { onHeaderClick(ci) }
+                                        else Modifier
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -116,7 +121,7 @@ fun ZoomableExcelGrid(
                         Modifier
                             .background(if (isComplete) Color(0xFFB9F6CA) else Color.Unspecified) // riga verde se completa
                     ) {
-                        row.forEachIndexed { ci, cell ->
+                        row.forEachIndexed { ci, _ -> // MODIFICA: 'cell' rinominato in '_'
                             val isMatch = searchMatches.contains(r to ci)
                             when {
                                 // PreGenerateScreen: selezione colonne
@@ -132,7 +137,7 @@ fun ZoomableExcelGrid(
                                     onCellClick = { selectedColumns[ci] = !selectedColumns[ci] }
                                 )
                                 // GeneratedScreen: colonne speciali
-                                generated -> when {
+                                generated -> when { // Qui 'generated' è già true
                                     // Edit mode: tutte le celle editabili
                                     editMode -> {
                                         val text = when (ci) {
@@ -204,8 +209,10 @@ fun ZoomableExcelGrid(
                                         isSearchMatch = isMatch,
                                         isRowComplete = isComplete,
                                         onCellClick = {
-                                            if (hasEditable || generated) onRowCellClick(r)
-                                            else selectedColumns[ci] = !selectedColumns[ci]
+                                            // MODIFICA: Rimosso il controllo ridondante 'if (hasEditable || generated)'
+                                            // Poiché siamo già nel blocco 'generated -> when', 'generated' è già true.
+                                            // L'azione qui è sempre 'onRowCellClick(r)'.
+                                            onRowCellClick(r)
                                         }
                                     )
                                 }
