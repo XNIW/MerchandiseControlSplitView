@@ -265,7 +265,7 @@ fun readAndAnalyzeExcel(
                             if (usedCols.contains(col)) continue
                             val matches = dataRows.count { row ->
                                 val v = row.getOrNull(col)?.trim() ?: ""
-                                v.matches(Regex("""^(0[\.,]\d{1,2})$""")) || v.matches(Regex("""^\d{1,2}%$"""))
+                                v.matches(Regex("""^(0[.,]\d{1,2})$""")) || v.matches(Regex("""^\d{1,2}%$"""))
                             }
                             if (matches >= threshold) { setIfFound("discount", col); break }
                         }
