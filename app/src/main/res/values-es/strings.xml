@@ -60,6 +60,7 @@
     <string name="header_retail_price">Precio de venta</string>
     <string name="header_total_price">Precio total</string>
     <string name="header_product_name">Nombre del producto</string>
+    <string name="header_second_product_name">Segundo nombre del producto</string>
     <string name="header_item_number">Código del artículo</string>
     <string name="header_supplier">Proveedor</string>
     <string name="header_complete">Completo</string>
@@ -67,6 +68,9 @@
     <string name="header_old_retail_price">Precio de venta anterior</string>
     <string name="header_new_retail_price">Nuevo precio de venta</string>
     <string name="header_autocount">Cantidad contada</string>
+    <string name="header_row_number">No</string>
+    <string name="header_discount">Descuento</string>
+    <string name="header_discounted_price">Precio con descuento</string>
 
     <!-- Pantalla de Base de Datos -->
     <string name="database_screen_title">Gestión de Productos</string>

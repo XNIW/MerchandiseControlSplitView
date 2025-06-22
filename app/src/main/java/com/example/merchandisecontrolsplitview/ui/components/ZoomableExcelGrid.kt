@@ -13,6 +13,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.snapshots.SnapshotStateList
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
@@ -44,7 +46,8 @@ fun ZoomableExcelGrid(
     onCellEditRequest: (Int, Int) -> Unit,
     onQuantityCellClick: (Int) -> Unit,
     onPriceCellClick: (Int) -> Unit,
-    onRowCellClick: (Int) -> Unit
+    onRowCellClick: (Int) -> Unit,
+    headerTypes: List<String>? = null // nuovo parametro opzionale
 ) {
     if (data.isEmpty()) return
 
@@ -75,17 +78,25 @@ fun ZoomableExcelGrid(
                 item {
                     Row {
                         repeat(columnCount) { ci ->
-                            TableCell(
-                                text = data[0][ci],
-                                width = cellWidth,
-                                height = cellHeight,
-                                isHeader = true,
-                                isSelectedColumn = false,
-                                isRowFilled = false,
-                                isSearchMatch = false,
-                                isRowComplete = false,
-                                onCellClick = null
-                            )
+                            // Colorazione header per metodo di riconoscimento
+                            val bgColor = when (headerTypes?.getOrNull(ci)) {
+                                "alias"   -> Color(0xFFB9F6CA)    // verde chiaro
+                                "pattern" -> Color(0xFFFFE082)    // arancione
+                                else      -> Color(0xFFE0E0E0)    // grigio chiaro
+                            }
+                            Box(
+                                Modifier
+                                    .background(bgColor)
+                                    .border(1.dp, Color.DarkGray)
+                                    .width(cellWidth)
+                                    .height(cellHeight),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    data[0][ci],
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                     HorizontalDivider(color = Color.Gray, thickness = 1.dp)

@@ -55,6 +55,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     val historyEntries  = mutableStateListOf<HistoryEntry>()
     private var currentIndex: Int? = null
 
+    val headerTypes = mutableStateListOf<String>()
+
     private val db = AppDatabase.getDatabase(application)
 
     var currentSupplierName: String = ""
@@ -86,12 +88,15 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             isLoading.value = true
             loadError.value = null
             try {
-                val (header, dataRows) = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
+                val (header, dataRows, headerSource) = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
                 excelData.clear()
                 if (header.isNotEmpty()) {
-                    excelData.add(header)   // Prima riga: intestazione
-                    excelData.addAll(dataRows)  // Dati: dalla seconda riga in poi
+                    excelData.add(header)
+                    excelData.addAll(dataRows)
                 }
+                // Salva la lista headerTypes!
+                headerTypes.clear()
+                headerTypes.addAll(headerSource)
                 generated.value = false
                 initPreGenerateState()
             } catch (e: Exception) {

@@ -30,7 +30,8 @@ fun TableCell(
     isRowFilled: Boolean,
     isSearchMatch: Boolean,
     isRowComplete: Boolean,
-    onCellClick: (() -> Unit)?
+    onCellClick: (() -> Unit)?,
+    backgroundColor: Color = Color.Unspecified
 ) {
     val backgroundColor = when {
         isRowComplete    -> Color.Green
@@ -44,8 +45,8 @@ fun TableCell(
         modifier = Modifier
             .width(width)
             .height(height)
-            .border(1.dp, Color.Gray)
             .background(backgroundColor)
+            .border(1.dp, Color.Gray)
             .clip(RoundedCornerShape(2.dp))
             .padding(4.dp)
             .then(

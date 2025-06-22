@@ -36,6 +36,7 @@ fun PreGenerateScreen(
     val isLoading by viewModel.isLoading
     val loadError by viewModel.loadError
     val context = LocalContext.current
+    val headerTypes = viewModel.headerTypes
 
     // Local UI state
     var editMode by remember { mutableStateOf(false) }
@@ -43,6 +44,7 @@ fun PreGenerateScreen(
 
     var showSupplierDialog by remember { mutableStateOf(false) }
     var supplierName by remember { mutableStateOf("") }
+
 
     // Intercept back gesture to confirm exit
     BackHandler {
@@ -85,7 +87,8 @@ fun PreGenerateScreen(
                     onCellEditRequest = { _, _ -> },
                     onQuantityCellClick = {},
                     onPriceCellClick = {},
-                    onRowCellClick = { }
+                    onRowCellClick = { },
+                    headerTypes = headerTypes   // <--- NUOVO PARAMETRO!
                 )
             }
         }

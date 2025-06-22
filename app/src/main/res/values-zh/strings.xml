@@ -60,6 +60,7 @@
     <string name="header_retail_price">零售价</string>
     <string name="header_total_price">总价</string>
     <string name="header_product_name">品名</string>
+    <string name="header_second_product_name">品名2</string>
     <string name="header_item_number">货号</string>
     <string name="header_supplier">供应商</string>
     <string name="header_complete">完成</string>
@@ -67,6 +68,9 @@
     <string name="header_old_retail_price">旧零售价</string>
     <string name="header_new_retail_price">新零售价</string>
     <string name="header_autocount">实点数量</string>
+    <string name="header_row_number">序号</string>
+    <string name="header_discount">折扣</string>
+    <string name="header_discounted_price">折后价</string>
 
     <!-- 数据库页面 -->
     <string name="database_screen_title">商品管理</string>

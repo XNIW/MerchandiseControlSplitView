@@ -60,6 +60,7 @@
     <string name="header_retail_price">Retail price</string>
     <string name="header_total_price">Total price</string>
     <string name="header_product_name">Product name</string>
+    <string name="header_second_product_name">Second Product Name</string>
     <string name="header_item_number">Item code</string>
     <string name="header_supplier">Supplier</string>
     <string name="header_complete">Complete</string>
@@ -67,6 +68,9 @@
     <string name="header_old_retail_price">Old retail price</string>
     <string name="header_new_retail_price">New retail price</string>
     <string name="header_autocount">Counted quantity</string>
+    <string name="header_row_number">No</string>
+    <string name="header_discount">Discount</string>
+    <string name="header_discounted_price">Discounted Price</string>
 
     <!-- Database Screen -->
     <string name="database_screen_title">Product Management</string>

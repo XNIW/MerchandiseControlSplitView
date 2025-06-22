@@ -60,6 +60,7 @@
     <string name="header_retail_price">Prezzo vendita</string>
     <string name="header_total_price">Prezzo totale</string>
     <string name="header_product_name">Nome prodotto</string>
+    <string name="header_second_product_name">Secondo nome prodotto</string>
     <string name="header_item_number">Codice articolo</string>
     <string name="header_supplier">Fornitore</string>
     <string name="header_complete">Completo</string>
@@ -67,6 +68,9 @@
     <string name="header_old_retail_price">Prezzo vecchio vendita</string>
     <string name="header_new_retail_price">Nuovo prezzo vendita</string>
     <string name="header_autocount">Quantità contata</string>
+    <string name="header_row_number">No</string>
+    <string name="header_discount">Sconto</string>
+    <string name="header_discounted_price">Prezzo scontato</string>
 
     <!-- Schermata Database -->
     <string name="database_screen_title">Gestione Prodotti</string>

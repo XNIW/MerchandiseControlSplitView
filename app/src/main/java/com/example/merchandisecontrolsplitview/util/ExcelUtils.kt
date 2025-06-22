@@ -9,15 +9,13 @@ import org.apache.poi.ss.usermodel.WorkbookFactory
 fun readAndAnalyzeExcel(
     context: Context,
     uri: Uri
-): Pair<List<String>, List<List<String>>> {
-    // Funzione per normalizzare nomi colonne
+): Triple<List<String>, List<List<String>>, List<String>> {
     fun normalizeHeader(s: String) = s
         .trim()
         .replace(" ", "")
         .replace("_", "")
         .lowercase()
 
-    // 1. Lettura grezza di tutte le righe
     val rows = mutableListOf<List<String>>()
     context.contentResolver.openInputStream(uri)?.use { stream ->
         val wb = WorkbookFactory.create(stream)
@@ -60,188 +58,234 @@ fun readAndAnalyzeExcel(
             break
         }
     }
-    if (dataRowIdx <= 0 || dataRowIdx >= rows.size) {
-        return Pair(emptyList(), emptyList())
-    }
+    val hasHeader = (dataRowIdx > 0 && dataRowIdx < rows.size)
 
-    // Intestazione e dati
-    val header = rows[dataRowIdx - 1].toMutableList()
-    val dataRows = rows.drop(dataRowIdx)
-        .filter { row ->
+    var header: MutableList<String>
+    var headerSource: MutableList<String>
+    var dataRows: List<List<String>>
+
+    if (hasHeader) {
+        header = rows[dataRowIdx - 1].toMutableList()
+        headerSource = MutableList(header.size) { "unknown" }
+        dataRows = rows.drop(dataRowIdx).filter { row ->
             val numericCount = row.count { it.replace(",", ".").toDoubleOrNull() != null }
             val textCount = row.count { it.isNotBlank() && it.replace(",", ".").toDoubleOrNull() == null }
             numericCount >= 3 && textCount >= 1
         }
-    if (dataRows.isEmpty()) return Pair(header, dataRows)
+    } else {
+        val colCount = rows.maxOfOrNull { it.size } ?: 0
+        header = (1..colCount).map { "Colonna $it" }.toMutableList()
+        headerSource = MutableList(header.size) { "generated" }
+        dataRows = rows
+    }
+    if (dataRows.isEmpty()) return Triple(header, dataRows, headerSource)
+
+    val possibleNames = mapOf(
+        "barcode" to listOf("barcode", "条码", "ean", "bar code", "codice a barre", "código de barras", "codigo de barras", "código barras", "codigo barras", "co.barra", "条形码"),
+        "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量"),
+        "purchasePrice" to listOf("purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格"),
+        "retailPrice" to listOf("retailprice", "New Retail Price", "retail_price", "零售价", "prezzo vendita", "prezzo retail", "sale price", "listino", "precio de venta", "precio venta", "precio al público", "precio retail", "precio al por menor"),
+        "totalPrice" to listOf("totalprice", "total_price", "总价", "totale", "importo", "price total", "precio total", "importe", "total", "importe total", "importe final", "subtotal", "subtotal bruto", "合计"),
+        "productName" to listOf("productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre", "产品名1", "产品品名"),
+        "secondProductName" to listOf("productname2", "product_name2", "品名2", "descrizione2", "name2", "nome2", "description2", "nombre del producto2", "nombre producto2", "producto2", "descripción2", "descripcion2", "nombre2", "产品名2", "产品品名2"),
+        "itemNumber" to listOf("itemnumber", "item_number", "货号", "codice", "code", "articolo", "número de artículo", "numero de artículo", "número de producto", "numero de producto", "código", "codigo", "referencia", "产品货号", "编号"),
+        "supplier" to listOf("supplier", "供应商", "fornitore", "vendor", "provider", "fornitore/azienda", "proveedor", "empresa proveedora", "vendedor", "distribuidor", "fabricante"),
+        "rowNumber" to listOf("no", "n.", "№", "row", "rowno", "rownumber", "serial", "serialnumber", "progressivo", "numeroriga", "num. riga", "número de fila", "número", "numero", "序号", "编号", "编号序号", "序列号"),
+        "discount" to listOf("discount", "sconto", "折扣", "descuento", "rabatt", "sc.", "dcto", "scnto", "scnt.", "rebaja", "remise", "D%"),
+        "discountedPrice" to listOf("discountedprice", "prezzoscontato", "precio con descuento", "precio descontado", "折后价", "prezzo scontato", "precio rebajado", "rebate price", "after discount price", "final price", "prezzo finale"),
+    )
+
+    val headerMap = mutableMapOf<String, Int>()
+    val usedCols = mutableSetOf<Int>()
+
+    // Alias matching SOLO se header reale
+    if (hasHeader) {
+        for ((key, aliases) in possibleNames) {
+            val foundIdx = header.indexOfFirst { colName ->
+                val normCol = normalizeHeader(colName)
+                aliases.any { alias -> normCol == normalizeHeader(alias) }
+            }
+            if (foundIdx >= 0 && !usedCols.contains(foundIdx)) {
+                headerMap[key] = foundIdx
+                usedCols.add(foundIdx)
+                header[foundIdx] = key // aggiorna header in inglese standard!
+                headerSource[foundIdx] = "alias"
+            }
+        }
+
+        // Filtro colonne completamente vuote DOPO alias
+        val nonEmptyCols = header.indices.filter { col ->
+            dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+        }
+        val emptyCols = header.indices.filter { col -> !nonEmptyCols.contains(col) }
+        val colToHeader = headerMap.entries.associate { it.value to it.key }
+        for (emptyCol in emptyCols) {
+            val assignedHeader = colToHeader[emptyCol]
+            if (assignedHeader != null) {
+                headerMap.remove(assignedHeader)
+            }
+            usedCols.remove(emptyCol)
+            headerSource[emptyCol] = "unknown"
+        }
+        val oldToNewIdx = nonEmptyCols.withIndex().associate { it.value to it.index }
+        header = nonEmptyCols.map { header[it] }.toMutableList()
+        headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList()
+        dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } }
+        // Aggiorna headerMap e usedCols sugli indici nuovi
+        val newHeaderMap = mutableMapOf<String, Int>()
+        val newUsedCols = mutableSetOf<Int>()
+        for ((k, oldIdx) in headerMap) {
+            oldToNewIdx[oldIdx]?.let { newIdx ->
+                newHeaderMap[k] = newIdx
+                newUsedCols.add(newIdx)
+            }
+        }
+        headerMap.clear()
+        headerMap.putAll(newHeaderMap)
+        usedCols.clear()
+        usedCols.addAll(newUsedCols)
+    }
 
     val colCount = header.size
     val threshold = (dataRows.size * 0.5).toInt()
-
-    // 1. Primo passaggio: ricerca per nome colonna (con normalizzazione!)
-    val possibleNames = mapOf(
-        "barcode" to listOf(
-            "barcode", "条码", "ean", "bar code", "codice a barre",
-            "código de barras", "codigo de barras", "código barras", "codigo barras"
-        ),
-        "quantity" to listOf(
-            "quantity", "数量", "qty", "quantità", "amount",
-            "cantidad", "número", "numero", "número de unidades", "numero de unidades"
-        ),
-        "purchasePrice" to listOf(
-            "purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo",
-            "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición"
-        ),
-        "retailPrice" to listOf(
-            "retailprice", "New Retail Price", "retail_price", "零售价", "prezzo vendita", "prezzo retail", "sale price", "listino",
-            "precio de venta", "precio venta", "precio al público", "precio retail", "precio al por menor"
-        ),
-        "totalPrice" to listOf(
-            "totalprice", "total_price", "总价", "totale", "importo", "price total",
-            "precio total", "importe", "total", "importe total", "importe final"
-        ),
-        "productName" to listOf(
-            "productname", "product_name", "品名", "descrizione", "name", "nome", "description",
-            "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre"
-        ),
-        "itemNumber" to listOf(
-            "itemnumber", "item_number", "货号", "codice", "code", "articolo", "sku",
-            "número de artículo", "numero de artículo", "número de producto", "numero de producto", "código", "codigo", "referencia"
-        ),
-        "supplier" to listOf(
-            "supplier", "供应商", "fornitore", "vendor", "provider", "fornitore/azienda",
-            "proveedor", "empresa proveedora", "vendedor", "distribuidor", "fabricante"
-        )
-    )
-
-    val headerMap = mutableMapOf<String, Int>() // chiave -> indice
-    val usedCols = mutableSetOf<Int>()
-    for ((key, aliases) in possibleNames) {
-        val foundIdx = header.indexOfFirst { colName ->
-            val normCol = normalizeHeader(colName)
-            aliases.any { alias -> normCol == normalizeHeader(alias) }
-        }
-        if (foundIdx >= 0) {
-            headerMap[key] = foundIdx
-            usedCols.add(foundIdx)
-            header[foundIdx] = key // aggiorna header in inglese standard!
-        }
+    fun setIfFound(key: String, col: Int) {
+        if (usedCols.contains(col)) return
+        headerMap[key] = col
+        usedCols.add(col)
+        header[col] = key
+        if (headerSource[col] != "alias") headerSource[col] = "pattern"
     }
 
-    // 2. Secondo passaggio: pattern recognition SOLO se la colonna non è stata trovata
-    // — barcode (solo se non trovato prima)
-    if (!headerMap.containsKey("barcode")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val matches = dataRows.count { row ->
-                val v = row.getOrNull(col)?.trim() ?: ""
-                (v.length in listOf(8,12,13) && v.all(Char::isDigit))
-            }
-            if (matches >= threshold) {
-                headerMap["barcode"] = col; usedCols.add(col); header[col] = "barcode"; break
-            }
-        }
-    }
-    // — quantity
-    if (!headerMap.containsKey("quantity")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-            if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
-                headerMap["quantity"] = col; usedCols.add(col); header[col] = "quantity"; break
-            }
-        }
-    }
-    // — purchasePrice
-    if (!headerMap.containsKey("purchasePrice")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-            if (
-                nums.isNotEmpty() &&
-                nums.all { it > 0 } &&
-                nums.size >= dataRows.size * 0.7
-            ) {
-                headerMap["purchasePrice"] = col; usedCols.add(col); header[col] = "purchasePrice"; break
-            }
-        }
-    }
-    // — totalPrice
-    if (!headerMap.containsKey("totalPrice")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val matches = dataRows.count { row ->
-                val tot = row.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() ?: return@count false
-                tot > 0
-            }
-            if (matches >= dataRows.size * 0.7) {
-                headerMap["totalPrice"] = col; usedCols.add(col); header[col] = "totalPrice"; break
-            }
-        }
-    }
-    // — retailPrice
-    if (!headerMap.containsKey("retailPrice")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-            if (
-                nums.isNotEmpty() &&
-                nums.all { it > 0 } &&
-                nums.size >= dataRows.size * 0.7
-            ) {
-                headerMap["retailPrice"] = col; usedCols.add(col); header[col] = "retailPrice"; break
-            }
-        }
-    }
-    // — productName
-    if (!headerMap.containsKey("productName")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val matches = dataRows.count { row ->
-                val v = row.getOrNull(col)?.trim() ?: ""
-                v.length >= 3 && v.any { !it.isDigit() }
-            }
-            if (matches >= dataRows.size * 0.5) {
-                headerMap["productName"] = col; usedCols.add(col); header[col] = "productName"; break
-            }
-        }
-    }
-    // — itemNumber
-    if (!headerMap.containsKey("itemNumber")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val matches = dataRows.count { row ->
-                val v = row.getOrNull(col)?.trim() ?: ""
-                v.length in 4..12 && (v.any { it.isDigit() } || v.any { it.isLetter() })
-            }
-            if (matches >= dataRows.size * 0.5) {
-                headerMap["itemNumber"] = col; usedCols.add(col); header[col] = "itemNumber"; break
-            }
-        }
-    }
-    // — supplier
-    if (!headerMap.containsKey("supplier")) {
-        for (col in 0 until colCount) {
-            if (usedCols.contains(col)) continue
-            val matches = dataRows.count { row ->
-                val v = row.getOrNull(col)?.trim() ?: ""
-                v.length >= 3
-            }
-            if (matches >= dataRows.size * 0.5) {
-                headerMap["supplier"] = col; usedCols.add(col); header[col] = "supplier"; break
+    // --- Pattern recognition SOLO PRINCIPALI SEMPRE ---
+    val principali = listOf("itemNumber", "barcode", "productName", "quantity", "purchasePrice", "totalPrice")
+    for (key in principali) {
+        if (!headerMap.containsKey(key)) {
+            when (key) {
+                "barcode" -> {
+                    for (col in 0 until colCount) {
+                        if (usedCols.contains(col)) continue
+                        val matches = dataRows.count { row ->
+                            val v = row.getOrNull(col)?.trim() ?: ""
+                            (v.length in listOf(8,12,13) && v.all(Char::isDigit))
+                        }
+                        if (matches >= threshold) { setIfFound("barcode", col); break }
+                    }
+                }
+                "itemNumber" -> {
+                    for (col in 0 until colCount) {
+                        if (usedCols.contains(col)) continue
+                        val matches = dataRows.count { row ->
+                            val v = row.getOrNull(col)?.trim() ?: ""
+                            v.length in 4..12 && (v.any { it.isDigit() } || v.any { it.isLetter() })
+                        }
+                        if (matches >= dataRows.size * 0.5) { setIfFound("itemNumber", col); break }
+                    }
+                }
+                "quantity" -> {
+                    for (col in 0 until colCount) {
+                        if (usedCols.contains(col)) continue
+                        val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
+                        if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
+                            setIfFound("quantity", col); break
+                        }
+                    }
+                }
+                "purchasePrice" -> {
+                    for (col in 0 until colCount) {
+                        if (usedCols.contains(col)) continue
+                        val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
+                        if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
+                            setIfFound("purchasePrice", col); break
+                        }
+                    }
+                }
+                "totalPrice" -> {
+                    val idxQuantity = headerMap["quantity"] ?: -1
+                    val idxPurchase = headerMap["purchasePrice"] ?: -1
+                    if (idxQuantity != -1 && idxPurchase != -1) {
+                        for (col in 0 until colCount) {
+                            if (usedCols.contains(col)) continue
+                            val matches = dataRows.count { row ->
+                                val quantity = parseNumber(row.getOrNull(idxQuantity))
+                                val purchase = parseNumber(row.getOrNull(idxPurchase))
+                                val tot      = parseNumber(row.getOrNull(col))
+                                if (quantity == null || purchase == null || tot == null) return@count false
+                                val expected = quantity * purchase
+                                val epsilon = 0.10 * (expected.coerceAtLeast(1.0))
+                                kotlin.math.abs(tot - expected) <= epsilon
+                            }
+                            if (matches >= dataRows.size * 0.7) {
+                                setIfFound("totalPrice", col)
+                                break
+                            }
+                        }
+                    }
+                }
+                "productName" -> {
+                    for (col in 0 until colCount) {
+                        if (usedCols.contains(col)) continue
+                        val matches = dataRows.count { row ->
+                            val v = row.getOrNull(col)?.trim() ?: ""
+                            v.length >= 3
+                        }
+                        if (matches >= dataRows.size * 0.5) { setIfFound("productName", col); break }
+                    }
+                }
             }
         }
     }
 
-    // Filtra colonne completamente vuote
-    val nonEmptyCols = header.indices.filter { col ->
-        dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
-    }
-    val filteredHeader = nonEmptyCols.map { header[it] }
-    val filteredDataRows = dataRows.map { row ->
-        nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" }
+    // --- Pattern recognition SUPPLEMENTARI SOLO SE NON c'è header ---
+    if (!hasHeader) {
+        val supplementari = listOf("retailPrice", "secondProductName", "supplier", "discount", "discountedPrice", "rowNumber")
+        for (key in supplementari) {
+            if (!headerMap.containsKey(key)) {
+                when (key) {
+                    "retailPrice", "discountedPrice", "purchasePrice" -> {
+                        for (col in 0 until colCount) {
+                            if (usedCols.contains(col)) continue
+                            val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
+                            if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
+                                setIfFound(key, col); break
+                            }
+                        }
+                    }
+                    "secondProductName", "supplier" -> {
+                        for (col in 0 until colCount) {
+                            if (usedCols.contains(col)) continue
+                            val matches = dataRows.count { row ->
+                                val v = row.getOrNull(col)?.trim() ?: ""
+                                v.length >= 3
+                            }
+                            if (matches >= dataRows.size * 0.5) { setIfFound(key, col); break }
+                        }
+                    }
+                    "discount" -> {
+                        for (col in 0 until colCount) {
+                            if (usedCols.contains(col)) continue
+                            val matches = dataRows.count { row ->
+                                val v = row.getOrNull(col)?.trim() ?: ""
+                                v.matches(Regex("""^(0[\.,]\d{1,2})$""")) || v.matches(Regex("""^\d{1,2}%$"""))
+                            }
+                            if (matches >= threshold) { setIfFound("discount", col); break }
+                        }
+                    }
+                    "rowNumber" -> {
+                        for (col in 0 until colCount) {
+                            if (usedCols.contains(col)) continue
+                            val matches = dataRows.count { row ->
+                                val v = row.getOrNull(col)?.trim() ?: ""
+                                v.matches(Regex("""^\d+$""")) && v.length <= 6
+                            }
+                            if (matches >= threshold) { setIfFound("rowNumber", col); break }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    return Pair(filteredHeader, filteredDataRows)
+    return Triple(header, dataRows, headerSource)
 }
 
 fun getLocalizedHeader(context: Context, key: String): String {
@@ -259,6 +303,24 @@ fun getLocalizedHeader(context: Context, key: String): String {
         "newRetailPrice" -> context.getString(R.string.header_new_retail_price)
         "autocount"      -> context.getString(R.string.header_autocount)
         "complete" -> context.getString(R.string.header_complete)
+        "secondProductName" -> context.getString(R.string.header_second_product_name)
+        "rowNumber" -> context.getString(R.string.header_row_number)
+        "discount" -> context.getString(R.string.header_discount)
+        "discountedPrice" -> context.getString(R.string.header_discounted_price)
         else           -> key // fallback: mostra la chiave originale
+    }
+}
+
+fun parseNumber(value: String?): Double? {
+    if (value == null) return null
+    val clean = value.trim()
+    // Gestisce formati con punto come mille, virgola come decimale, e viceversa
+    return when {
+        clean.matches(Regex("^\\d{1,3}(\\.\\d{3})*,\\d+$")) ->
+            clean.replace(".", "").replace(",", ".").toDoubleOrNull()
+        clean.matches(Regex("^\\d{1,3}(,\\d{3})*\\.\\d+$")) ->
+            clean.replace(",", "").toDoubleOrNull()
+        else ->
+            clean.replace(",", ".").toDoubleOrNull()
     }
 }
