@@ -17,6 +17,10 @@
     <string name="italian">Italiano</string>
     <string name="spanish">Spagnolo</string>
     <string name="english">Inglese</string>
+    <string name="select_theme">Tema</string>
+    <string name="theme_auto">Auto (sistema)</string>
+    <string name="theme_light">Chiaro</string>
+    <string name="theme_dark">Scuro</string>
 
     <!-- Schermata FilePickerScreen -->
     <string name="file_history">File storico</string>

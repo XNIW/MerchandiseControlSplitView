@@ -17,6 +17,10 @@
     <string name="italian">意大利语</string>
     <string name="spanish">西班牙语</string>
     <string name="english">英语</string>
+    <string name="select_theme">主题</string>
+    <string name="theme_auto">自动（系统）</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
 
     <!-- 文件选择页面 -->
     <string name="file_history">文件历史</string>

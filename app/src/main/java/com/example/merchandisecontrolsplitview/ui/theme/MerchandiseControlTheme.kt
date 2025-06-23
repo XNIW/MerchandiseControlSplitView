@@ -55,14 +55,15 @@ private val DarkColors = darkColorScheme(
 
 /**
  * Application theme using Material3
- * Renamed to MerchandiseControlTheme
+ * @param darkTheme imposta true per scuro, false per chiaro, null (default) per seguire il sistema
  */
 @Composable
 fun MerchandiseControlTheme(
-    useDarkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean? = null,
     content: @Composable () -> Unit
 ) {
-    val colors = if (useDarkTheme) DarkColors else LightColors
+    val isDark = darkTheme ?: isSystemInDarkTheme()
+    val colors = if (isDark) DarkColors else LightColors
 
     MaterialTheme(
         colorScheme = colors,
