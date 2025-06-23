@@ -99,9 +99,7 @@ fun AppNavGraph() {
         }
 
         composable("optionsScreen") {
-            OptionsScreen(
-                onBack = { navController.popBackStack() }
-            )
+            OptionsScreen(navController = navController)
         }
     }
 }
