@@ -9,7 +9,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -18,45 +17,52 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
-import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.UiState
 
 /**
- * Screen for selecting columns before generating the filtered sheet.
+ * Schermata di anteprima di un file Excel.
+ * Funge da punto di partenza sia per la generazione di un nuovo foglio filtrato
+ * sia per avviare il flusso di importazione/sincronizzazione con il database.
+ *
+ * @param excelViewModel ViewModel per la gestione dello stato del foglio Excel (dati, selezioni).
+ * @param databaseUiState Lo stato della UI dal DatabaseViewModel, per mostrare feedback durante l'analisi.
+ * @param onGenerate Callback per generare un nuovo foglio Excel filtrato.
+ * @param onBack Callback per tornare alla schermata precedente.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreGenerateScreen(
-    viewModel: ExcelViewModel,
+    excelViewModel: ExcelViewModel,
+    databaseUiState: UiState, // <-- MODIFICA: Aggiunto per reagire allo stato di analisi
     onGenerate: (String) -> Unit,
     onBack: () -> Unit
 ) {
-    // State from ViewModel
-    val excelData = viewModel.excelData
-    val selectedColumns = viewModel.selectedColumns
-    val editableValues = viewModel.editableValues
-    val completeStates = viewModel.completeStates
-    val isLoading by viewModel.isLoading
-    val loadError by viewModel.loadError
-    val context = LocalContext.current
-    val headerTypes = viewModel.headerTypes
+    // State from ExcelViewModel
+    val excelData = excelViewModel.excelData
+    val selectedColumns = excelViewModel.selectedColumns
+    val editableValues = excelViewModel.editableValues
+    val completeStates = excelViewModel.completeStates
+    val isExcelLoading by excelViewModel.isLoading
+    val excelLoadError by excelViewModel.loadError
+    val headerTypes = excelViewModel.headerTypes
 
     // Local UI state
+    val context = LocalContext.current
     var editMode by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
-
     var showSupplierDialog by remember { mutableStateOf(false) }
     var supplierName by remember { mutableStateOf("") }
-
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
+    var showCustomHeaderDialog by remember { mutableStateOf(false) }
+    var customHeader by remember { mutableStateOf("") }
 
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
         "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
         "discount", "discountedPrice"
     )
-    var showCustomHeaderDialog by remember { mutableStateOf(false) }
-    var customHeader by remember { mutableStateOf("") }
 
     // Intercept back gesture to confirm exit
     BackHandler {
@@ -66,18 +72,10 @@ fun PreGenerateScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pre-Genera") },
+                title = { Text("Anteprima File") },
                 navigationIcon = {
                     IconButton(onClick = { showExitDialog = true }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { /* TODO: Gestisci la sincronizzazione qui */ }) {
-                        Icon(
-                            imageVector = Icons.Filled.Sync,
-                            contentDescription = "Sincronizza"
-                        )
                     }
                 }
             )
@@ -88,24 +86,32 @@ fun PreGenerateScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // --- MODIFICA: Gestione unificata degli stati di caricamento ed errore ---
+            val isAnalysisInProgress = databaseUiState is UiState.Loading
+            val analysisError = (databaseUiState as? UiState.Error)?.message
+
             when {
-                isLoading -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
+                // Mostra il caricamento se sta leggendo l'Excel O se sta analizzando per l'import
+                isExcelLoading || isAnalysisInProgress -> {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         CircularProgressIndicator()
+                        Spacer(Modifier.height(8.dp))
+                        Text(if(isAnalysisInProgress) "Analisi in corso..." else "Caricamento file...")
                     }
                 }
-                loadError != null -> {
+                // Mostra l'errore se si è verificato durante il caricamento O durante l'analisi
+                excelLoadError != null || analysisError != null -> {
                     Text(
-                        text = loadError ?: "",
+                        text = excelLoadError ?: analysisError ?: "Errore sconosciuto",
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(16.dp)
+                        modifier = Modifier.padding(16.dp).align(Alignment.Center)
                     )
                 }
+                // Se non ci sono caricamenti o errori, e ci sono dati, mostra la griglia
                 excelData.isNotEmpty() -> {
                     val localizedData = listOf(excelData[0].map { getLocalizedHeader(context, it) }) + excelData.drop(1)
                     ZoomableExcelGrid(
@@ -129,8 +135,8 @@ fun PreGenerateScreen(
                 }
             }
 
-            // FABs: Seleziona Tutto / Modifica / Genera
-            if (excelData.isNotEmpty()) {
+            // FABs per il flusso di "Generazione"
+            if (excelData.isNotEmpty() && !isAnalysisInProgress) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -141,21 +147,14 @@ fun PreGenerateScreen(
                     if (!editMode) {
                         FloatingActionButton(onClick = {
                             val anyUnselected = selectedColumns.any { !it }
-                            selectedColumns.forEachIndexed { idx, _ ->
-                                selectedColumns[idx] = anyUnselected
-                            }
+                            selectedColumns.forEachIndexed { idx, _ -> selectedColumns[idx] = anyUnselected }
                         }) {
-                            Icon(
-                                imageVector = Icons.Default.DoneAll,
-                                contentDescription = stringResource(R.string.select_all)
-                            )
+                            Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
                         }
                     }
-                    FloatingActionButton(onClick = {
-                        editMode = !editMode
-                    }) {
+                    FloatingActionButton(onClick = { editMode = !editMode }) {
                         Icon(
-                            imageVector = if (editMode) Icons.Default.Check else Icons.Default.Edit,
+                            if (editMode) Icons.Default.Check else Icons.Default.Edit,
                             contentDescription = if (editMode) stringResource(R.string.exit_edit) else stringResource(R.string.edit)
                         )
                     }
@@ -164,33 +163,19 @@ fun PreGenerateScreen(
                             supplierName = ""
                             showSupplierDialog = true
                         }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = stringResource(R.string.generate_filtered_sheet)
-                            )
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
                         }
                     }
                 }
             }
 
-            // Dialog per conferma di uscita
+            // Dialog vari per la gestione della UI (uscita, fornitore, header)
             if (showExitDialog) {
                 AlertDialog(
                     onDismissRequest = { showExitDialog = false },
                     title = { Text(stringResource(R.string.exit_confirm_title)) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showExitDialog = false
-                            onBack()
-                        }) {
-                            Text(stringResource(R.string.exit))
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showExitDialog = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
-                    }
+                    confirmButton = { TextButton(onClick = { showExitDialog = false; onBack() }) { Text(stringResource(R.string.exit)) } },
+                    dismissButton = { TextButton(onClick = { showExitDialog = false }) { Text(stringResource(R.string.cancel)) } }
                 )
             }
 
@@ -200,67 +185,41 @@ fun PreGenerateScreen(
                     title = { Text(stringResource(R.string.supplier_dialog_title)) },
                     text = {
                         OutlinedTextField(
-                            value = supplierName,
-                            onValueChange = { supplierName = it },
+                            value = supplierName, onValueChange = { supplierName = it },
                             label = { Text(stringResource(R.string.supplier_label)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
                     },
                     confirmButton = {
-                        TextButton(
-                            onClick = {
-                                if (supplierName.isNotBlank()) {
-                                    showSupplierDialog = false
-                                    onGenerate(supplierName) // passa il fornitore!
-                                }
-                            }
-                        ) { Text(stringResource(R.string.confirm)) }
+                        TextButton(onClick = {
+                            if (supplierName.isNotBlank()) { showSupplierDialog = false; onGenerate(supplierName) }
+                        }) { Text(stringResource(R.string.confirm)) }
                     },
-                    dismissButton = {
-                        TextButton(onClick = { showSupplierDialog = false }) { Text(stringResource(R.string.cancel)) }
-                    }
+                    dismissButton = { TextButton(onClick = { showSupplierDialog = false }) { Text(stringResource(R.string.cancel)) } }
                 )
             }
 
             if (showCustomHeaderDialog && headerDialogIndex != null) {
                 AlertDialog(
-                    onDismissRequest = {
-                        showCustomHeaderDialog = false
-                        customHeader = ""
-                        headerDialogIndex = null
-                    },
+                    onDismissRequest = { showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null },
                     title = { Text(stringResource(R.string.custom_header_dialog_title)) },
                     text = {
                         OutlinedTextField(
-                            value = customHeader,
-                            onValueChange = { customHeader = it },
+                            value = customHeader, onValueChange = { customHeader = it },
                             label = { Text(stringResource(R.string.custom_header_label)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
                     },
                     confirmButton = {
-                        TextButton(
-                            onClick = {
-                                val idx = headerDialogIndex!!
-                                if (customHeader.isNotBlank()) {
-                                    viewModel.setHeaderType(idx, customHeader.trim())
-                                    showCustomHeaderDialog = false
-                                    customHeader = ""
-                                    headerDialogIndex = null
-                                }
+                        TextButton(onClick = {
+                            val idx = headerDialogIndex!!
+                            if (customHeader.isNotBlank()) {
+                                excelViewModel.setHeaderType(idx, customHeader.trim())
+                                showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null
                             }
-                        ) { Text(stringResource(R.string.confirm)) }
+                        }) { Text(stringResource(R.string.confirm)) }
                     },
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                showCustomHeaderDialog = false
-                                customHeader = ""
-                            }
-                        ) { Text(stringResource(R.string.cancel)) }
-                    }
+                    dismissButton = { TextButton(onClick = { showCustomHeaderDialog = false; customHeader = "" }) { Text(stringResource(R.string.cancel)) } }
                 )
             }
 
@@ -271,28 +230,13 @@ fun PreGenerateScreen(
                     text = {
                         Column {
                             possibleKeys.forEach { key ->
-                                TextButton(
-                                    onClick = {
-                                        viewModel.setHeaderType(colIdx, key)
-                                        headerDialogIndex = null
-                                    }
-                                ) { Text(getLocalizedHeader(context, key)) }
+                                TextButton(onClick = { excelViewModel.setHeaderType(colIdx, key); headerDialogIndex = null }) { Text(getLocalizedHeader(context, key)) }
                             }
-                            TextButton(
-                                onClick = {
-                                    showCustomHeaderDialog = true
-                                    headerDialogIndex = colIdx // (importante per sapere a che colonna applicare)
-                                }
-                            ) {
-                                Text(stringResource(R.string.custom_column_type))
-                            }
+                            TextButton(onClick = { showCustomHeaderDialog = true; headerDialogIndex = colIdx }) { Text(stringResource(R.string.custom_column_type)) }
                         }
                     },
                     confirmButton = {},
-                    dismissButton = {
-                        TextButton(onClick = { headerDialogIndex = null }) { Text(stringResource(R.string.close)) }
-
-                    }
+                    dismissButton = { TextButton(onClick = { headerDialogIndex = null }) { Text(stringResource(R.string.close)) } }
                 )
             }
         }

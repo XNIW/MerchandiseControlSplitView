@@ -6,9 +6,12 @@ import android.net.Uri
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.core.content.edit // IMPORT AGGIUNTO per SharedPreferences.edit
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -19,13 +22,12 @@ import org.apache.poi.ss.usermodel.IndexedColors
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
-import com.example.merchandisecontrolsplitview.data.AppDatabase
-import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+
+// Le data class e altre parti del ViewModel rimangono invariate
 
 /** Un singolo record di cronologia. */
 data class HistoryEntry(
-    val id: String,                // es. "2025-06-17_16:59:07.xlsx"
+    val id: String,
     val timestamp: String,
     val data: List<List<String>>,
     val editable: List<List<String>>,
@@ -40,18 +42,18 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("history_prefs", Context.MODE_PRIVATE)
     private val gson  = Gson()
 
-    // --- Stato griglia ---
+    // Stato griglia
     val excelData       = mutableStateListOf<List<String>>()
     val selectedColumns = mutableStateListOf<Boolean>()
     val editableValues  = mutableStateListOf<MutableList<MutableState<String>>>()
     val completeStates  = mutableStateListOf<Boolean>()
 
-    // --- Flag UI ---
+    // Flag UI
     val generated = mutableStateOf(false)
     val isLoading = mutableStateOf(false)
     val loadError = mutableStateOf<String?>(null)
 
-    // --- Cronologia persistente ---
+    // Cronologia persistente
     val historyEntries  = mutableStateListOf<HistoryEntry>()
     private var currentIndex: Int? = null
 
@@ -76,13 +78,11 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun saveHistoryToPrefs() {
         val json = gson.toJson(historyEntries.toList())
-        // MODIFICATO: Utilizzo della funzione KTX "edit"
         prefs.edit {
             putString("history_list", json)
         }
     }
 
-    /** Carica e analizza un file Excel da URI. */
     fun loadFromUri(context: Context, uri: Uri) {
         viewModelScope.launch {
             isLoading.value = true
@@ -94,7 +94,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                     excelData.add(header)
                     excelData.addAll(dataRows)
                 }
-                // Salva la lista headerTypes!
                 headerTypes.clear()
                 headerTypes.addAll(headerSource)
                 generated.value = false
@@ -119,12 +118,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
-                    // HEADER: inserisci le nuove colonne prima di "autocount", "newRetailPrice", "complete"
-                    // BLOCCO CORRETTO
                     row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
                             listOf("oldPurchasePrice", "oldRetailPrice", "autocount", "newRetailPrice", "complete")
                 } else {
-                    // Trova il barcode
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
                     val barcodeIdx = excelData.firstOrNull()?.indexOf("barcode") ?: -1
                     val barcode = excelData[idx].getOrNull(barcodeIdx)
@@ -132,7 +128,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                     var oldRetail = ""
 
                     if (!barcode.isNullOrBlank()) {
-                        // Query database (usa withContext su IO per non bloccare main thread!)
                         val product = withContext(Dispatchers.IO) {
                             db.productDao().findByBarcode(barcode)
                         }
@@ -145,11 +140,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Aggiorna stato come prima
             excelData.clear()
             excelData.addAll(filtered)
 
-            // Ricostruisci i valori editabili (autocount/newRetailPrice)
             editableValues.clear()
             editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
             filtered.drop(1).forEach { row ->
@@ -158,7 +151,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 editableValues.add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
             }
 
-            // Reset complete e colonne
             completeStates.clear()
             repeat(filtered.size) { completeStates.add(false) }
             selectedColumns.clear()
@@ -166,13 +158,12 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
             generated.value = true
 
-            // --- CREA IL NOME FILE CON FORNITORE ---
             val now   = LocalDateTime.now()
             val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
             val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
             val id    = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
 
-            currentSupplierName = supplierName // <--- Salva il fornitore!
+            currentSupplierName = supplierName
 
             addHistoryEntryWithId(id, supplierName)
             saveHistoryToPrefs()
@@ -180,10 +171,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-
-
-    /** Aggiunge un nuovo entry con secondi e persiste. */
-    // MODIFICATO: La funzione è ora privata
     private fun addHistoryEntryWithId(id: String, supplier: String) {
         val now   = LocalDateTime.now()
         val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
@@ -197,9 +184,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         historyEntries.add(0, entry)
         currentIndex = 0
     }
-    /**
-     * Rinomina un entry di cronologia e persiste.
-     */
+
     fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
         val idx = historyEntries.indexOfFirst { it.id == entry.id }
         if (idx >= 0) {
@@ -209,17 +194,11 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Elimina un entry di cronologia e persiste.
-     */
     fun deleteHistoryEntry(entry: HistoryEntry) {
         historyEntries.remove(entry)
         saveHistoryToPrefs()
     }
 
-    /**
-     * Aggiorna l’entry corrente di cronologia con lo stato attuale della griglia.
-     */
     fun updateHistoryEntry() {
         currentIndex?.takeIf { it in historyEntries.indices }?.let { idx ->
             val e = historyEntries[idx]
@@ -232,10 +211,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Carica uno HistoryEntry senza modificarne l’ordine,
-     * memorizza l’indice per update futuri e ripristina stato.
-     */
     fun loadHistoryEntry(entry: HistoryEntry) {
         val idx = historyEntries.indexOfFirst { it.id == entry.id }
         if (idx >= 0) {
@@ -248,9 +223,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Resetta completamente lo stato del ViewModel per prepararlo a un nuovo file.
-     */
     fun resetState() {
         excelData.clear()
         selectedColumns.clear()
@@ -267,23 +239,21 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setHeaderType(colIdx: Int, type: String?) {
-        // Aggiorna la tipologia riconoscimento (colore)
         if (colIdx in headerTypes.indices) {
             headerTypes[colIdx] = type ?: "unknown"
         }
-
-        // MODIFICATO: Controllo più robusto per l'accesso a excelData[0]
         val headerRow = excelData.firstOrNull()?.toMutableList()
-        if (headerRow != null && colIdx in headerRow.indices) { // Usa headerRow.indices, che sarà valido se headerRow non è null
+        if (headerRow != null && colIdx in headerRow.indices) {
             if (type != null) {
-                // Sostituisci con la chiave selezionata ("barcode", "quantity", ecc)
                 headerRow[colIdx] = type
-                excelData[0] = headerRow // Aggiorna la riga dell'intestazione in excelData
+                excelData[0] = headerRow
             }
         }
     }
 }
 
+
+// --- FUNZIONE DI ESPORTAZIONE CORRETTA ---
 private fun saveExcelFileInternal(
     context: Context,
     uri: Uri,
@@ -294,48 +264,88 @@ private fun saveExcelFileInternal(
 ) {
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet("Export")
+
+    // --- 1. Definiamo i tipi di colonna ---
+    val numericTypes = setOf(
+        "quantity", "purchasePrice", "retailPrice", "totalPrice", "rowNumber",
+        "discount", "discountedPrice", "realQuantity", "newRetailPrice",
+        "oldPurchasePrice", "oldRetailPrice", "autocount"
+    )
+
+    // Definiamo gli stili per le righe
     val styleComplete = wb.createCellStyle().apply {
         fillForegroundColor = IndexedColors.LIGHT_GREEN.index
-        fillPattern         = FillPatternType.SOLID_FOREGROUND
+        fillPattern = FillPatternType.SOLID_FOREGROUND
     }
     val styleFilled = wb.createCellStyle().apply {
         fillForegroundColor = IndexedColors.LIGHT_YELLOW.index
-        fillPattern         = FillPatternType.SOLID_FOREGROUND
+        fillPattern = FillPatternType.SOLID_FOREGROUND
     }
+
+    // --- 2. Filtriamo l'header per rimuovere la colonna "complete" ---
+    val originalHeader = data.firstOrNull() ?: return
+    val headerWithIndices = originalHeader.mapIndexedNotNull { index, header ->
+        if (header != "complete") index to header else null
+    }
+    val filteredHeader = headerWithIndices.map { it.second }
+
+    // --- 3. Scriviamo il nuovo header filtrato (localizzato) + la colonna supplier ---
     val headerRow = sheet.createRow(0)
-
-    // Header localizzato: aggiungi supplier in fondo
-    val localizedHeader = data.firstOrNull()?.map { getLocalizedHeader(context, it) } ?: emptyList()
-    localizedHeader.forEachIndexed { ci, name ->
-        headerRow.createCell(ci).setCellValue(name)
+    filteredHeader.forEachIndexed { newIndex, headerKey ->
+        headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
     }
-    headerRow.createCell(localizedHeader.size)
-        .setCellValue(getLocalizedHeader(context, "supplier"))
+    headerRow.createCell(filteredHeader.size).setCellValue(getLocalizedHeader(context, "supplier"))
 
-    // Data rows: aggiungi supplier in fondo
-    data.drop(1).forEachIndexed { ri, row ->
-        val excelRow = sheet.createRow(ri + 1)
-        row.forEachIndexed { ci, txt ->
-            val cell = excelRow.createCell(ci)
-            when (ci) {
-                row.size - 3, row.size - 2 ->
-                    cell.setCellValue(editable[ri + 1][ci - (row.size - 3)].value)
-                else ->
-                    cell.setCellValue(txt)
+
+    // --- 4. Scriviamo le righe di dati con i tipi corretti ---
+    data.drop(1).forEachIndexed { rowIndex, rowData ->
+        val excelRow = sheet.createRow(rowIndex + 1)
+        var hasEditableValues = false
+
+        if (complete.getOrNull(rowIndex + 1) == true) {
+            // Flag per colorare tutta la riga dopo
+        } else if (editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true) {
+            hasEditableValues = true
+        }
+
+        headerWithIndices.forEachIndexed { newIndex, (originalIndex, headerKey) ->
+            val cell = excelRow.createCell(newIndex)
+            val cellValue = rowData.getOrNull(originalIndex) ?: ""
+
+            if (numericTypes.contains(headerKey)) {
+                val numericValue = cellValue.replace(",", ".").toDoubleOrNull()
+                if (numericValue != null) {
+                    cell.setCellValue(numericValue)
+                } else {
+                    cell.setCellValue(cellValue)
+                }
+            } else {
+                cell.setCellValue(cellValue)
             }
-            when {
-                complete.getOrNull(ri + 1) == true ->
-                    cell.cellStyle = styleComplete
-                editable.getOrNull(ri + 1)
-                    ?.let { it[0].value.isNotEmpty() && it[1].value.isNotEmpty() } == true
-                        && ci < row.size - 1 ->
-                    cell.cellStyle = styleFilled
+
+            if (complete.getOrNull(rowIndex + 1) == true) {
+                cell.cellStyle = styleComplete
+            } else if (hasEditableValues) {
+                cell.cellStyle = styleFilled
             }
         }
-        // Supplier nell'ultima colonna
-        excelRow.createCell(row.size).setCellValue(supplier)
+
+        val supplierCell = excelRow.createCell(filteredHeader.size)
+        supplierCell.setCellValue(supplier)
+        if (complete.getOrNull(rowIndex + 1) == true) {
+            supplierCell.cellStyle = styleComplete
+        } else if (hasEditableValues) {
+            supplierCell.cellStyle = styleFilled
+        }
     }
 
+    // --- CORREZIONE ---
+    // Rimossa la sezione "autoSizeColumn" che causava il crash.
+    // Inseriamo invece una larghezza di colonna predefinita per migliorare la leggibilità.
+    // Il valore 15 corrisponde a circa 15 caratteri di larghezza.
+    sheet.defaultColumnWidth = 15
+
+    // Scriviamo il file
     context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
     wb.close()
 }

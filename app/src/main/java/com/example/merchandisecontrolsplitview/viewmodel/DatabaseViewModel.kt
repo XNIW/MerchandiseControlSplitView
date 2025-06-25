@@ -10,9 +10,14 @@ import com.example.merchandisecontrolsplitview.data.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
-import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel // Usa la tua utility
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
+import org.apache.poi.ss.usermodel.Workbook
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import java.io.IOException
 
+// La tua classe UiState rimane invariata
 sealed class UiState {
     data object Idle : UiState()
     data class Loading(val progress: Int? = null) : UiState()
@@ -23,8 +28,10 @@ sealed class UiState {
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
+
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
     private val _filter = MutableStateFlow<String?>(null)
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
@@ -38,37 +45,64 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _filter.value = text.ifBlank { null }
     }
 
-    fun importFromExcel(context: Context, uri: Uri) {
+    private val _importAnalysisResult = MutableStateFlow<ImportAnalysis?>(null)
+    val importAnalysisResult: StateFlow<ImportAnalysis?> = _importAnalysisResult.asStateFlow()
+
+    fun startImportAnalysis(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val products = importExcelToProducts(getApplication(), uri)
-                val dao = db.productDao()
-                var processed = 0
-                products.forEach { product ->
-                    val existing = dao.findByBarcode(product.barcode)
-                    val finalProduct = if (existing == null) {
-                        product.copy(
-                            oldPurchasePrice = null,
-                            oldRetailPrice = null
-                        )
-                    } else {
-                        product.copy(
-                            id = existing.id,
-                            oldPurchasePrice = existing.newPurchasePrice,
-                            oldRetailPrice = existing.newRetailPrice
-                        )
-                    }
-                    dao.upsert(finalProduct)
-                    processed++
-                    if (processed % 10 == 0)
-                        _uiState.value = UiState.Loading(progress = processed * 100 / products.size)
+                // --- FIX: Utilizzo corretto di ExcelUtils.kt ---
+                // 1. La tua funzione readAndAnalyzeExcel restituisce le intestazioni GIA' NORMALIZZATE.
+                //    Non serve alcuna logica di normalizzazione aggiuntiva qui.
+                val (normalizedHeader, dataRows, _) = readAndAnalyzeExcel(context, uri)
+
+                if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
+                    _uiState.value = UiState.Error("Il file Excel è vuoto o non ha un'intestazione valida.")
+                    return@launch
                 }
-                // FIX: Use getApplication() to get the Context
+
+                // 2. Crea la mappa usando direttamente le chiavi normalizzate fornite da ExcelUtils.
+                val importedRowsAsMap = dataRows.map { row ->
+                    normalizedHeader.mapIndexed { index, headerKey ->
+                        headerKey to (row.getOrNull(index) ?: "")
+                    }.toMap()
+                }
+
+                // 3. Il resto del flusso rimane invariato, perché l'analyzer riceve i dati
+                //    nel formato corretto che si aspetta.
+                val currentDbProducts = db.productDao().getAll()
+                val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts)
+                _importAnalysisResult.value = analysis
+                _uiState.value = UiState.Idle
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = UiState.Error("Errore durante l'analisi del file: ${e.message}")
+            }
+        }
+    }
+
+    // La funzione helper `normalizeHeader` è stata rimossa perché ridondante.
+
+    fun clearImportAnalysis() {
+        _importAnalysisResult.value = null
+    }
+
+    fun importProducts(newProducts: List<Product>, updatedProducts: List<ProductUpdate>, context: Context) {
+        _uiState.value = UiState.Loading()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val dao = db.productDao()
+                if (newProducts.isNotEmpty()) {
+                    dao.insertAll(newProducts)
+                }
+                if (updatedProducts.isNotEmpty()) {
+                    dao.updateAll(updatedProducts.map { it.newProduct })
+                }
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
-                // FIX: Use getApplication() to get the Context
-                _uiState.value = UiState.Error(context.getString(R.string.import_error, e.message ?: ""))
+                e.printStackTrace()
+                _uiState.value = UiState.Error(context.getString(R.string.import_error, e.message ?: "Errore sconosciuto"))
             }
         }
     }
@@ -77,76 +111,47 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val dao = db.productDao()
-                // Preleva tutto il contenuto caricando tutte le pagine
-                val pagingSource = dao.getAllPaged(null)
-                val products = mutableListOf<Product>()
-                val result = pagingSource.load(PagingSource.LoadParams.Refresh(null, 10000, false))
-                if (result is PagingSource.LoadResult.Page) {
-                    products.addAll(result.data)
+                val products = db.productDao().getAll()
+                if (products.isEmpty()) {
+                    _uiState.value = UiState.Error("Nessun prodotto da esportare.")
+                    return@launch
                 }
-                writeProductsToExcel(getApplication(), uri, products)
-                // FIX: Use getApplication() to get the Context
+                writeProductsToExcel(context, uri, products)
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
-                // FIX: Use getApplication() to get the Context
-                _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: ""))
+                _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: "Errore sconosciuto"))
             }
         }
     }
 
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
-        // Qui puoi implementare la scrittura su CSV/Excel: vuoi un esempio funzionante per CSV?
-    }
-
-    private fun importExcelToProducts(context: Context, uri: Uri): List<Product> {
-        val (header, dataRows) = readAndAnalyzeExcel(context, uri)
-        if (header.isEmpty() || dataRows.isEmpty()) return emptyList()
-
-        // Trova gli indici delle colonne di interesse
-        val idxBarcode      = header.indexOf("barcode")
-        val idxItemNumber   = header.indexOf("itemNumber")
-        val idxProductName  = header.indexOf("productName")
-        val idxPurchase     = header.indexOf("purchasePrice")
-        val idxRetail       = header.indexOf("retailPrice") // solo se vuoi anche retailPrice
-        val idxOldPurchase  = header.indexOf("oldPurchasePrice") // opzionale
-        val idxOldRetail    = header.indexOf("oldRetailPrice")   // opzionale
-        val idxSupplier     = header.indexOf("supplier") // opzionale
-        val idxQuantity     = header.indexOf("quantity")
-        val idxTotal        = header.indexOf("totalPrice")
-
-        val products = mutableListOf<Product>()
-
-        for (row in dataRows) {
-            val barcode = row.getOrNull(idxBarcode)?.trim().takeIf { !it.isNullOrEmpty() }
-            if (barcode == null) continue // senza barcode salta
-
-            // Conversioni di tipo sicure
-            val itemNumber      = row.getOrNull(idxItemNumber)?.takeIf { it.isNotBlank() }
-            val productName     = row.getOrNull(idxProductName)?.takeIf { it.isNotBlank() }
-            val newPurchase     = row.getOrNull(idxPurchase)?.replace(",", ".")?.toDoubleOrNull()
-            val newRetail       = row.getOrNull(idxRetail)?.replace(",", ".")?.toDoubleOrNull()
-            val oldPurchase     = row.getOrNull(idxOldPurchase)?.replace(",", ".")?.toDoubleOrNull()
-            val oldRetail       = row.getOrNull(idxOldRetail)?.replace(",", ".")?.toDoubleOrNull()
-            val supplier        = row.getOrNull(idxSupplier)?.takeIf { it.isNotBlank() }
-            val quantity        = row.getOrNull(idxQuantity)?.replace(",", ".")?.toLongOrNull()
-            val totalPrice      = row.getOrNull(idxTotal)?.replace(",", ".")?.toDoubleOrNull()
-
-            products.add(
-                Product(
-                    id = 0L, // sarà autoincrement da Room
-                    barcode = barcode,
-                    itemNumber = itemNumber,
-                    productName = productName,
-                    newPurchasePrice = newPurchase,
-                    newRetailPrice = newRetail,
-                    oldPurchasePrice = oldPurchase,
-                    oldRetailPrice = oldRetail,
-                    supplier = supplier
-                    // Se hai altri campi, aggiungili qui!
-                )
-            )
+        val workbook: Workbook = XSSFWorkbook()
+        val sheet = workbook.createSheet("Prodotti")
+        val headerRow = sheet.createRow(0)
+        val headers = listOf(
+            "barcode", "itemNumber", "productName", "newPurchasePrice",
+            "newRetailPrice", "oldPurchasePrice", "oldRetailPrice", "supplier"
+        )
+        headers.forEachIndexed { index, header ->
+            headerRow.createCell(index).setCellValue(header)
         }
-        return products
+        products.forEachIndexed { index, product ->
+            val row = sheet.createRow(index + 1)
+            row.createCell(0).setCellValue(product.barcode)
+            row.createCell(1).setCellValue(product.itemNumber ?: "")
+            row.createCell(2).setCellValue(product.productName ?: "")
+            row.createCell(3).setCellValue(product.newPurchasePrice ?: 0.0)
+            row.createCell(4).setCellValue(product.newRetailPrice ?: 0.0)
+            row.createCell(5).setCellValue(product.oldPurchasePrice ?: 0.0)
+            row.createCell(6).setCellValue(product.oldRetailPrice ?: 0.0)
+            row.createCell(7).setCellValue(product.supplier ?: "")
+        }
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
+            workbook.close()
+        } catch (e: IOException) {
+            e.printStackTrace()
+            throw e
+        }
     }
 }

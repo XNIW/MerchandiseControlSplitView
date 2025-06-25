@@ -1,75 +1,100 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
+import android.os.Bundle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.merchandisecontrolsplitview.ui.screens.DatabaseScreen
+import com.example.merchandisecontrolsplitview.ui.screens.*
+import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
-import com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreen
-import com.example.merchandisecontrolsplitview.ui.screens.PreGenerateScreen
-import com.example.merchandisecontrolsplitview.ui.screens.GeneratedScreen
-import com.example.merchandisecontrolsplitview.ui.screens.HistoryScreen
-import com.example.merchandisecontrolsplitview.ui.screens.OptionsScreen
 
-/**
- * Navigation graph for the MerchandiseControlSplitView app.
- */
+object NavigationStateHolder {
+    var savedState: Bundle? = null
+}
+
+// MODIFICA: Il parametro startDestination è stato rimosso
 @Composable
 fun AppNavGraph() {
-    val navController = rememberNavController()
     val context = LocalContext.current
-    val viewModel: ExcelViewModel = viewModel()
+
+    val navController = rememberNavController()
+
+    // --- Ripristina lo stato navigation se disponibile ---
+    LaunchedEffect(Unit) {
+        NavigationStateHolder.savedState?.let { state ->
+            navController.restoreState(state)
+            NavigationStateHolder.savedState = null
+        }
+    }
+
+    // --- Salva lo stato navigation quando la composable viene dismessa ---
+    DisposableEffect(Unit) {
+        onDispose {
+            val state = navController.saveState()
+            if (state != null) {
+                NavigationStateHolder.savedState = state
+            }
+        }
+    }
+
+    val excelViewModel: ExcelViewModel = viewModel()
+    val dbViewModel: DatabaseViewModel = viewModel()
+
+    val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
+    LaunchedEffect(importAnalysisResult, navController) {
+        if (importAnalysisResult != null) {
+            if (navController.currentDestination?.route != Screen.ImportAnalysis.route) {
+                navController.navigate(Screen.ImportAnalysis.route)
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
+        // MODIFICA: startDestination è ora sempre Screen.FilePicker.route
         startDestination = Screen.FilePicker.route
     ) {
         composable(Screen.FilePicker.route) {
             FilePickerScreen(
+                viewModel = excelViewModel,
                 onFilePicked = { uri ->
-                    viewModel.loadFromUri(context, uri)
+                    excelViewModel.loadFromUri(context, uri)
                     navController.navigate(Screen.PreGenerate.route)
                 },
-                onViewHistory = {
-                    navController.navigate(Screen.History.route)
-                },
-                onDatabase = {
-                    navController.navigate("databaseScreen") // AGGIUNGI QUESTO
-                },
-                onOptions = {
-                    navController.navigate("optionsScreen") // Navigate to your OptionsScreen
-                },
-                viewModel = viewModel
+                onViewHistory = { navController.navigate(Screen.History.route) },
+                onDatabase = { navController.navigate(Screen.Database.route) },
+                onOptions = { navController.navigate(Screen.Options.route) }
             )
         }
 
         composable(Screen.PreGenerate.route) {
+            val dbUiState by dbViewModel.uiState.collectAsState()
             PreGenerateScreen(
-                viewModel = viewModel,
-                onGenerate = { supplierName -> // ACCETTA IL PARAMETRO!
-                    viewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
-                        navController.navigate("generatedScreen/$entryId")
+                excelViewModel = excelViewModel,
+                databaseUiState = dbUiState,
+                onGenerate = { supplierName ->
+                    excelViewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
+                        navController.navigate("${Screen.Generated.route}/$entryId")
                     }
                 },
-                onBack = {
-                    navController.popBackStack()
-                }
+                onBack = { navController.popBackStack() }
             )
         }
 
-        composable("generatedScreen/{entryId}") { backStackEntry ->
+        composable("${Screen.Generated.route}/{entryId}") { backStackEntry ->
             val entryId = backStackEntry.arguments?.getString("entryId") ?: ""
             GeneratedScreen(
-                viewModel = viewModel,
+                viewModel = excelViewModel,
                 onBackToStart = {
-                    viewModel.resetState()
-                    navController.popBackStack(
-                        Screen.FilePicker.route,
-                        inclusive = false
-                    )
+                    excelViewModel.resetState()
+                    navController.popBackStack(Screen.FilePicker.route, inclusive = false)
                 },
                 entryId = entryId
             )
@@ -77,29 +102,45 @@ fun AppNavGraph() {
 
         composable(Screen.History.route) {
             HistoryScreen(
-                historyList = viewModel.historyEntries,
-                onSelect    = { entry ->
-                    viewModel.loadHistoryEntry(entry)
-                    navController.navigate("generatedScreen/${entry.id}")
+                historyList = excelViewModel.historyEntries,
+                onSelect = { entry ->
+                    excelViewModel.loadHistoryEntry(entry)
+                    navController.navigate("${Screen.Generated.route}/${entry.id}")
                 },
-                onRename    = { entry, newName ->
-                    viewModel.renameHistoryEntry(entry, newName)
-                },
-                onDelete    = { entry ->
-                    viewModel.deleteHistoryEntry(entry)
-                },
-                onBack      = {
-                    navController.popBackStack()
-                }
+                onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
+                onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },
+                onBack = { navController.popBackStack() }
             )
         }
 
-        composable("databaseScreen") {
-            DatabaseScreen(navController = navController)
+        composable(Screen.Database.route) {
+            DatabaseScreen(navController = navController, viewModel = dbViewModel)
         }
 
-        composable("optionsScreen") {
+        composable(Screen.Options.route) {
             OptionsScreen(navController = navController)
+        }
+
+        // --- Schermata di Analisi (Logica Corretta e Robusta) ---
+        composable(Screen.ImportAnalysis.route) {
+            DisposableEffect(Unit) {
+                onDispose {
+                    dbViewModel.clearImportAnalysis()
+                }
+            }
+
+            importAnalysisResult?.let { analysis ->
+                ImportAnalysisScreen(
+                    importAnalysis = analysis,
+                    onConfirm = { newProducts, updatedProducts ->
+                        dbViewModel.importProducts(newProducts, updatedProducts, context)
+                        navController.popBackStack()
+                    },
+                    onCancel = {
+                        navController.popBackStack()
+                    }
+                )
+            }
         }
     }
 }

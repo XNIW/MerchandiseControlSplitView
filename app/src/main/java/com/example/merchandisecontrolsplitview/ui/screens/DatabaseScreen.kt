@@ -23,11 +23,12 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import com.example.merchandisecontrolsplitview.viewmodel.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,26 +45,22 @@ fun DatabaseScreen(
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { viewModel.importFromExcel(context, it) }
+        uri?.let { viewModel.startImportAnalysis(context, it) }
     }
 
     val downloadLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/csv"),
-        onResult = { uri: Uri? -> uri?.let { viewModel.exportToExcel(context, it) } } // <-- passa context!
+        contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        onResult = { uri: Uri? -> uri?.let { viewModel.exportToExcel(context, it) } }
     )
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result?.contents?.let { code ->
-            viewModel.setFilter(code)
-        }
+        result?.contents?.let { code -> viewModel.setFilter(code) }
     }
 
     LaunchedEffect(uiState) {
-        when (uiState) {
-            is com.example.merchandisecontrolsplitview.viewmodel.UiState.Success ->
-                snackbarHostState.showSnackbar((uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Success).message)
-            is com.example.merchandisecontrolsplitview.viewmodel.UiState.Error ->
-                snackbarHostState.showSnackbar((uiState as com.example.merchandisecontrolsplitview.viewmodel.UiState.Error).message)
+        when (val currentState = uiState) {
+            is UiState.Success -> snackbarHostState.showSnackbar(currentState.message)
+            is UiState.Error -> snackbarHostState.showSnackbar(currentState.message)
             else -> {}
         }
     }
@@ -86,22 +83,20 @@ fun DatabaseScreen(
                     }) {
                         Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.import_file))
                     }
-                    IconButton(onClick = { downloadLauncher.launch("prodotti.csv") }) {
+                    IconButton(onClick = { downloadLauncher.launch("prodotti.xlsx") }) {
                         Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
                     }
                 }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { paddingValues -> // Ho rinominato 'padding' in 'paddingValues' per chiarezza, non è obbligatorio
-        // ***** INIZIO DELLA MODIFICA *****
-        // Avvolgi il contenuto della schermata e il FAB in una Box
+    ) { paddingValues ->
         Box(
             modifier = Modifier
-                .padding(paddingValues) // Applica il padding dello Scaffold all'intera Box
-                .fillMaxSize() // Fai in modo che la Box occupi tutto lo spazio rimanente
+                .padding(paddingValues)
+                .fillMaxSize()
         ) {
-            Column(Modifier.fillMaxSize()) { // Questa Column gestisce il layout principale della tua UI
+            Column(Modifier.fillMaxSize()) {
                 OutlinedTextField(
                     value = filter ?: "",
                     onValueChange = { viewModel.setFilter(it) },
@@ -110,13 +105,16 @@ fun DatabaseScreen(
                         .fillMaxWidth()
                         .padding(8.dp)
                 )
-                if (uiState is com.example.merchandisecontrolsplitview.viewmodel.UiState.Loading) {
+                if (uiState is UiState.Loading) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     items(products.itemCount) { idx ->
                         products[idx]?.let { ProductRow(it) }
-                        HorizontalDivider()
                     }
                 }
             }
@@ -133,57 +131,119 @@ fun DatabaseScreen(
                     scanLauncher.launch(opts)
                 },
                 modifier = Modifier
-                    .align(Alignment.BottomEnd) // <-- Ora questo funziona!
+                    .align(Alignment.BottomEnd)
                     .padding(end = 24.dp, bottom = 24.dp)
             ) {
                 Icon(Icons.Filled.CameraAlt, contentDescription = stringResource(R.string.scan_barcode))
             }
         }
-        // ***** FINE DELLA MODIFICA *****
     }
 }
-
+/**
+ * Composable per una riga prodotto con un layout corretto e migliorato.
+ */
 @Composable
 fun ProductRow(product: Product) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp, horizontal = 8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(Modifier.padding(12.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.barcode) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.barcode, style = MaterialTheme.typography.bodyMedium)
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            // --- Sezione Titolo e Identificativi (invariata) ---
+            Text(
+                text = product.productName ?: "Prodotto senza nome",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Barcode: ${product.barcode}  |  Cod. Art.: ${product.itemNumber ?: "-"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            // --- NUOVA Sezione Prezzi ---
+            // Layout a griglia per i prezzi per evitare sovrapposizioni
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Riga per i prezzi di acquisto
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    PriceInfo(
+                        label = stringResource(R.string.new_purchase_price),
+                        value = product.newPurchasePrice?.let { "%.2f".format(it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    PriceInfo(
+                        label = stringResource(R.string.old_purchase_price),
+                        value = product.oldPurchasePrice?.let { "%.2f".format(it) },
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.End
+                    )
+                }
+                Spacer(Modifier.height(8.dp)) // Spazio tra le righe di prezzo
+                // Riga per i prezzi di vendita
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    PriceInfo(
+                        label = stringResource(R.string.new_retail_price),
+                        value = product.newRetailPrice?.let { "%.2f".format(it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    PriceInfo(
+                        label = stringResource(R.string.old_retail_price),
+                        value = product.oldRetailPrice?.let { "%.2f".format(it) },
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.End
+                    )
+                }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.item_number) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.itemNumber ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.product_name) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.productName ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.new_purchase_price) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.newPurchasePrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.new_retail_price) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.newRetailPrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.old_purchase_price) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.oldPurchasePrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.old_retail_price) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.oldRetailPrice?.let { "%.2f".format(it) } ?: "-", style = MaterialTheme.typography.bodyMedium)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.supplier) + ":", style = MaterialTheme.typography.labelMedium)
-                Text(product.supplier ?: "-", style = MaterialTheme.typography.bodyMedium)
+            // --- Fine NUOVA Sezione Prezzi ---
+
+            Spacer(Modifier.height(8.dp))
+
+            // --- Sezione Fornitore (spostata in un Composable dedicato per coerenza) ---
+            Row {
+                Text(
+                    text = "${stringResource(R.string.supplier)}: ",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = product.supplier ?: "-",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Normal
+                )
             }
         }
     }
 }
+
+/**
+ * NUOVO Composable per visualizzare un'etichetta e il suo valore.
+ * L'etichetta è sopra il valore per evitare problemi di larghezza.
+ *
+ * NOTA: Questo sostituisce il vecchio `ProductInfoLine`.
+ */
+@Composable
+fun PriceInfo(
+    label: String,
+    value: String?,
+    modifier: Modifier = Modifier,
+    horizontalAlignment: Alignment.Horizontal = Alignment.Start
+) {
+    Column(modifier = modifier, horizontalAlignment = horizontalAlignment) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium, // Etichetta più piccola
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value ?: "-",
+            style = MaterialTheme.typography.bodyLarge, // Valore più grande
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+

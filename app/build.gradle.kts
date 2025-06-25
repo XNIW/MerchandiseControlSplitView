@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.example.merchandisecontrolsplitview"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.merchandisecontrolsplitview"
         minSdk = 31
-        targetSdk = 35
+        targetSdk = 36 // CORRETTO: Aggiornato per corrispondere a compileSdk
         versionCode = 1
         versionName = "1.0"
 
@@ -28,20 +28,18 @@ android {
             )
         }
     }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
-    kotlinOptions {
-        jvmTarget = "11"
-    }
+
     buildFeatures {
         compose = true
+    }
+
+    // CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
+    kotlin {
+        jvmToolchain(11)
     }
 }
 
 dependencies {
-
     // BOM
     implementation(platform(libs.androidx.compose.bom))
 

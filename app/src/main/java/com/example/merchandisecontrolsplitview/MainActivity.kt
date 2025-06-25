@@ -23,19 +23,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            // Leggi la preferenza del tema
             val context = LocalContext.current
-            // Usa remember per evitare di rileggere ogni recomposition
+            val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
             val themePref = remember {
-                context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                    .getString("theme", "auto") ?: "auto"
+                prefs.getString("theme", "auto") ?: "auto"
             }
+
             val darkTheme = when (themePref) {
                 "dark" -> true
                 "light" -> false
                 else -> isSystemInDarkTheme()
             }
+
             MerchandiseControlTheme(darkTheme = darkTheme) {
+                // La chiamata ora è pulita, senza parametri.
+                // Lo stato di navigazione è gestito internamente da AppNavGraph.
                 AppNavGraph()
             }
         }
