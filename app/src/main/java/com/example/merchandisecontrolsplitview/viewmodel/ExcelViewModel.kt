@@ -223,6 +223,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             editableValues.clear(); entry.editable.forEach { row -> editableValues.add(row.map { mutableStateOf(it) }.toMutableList()) }
             completeStates.clear(); completeStates.addAll(entry.complete)
             generated.value = true
+            currentSupplierName = entry.supplier
         }
     }
 
@@ -313,7 +314,16 @@ private fun saveExcelFileInternal(
 
         headerWithIndices.forEachIndexed { newIndex, (originalIndex, headerKey) ->
             val cell = excelRow.createCell(newIndex)
-            val cellValue = rowData.getOrNull(originalIndex) ?: ""
+
+            // --- INIZIO CORREZIONE ---
+            // Determina la sorgente corretta per il valore della cella.
+            // Per 'autocount' e 'newRetailPrice', usa la lista 'editable', altrimenti la lista 'data'.
+            val cellValue: String = when (headerKey) {
+                "autocount" -> editable.getOrNull(rowIndex + 1)?.getOrNull(0)?.value ?: ""
+                "newRetailPrice" -> editable.getOrNull(rowIndex + 1)?.getOrNull(1)?.value ?: ""
+                else -> rowData.getOrNull(originalIndex) ?: ""
+            }
+            // --- FINE CORREZIONE ---
 
             if (numericTypes.contains(headerKey)) {
                 val numericValue = cellValue.replace(",", ".").toDoubleOrNull()

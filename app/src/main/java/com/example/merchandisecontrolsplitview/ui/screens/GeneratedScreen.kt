@@ -184,11 +184,13 @@ fun GeneratedScreen(
                                     when (headerKey) {
                                         "autocount" -> {
                                             finalKey = "quantity"
-                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value ?: ""
+                                            // Se il valore è vuoto, lo imposta a "0", altrimenti usa il valore esistente.
+                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value?.ifBlank { "0" } ?: "0"
                                         }
                                         "newRetailPrice" -> {
                                             finalKey = "retailPrice"
-                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value ?: ""
+                                            // Se il valore è vuoto, lo imposta a "0", altrimenti usa il valore esistente.
+                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value?.ifBlank { "0" } ?: "0"
                                         }
                                         else -> {
                                             finalKey = headerKey
