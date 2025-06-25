@@ -58,6 +58,10 @@
     <string name="not_found">Numero non trovato</string>
     <string name="no_scanner_result">Nessun risultato dallo scanner</string>
     <string name="scan_prompt">Inquadra un barcode</string>
+    <string name="generic_calculator_title">Calcolatrice</string>
+    <string name="fast_calculator_desc">Calcolatrice Veloce</string>
+    <string name="error_label">Errore</string>
+
     <!-- Icone accessibilità -->
     <string name="scan_icon_desc">Scannerizza codice</string>
     <string name="search_icon_desc">Cerca numero</string>

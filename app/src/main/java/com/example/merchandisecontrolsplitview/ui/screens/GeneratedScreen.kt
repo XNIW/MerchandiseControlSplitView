@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +52,8 @@ import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import java.util.Locale
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
+import androidx.compose.foundation.interaction.MutableInteractionSource
+
 
 
 /**
@@ -92,6 +95,7 @@ fun GeneratedScreen(
     var renameText by remember { mutableStateOf(entryId) }
     var titleText by remember { mutableStateOf(entryId) }
 
+    var showGenericCalcDialog by remember { mutableStateOf(false) }
 
     BackHandler { onBackToStart() }
 
@@ -339,6 +343,7 @@ fun GeneratedScreen(
                 val row = excelData[infoRowIndex]
                 val qtyReq = remember { FocusRequester() }
                 val priceReq = remember { FocusRequester() }
+                val backgroundFocusRequester = remember { FocusRequester() }
                 LaunchedEffect(showInfoDialog, infoDialogFocusField) {
                     if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
                 }
@@ -346,116 +351,91 @@ fun GeneratedScreen(
                     onDismissRequest = { showInfoDialog = false },
                     title = { Text(stringResource(R.string.row_info)) },
                     text = {
-                        Column(Modifier.verticalScroll(rememberScrollState()).fillMaxWidth()) {
+                        Column(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth()
+                                .focusRequester(backgroundFocusRequester)
+                                .focusable()
+                                .clickable(
+                                    indication = null,
+                                    interactionSource = remember { MutableInteractionSource() }
+                                ) {
+                                    // 4. Richiedi il focus sullo sfondo
+                                    backgroundFocusRequester.requestFocus()
+                                }
+                        ) {
                             header.forEachIndexed { ci, name ->
-                                // BLOCCO CORRETTO CON 'when'
-                                when (name) {
-                                    "autocount", "newRetailPrice" -> {
-                                        val idx = if (name == "autocount") 0 else 1
-                                        val req = if (idx == 0) qtyReq else priceReq
-                                        var tf by remember {
-                                            mutableStateOf(
-                                                TextFieldValue(
-                                                    editableValues[infoRowIndex][idx].value,
-                                                    TextRange(editableValues[infoRowIndex][idx].value.length)
-                                                )
-                                            )
-                                        }
-                                        Row(
-                                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                getLocalizedHeader(context, name) + ":",
-                                                Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            TextField(
-                                                value = tf,
-                                                onValueChange = { nv ->
-                                                    tf =
-                                                        nv; editableValues[infoRowIndex][idx].value =
-                                                    nv.text; excelViewModel.updateHistoryEntry()
-                                                },
-                                                singleLine = true,
-                                                keyboardOptions = KeyboardOptions(
-                                                    keyboardType = KeyboardType.Number,
-                                                    imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done
-                                                ),
-                                                keyboardActions = KeyboardActions(
-                                                    onNext = { if (idx == 0) priceReq.requestFocus() },
-                                                    onDone = {
-                                                        completeStates[infoRowIndex] =
-                                                            !completeStates[infoRowIndex]; excelViewModel.updateHistoryEntry(); showInfoDialog =
-                                                        false
-                                                    }),
-                                                modifier = Modifier.weight(1f).height(48.dp).border(
-                                                    1.dp,
-                                                    Color.Gray,
-                                                    RoundedCornerShape(4.dp)
-                                                ).clip(RoundedCornerShape(4.dp)).focusRequester(req)
-                                            )
-                                        }
-                                    }
-
-                                    "purchasePrice" -> {
-                                        val idx = header.indexOf("purchasePrice")
-                                        val value = row.getOrNull(idx) ?: ""
-                                        Row(
-                                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                getLocalizedHeader(context, name) + ":",
-                                                Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            Text(
-                                                value,
-                                                Modifier
-                                                    .weight(1f)
-                                                    .background(
-                                                        MaterialTheme.colorScheme.surfaceVariant,
-                                                        RoundedCornerShape(4.dp)
+                                if (name != "complete") {
+                                    when (name) {
+                                        "autocount", "newRetailPrice" -> {
+                                            val idx = if (name == "autocount") 0 else 1
+                                            val req = if (idx == 0) qtyReq else priceReq
+                                            var tf by remember {
+                                                mutableStateOf(
+                                                    TextFieldValue(
+                                                        editableValues[infoRowIndex][idx].value,
+                                                        TextRange(editableValues[infoRowIndex][idx].value.length)
                                                     )
-                                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                                style = MaterialTheme.typography.bodyMedium.copy(
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    fontWeight = FontWeight.Bold
                                                 )
-                                            )
-                                            IconButton(
-                                                onClick = {
-                                                    calcInput = value
-                                                    calcResult = value
-                                                    calcRowIndex = infoRowIndex
-                                                    showCalcDialog = true
-                                                }
+                                            }
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(
-                                                    Icons.Filled.Calculate,
-                                                    contentDescription = "Calcola nuovo valore"
+                                                Text(
+                                                    getLocalizedHeader(context, name) + ":",
+                                                    Modifier.weight(1f),
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                TextField(
+                                                    value = tf,
+                                                    onValueChange = { nv ->
+                                                        tf =
+                                                            nv; editableValues[infoRowIndex][idx].value =
+                                                        nv.text; excelViewModel.updateHistoryEntry()
+                                                    },
+                                                    singleLine = true,
+                                                    keyboardOptions = KeyboardOptions(
+                                                        keyboardType = KeyboardType.Number,
+                                                        imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done
+                                                    ),
+                                                    keyboardActions = KeyboardActions(
+                                                        onNext = { if (idx == 0) priceReq.requestFocus() },
+                                                        onDone = {
+                                                            completeStates[infoRowIndex] =
+                                                                !completeStates[infoRowIndex]; excelViewModel.updateHistoryEntry(); showInfoDialog =
+                                                            false
+                                                        }),
+                                                    modifier = Modifier.weight(1f).height(48.dp)
+                                                        .border(
+                                                            1.dp,
+                                                            Color.Gray,
+                                                            RoundedCornerShape(4.dp)
+                                                        ).clip(RoundedCornerShape(4.dp))
+                                                        .focusRequester(req)
                                                 )
                                             }
                                         }
-                                    }
 
-                                    else -> {
-                                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                            Text(
-                                                getLocalizedHeader(context, name) + ":",
-                                                Modifier.weight(1f),
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                            val value = row.getOrNull(ci) ?: ""
-                                            if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                        "purchasePrice" -> {
+                                            val idx = header.indexOf("purchasePrice")
+                                            val value = row.getOrNull(idx) ?: ""
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    getLocalizedHeader(context, name) + ":",
+                                                    Modifier.weight(1f),
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
                                                 Text(
                                                     value,
-                                                    Modifier.weight(1f)
+                                                    Modifier
+                                                        .weight(1f)
                                                         .background(
-                                                            if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(
-                                                                alpha = 0.10f
-                                                            ) else Color.Transparent,
+                                                            MaterialTheme.colorScheme.surfaceVariant,
                                                             RoundedCornerShape(4.dp)
                                                         )
                                                         .padding(
@@ -463,42 +443,114 @@ fun GeneratedScreen(
                                                             vertical = 2.dp
                                                         ),
                                                     style = MaterialTheme.typography.bodyMedium.copy(
-                                                        color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                        fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        fontWeight = FontWeight.Bold
                                                     )
                                                 )
-                                            } else {
+                                                IconButton(
+                                                    onClick = {
+                                                        calcInput = value
+                                                        calcResult = value
+                                                        calcRowIndex = infoRowIndex
+                                                        showCalcDialog = true
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        Icons.Filled.Calculate,
+                                                        contentDescription = "Calcola nuovo valore"
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        else -> {
+                                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                                                 Text(
-                                                    value,
+                                                    getLocalizedHeader(context, name) + ":",
                                                     Modifier.weight(1f),
                                                     style = MaterialTheme.typography.bodyMedium
                                                 )
+                                                val value = row.getOrNull(ci) ?: ""
+                                                if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
+                                                    Text(
+                                                        value,
+                                                        Modifier.weight(1f)
+                                                            .background(
+                                                                if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(
+                                                                    alpha = 0.10f
+                                                                ) else Color.Transparent,
+                                                                RoundedCornerShape(4.dp)
+                                                            )
+                                                            .padding(
+                                                                horizontal = 8.dp,
+                                                                vertical = 2.dp
+                                                            ),
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                            fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    )
+                                                } else {
+                                                    Text(
+                                                        value,
+                                                        Modifier.weight(1f),
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                         }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            completeStates[infoRowIndex] =
-                                !completeStates[infoRowIndex]; excelViewModel.updateHistoryEntry(); showInfoDialog =
-                            false
-                        }) { Text(getLocalizedHeader(context, "complete")) }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showInfoDialog = false }) {
-                            Text(
-                                stringResource(R.string.confirm)
-                            )
+                        // Lasciamo questo vuoto perché gestiamo tutto nel confirmButton
+                    },
+                    confirmButton = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 1. Icona della calcolatrice a sinistra
+                            IconButton(onClick = { showGenericCalcDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Filled.Calculate,
+                                    contentDescription = stringResource(R.string.fast_calculator_desc)
+                                )
+                            }
+
+                            // 2. Spacer flessibile che spinge tutto a destra
+                            Spacer(Modifier.weight(1f))
+
+                            // 3. Pulsante secondario "Confirmar" (per chiudere il dialogo)
+                            TextButton(onClick = { showInfoDialog = false }) {
+                                Text(stringResource(R.string.confirm)) // O il testo appropriato per "Chiudi"
+                            }
+
+                            // Aggiungiamo un piccolo spazio tra i pulsanti
+                            Spacer(Modifier.width(8.dp))
+
+                            // 4. Pulsante primario "Completo" con riempimento
+                            Button(
+                                onClick = {
+                                    completeStates[infoRowIndex] = !completeStates[infoRowIndex]
+                                    excelViewModel.updateHistoryEntry()
+                                    showInfoDialog = false
+                                }
+                            ) {
+                                Text(getLocalizedHeader(context, "complete"))
+                            }
                         }
                     }
+
                 )
             }
 
             if (showCalcDialog && calcRowIndex == infoRowIndex) {
                 CalculatorDialog(
+                    title = stringResource(R.string.calc_title),
                     value = calcInput,
                     onValueChange = { calcInput = it },
                     onResult = { res ->
@@ -551,6 +603,17 @@ fun GeneratedScreen(
         )
     }
 
+    if (showGenericCalcDialog) {
+        var genericCalcInput by remember { mutableStateOf("") }
+        CalculatorDialog(
+            title = stringResource(R.string.generic_calculator_title),
+            value = genericCalcInput,
+            onValueChange = { genericCalcInput = it },
+            // onResult è vuota o semplicemente chiude il dialogo. NON modifica i dati.
+            onResult = { /* Non fa nulla con il risultato */ },
+            onDismiss = { showGenericCalcDialog = false }
+        )
+    }
 }
 
 
@@ -609,6 +672,7 @@ fun evalSimpleExpr(expr: String): Double {
 
 @Composable
 fun CalculatorDialog(
+    title: String,
     value: String,
     onValueChange: (String) -> Unit,
     onResult: (String) -> Unit,
@@ -617,17 +681,19 @@ fun CalculatorDialog(
     var input by remember { mutableStateOf(value) }
     var result by remember { mutableStateOf("") }
 
+    val errorText = stringResource(R.string.error_label)
+
     fun updateResult(str: String) {
         result = try {
             if (str.trim().endsWith("=")) {
                 evalSimpleExpr(str.trim().removeSuffix("=")).toString()
             } else ""
-        } catch (e: Exception) { "Errore" }
+        } catch (e: Exception) { errorText }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.calc_title)) },
+        title = { Text(title) },
         text = {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,

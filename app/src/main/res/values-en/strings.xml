@@ -59,6 +59,10 @@
     <string name="not_found">Number not found</string>
     <string name="no_scanner_result">No result from scanner</string>
     <string name="scan_prompt">Point at a barcode</string>
+    <string name="generic_calculator_title">Calculator</string>
+    <string name="fast_calculator_desc">Quick Calculator</string>
+    <string name="error_label">Error</string>
+
     <!-- Icon accessibility -->
     <string name="scan_icon_desc">Scan code</string>
     <string name="search_icon_desc">Search number</string>

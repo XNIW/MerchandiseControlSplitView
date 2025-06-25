@@ -58,6 +58,10 @@
     <string name="not_found">未找到编号</string>
     <string name="no_scanner_result">扫码无结果</string>
     <string name="scan_prompt">请对准条码</string>
+    <string name="generic_calculator_title">计算器</string>
+    <string name="fast_calculator_desc">快速计算器</string>
+    <string name="error_label">错误</string>
+
     <!-- 图标无障碍 -->
     <string name="scan_icon_desc">扫码</string>
     <string name="search_icon_desc">查找编号</string>
