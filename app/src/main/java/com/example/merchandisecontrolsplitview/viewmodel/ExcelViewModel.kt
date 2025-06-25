@@ -159,7 +159,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             generated.value = true
 
             val now   = LocalDateTime.now()
-            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
+            // *** MODIFICA QUI ***
+            // Sostituiamo i due punti (:) con i trattini (-) per rendere il nome sicuro
+            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
             val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
             val id    = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
 
@@ -167,13 +169,13 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
             addHistoryEntryWithId(id, supplierName)
             saveHistoryToPrefs()
-            onResult(id)
+            onResult(id) // L'ID ora è sicuro
         }
     }
 
     private fun addHistoryEntryWithId(id: String, supplier: String) {
         val now   = LocalDateTime.now()
-        val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH:mm:ss"))
+        val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
         val entry = HistoryEntry(
             id, stamp,
             excelData.map { it.toList() },
@@ -185,6 +187,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         currentIndex = 0
     }
 
+    // ... il resto del ViewModel non cambia ...
     fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
         val idx = historyEntries.indexOfFirst { it.id == entry.id }
         if (idx >= 0) {

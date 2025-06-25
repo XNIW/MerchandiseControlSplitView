@@ -103,4 +103,5 @@
     <string name="export_success">Export completed</string>
     <string name="import_error">Import error: %1$s</string>
     <string name="export_error">Export error: %1$s</string>
+    <string name="sync_with_database">Sync with database</string>
 </resources>

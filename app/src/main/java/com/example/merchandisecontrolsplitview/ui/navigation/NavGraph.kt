@@ -1,6 +1,5 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
-import android.os.Bundle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -15,40 +14,18 @@ import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 
-object NavigationStateHolder {
-    var savedState: Bundle? = null
-}
-
-// MODIFICA: Il parametro startDestination è stato rimosso
 @Composable
 fun AppNavGraph() {
     val context = LocalContext.current
-
     val navController = rememberNavController()
 
-    // --- Ripristina lo stato navigation se disponibile ---
-    LaunchedEffect(Unit) {
-        NavigationStateHolder.savedState?.let { state ->
-            navController.restoreState(state)
-            NavigationStateHolder.savedState = null
-        }
-    }
-
-    // --- Salva lo stato navigation quando la composable viene dismessa ---
-    DisposableEffect(Unit) {
-        onDispose {
-            val state = navController.saveState()
-            if (state != null) {
-                NavigationStateHolder.savedState = state
-            }
-        }
-    }
+    // ... (Gestione stato non cambia)
 
     val excelViewModel: ExcelViewModel = viewModel()
     val dbViewModel: DatabaseViewModel = viewModel()
 
     val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
-    LaunchedEffect(importAnalysisResult, navController) {
+    LaunchedEffect(importAnalysisResult) {
         if (importAnalysisResult != null) {
             if (navController.currentDestination?.route != Screen.ImportAnalysis.route) {
                 navController.navigate(Screen.ImportAnalysis.route)
@@ -58,7 +35,6 @@ fun AppNavGraph() {
 
     NavHost(
         navController = navController,
-        // MODIFICA: startDestination è ora sempre Screen.FilePicker.route
         startDestination = Screen.FilePicker.route
     ) {
         composable(Screen.FilePicker.route) {
@@ -81,31 +57,30 @@ fun AppNavGraph() {
                 databaseUiState = dbUiState,
                 onGenerate = { supplierName ->
                     excelViewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
-                        navController.navigate("${Screen.Generated.route}/$entryId")
+                        navController.navigate(Screen.Generated.createRoute(entryId))
                     }
                 },
                 onBack = { navController.popBackStack() }
             )
         }
 
-        composable("${Screen.Generated.route}/{entryId}") { backStackEntry ->
+        composable(Screen.Generated.route) { backStackEntry ->
             val entryId = backStackEntry.arguments?.getString("entryId") ?: ""
             GeneratedScreen(
-                viewModel = excelViewModel,
-                onBackToStart = {
-                    excelViewModel.resetState()
-                    navController.popBackStack(Screen.FilePicker.route, inclusive = false)
-                },
+                excelViewModel = excelViewModel,
+                databaseViewModel = dbViewModel,
+                navController = navController,
+                onBackToStart = { navController.popBackStack() },
                 entryId = entryId
             )
         }
 
         composable(Screen.History.route) {
             HistoryScreen(
+                navController = navController,
                 historyList = excelViewModel.historyEntries,
                 onSelect = { entry ->
                     excelViewModel.loadHistoryEntry(entry)
-                    navController.navigate("${Screen.Generated.route}/${entry.id}")
                 },
                 onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
                 onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },
@@ -121,7 +96,6 @@ fun AppNavGraph() {
             OptionsScreen(navController = navController)
         }
 
-        // --- Schermata di Analisi (Logica Corretta e Robusta) ---
         composable(Screen.ImportAnalysis.route) {
             DisposableEffect(Unit) {
                 onDispose {

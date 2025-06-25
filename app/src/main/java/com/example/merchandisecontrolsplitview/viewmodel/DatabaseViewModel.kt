@@ -52,25 +52,16 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // --- FIX: Utilizzo corretto di ExcelUtils.kt ---
-                // 1. La tua funzione readAndAnalyzeExcel restituisce le intestazioni GIA' NORMALIZZATE.
-                //    Non serve alcuna logica di normalizzazione aggiuntiva qui.
                 val (normalizedHeader, dataRows, _) = readAndAnalyzeExcel(context, uri)
-
                 if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
                     _uiState.value = UiState.Error("Il file Excel è vuoto o non ha un'intestazione valida.")
                     return@launch
                 }
-
-                // 2. Crea la mappa usando direttamente le chiavi normalizzate fornite da ExcelUtils.
                 val importedRowsAsMap = dataRows.map { row ->
                     normalizedHeader.mapIndexed { index, headerKey ->
                         headerKey to (row.getOrNull(index) ?: "")
                     }.toMap()
                 }
-
-                // 3. Il resto del flusso rimane invariato, perché l'analyzer riceve i dati
-                //    nel formato corretto che si aspetta.
                 val currentDbProducts = db.productDao().getAll()
                 val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts)
                 _importAnalysisResult.value = analysis
@@ -81,8 +72,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-
-    // La funzione helper `normalizeHeader` è stata rimossa perché ridondante.
 
     fun clearImportAnalysis() {
         _importAnalysisResult.value = null
@@ -152,6 +141,21 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: IOException) {
             e.printStackTrace()
             throw e
+        }
+    }
+
+    fun analyzeGridData(gridData: List<Map<String, String>>, context: Context) {
+        _uiState.value = UiState.Loading()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val currentDbProducts = db.productDao().getAll()
+                val analysis = ImportAnalyzer.analyze(gridData, currentDbProducts)
+                _importAnalysisResult.value = analysis
+                _uiState.value = UiState.Idle
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = UiState.Error("Errore durante l'analisi dei dati: ${e.message}")
+            }
         }
     }
 }

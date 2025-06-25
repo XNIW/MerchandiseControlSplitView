@@ -102,5 +102,7 @@
     <string name="export_success">导出完成</string>
     <string name="import_error">导入错误：%1$s</string>
     <string name="export_error">导出错误：%1$s</string>
+    <string name="sync_with_database">与数据库同步</string>
+
 
 </resources>

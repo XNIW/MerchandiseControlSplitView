@@ -32,12 +32,17 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.ui.res.stringResource
+import androidx.navigation.NavController
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.ui.navigation.Screen // <-- IMPORT AGGIUNTO
+import java.net.URLEncoder // <-- IMPORT AGGIUNTO
+import java.nio.charset.StandardCharsets // <-- IMPORT AGGIUNTO
 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
+    navController: NavController,
     historyList: List<HistoryEntry>,
     onSelect: (HistoryEntry) -> Unit,
     onRename: (HistoryEntry, String) -> Unit,
@@ -51,6 +56,20 @@ fun HistoryScreen(
 
     var showDeleteDialog by remember { mutableStateOf(false) }
     var deleteEntry      by remember { mutableStateOf<HistoryEntry?>(null) }
+
+    var navigateToEntryId by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(navigateToEntryId) {
+        navigateToEntryId?.let { entryId ->
+            // *** CORREZIONE QUI ***
+            // Creiamo la rotta sostituendo {entryId} con il valore codificato.
+            val encodedId = URLEncoder.encode(entryId, StandardCharsets.UTF_8.toString())
+            val route = Screen.Generated.route.replace("{entryId}", encodedId)
+            navController.navigate(route)
+
+            navigateToEntryId = null
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -74,6 +93,7 @@ fun HistoryScreen(
                 val dismissState = rememberSwipeToDismissBoxState(
                     confirmValueChange = { value ->
                         when (value) {
+                            // These show dialogs but DO NOT set navigateToEntryId
                             SwipeToDismissBoxValue.EndToStart -> {
                                 deleteEntry = entry
                                 showDeleteDialog = true
@@ -97,12 +117,9 @@ fun HistoryScreen(
                     backgroundContent = {
                         val direction = dismissState.targetValue
                         if (direction != SwipeToDismissBoxValue.Settled) {
-                            // --- BLOCCO MODIFICATO ---
                             val color = when (direction) {
                                 SwipeToDismissBoxValue.StartToEnd -> Color.LightGray
                                 SwipeToDismissBoxValue.EndToStart -> Color(0xFFD32F2F)
-                                // `else` è necessario per rendere il "when" esaustivo
-                                // ma non verrà mai eseguito grazie all'if esterno.
                                 else -> Color.Transparent
                             }
                             val icon = when (direction) {
@@ -115,7 +132,6 @@ fun HistoryScreen(
                                 SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
                                 else -> Alignment.Center
                             }
-                            // --- FINE BLOCCO MODIFICATO ---
 
                             Box(
                                 Modifier
@@ -135,7 +151,10 @@ fun HistoryScreen(
                         Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp)
-                            .clickable { onSelect(entry) },
+                            .clickable {
+                                onSelect(entry)
+                                navigateToEntryId = entry.id
+                            },
                         elevation = CardDefaults.cardElevation()
                     ) {
                         Row(
@@ -160,7 +179,6 @@ fun HistoryScreen(
         }
     }
 
-    // Dialog Rinomina (invariato)
     if (showRenameDialog && renameEntry != null) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
@@ -190,7 +208,6 @@ fun HistoryScreen(
         )
     }
 
-    // Dialog Elimina (invariato)
     if (showDeleteDialog && deleteEntry != null) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },

@@ -102,4 +102,5 @@
     <string name="export_success">Esportazione completata</string>
     <string name="import_error">Errore importazione: %1$s</string>
     <string name="export_error">Errore esportazione: %1$s</string>
+    <string name="sync_with_database">Sincronizza con database</string>
 </resources>
