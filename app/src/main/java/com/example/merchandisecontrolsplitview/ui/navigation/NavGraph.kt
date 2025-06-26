@@ -105,6 +105,7 @@ fun AppNavGraph() {
 
             importAnalysisResult?.let { analysis ->
                 ImportAnalysisScreen(
+                    excelViewModel = excelViewModel,
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
                         dbViewModel.importProducts(newProducts, updatedProducts, context)

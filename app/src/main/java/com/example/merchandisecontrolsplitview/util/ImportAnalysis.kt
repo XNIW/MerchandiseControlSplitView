@@ -38,7 +38,7 @@ object ImportAnalyzer {
                 // Qui avviene la conversione da testo (String) ai tipi di dati corretti.
                 val barcode = row["barcode"]?.trim() ?: ""
                 val itemNumber = row["itemNumber"]?.trim()?.takeIf { it.isNotBlank() }
-                val productName = row["productName"]?.trim()?.takeIf { it.isNotBlank() }
+                val productName = row["productName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
 
                 // **PUNTO CHIAVE**: Conversione esplicita dei prezzi da String a Double?
                 val purchasePrice = row["purchasePrice"]?.replace(",", ".")?.toDoubleOrNull()
@@ -87,7 +87,7 @@ object ImportAnalyzer {
                 }
             } catch (ex: Exception) {
                 errors.add(
-                    RowImportError(rowIndex + 1, row.values.toList(), "Errore di parsing imprevisto: ${ex.message}")
+                    RowImportError(rowIndex + 1, row, "Errore di parsing imprevisto: ${ex.message}")
                 )
             }
         }
@@ -102,18 +102,16 @@ object ImportAnalyzer {
         rowIndex: Int, row: Map<String, String>, barcode: String, productName: String?,
         purchasePrice: Double?, retailPrice: Double?
     ): RowImportError? {
-        val rowContentForError = row.values.toList()
+        // Rimuoviamo la riga "val rowContentForError = ..."
         return when {
             barcode.isBlank() ->
-                RowImportError(rowIndex + 1, rowContentForError, "Il barcode è obbligatorio.")
+                RowImportError(rowIndex + 1, row, "Il barcode è obbligatorio.") // Passiamo 'row' direttamente
             productName.isNullOrBlank() ->
-                RowImportError(rowIndex + 1, rowContentForError, "Il nome del prodotto è obbligatorio.")
-            productName.length > MAX_PRODUCT_NAME_LENGTH ->
-                RowImportError(rowIndex + 1, rowContentForError, "Nome prodotto troppo lungo (max $MAX_PRODUCT_NAME_LENGTH).")
+                RowImportError(rowIndex + 1, row, "Il nome del prodotto è obbligatorio.") // Passiamo 'row'
             retailPrice == null ->
-                RowImportError(rowIndex + 1, rowContentForError, "Il prezzo di vendita non è un numero valido.")
+                RowImportError(rowIndex + 1, row, "Il prezzo di vendita non è un numero valido.") // Passiamo 'row'
             (purchasePrice ?: 0.0) < 0 || retailPrice < 0 ->
-                RowImportError(rowIndex + 1, rowContentForError, "I prezzi non possono essere negativi.")
+                RowImportError(rowIndex + 1, row, "I prezzi non possono essere negativi.") // Passiamo 'row'
             else -> null
         }
     }

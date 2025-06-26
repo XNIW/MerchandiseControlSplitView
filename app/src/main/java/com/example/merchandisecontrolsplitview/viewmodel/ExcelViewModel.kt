@@ -48,6 +48,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     val editableValues  = mutableStateListOf<MutableList<MutableState<String>>>()
     val completeStates  = mutableStateListOf<Boolean>()
 
+    val errorRowIndexes = mutableStateOf<Set<Int>>(emptySet())
+
     // Flag UI
     val generated = mutableStateOf(false)
     val isLoading = mutableStateOf(false)
@@ -234,6 +236,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         selectedColumns.clear()
         editableValues.clear()
         completeStates.clear()
+        errorRowIndexes.value = emptySet()
         generated.value = false
         isLoading.value = false
         loadError.value = null

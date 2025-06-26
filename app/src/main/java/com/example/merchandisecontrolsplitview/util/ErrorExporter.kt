@@ -2,80 +2,67 @@ package com.example.merchandisecontrolsplitview.util
 
 import android.content.Context
 import android.net.Uri
-import android.provider.DocumentsContract
 import com.example.merchandisecontrolsplitview.data.RowImportError
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 
-/**
- * Un oggetto helper per esportare dati in formati file, come CSV.
- */
 object ErrorExporter {
 
     /**
-     * Esporta una lista di errori di importazione in un file CSV.
-     * Utilizza il Storage Access Framework per creare un file nella directory
-     * selezionata dall'utente.
+     * Esporta una lista di errori di importazione in un file XLSX.
      *
      * @param errors La lista di `RowImportError` da esportare.
-     * @param context Context dell'applicazione, necessario per ottenere il `ContentResolver`.
-     * @param directoryUri L'URI della directory scelta dall'utente tramite `OpenDocumentTree`.
-     * @param fileName Il nome del file da creare.
-     * @return L'URI del file CSV creato con successo, o `null` in caso di errore.
+     * @param context Il Context dell'applicazione.
+     * @param fileUri L'URI del file scelto dall'utente tramite `CreateDocument`.
      */
-    fun exportErrorsToCsv(
+    fun exportErrorsToXlsx(
         errors: List<RowImportError>,
         context: Context,
-        directoryUri: Uri,
-        fileName: String = "import_errors_${System.currentTimeMillis()}.csv" // Nome file unico
-    ): Uri? {
+        fileUri: Uri
+    ) {
+        if (errors.isEmpty()) return // Non fare nulla se non ci sono errori
+
+        val workbook = XSSFWorkbook()
+        val sheet = workbook.createSheet("Errori di Importazione")
+
         try {
-            // **FIX: Utilizza DocumentsContract per creare un nuovo documento (file).**
-            // Questo è il modo corretto per lavorare con le URI dell'albero di documenti (Document Tree).
-            val fileUri = DocumentsContract.createDocument(
-                context.contentResolver,
-                directoryUri,
-                "text/csv", // Mime type del file
-                fileName
-            )
+            // --- 1. Creazione dell'Intestazione (Header) ---
+            // Prende le chiavi dalla mappa del primo errore per creare le colonne.
+            // Aggiunge la colonna finale "Errore".
+            val headers = errors.first().rowContent.keys.toList() + "Errore"
+            val headerRow = sheet.createRow(0)
+            headers.forEachIndexed { index, headerText ->
+                headerRow.createCell(index).setCellValue(getLocalizedHeader(context, headerText))
+            }
 
-            // Se la creazione del file fallisce (es. per permessi mancanti), fileUri sarà null.
-            fileUri?.let { uri ->
-                // Apri un output stream verso l'URI del file appena creato.
-                // Il blocco `use` garantisce che lo stream venga chiuso automaticamente.
-                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    // Usa un BufferedWriter per scrivere in modo efficiente.
-                    outputStream.bufferedWriter().use { out ->
-                        // Scrivi l'intestazione del CSV.
-                        out.write("RowNumber;RowContent;ErrorReason\n")
-                        // Itera su ogni errore per scriverlo come una riga nel file.
-                        errors.forEach { error ->
-                            // Prepara il contenuto della riga per essere CSV-safe:
-                            // 1. Unisci gli elementi con un separatore.
-                            // 2. Rimuovi le nuove righe per non rompere la struttura del file.
-                            // 3. Esegui l'escape delle virgolette doppie raddoppiandole.
-                            val rowContent = error.rowContent
-                                .joinToString(separator = "|") // Uso '|' per essere sicuri
-                                .replace("\n", " ")
-                                .replace("\"", "\"\"")
+            // --- 2. Scrittura delle Righe di Errore ---
+            errors.forEachIndexed { rowIndex, error ->
+                val dataRow = sheet.createRow(rowIndex + 1)
+                val rowDataMap = error.rowContent
 
-                            val errorReason = error.errorReason.replace("\"", "\"\"")
-
-                            // Scrivi la riga completa, racchiudendo i campi di testo tra virgolette.
-                            out.write("${error.rowNumber};\"$rowContent\";\"$errorReason\"\n")
-                        }
+                // Scrive i dati di ogni colonna in base all'header
+                headers.forEachIndexed { colIndex, headerKey ->
+                    if (headerKey != "Errore") {
+                        val cellValue = rowDataMap[headerKey] ?: ""
+                        dataRow.createCell(colIndex).setCellValue(cellValue)
                     }
                 }
-                // Restituisce l'URI del file creato con successo.
-                return uri
+                // Aggiunge il motivo dell'errore nell'ultima colonna
+                dataRow.createCell(headers.size - 1).setCellValue(error.errorReason)
+            }
+
+            // --- 3. Adatta la larghezza delle colonne al contenuto ---
+            sheet.defaultColumnWidth = 15
+
+            // --- 4. Scrittura del file ---
+            context.contentResolver.openOutputStream(fileUri)?.use { outputStream ->
+                workbook.write(outputStream)
             }
         } catch (e: IOException) {
-            // Gestisce specificamente gli errori di Input/Output.
             e.printStackTrace()
-        } catch (e: Exception) {
-            // Gestisce altri errori imprevisti.
-            e.printStackTrace()
+            // Gestisci l'errore, magari con un Toast
+        } finally {
+            workbook.close()
         }
-        // Se qualcosa va storto durante la creazione o la scrittura, restituisce null.
-        return null
     }
 }

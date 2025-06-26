@@ -148,6 +148,7 @@ fun PreGenerateScreen(
                         editableValues = editableValues,
                         completeStates = completeStates,
                         searchMatches = emptySet(),
+                        errorRowIndexes = emptySet(),
                         generated = false,
                         editMode = editMode,
                         onCompleteToggle = {},

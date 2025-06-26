@@ -5,10 +5,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
@@ -28,10 +30,12 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
+import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportAnalysisScreen(
+    excelViewModel: ExcelViewModel,
     importAnalysis: ImportAnalysis,
     onConfirm: (List<Product>, List<ProductUpdate>) -> Unit,
     onCancel: () -> Unit
@@ -49,10 +53,14 @@ fun ImportAnalysisScreen(
     var updateToEdit by remember { mutableStateOf<Pair<Int, ProductUpdate>?>(null) }
 
 
-    val openDirectoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+    val exportErrorsLauncher = rememberLauncherForActivityResult(
+        // Cambia il tipo di file in XLSX
+        ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
         uri?.let {
-            ErrorExporter.exportErrorsToCsv(importAnalysis.errors, context, it)
-            Toast.makeText(context, "Errori esportati.", Toast.LENGTH_SHORT).show()
+            // Chiama la nuova funzione di esportazione per XLSX
+            ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
+            Toast.makeText(context, "File errori esportato.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -156,8 +164,19 @@ fun ImportAnalysisScreen(
                     onToggle = { errorsExpanded = !errorsExpanded }
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
-                        Button(onClick = { openDirectoryLauncher.launch(null) }) {
-                            Text("Esporta Errori")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Pulsante Esporta esistente
+                            Button(onClick = { exportErrorsLauncher.launch("errori_importazione.xlsx") }) {
+                                Text("Esporta Errori")
+                            }
+                            OutlinedButton(onClick = {
+                                // Imposta gli indici nel ViewModel
+                                excelViewModel.errorRowIndexes.value = importAnalysis.errors.map { it.rowNumber }.toSet()
+                                // E poi torna indietro
+                                onCancel()
+                            }) {
+                                Text("Correggi")
+                            }
                         }
                     } else {
                         Text("Nessun errore critico trovato.", modifier = Modifier.padding(12.dp))
@@ -336,8 +355,95 @@ private fun ExpandableSection(
 private fun ErrorRow(error: RowImportError) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text("Riga ${error.rowNumber}: ${error.errorReason}", color = MaterialTheme.colorScheme.onError, fontWeight = FontWeight.Bold)
-            Text("Contenuto: ${error.rowContent.joinToString(" | ")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onError)
+            // Motivo dell'errore in evidenza
+            Text(
+                "Riga ${error.rowNumber}: ${error.errorReason}",
+                color = MaterialTheme.colorScheme.onError,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
+
+            // --- INIZIO LOGICA DI EVIDENZIAZIONE ---
+            // 1. Determina la chiave del campo problematico in base al messaggio di errore
+            val problematicKey = when {
+                error.errorReason.contains("prezzo di vendita") -> "newRetailPrice"
+                error.errorReason.contains("quantità") -> "quantity"
+                error.errorReason.contains("barcode") -> "barcode"
+                error.errorReason.contains("nome del prodotto") -> "productName"
+                // Aggiungi altri casi se necessario
+                else -> null
+            }
+
+            // Dettagli principali per identificare il prodotto
+            val barcode = error.rowContent["barcode"] ?: "-"
+            val productName = error.rowContent["productName"] ?: "Prodotto non identificato"
+            val quantity = error.rowContent["quantity"] ?: "-"
+            val retailPrice = error.rowContent["newRetailPrice"] ?: "-"
+
+            // 2. Mostra i campi, applicando uno stile diverso se la chiave corrisponde
+            //    a quella del campo problematico.
+            ErrorDetailText(
+                label = "Barcode",
+                value = barcode,
+                isHighlighted = problematicKey == "barcode"
+            )
+            ErrorDetailText(
+                label = "Nome Prodotto",
+                value = productName,
+                isHighlighted = problematicKey == "productName"
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            ErrorDetailText(
+                label = "Quantità contata",
+                value = quantity,
+                isHighlighted = problematicKey == "quantity"
+            )
+            ErrorDetailText(
+                label = "Nuovo prezzo v.",
+                value = retailPrice,
+                isHighlighted = problematicKey == "newRetailPrice"
+            )
+            // --- FINE LOGICA DI EVIDENZIAZIONE ---
         }
+    }
+}
+
+/**
+ * NUOVO Composable helper per mostrare una riga di dettaglio all'interno della ErrorRow.
+ * Evidenzia il valore se `isHighlighted` è true.
+ */
+@Composable
+private fun ErrorDetailText(label: String, value: String, isHighlighted: Boolean) {
+    // 1. Definisce un modificatore condizionale per lo sfondo.
+    //    Viene applicato solo se isHighlighted è true.
+    val rowModifier = if (isHighlighted) {
+        Modifier
+            .background(
+                color = Color.Red.copy(alpha = 0.25f), // Un rosso vivido ma semi-trasparente
+                shape = RoundedCornerShape(4.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp) // Un po' di spazio interno
+    } else {
+        Modifier // Nessun modificatore se non è il campo con l'errore
+    }
+
+    // 2. Applica il modificatore all'intera riga
+    Row(modifier = rowModifier) {
+        Text(
+            text = "$label: ",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onError
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            // Manteniamo il grassetto per un'ulteriore enfasi
+            fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onError
+        )
     }
 }

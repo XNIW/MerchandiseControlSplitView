@@ -34,6 +34,7 @@ fun ZoomableExcelGrid(
     editableValues: List<List<MutableState<String>>>,
     completeStates: SnapshotStateList<Boolean>,
     searchMatches: Set<Pair<Int, Int>>,
+    errorRowIndexes: Set<Int>,
     generated: Boolean,
     editMode: Boolean,
     onCompleteToggle: (Int) -> Unit,
@@ -101,6 +102,13 @@ fun ZoomableExcelGrid(
                     } else false
                     val isComplete = completeStates.getOrNull(r) == true
 
+                    // --- LOGICA DI EVIDENZIAZIONE ---
+                    val isErrorRow = errorRowIndexes.contains(r)
+                    // Il colore rosso viene usato solo se la riga è errata, altrimenti è null.
+                    val highlightColor = if (isErrorRow) Color.Red.copy(alpha = 0.2f) else null
+                    // --- FINE LOGICA ---
+
+                    // La Row ora non ha più uno sfondo
                     Row {
                         row.forEachIndexed { ci, cell ->
                             val isMatch = searchMatches.contains(r to ci)
@@ -111,7 +119,9 @@ fun ZoomableExcelGrid(
                                     height = cellHeight,
                                     isSelectedColumn = selectedColumns.getOrElse(ci) { false },
                                     isSearchMatch = isMatch,
-                                    onCellClick = { selectedColumns[ci] = !selectedColumns[ci] }
+                                    onCellClick = { selectedColumns[ci] = !selectedColumns[ci] },
+                                    // Passiamo il colore di highlight a ogni cella
+                                    overrideBackgroundColor = highlightColor
                                 )
                                 generated -> when {
                                     editMode -> {
@@ -123,20 +133,23 @@ fun ZoomableExcelGrid(
                                         TableCell(
                                             text = text, width = cellWidth, height = cellHeight,
                                             isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
-                                            onCellClick = { onCellEditRequest(r, ci) }
+                                            onCellClick = { onCellEditRequest(r, ci) },
+                                            overrideBackgroundColor = highlightColor
                                         )
                                     }
                                     hasEditable && ci == indexQuantita -> TableCell(
                                         text = editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty(),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
-                                        onCellClick = { onQuantityCellClick(r) }
+                                        onCellClick = { onQuantityCellClick(r) },
+                                        overrideBackgroundColor = highlightColor
                                     )
                                     hasEditable && ci == indexPrezzo -> TableCell(
                                         text = editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty(),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
-                                        onCellClick = { onPriceCellClick(r) }
+                                        onCellClick = { onPriceCellClick(r) },
+                                        overrideBackgroundColor = highlightColor
                                     )
                                     hasEditable && ci == indexCompleto -> {
                                         val completeColor = if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
@@ -144,9 +157,13 @@ fun ZoomableExcelGrid(
                                             modifier = Modifier
                                                 .width(cellWidth)
                                                 .height(cellHeight)
+                                                // La logica del background ora dà priorità all'errore
                                                 .background(
-                                                    if (isComplete) completeColor
-                                                    else MaterialTheme.colorScheme.surface
+                                                    when {
+                                                        isErrorRow -> highlightColor!! // Usa il colore rosso se c'è errore
+                                                        isComplete -> completeColor     // Altrimenti il colore verde se completo
+                                                        else -> MaterialTheme.colorScheme.surface // Altrimenti il default
+                                                    }
                                                 )
                                                 .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                                                 .clickable { onCompleteToggle(r) },
@@ -163,7 +180,8 @@ fun ZoomableExcelGrid(
                                     else -> TableCell(
                                         text = cell, width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
-                                        onCellClick = { onRowCellClick(r) }
+                                        onCellClick = { onRowCellClick(r) },
+                                        overrideBackgroundColor = highlightColor
                                     )
                                 }
                             }
