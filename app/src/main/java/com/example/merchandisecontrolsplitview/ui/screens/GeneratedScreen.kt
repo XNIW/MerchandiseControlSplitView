@@ -228,7 +228,7 @@ fun GeneratedScreen(
                                 map.toMap() // Converte la mappa in una versione non modificabile
                             }
 
-                            databaseViewModel.analyzeGridData(gridDataForAnalysis, context)
+                            databaseViewModel.analyzeGridData(gridDataForAnalysis)
                             navController.navigate(Screen.ImportAnalysis.route)
                         }) {
                             Icon(Icons.Default.Sync, contentDescription = stringResource(R.string.sync_with_database))

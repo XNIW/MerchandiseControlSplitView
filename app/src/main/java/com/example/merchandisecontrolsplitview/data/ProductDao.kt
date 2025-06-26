@@ -30,6 +30,17 @@ interface ProductDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(products: List<Product>)
 
+    // --- INIZIO NUOVO CODICE ---
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(product: Product)
+
+    @Update
+    suspend fun update(product: Product)
+
+    @Delete
+    suspend fun delete(product: Product)
+    // --- FINE NUOVO CODICE ---
+
     /**
      * Aggiorna una lista di prodotti esistenti.
      * @param products La lista di prodotti da aggiornare.

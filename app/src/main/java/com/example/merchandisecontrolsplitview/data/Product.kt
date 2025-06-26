@@ -11,11 +11,11 @@ import androidx.room.Index
 data class Product(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val barcode: String,
-    val itemNumber: String?,
+    val itemNumber: String? = null, // <-- MODIFICATO
     val productName: String?,
-    val newPurchasePrice: Double?,
-    val newRetailPrice: Double?,
-    val oldPurchasePrice: Double?,
-    val oldRetailPrice: Double?,
-    val supplier: String?
+    val newPurchasePrice: Double? = null, // <-- MODIFICATO
+    val newRetailPrice: Double? = null, // <-- MODIFICATO
+    val oldPurchasePrice: Double? = null, // <-- MODIFICATO
+    val oldRetailPrice: Double? = null, // <-- MODIFICATO
+    val supplier: String? = null // <-- MODIFICATO
 )

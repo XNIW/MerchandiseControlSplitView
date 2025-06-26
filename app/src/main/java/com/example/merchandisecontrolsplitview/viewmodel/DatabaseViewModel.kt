@@ -17,7 +17,6 @@ import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 
-// La tua classe UiState rimane invariata
 sealed class UiState {
     data object Idle : UiState()
     data class Loading(val progress: Int? = null) : UiState()
@@ -28,6 +27,7 @@ sealed class UiState {
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
+    private val dao = db.productDao()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -37,7 +37,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     val pager = filter.flatMapLatest { filterStr ->
         Pager(PagingConfig(pageSize = 20)) {
-            db.productDao().getAllPaged(filterStr)
+            dao.getAllPaged(filterStr)
         }.flow.cachedIn(viewModelScope)
     }
 
@@ -62,7 +62,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                         headerKey to (row.getOrNull(index) ?: "")
                     }.toMap()
                 }
-                val currentDbProducts = db.productDao().getAll()
+                val currentDbProducts = dao.getAll()
                 val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
@@ -81,7 +81,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val dao = db.productDao()
                 if (newProducts.isNotEmpty()) {
                     dao.insertAll(newProducts)
                 }
@@ -100,7 +99,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val products = db.productDao().getAll()
+                val products = dao.getAll()
                 if (products.isEmpty()) {
                     _uiState.value = UiState.Error("Nessun prodotto da esportare.")
                     return@launch
@@ -112,6 +111,45 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // --- NUOVE FUNZIONI PER LA GESTIONE SINGOLA ---
+
+    fun addProduct(product: Product) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dao.insert(product)
+                _uiState.value = UiState.Success("Prodotto aggiunto con successo.")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = UiState.Error("Errore durante l'aggiunta del prodotto.")
+            }
+        }
+    }
+
+    fun updateProduct(product: Product) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dao.update(product)
+                _uiState.value = UiState.Success("Prodotto aggiornato con successo.")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = UiState.Error("Errore durante l'aggiornamento del prodotto.")
+            }
+        }
+    }
+
+    fun deleteProduct(product: Product) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                dao.delete(product)
+                _uiState.value = UiState.Success("Prodotto eliminato con successo.")
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _uiState.value = UiState.Error("Errore durante l'eliminazione del prodotto.")
+            }
+        }
+    }
+    // --- FINE NUOVE FUNZIONI ---
 
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
         val workbook: Workbook = XSSFWorkbook()
@@ -144,11 +182,11 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun analyzeGridData(gridData: List<Map<String, String>>, context: Context) {
+    fun analyzeGridData(gridData: List<Map<String, String>>) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val currentDbProducts = db.productDao().getAll()
+                val currentDbProducts = dao.getAll()
                 val analysis = ImportAnalyzer.analyze(gridData, currentDbProducts)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
