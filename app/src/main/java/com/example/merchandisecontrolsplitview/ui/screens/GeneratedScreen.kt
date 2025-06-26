@@ -127,6 +127,7 @@ fun GeneratedScreen(
         uri?.let { targetUri ->
             scope.launch {
                 excelViewModel.saveFileSuspend(context, targetUri)
+                excelViewModel.markCurrentEntryAsExported()
                 onBackToStart()
             }
         }

@@ -108,6 +108,10 @@ fun AppNavGraph() {
                     excelViewModel = excelViewModel,
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
+                        // Controlla se l'analisi originale non aveva errori
+                        if (importAnalysisResult?.errors?.isEmpty() == true) {
+                            excelViewModel.markCurrentEntryAsSynced()
+                        }
                         dbViewModel.importProducts(newProducts, updatedProducts, context)
                         // --- INIZIO MODIFICA ---
                         // Torna alla schermata iniziale e pulisce lo stack di navigazione.

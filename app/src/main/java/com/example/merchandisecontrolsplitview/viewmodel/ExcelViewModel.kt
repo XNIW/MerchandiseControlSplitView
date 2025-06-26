@@ -32,7 +32,9 @@ data class HistoryEntry(
     val data: List<List<String>>,
     val editable: List<List<String>>,
     val complete: List<Boolean>,
-    val supplier: String = ""
+    val supplier: String = "",
+    val wasExported: Boolean = false,
+    val wasSyncedSuccessfully: Boolean = false
 )
 
 /**
@@ -165,7 +167,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             val now   = LocalDateTime.now()
             // *** MODIFICA QUI ***
             // Sostituiamo i due punti (:) con i trattini (-) per rendere il nome sicuro
-            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
+            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"))
             val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
             val id    = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
 
@@ -256,6 +258,27 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             if (type != null) {
                 headerRow[colIdx] = type
                 excelData[0] = headerRow
+            }
+        }
+    }
+
+    fun markCurrentEntryAsExported() {
+        currentIndex?.takeIf { it in historyEntries.indices }?.let { idx ->
+            val entry = historyEntries[idx]
+            // Aggiorna solo se non è già impostato, per efficienza
+            if (!entry.wasExported) {
+                historyEntries[idx] = entry.copy(wasExported = true)
+                saveHistoryToPrefs() // Salva la modifica
+            }
+        }
+    }
+
+    fun markCurrentEntryAsSynced() {
+        currentIndex?.takeIf { it in historyEntries.indices }?.let { idx ->
+            val entry = historyEntries[idx]
+            if (!entry.wasSyncedSuccessfully) {
+                historyEntries[idx] = entry.copy(wasSyncedSuccessfully = true)
+                saveHistoryToPrefs()
             }
         }
     }
