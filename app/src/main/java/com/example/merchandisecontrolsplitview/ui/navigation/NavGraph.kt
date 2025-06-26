@@ -108,7 +108,15 @@ fun AppNavGraph() {
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
                         dbViewModel.importProducts(newProducts, updatedProducts, context)
-                        navController.popBackStack()
+                        // --- INIZIO MODIFICA ---
+                        // Torna alla schermata iniziale e pulisce lo stack di navigazione.
+                        navController.navigate(Screen.FilePicker.route) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                inclusive = true
+                            }
+                            launchSingleTop = true // Evita di creare istanze multiple della stessa schermata
+                        }
+                        // --- FINE MODIFICA ---
                     },
                     onCancel = {
                         navController.popBackStack()

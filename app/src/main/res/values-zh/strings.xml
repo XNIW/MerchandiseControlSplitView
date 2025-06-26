@@ -46,6 +46,7 @@
     <string name="select_column_type">选择列类型</string>
     <string name="custom_column_type">自定义名称</string>
     <string name="close">关闭</string>
+    <string name="reload_file">重新加载文件</string>
 
     <!-- 生成页面 -->
     <string name="row_info">行信息</string>
@@ -61,6 +62,7 @@
     <string name="generic_calculator_title">计算器</string>
     <string name="fast_calculator_desc">快速计算器</string>
     <string name="error_label">错误</string>
+    <string name="go_to_home">返回首页</string>
 
     <!-- 图标无障碍 -->
     <string name="scan_icon_desc">扫码</string>

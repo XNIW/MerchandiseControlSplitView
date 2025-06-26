@@ -62,6 +62,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
 
     private var currentSupplierName: String = ""
+    val supplierName: String
+        get() = currentSupplierName
 
     init {
         loadHistoryFromPrefs()
@@ -98,7 +100,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 headerTypes.addAll(headerSource)
                 generated.value = false
                 initPreGenerateState()
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 loadError.value = "Errore nel leggere il file Excel"
             }
             isLoading.value = false

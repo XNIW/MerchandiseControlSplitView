@@ -61,7 +61,7 @@ object ImportAnalyzer {
                         barcode = barcode,
                         itemNumber = itemNumber,
                         productName = productName!!,
-                        newPurchasePrice = purchasePrice!!,
+                        newPurchasePrice = purchasePrice ?: 0.0,
                         newRetailPrice = newRetailPrice!!,
                         oldPurchasePrice = null,
                         oldRetailPrice = null,
@@ -76,7 +76,7 @@ object ImportAnalyzer {
                         supplier = supplier ?: existingProduct.supplier,
                         oldPurchasePrice = existingProduct.newPurchasePrice,
                         oldRetailPrice = existingProduct.newRetailPrice,
-                        newPurchasePrice = purchasePrice!!,
+                        newPurchasePrice = purchasePrice ?: 0.0,
                         newRetailPrice = newRetailPrice!!
                     )
 
@@ -110,11 +110,9 @@ object ImportAnalyzer {
                 RowImportError(rowIndex + 1, rowContentForError, "Il nome del prodotto è obbligatorio.")
             productName.length > MAX_PRODUCT_NAME_LENGTH ->
                 RowImportError(rowIndex + 1, rowContentForError, "Nome prodotto troppo lungo (max $MAX_PRODUCT_NAME_LENGTH).")
-            purchasePrice == null ->
-                RowImportError(rowIndex + 1, rowContentForError, "Il prezzo di acquisto non è un numero valido.")
             retailPrice == null ->
                 RowImportError(rowIndex + 1, rowContentForError, "Il prezzo di vendita non è un numero valido.")
-            purchasePrice < 0 || retailPrice < 0 ->
+            (purchasePrice ?: 0.0) < 0 || retailPrice < 0 ->
                 RowImportError(rowIndex + 1, rowContentForError, "I prezzi non possono essere negativi.")
             else -> null
         }

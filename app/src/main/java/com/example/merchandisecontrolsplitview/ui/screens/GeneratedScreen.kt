@@ -53,7 +53,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import java.util.Locale
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
 import androidx.compose.foundation.interaction.MutableInteractionSource
-
+import androidx.compose.material.icons.filled.Home
 
 
 /**
@@ -88,7 +88,6 @@ fun GeneratedScreen(
 
     var showCalcDialog by remember { mutableStateOf(false) }
     var calcInput by remember { mutableStateOf("") }
-    var calcResult by remember { mutableStateOf("") }
     var calcRowIndex by remember { mutableIntStateOf(-1) }
 
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -96,8 +95,13 @@ fun GeneratedScreen(
     var titleText by remember { mutableStateOf(entryId) }
 
     var showGenericCalcDialog by remember { mutableStateOf(false) }
+    var showExitDialog by remember { mutableStateOf(false) }
+    var onConfirmAction by remember { mutableStateOf({}) }
 
-    BackHandler { onBackToStart() }
+    BackHandler {
+        onConfirmAction = { onBackToStart() }
+        showExitDialog = true
+    }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
@@ -157,12 +161,31 @@ fun GeneratedScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { onBackToStart() }) {
+                    IconButton(onClick = {
+                        onConfirmAction = { onBackToStart() }
+                        showExitDialog = true
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
                     if (excelData.isNotEmpty() && generated) {
+                        IconButton(onClick = {
+                            onConfirmAction = {
+                                navController.navigate(Screen.FilePicker.route) {
+                                    popUpTo(navController.graph.startDestinationId) {
+                                        inclusive = true
+                                    }
+                                    launchSingleTop = true
+                                }
+                            }
+                            showExitDialog = true
+                        }) {
+                            Icon(
+                                Icons.Default.Home, // O Icons.Default.Close se preferisci
+                                contentDescription = stringResource(R.string.go_to_home)
+                            )
+                        }
                         // --- PULSANTE SINCRONIZZA ---
                         IconButton(onClick = {
                             val header = excelData.firstOrNull()
@@ -172,34 +195,37 @@ fun GeneratedScreen(
                             }
 
                             val dataRows = excelData.drop(1)
-                            val gridDataForAnalysis = dataRows.mapIndexed { rowIndex, row ->
-                                val map = mutableMapOf<String, String>()
-                                header.forEachIndexed { colIndex, headerKey ->
-                                    val actualRowIndex = rowIndex + 1
+                            val gridDataForAnalysis = dataRows.mapIndexed { rowIndex, rowData ->
+                                val actualRowIndex = rowIndex + 1
 
-                                    val value: String
-                                    val finalKey: String
+                                // 1. Crea una mappa base con i dati originali della riga
+                                val map = header.mapIndexed { colIndex, headerKey ->
+                                    headerKey to (rowData.getOrNull(colIndex) ?: "")
+                                }.toMap().toMutableMap()
 
-                                    // Mappiamo le colonne speciali con i nomi che l'analizzatore si aspetta
-                                    when (headerKey) {
-                                        "autocount" -> {
-                                            finalKey = "quantity"
-                                            // Se il valore è vuoto, lo imposta a "0", altrimenti usa il valore esistente.
-                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value?.ifBlank { "0" } ?: "0"
-                                        }
-                                        "newRetailPrice" -> {
-                                            finalKey = "retailPrice"
-                                            // Se il valore è vuoto, lo imposta a "0", altrimenti usa il valore esistente.
-                                            value = editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value?.ifBlank { "0" } ?: "0"
-                                        }
-                                        else -> {
-                                            finalKey = headerKey
-                                            value = row.getOrNull(colIndex) ?: ""
-                                        }
-                                    }
-                                    map[finalKey] = value
-                                }
-                                map
+                                // 2. Prende i valori NUOVI e DEFINITIVI inseriti dall'utente
+                                //    e li pulisce per la massima sicurezza.
+                                val finalQuantity = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value
+                                    ?.replace(Regex("[^0-9,.]"), "") // Pulisce
+                                    ?.replace(',', '.')
+                                    ?.ifBlank { "0" } ?: "0"
+
+                                val finalPrice = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value
+                                    ?.replace(Regex("[^0-9,.]"), "") // Pulisce
+                                    ?.replace(',', '.')
+                                    ?.ifBlank { "0" } ?: "0"
+
+                                // 3. SOVRASCRIVE i valori nella mappa con quelli nuovi, usando le chiavi corrette
+                                //    che il database si aspetta ("quantity", "retailPrice", "supplier").
+                                map["quantity"] = finalQuantity
+                                map["newRetailPrice"] = finalPrice // <--- CHIAVE CORRETTA
+                                map["supplier"] = excelViewModel.supplierName
+
+                                // 4. Rimuove le chiavi vecchie che non servono più al database
+                                map.remove("autocount")
+                                //map.remove("newRetailPrice")
+
+                                map.toMap() // Converte la mappa in una versione non modificabile
                             }
 
                             databaseViewModel.analyzeGridData(gridDataForAnalysis, context)
@@ -251,6 +277,29 @@ fun GeneratedScreen(
                         }
                     )
                 }
+            }
+
+            if (showExitDialog) {
+                AlertDialog(
+                    onDismissRequest = { showExitDialog = false },
+                    title = { Text("Conferma uscita") },
+                    text = { Text("Sei sicuro di voler uscire? I progressi inseriti sono stati salvati nella cronologia.") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showExitDialog = false
+                                onConfirmAction() // Esegue l'azione salvata (Indietro o Home)
+                            }
+                        ) {
+                            Text("Esci")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showExitDialog = false }) {
+                            Text("Annulla")
+                        }
+                    }
+                )
             }
 
             // FAB Scanner e Cerca
@@ -452,7 +501,6 @@ fun GeneratedScreen(
                                                 IconButton(
                                                     onClick = {
                                                         calcInput = value
-                                                        calcResult = value
                                                         calcRowIndex = infoRowIndex
                                                         showCalcDialog = true
                                                     }
@@ -690,7 +738,7 @@ fun CalculatorDialog(
             if (str.trim().endsWith("=")) {
                 evalSimpleExpr(str.trim().removeSuffix("=")).toString()
             } else ""
-        } catch (e: Exception) { errorText }
+        } catch (_: Exception) { errorText }
     }
 
     AlertDialog(

@@ -1,6 +1,9 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -9,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,12 +55,19 @@ fun PreGenerateScreen(
     // Local UI state
     val context = LocalContext.current
     var editMode by remember { mutableStateOf(false) }
-    var showExitDialog by remember { mutableStateOf(false) }
     var showSupplierDialog by remember { mutableStateOf(false) }
     var supplierName by remember { mutableStateOf("") }
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
+
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        // Quando un file viene scelto, ricarica i dati nel ViewModel.
+        // La UI si aggiornerà automaticamente.
+        uri?.let { excelViewModel.loadFromUri(context, it) }
+    }
 
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
@@ -66,7 +77,7 @@ fun PreGenerateScreen(
 
     // Intercept back gesture to confirm exit
     BackHandler {
-        showExitDialog = true
+        onBack()
     }
 
     Scaffold(
@@ -74,8 +85,23 @@ fun PreGenerateScreen(
             TopAppBar(
                 title = { Text("Anteprima File") },
                 navigationIcon = {
-                    IconButton(onClick = { showExitDialog = true }) {
+                    IconButton(onClick = { onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                    }
+                },
+                // --- INIZIO NUOVO CODICE ---
+                actions = {
+                    IconButton(onClick = {
+                        // Lancia il selettore di file
+                        launcher.launch(arrayOf(
+                            "application/vnd.ms-excel",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ))
+                    }) {
+                        Icon(
+                            Icons.Default.Refresh, // O Icons.Default.FolderOpen
+                            contentDescription = stringResource(R.string.reload_file)
+                        )
                     }
                 }
             )
@@ -167,16 +193,6 @@ fun PreGenerateScreen(
                         }
                     }
                 }
-            }
-
-            // Dialog vari per la gestione della UI (uscita, fornitore, header)
-            if (showExitDialog) {
-                AlertDialog(
-                    onDismissRequest = { showExitDialog = false },
-                    title = { Text(stringResource(R.string.exit_confirm_title)) },
-                    confirmButton = { TextButton(onClick = { showExitDialog = false; onBack() }) { Text(stringResource(R.string.exit)) } },
-                    dismissButton = { TextButton(onClick = { showExitDialog = false }) { Text(stringResource(R.string.cancel)) } }
-                )
             }
 
             if (showSupplierDialog) {

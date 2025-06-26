@@ -47,6 +47,7 @@
     <string name="select_column_type">Select column type</string>
     <string name="custom_column_type">Custom name</string>
     <string name="close">Close</string>
+    <string name="reload_file">Reload file</string>
 
     <!-- GenerateScreen -->
     <string name="row_info">Row information</string>
@@ -62,6 +63,7 @@
     <string name="generic_calculator_title">Calculator</string>
     <string name="fast_calculator_desc">Quick Calculator</string>
     <string name="error_label">Error</string>
+    <string name="go_to_home">Go to Home</string>
 
     <!-- Icon accessibility -->
     <string name="scan_icon_desc">Scan code</string>
