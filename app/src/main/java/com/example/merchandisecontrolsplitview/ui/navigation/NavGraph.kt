@@ -19,8 +19,6 @@ fun AppNavGraph() {
     val context = LocalContext.current
     val navController = rememberNavController()
 
-    // ... (Gestione stato non cambia)
-
     val excelViewModel: ExcelViewModel = viewModel()
     val dbViewModel: DatabaseViewModel = viewModel()
 
@@ -55,6 +53,7 @@ fun AppNavGraph() {
             PreGenerateScreen(
                 excelViewModel = excelViewModel,
                 databaseUiState = dbUiState,
+                databaseViewModel = dbViewModel,
                 onGenerate = { supplierName ->
                     excelViewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
                         navController.navigate(Screen.Generated.createRoute(entryId))
@@ -106,6 +105,7 @@ fun AppNavGraph() {
             importAnalysisResult?.let { analysis ->
                 ImportAnalysisScreen(
                     excelViewModel = excelViewModel,
+                    databaseViewModel = dbViewModel, // <-- QUESTA È LA CORREZIONE
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
                         // Controlla se l'analisi originale non aveva errori
@@ -113,15 +113,12 @@ fun AppNavGraph() {
                             excelViewModel.markCurrentEntryAsSynced()
                         }
                         dbViewModel.importProducts(newProducts, updatedProducts, context)
-                        // --- INIZIO MODIFICA ---
-                        // Torna alla schermata iniziale e pulisce lo stack di navigazione.
                         navController.navigate(Screen.FilePicker.route) {
                             popUpTo(navController.graph.startDestinationId) {
                                 inclusive = true
                             }
-                            launchSingleTop = true // Evita di creare istanze multiple della stessa schermata
+                            launchSingleTop = true
                         }
-                        // --- FINE MODIFICA ---
                     },
                     onCancel = {
                         navController.popBackStack()

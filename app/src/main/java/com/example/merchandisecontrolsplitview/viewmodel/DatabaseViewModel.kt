@@ -7,12 +7,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.*
 import com.example.merchandisecontrolsplitview.data.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel // Usa la tua utility
+import kotlinx.coroutines.withContext
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
+import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
@@ -24,10 +26,11 @@ sealed class UiState {
     data class Error(val message: String) : UiState()
 }
 
-@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
     private val dao = db.productDao()
+    private val supplierDao = db.supplierDao()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -40,6 +43,31 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             dao.getAllPaged(filterStr)
         }.flow.cachedIn(viewModelScope)
     }
+
+    // --- BLOCCO FORNITORI FINALE E OTTIMIZZATO ---
+
+    // 1. Questo StateFlow è l'unica fonte di verità per il testo nel campo di ricerca.
+    private val _supplierInputText = MutableStateFlow("")
+    val supplierInputText: StateFlow<String> = _supplierInputText.asStateFlow()
+
+    // 2. Funzione per la UI per aggiornare il testo.
+    fun onSupplierSearchQueryChanged(query: String) {
+        _supplierInputText.value = query
+    }
+
+    // 3. Il flusso dei suggerimenti reagisce a _supplierInputText con debounce.
+    val suppliers: StateFlow<List<Supplier>> = _supplierInputText
+        .debounce(300L)
+        .distinctUntilChanged()
+        .flatMapLatest { query ->
+            if (query.isBlank())
+                flow { emit(supplierDao.getAll()) }
+            else
+                flow { emit(supplierDao.searchByName(query)) }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
 
     fun setFilter(text: String) {
         _filter.value = text.ifBlank { null }
@@ -63,7 +91,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     }.toMap()
                 }
                 val currentDbProducts = dao.getAll()
-                val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts)
+                val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts, supplierDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -112,8 +140,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // --- NUOVE FUNZIONI PER LA GESTIONE SINGOLA ---
-
     fun addProduct(product: Product) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -149,7 +175,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-    // --- FINE NUOVE FUNZIONI ---
 
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
         val workbook: Workbook = XSSFWorkbook()
@@ -157,7 +182,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         val headerRow = sheet.createRow(0)
         val headers = listOf(
             "barcode", "itemNumber", "productName", "newPurchasePrice",
-            "newRetailPrice", "oldPurchasePrice", "oldRetailPrice", "supplier"
+            "newRetailPrice", "oldPurchasePrice", "oldRetailPrice", "supplierId"
         )
         headers.forEachIndexed { index, header ->
             headerRow.createCell(index).setCellValue(header)
@@ -171,7 +196,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(4).setCellValue(product.newRetailPrice ?: 0.0)
             row.createCell(5).setCellValue(product.oldPurchasePrice ?: 0.0)
             row.createCell(6).setCellValue(product.oldRetailPrice ?: 0.0)
-            row.createCell(7).setCellValue(product.supplier ?: "")
+            row.createCell(7).setCellValue(product.supplierId?.toDouble() ?: 0.0)
         }
         try {
             context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
@@ -187,7 +212,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val currentDbProducts = dao.getAll()
-                val analysis = ImportAnalyzer.analyze(gridData, currentDbProducts)
+                val analysis = ImportAnalyzer.analyze(gridData, currentDbProducts, supplierDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -195,5 +220,21 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = UiState.Error("Errore durante l'analisi dei dati: ${e.message}")
             }
         }
+    }
+
+    suspend fun addSupplier(name: String): Supplier? {
+        if (name.isBlank()) return null
+        val existing = supplierDao.findByName(name)
+        if (existing != null) return existing
+
+        val newSupplier = Supplier(name = name)
+        return withContext(Dispatchers.IO) {
+            supplierDao.insert(newSupplier)
+            supplierDao.findByName(name)
+        }
+    }
+
+    suspend fun getSupplierById(id: Long): Supplier? {
+        return supplierDao.getById(id)
     }
 }

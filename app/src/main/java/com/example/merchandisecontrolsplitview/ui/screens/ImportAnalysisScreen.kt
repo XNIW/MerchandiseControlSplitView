@@ -1,3 +1,4 @@
+// in ui/screens/ImportAnalysisScreen.kt
 package com.example.merchandisecontrolsplitview.ui.screens
 
 import android.widget.Toast
@@ -24,18 +25,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.example.merchandisecontrolsplitview.data.ImportAnalysis
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
+import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportAnalysisScreen(
     excelViewModel: ExcelViewModel,
+    databaseViewModel: DatabaseViewModel,
     importAnalysis: ImportAnalysis,
     onConfirm: (List<Product>, List<ProductUpdate>) -> Unit,
     onCancel: () -> Unit
@@ -45,6 +47,7 @@ fun ImportAnalysisScreen(
     val editableNewProducts = remember { importAnalysis.newProducts.map { it.copy() }.toMutableStateList() }
     val editableUpdatedProducts = remember { importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList() }
 
+    // --- CORREZIONE ERRORE DI BATTITURA ---
     var newProductsExpanded by remember { mutableStateOf(true) }
     var updatedProductsExpanded by remember { mutableStateOf(true) }
     var errorsExpanded by remember { mutableStateOf(true) }
@@ -52,13 +55,10 @@ fun ImportAnalysisScreen(
     var itemToEdit by remember { mutableStateOf<Pair<Int, Product>?>(null) }
     var updateToEdit by remember { mutableStateOf<Pair<Int, ProductUpdate>?>(null) }
 
-
     val exportErrorsLauncher = rememberLauncherForActivityResult(
-        // Cambia il tipo di file in XLSX
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ) { uri ->
         uri?.let {
-            // Chiama la nuova funzione di esportazione per XLSX
             ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
             Toast.makeText(context, "File errori esportato.", Toast.LENGTH_SHORT).show()
         }
@@ -68,6 +68,7 @@ fun ImportAnalysisScreen(
         val (index, product) = itemToEdit!!
         EditProductDialog(
             product = product,
+            viewModel = databaseViewModel,
             onDismiss = { itemToEdit = null },
             onSave = { updatedProduct ->
                 editableNewProducts[index] = updatedProduct
@@ -80,6 +81,7 @@ fun ImportAnalysisScreen(
         val (index, productUpdate) = updateToEdit!!
         EditProductDialog(
             product = productUpdate.newProduct,
+            viewModel = databaseViewModel,
             onDismiss = { updateToEdit = null },
             onSave = { updatedProduct ->
                 editableUpdatedProducts[index] = productUpdate.copy(newProduct = updatedProduct)
@@ -87,7 +89,6 @@ fun ImportAnalysisScreen(
             }
         )
     }
-
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Revisione Importazione") }) },
@@ -121,11 +122,7 @@ fun ImportAnalysisScreen(
                 }
             }
             if (newProductsExpanded && editableNewProducts.isNotEmpty()) {
-                itemsIndexed(
-                    editableNewProducts,
-                    // FIX: Key is made unique by combining barcode and index
-                    key = { index, p -> "new-${p.barcode}-$index" }
-                ) { index, product ->
+                itemsIndexed(editableNewProducts, key = { index, p -> "new-${p.barcode}-$index" }) { index, product ->
                     DisplayProductRow(
                         product = product,
                         onEditClick = { itemToEdit = index to product }
@@ -145,11 +142,7 @@ fun ImportAnalysisScreen(
                 }
             }
             if (updatedProductsExpanded && editableUpdatedProducts.isNotEmpty()) {
-                itemsIndexed(
-                    editableUpdatedProducts,
-                    // FIX: Key is made unique by combining product ID and index
-                    key = { index, u -> "update-${u.oldProduct.id}-$index" }
-                ) { index, update ->
+                itemsIndexed(editableUpdatedProducts, key = { index, u -> "update-${u.oldProduct.id}-$index" }) { index, update ->
                     DisplayProductUpdateRow(
                         productUpdate = update,
                         onEditClick = { updateToEdit = index to update }
@@ -165,14 +158,11 @@ fun ImportAnalysisScreen(
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Pulsante Esporta esistente
                             Button(onClick = { exportErrorsLauncher.launch("errori_importazione.xlsx") }) {
                                 Text("Esporta Errori")
                             }
                             OutlinedButton(onClick = {
-                                // Imposta gli indici nel ViewModel
                                 excelViewModel.errorRowIndexes.value = importAnalysis.errors.map { it.rowNumber }.toSet()
-                                // E poi torna indietro
                                 onCancel()
                             }) {
                                 Text("Correggi")
@@ -184,11 +174,7 @@ fun ImportAnalysisScreen(
                 }
             }
             if (errorsExpanded && importAnalysis.errors.isNotEmpty()) {
-                itemsIndexed(
-                    importAnalysis.errors,
-                    // FIX: Key is made unique by combining row number and index for absolute safety
-                    key = { index, e -> "error-${e.rowNumber}-$index" }
-                ) { _, err ->
+                itemsIndexed(importAnalysis.errors, key = { index, e -> "error-${e.rowNumber}-$index" }) { _, err ->
                     ErrorRow(error = err)
                 }
             }
@@ -210,8 +196,9 @@ private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
                 Text("Cod. Art.: ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("Acq: ${product.newPurchasePrice?.let { "%.2f".format(it) } ?: "-"}", style = MaterialTheme.typography.bodyMedium)
-                Text("Ven: ${product.newRetailPrice?.let { "%.2f".format(it) } ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                // --- MODIFICA QUI ---
+                Text("Acq: ${product.newPurchasePrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                Text("Ven: ${product.newRetailPrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onEditClick) {
                 Icon(Icons.Default.Edit, contentDescription = "Modifica Prodotto")
@@ -232,12 +219,7 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    productUpdate.oldProduct.productName ?: "Senza Nome",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
+                Text(productUpdate.oldProduct.productName ?: "Senza Nome", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = onEditClick) {
                     Icon(Icons.Default.Edit, contentDescription = "Modifica Aggiornamento")
                 }
@@ -261,64 +243,19 @@ private fun CompareRow(field: String, old: Product, new: Product) {
     val (oldValue, newValue) = when (field) {
         "Nome Prodotto" -> old.productName to new.productName
         "Codice Articolo" -> old.itemNumber to new.itemNumber
-        "Prezzo Acquisto" -> old.newPurchasePrice?.toString() to new.newPurchasePrice?.toString()
-        "Prezzo Vendita" -> old.newRetailPrice?.toString() to new.newRetailPrice?.toString()
-        "Fornitore" -> old.supplier to new.supplier
+        // --- MODIFICA QUI ---
+        "Prezzo Acquisto" -> old.newPurchasePrice?.toLong()?.toString() to new.newPurchasePrice?.toLong()?.toString()
+        "Prezzo Vendita" -> old.newRetailPrice?.toLong()?.toString() to new.newRetailPrice?.toLong()?.toString()
+        "Fornitore" -> old.supplierId?.toString() to new.supplierId?.toString() // Questo può rimanere ID o nome
         else -> "" to ""
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(field, modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium)
-        Text(
-            text = oldValue ?: "-",
-            modifier = Modifier.weight(1f),
-            textDecoration = TextDecoration.LineThrough,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = newValue ?: "-",
-            modifier = Modifier.weight(1f),
-            fontWeight = FontWeight.Bold,
-            color = Color(0xFF006400) // Verde scuro più leggibile
-        )
+        Text(text = oldValue ?: "-", modifier = Modifier.weight(1f), textDecoration = TextDecoration.LineThrough, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(text = newValue ?: "-", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Color(0xFF006400))
     }
 }
 
-
-@Composable
-private fun EditProductDialog(
-    product: Product,
-    onDismiss: () -> Unit,
-    onSave: (Product) -> Unit
-) {
-    var tempProduct by remember { mutableStateOf(product) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Modifica Prodotto", style = MaterialTheme.typography.titleLarge)
-                OutlinedTextField(value = tempProduct.barcode, onValueChange = { tempProduct = tempProduct.copy(barcode = it) }, label = { Text("Barcode") })
-                OutlinedTextField(value = tempProduct.itemNumber ?: "", onValueChange = { tempProduct = tempProduct.copy(itemNumber = it) }, label = { Text("Cod. Art.") })
-                OutlinedTextField(value = tempProduct.productName ?: "", onValueChange = { tempProduct = tempProduct.copy(productName = it) }, label = { Text("Nome Prodotto") })
-                OutlinedTextField(value = tempProduct.newPurchasePrice?.toString() ?: "", onValueChange = { v -> tempProduct = tempProduct.copy(newPurchasePrice = v.replace(",", ".").toDoubleOrNull()) }, label = { Text("Prezzo Acquisto") })
-                OutlinedTextField(value = tempProduct.newRetailPrice?.toString() ?: "", onValueChange = { v -> tempProduct = tempProduct.copy(newRetailPrice = v.replace(",", ".").toDoubleOrNull()) }, label = { Text("Prezzo Vendita") })
-                OutlinedTextField(value = tempProduct.supplier ?: "", onValueChange = { tempProduct = tempProduct.copy(supplier = it) }, label = { Text("Fornitore") })
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = onDismiss) { Text("Annulla") }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = { onSave(tempProduct) }) { Text("Salva") }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun ExpandableSection(
@@ -336,16 +273,10 @@ private fun ExpandableSection(
             ) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 val rotationAngle by animateFloatAsState(targetValue = if (isExpanded) 180f else 0f, label = "rotation")
-                Icon(
-                    imageVector = Icons.Default.ArrowDropDown,
-                    contentDescription = if (isExpanded) "Comprimi" else "Espandi",
-                    modifier = Modifier.rotate(rotationAngle)
-                )
+                Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = if (isExpanded) "Comprimi" else "Espandi", modifier = Modifier.rotate(rotationAngle))
             }
             AnimatedVisibility(visible = isExpanded) {
-                Column {
-                    content()
-                }
+                Column { content() }
             }
         }
     }
@@ -355,95 +286,38 @@ private fun ExpandableSection(
 private fun ErrorRow(error: RowImportError) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            // Motivo dell'errore in evidenza
-            Text(
-                "Riga ${error.rowNumber}: ${error.errorReason}",
-                color = MaterialTheme.colorScheme.onError,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
+            Text("Riga ${error.rowNumber}: ${error.errorReason}", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
-
-            // --- INIZIO LOGICA DI EVIDENZIAZIONE ---
-            // 1. Determina la chiave del campo problematico in base al messaggio di errore
             val problematicKey = when {
                 error.errorReason.contains("prezzo di vendita") -> "newRetailPrice"
                 error.errorReason.contains("quantità") -> "quantity"
                 error.errorReason.contains("barcode") -> "barcode"
                 error.errorReason.contains("nome del prodotto") -> "productName"
-                // Aggiungi altri casi se necessario
                 else -> null
             }
-
-            // Dettagli principali per identificare il prodotto
             val barcode = error.rowContent["barcode"] ?: "-"
             val productName = error.rowContent["productName"] ?: "Prodotto non identificato"
             val quantity = error.rowContent["quantity"] ?: "-"
             val retailPrice = error.rowContent["newRetailPrice"] ?: "-"
 
-            // 2. Mostra i campi, applicando uno stile diverso se la chiave corrisponde
-            //    a quella del campo problematico.
-            ErrorDetailText(
-                label = "Barcode",
-                value = barcode,
-                isHighlighted = problematicKey == "barcode"
-            )
-            ErrorDetailText(
-                label = "Nome Prodotto",
-                value = productName,
-                isHighlighted = problematicKey == "productName"
-            )
-
+            ErrorDetailText(label = "Barcode", value = barcode, isHighlighted = problematicKey == "barcode")
+            ErrorDetailText(label = "Nome Prodotto", value = productName, isHighlighted = problematicKey == "productName")
             Spacer(Modifier.height(4.dp))
-
-            ErrorDetailText(
-                label = "Quantità contata",
-                value = quantity,
-                isHighlighted = problematicKey == "quantity"
-            )
-            ErrorDetailText(
-                label = "Nuovo prezzo v.",
-                value = retailPrice,
-                isHighlighted = problematicKey == "newRetailPrice"
-            )
-            // --- FINE LOGICA DI EVIDENZIAZIONE ---
+            ErrorDetailText(label = "Quantità contata", value = quantity, isHighlighted = problematicKey == "quantity")
+            ErrorDetailText(label = "Nuovo prezzo v.", value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
         }
     }
 }
 
-/**
- * NUOVO Composable helper per mostrare una riga di dettaglio all'interno della ErrorRow.
- * Evidenzia il valore se `isHighlighted` è true.
- */
 @Composable
 private fun ErrorDetailText(label: String, value: String, isHighlighted: Boolean) {
-    // 1. Definisce un modificatore condizionale per lo sfondo.
-    //    Viene applicato solo se isHighlighted è true.
     val rowModifier = if (isHighlighted) {
-        Modifier
-            .background(
-                color = Color.Red.copy(alpha = 0.25f), // Un rosso vivido ma semi-trasparente
-                shape = RoundedCornerShape(4.dp)
-            )
-            .padding(horizontal = 6.dp, vertical = 2.dp) // Un po' di spazio interno
+        Modifier.background(color = Color.Red.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
     } else {
-        Modifier // Nessun modificatore se non è il campo con l'errore
+        Modifier
     }
-
-    // 2. Applica il modificatore all'intera riga
     Row(modifier = rowModifier) {
-        Text(
-            text = "$label: ",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onError
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            // Manteniamo il grassetto per un'ulteriore enfasi
-            fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal,
-            color = MaterialTheme.colorScheme.onError
-        )
+        Text(text = "$label: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onError)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal, color = MaterialTheme.colorScheme.onError)
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
@@ -20,10 +21,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import kotlinx.coroutines.launch
 
 /**
  * Schermata di anteprima di un file Excel.
@@ -39,7 +43,8 @@ import com.example.merchandisecontrolsplitview.viewmodel.UiState
 @Composable
 fun PreGenerateScreen(
     excelViewModel: ExcelViewModel,
-    databaseUiState: UiState, // <-- MODIFICA: Aggiunto per reagire allo stato di analisi
+    databaseUiState: UiState,
+    databaseViewModel: DatabaseViewModel,
     onGenerate: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -55,17 +60,24 @@ fun PreGenerateScreen(
     // Local UI state
     val context = LocalContext.current
     var editMode by remember { mutableStateOf(false) }
-    var showSupplierDialog by remember { mutableStateOf(false) }
-    var supplierName by remember { mutableStateOf("") }
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
+
+    // --- STATO PER IL NUOVO DIALOGO FORNITORE ---
+    val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
+    var showSupplierDialog by remember { mutableStateOf(false) }
+    var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
+    var isDropdownExpanded by remember { mutableStateOf(false) }
+
+    // Raccogli la lista di fornitori dal ViewModel
+    val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         // Quando un file viene scelto, ricarica i dati nel ViewModel.
-        // La UI si aggiornerà automaticamente.
         uri?.let { excelViewModel.loadFromUri(context, it) }
     }
 
@@ -89,17 +101,15 @@ fun PreGenerateScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
-                // --- INIZIO NUOVO CODICE ---
                 actions = {
                     IconButton(onClick = {
-                        // Lancia il selettore di file
                         launcher.launch(arrayOf(
                             "application/vnd.ms-excel",
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         ))
                     }) {
                         Icon(
-                            Icons.Default.Refresh, // O Icons.Default.FolderOpen
+                            Icons.Default.Refresh,
                             contentDescription = stringResource(R.string.reload_file)
                         )
                     }
@@ -112,12 +122,10 @@ fun PreGenerateScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // --- MODIFICA: Gestione unificata degli stati di caricamento ed errore ---
             val isAnalysisInProgress = databaseUiState is UiState.Loading
             val analysisError = (databaseUiState as? UiState.Error)?.message
 
             when {
-                // Mostra il caricamento se sta leggendo l'Excel O se sta analizzando per l'import
                 isExcelLoading || isAnalysisInProgress -> {
                     Column(
                         modifier = Modifier.fillMaxSize(),
@@ -129,7 +137,6 @@ fun PreGenerateScreen(
                         Text(if(isAnalysisInProgress) "Analisi in corso..." else "Caricamento file...")
                     }
                 }
-                // Mostra l'errore se si è verificato durante il caricamento O durante l'analisi
                 excelLoadError != null || analysisError != null -> {
                     Text(
                         text = excelLoadError ?: analysisError ?: "Errore sconosciuto",
@@ -137,7 +144,6 @@ fun PreGenerateScreen(
                         modifier = Modifier.padding(16.dp).align(Alignment.Center)
                     )
                 }
-                // Se non ci sono caricamenti o errori, e ci sono dati, mostra la griglia
                 excelData.isNotEmpty() -> {
                     val localizedData = listOf(excelData[0].map { getLocalizedHeader(context, it) }) + excelData.drop(1)
                     ZoomableExcelGrid(
@@ -186,8 +192,12 @@ fun PreGenerateScreen(
                         )
                     }
                     if (!editMode) {
+                        // --- MODIFICA ONCLICK ---
                         FloatingActionButton(onClick = {
-                            supplierName = ""
+                            // Resetta lo stato nel ViewModel prima di aprire il dialogo
+                            databaseViewModel.onSupplierSearchQueryChanged("") // <-- CORREZIONE
+                            selectedSupplier = null
+                            isDropdownExpanded = false
                             showSupplierDialog = true
                         }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
@@ -196,23 +206,113 @@ fun PreGenerateScreen(
                 }
             }
 
+            // --- BLOCCO DIALOGO COMPLETAMENTE SOSTITUITO ---
             if (showSupplierDialog) {
                 AlertDialog(
                     onDismissRequest = { showSupplierDialog = false },
                     title = { Text(stringResource(R.string.supplier_dialog_title)) },
                     text = {
-                        OutlinedTextField(
-                            value = supplierName, onValueChange = { supplierName = it },
-                            label = { Text(stringResource(R.string.supplier_label)) },
-                            singleLine = true, modifier = Modifier.fillMaxWidth()
-                        )
+                        ExposedDropdownMenuBox(
+                            // --- MODIFICA 1: La visibilità dipende solo dallo stato booleano ---
+                            expanded = isDropdownExpanded,
+                            // --- MODIFICA 2: Cliccando si inverte lo stato ---
+                            onExpandedChange = { isDropdownExpanded = !isDropdownExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = supplierInputText,
+                                onValueChange = { text ->
+                                    databaseViewModel.onSupplierSearchQueryChanged(text)
+                                    isDropdownExpanded = true
+                                },
+                                label = { Text(stringResource(R.string.supplier_label)) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                trailingIcon = {
+                                    Row(
+                                        // Aggiungiamo l'allineamento verticale per centrare le icone
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // 1. Mostriamo la X (se il testo non è vuoto) PRIMA del triangolo
+                                        if (supplierInputText.isNotBlank()) {
+                                            IconButton(onClick = {
+                                                databaseViewModel.onSupplierSearchQueryChanged("")
+                                                isDropdownExpanded = true // riapre la lista completa!
+                                            }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Cancella"
+                                                )
+                                            }
+                                        }
+                                        // 2. Mostriamo il triangolo del dropdown DOPO la X
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = isDropdownExpanded)
+                                    }
+                                }
+                            )
+
+                            ExposedDropdownMenu(
+                                // --- MODIFICA 3: Anche qui la visibilità dipende solo dallo stato ---
+                                expanded = isDropdownExpanded,
+                                onDismissRequest = { isDropdownExpanded = false }
+                            ) {
+                                // Mostra un indicatore se la lista è vuota (es. durante il caricamento iniziale)
+                                if (supplierSuggestions.isEmpty() && supplierInputText.isBlank()) {
+                                    DropdownMenuItem(
+                                        text = { Text("Nessun fornitore trovato") },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                }
+
+                                supplierSuggestions.forEach { suggestion ->
+                                    DropdownMenuItem(
+                                        text = { Text(suggestion.name) },
+                                        onClick = {
+                                            databaseViewModel.onSupplierSearchQueryChanged(suggestion.name)
+                                            selectedSupplier = suggestion
+                                            isDropdownExpanded = false
+                                        }
+                                    )
+                                }
+
+                                // Logica per aggiungere un nuovo fornitore (invariata)
+                                if (supplierSuggestions.none { it.name.equals(supplierInputText, true) } && supplierInputText.isNotBlank()) {
+                                    DropdownMenuItem(
+                                        text = { Text("Aggiungi \"$supplierInputText\"") },
+                                        onClick = {
+                                            scope.launch {
+                                                val newSupplier = databaseViewModel.addSupplier(supplierInputText)
+                                                newSupplier?.let {
+                                                    databaseViewModel.onSupplierSearchQueryChanged(it.name)
+                                                    selectedSupplier = it
+                                                    isDropdownExpanded = false
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     },
                     confirmButton = {
-                        TextButton(onClick = {
-                            if (supplierName.isNotBlank()) { showSupplierDialog = false; onGenerate(supplierName) }
-                        }) { Text(stringResource(R.string.confirm)) }
+                        TextButton(
+                            onClick = {
+                                selectedSupplier?.let {
+                                    showSupplierDialog = false
+                                    onGenerate(it.name)
+                                }
+                            },
+                            enabled = selectedSupplier != null && selectedSupplier?.name == supplierInputText
+                        ) {
+                            Text(stringResource(R.string.confirm))
+                        }
                     },
-                    dismissButton = { TextButton(onClick = { showSupplierDialog = false }) { Text(stringResource(R.string.cancel)) } }
+                    dismissButton = {
+                        TextButton(onClick = { showSupplierDialog = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
                 )
             }
 

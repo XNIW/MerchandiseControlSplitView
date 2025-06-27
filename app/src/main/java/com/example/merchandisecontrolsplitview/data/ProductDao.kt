@@ -11,14 +11,16 @@ interface ProductDao {
      * @param filter La stringa di ricerca. Se null, restituisce tutti i prodotti.
      * @return Un PagingSource per l'integrazione con la libreria Paging 3.
      */
+    // --- QUERY MODIFICATA E CORRETTA ---
     @Query("""
-        SELECT * FROM products
+        SELECT products.* FROM products
+        LEFT JOIN suppliers ON products.supplierId = suppliers.id
         WHERE (:filter IS NULL OR 
-               barcode LIKE '%' || :filter || '%' OR 
-               productName LIKE '%' || :filter || '%' OR 
-               supplier LIKE '%' || :filter || '%' OR
-               itemNumber LIKE '%' || :filter || '%')
-        ORDER BY id ASC
+               products.barcode LIKE '%' || :filter || '%' OR 
+               products.productName LIKE '%' || :filter || '%' OR 
+               suppliers.name LIKE '%' || :filter || '%' OR
+               products.itemNumber LIKE '%' || :filter || '%')
+        ORDER BY products.id ASC
     """)
     fun getAllPaged(filter: String?): PagingSource<Int, Product>
 
@@ -30,7 +32,6 @@ interface ProductDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(products: List<Product>)
 
-    // --- INIZIO NUOVO CODICE ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(product: Product)
 
@@ -39,7 +40,6 @@ interface ProductDao {
 
     @Delete
     suspend fun delete(product: Product)
-    // --- FINE NUOVO CODICE ---
 
     /**
      * Aggiorna una lista di prodotti esistenti.
@@ -61,14 +61,14 @@ interface ProductDao {
      * Utile per operazioni di confronto in memoria, come l'analisi pre-importazione.
      * @return Una lista di tutti i prodotti.
      */
-    @Query("SELECT * FROM products") // FIX: Nome tabella in minuscolo per coerenza
+    @Query("SELECT * FROM products")
     suspend fun getAll(): List<Product>
 
     /**
      * Elimina tutti i prodotti dalla tabella.
      * Utile per operazioni di reset o test.
      */
-    @Query("DELETE FROM products") // FIX: Nome tabella in minuscolo per coerenza
+    @Query("DELETE FROM products")
     suspend fun deleteAll()
 
     /**
