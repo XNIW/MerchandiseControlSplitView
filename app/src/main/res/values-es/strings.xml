@@ -150,4 +150,6 @@
     <string name="search_or_add_supplier">Buscar o agregar proveedor</string>
     <string name="add_new_supplier_prompt">Agregar "%1$s" como nuevo proveedor</string>
     <string name="save">Guardar</string>
+    <string name="import_analysis_in_progress">Análisis del archivo en curso…</string>
+
 </resources>

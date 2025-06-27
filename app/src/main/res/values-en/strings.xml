@@ -151,4 +151,6 @@
     <string name="search_or_add_supplier">Search or add supplier</string>
     <string name="add_new_supplier_prompt">Add "%1$s" as a new supplier</string>
     <string name="save">Save</string>
+    <string name="import_analysis_in_progress">File analysis in progress…</string>
+
 </resources>

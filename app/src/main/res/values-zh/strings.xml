@@ -150,4 +150,6 @@
     <string name="search_or_add_supplier">搜索或添加供应商</string>
     <string name="add_new_supplier_prompt">将“%1$s”添加为新供应商</string>
     <string name="save">保存</string>
+    <string name="import_analysis_in_progress">文件分析中…</string>
+
 </resources>

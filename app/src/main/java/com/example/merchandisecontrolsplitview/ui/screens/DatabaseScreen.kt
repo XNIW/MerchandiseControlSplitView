@@ -238,6 +238,27 @@ fun DatabaseScreen(
                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.add_product))
                 }
             }
+            if (uiState is UiState.Loading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f)) // Sfondo semi-trasparente
+                        .clickable(enabled = false, onClick = {}), // Blocca l'interazione
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                        Text(
+                            text = stringResource(R.string.import_analysis_in_progress),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
         }
     }
 
