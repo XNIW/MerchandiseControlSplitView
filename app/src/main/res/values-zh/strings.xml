@@ -110,5 +110,44 @@
     <string name="export_error">导出错误：%1$s</string>
     <string name="sync_with_database">与数据库同步</string>
 
+    <!-- 通用 / 状态消息 -->
+    <string name="clear_text">清除</string>
+    <string name="no_products_found">未找到产品</string>
+    <string name="no_products_in_db">数据库中没有产品</string>
+    <string name="no_results_for">没有找到“%1$s”的结果</string>
+    <string name="add_first_product_prompt">添加你的第一个产品！</string>
+    <string name="add_product">添加产品</string>
 
+    <!-- 删除确认对话框 -->
+    <string name="delete_confirmation_title">删除确认</string>
+    <string name="delete_confirmation_message">你确定要删除此产品吗？</string>
+
+    <!-- 产品 -->
+    <string name="unnamed_product">未命名产品</string>
+    <string name="product_purchase_price_new_short">进价（新）</string>
+    <string name="product_purchase_price_old_short">进价（旧）</string>
+    <string name="product_retail_price_new_short">售价（新）</string>
+    <string name="product_retail_price_old_short">售价（旧）</string>
+    <string name="product_supplier_full">供应商</string>
+
+    <!-- 验证错误 -->
+    <string name="error_barcode_required">条码为必填项</string>
+    <string name="error_productname_required">产品名称为必填项</string>
+
+    <!-- 供应商 -->
+    <string name="no_supplier">无供应商</string>
+    <string name="select_supplier">选择供应商</string>
+    <string name="edit_product_title">编辑产品</string>
+    <string name="product_name_label">产品名称</string>
+    <string name="barcode_label">条码</string>
+    <string name="item_code_label">商品编码</string>
+    <string name="purchase_price_label">进货价</string>
+    <string name="retail_price_label">零售价</string>
+    <string name="old_purchase_price_label">原进货价</string>
+    <string name="old_retail_price_label">原零售价</string>
+    <string name="add_previous_prices">添加历史价格</string>
+    <string name="select_supplier_title">选择供应商</string>
+    <string name="search_or_add_supplier">搜索或添加供应商</string>
+    <string name="add_new_supplier_prompt">将“%1$s”添加为新供应商</string>
+    <string name="save">保存</string>
 </resources>
