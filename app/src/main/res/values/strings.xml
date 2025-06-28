@@ -225,4 +225,17 @@
     <string name="error_product_updated">Errore durante l\'aggiornamento del prodotto.</string>
     <string name="success_product_deleted">Prodotto eliminato con successo.</string>
     <string name="error_product_deleted">Errore durante l\'eliminazione del prodotto.</string>
+
+    <string name="error_main_file_needed">Caricare un file principale prima di aggiungerne altri.</string>
+    <string name="error_incompatible_file_structure">Uno dei file selezionati ha una struttura di colonne non compatibile. Operazione annullata.</string>
+    <string name="error_adding_files">Errore durante l\'aggiunta dei file.</string>
+    <string name="error_first_file_empty_or_invalid">Il primo file selezionato è vuoto o ha un formato non valido.</string>
+    <string name="error_different_columns">I file selezionati hanno colonne diverse. L\'operazione è stata annullata.</string>
+    <string name="error_unknown_file_analysis">Errore sconosciuto durante l\'analisi dei file.</string>
+    <string name="sheet_name_products">Prodotti</string>
+    <string name="sheet_name_export">Esportazione</string>
+
+
+    <string name="header_new_purchase_price">Nuovo Prezzo Acquisto</string>
+    <string name="header_supplier_id">ID Fornitore</string>
 </resources>

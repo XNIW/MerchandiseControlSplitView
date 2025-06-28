@@ -219,4 +219,15 @@
     <string name="success_product_deleted">产品删除成功。</string>
     <string name="error_product_deleted">删除产品时出错。</string>
 
+    <string name="error_main_file_needed">请先加载主文件，再添加其他文件。</string>
+    <string name="error_incompatible_file_structure">所选文件之一的列结构不兼容。操作已取消。</string>
+    <string name="error_adding_files">添加文件时出错。</string>
+    <string name="error_first_file_empty_or_invalid">选择的第一个文件为空或格式无效。</string>
+    <string name="error_different_columns">所选文件的列不一致。操作已取消。</string>
+    <string name="error_unknown_file_analysis">分析文件时发生未知错误。</string>
+    <string name="sheet_name_products">产品</string>
+    <string name="sheet_name_export">导出</string>
+    <string name="header_new_purchase_price">新进价</string>
+    <string name="header_supplier_id">供应商ID</string>
+
 </resources>

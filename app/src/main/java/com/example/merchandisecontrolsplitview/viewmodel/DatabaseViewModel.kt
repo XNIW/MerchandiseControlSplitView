@@ -98,7 +98,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, e.message ?: "sconosciuto"))
+                val errorMessage = e.message ?: context.getString(R.string.unknown)
+                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
             }
         }
     }
@@ -120,7 +121,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error(context.getString(R.string.import_error, e.message ?: "Errore sconosciuto"))
+                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
             }
         }
     }
@@ -137,7 +139,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 writeProductsToExcel(context, uri, products)
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
-                _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: "Errore sconosciuto"))
+                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
             }
         }
     }
@@ -180,11 +183,17 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
         val workbook: Workbook = XSSFWorkbook()
-        val sheet = workbook.createSheet("Prodotti")
+        val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
         val headerRow = sheet.createRow(0)
         val headers = listOf(
-            "barcode", "itemNumber", "productName", "newPurchasePrice",
-            "newRetailPrice", "oldPurchasePrice", "oldRetailPrice", "supplierId"
+            context.getString(R.string.header_barcode),
+            context.getString(R.string.header_item_number),
+            context.getString(R.string.header_product_name),
+            context.getString(R.string.header_new_purchase_price),
+            context.getString(R.string.header_new_retail_price),
+            context.getString(R.string.header_old_purchase_price),
+            context.getString(R.string.header_old_retail_price),
+            context.getString(R.string.header_supplier_id)
         )
         headers.forEachIndexed { index, header ->
             headerRow.createCell(index).setCellValue(header)
@@ -214,12 +223,16 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val currentDbProducts = dao.getAll()
+                // Usiamo appContext anche qui per coerenza
                 val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, supplierDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error("Errore durante l'analisi dei dati: ${e.message}")
+                // --- CORREZIONE QUI ---
+                // Usa appContext invece di un 'context' inesistente
+                val errorMessage = e.message ?: appContext.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_data_analysis, errorMessage))
             }
         }
     }

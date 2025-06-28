@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.SyncStatus
@@ -102,7 +103,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             loadError.value = null
 
             if (excelData.isEmpty()) {
-                loadError.value = "Caricare un file principale prima di aggiungerne altri."
+                loadError.value = context.getString(R.string.error_main_file_needed)
                 isLoading.value = false
                 return@launch
             }
@@ -121,7 +122,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                         // Se l'header non corrisponde, interrompi l'intera operazione.
                         if (originalHeader != newHeader) {
                             // Lancia un'eccezione per bloccare il processo
-                            throw IllegalArgumentException("Uno dei file selezionati ha una struttura di colonne non compatibile. Operazione annullata.")
+                            throw IllegalArgumentException(context.getString(R.string.error_incompatible_file_structure))
                         }
 
                         // Se valido, aggiungi le sue righe alla lista temporanea
@@ -142,7 +143,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
             } catch (e: Exception) {
                 // Cattura sia le eccezioni di I/O che la nostra eccezione di validazione
-                loadError.value = e.message ?: "Errore durante l'aggiunta dei file."
+                loadError.value = e.message ?: context.getString(R.string.error_adding_files)
             } finally {
                 isLoading.value = false
             }
@@ -167,7 +168,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Se il primo file è vuoto o non valido, lancia un errore.
                 if (goldenHeader.isEmpty()) {
-                    throw IllegalStateException("Il primo file selezionato è vuoto o ha un formato non valido.")
+                    throw IllegalStateException(context.getString(R.string.error_first_file_empty_or_invalid))
                 }
 
                 // 3. Crea una lista temporanea per contenere TUTTE le righe valide.
@@ -182,7 +183,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         // Se un header non corrisponde, lancia un errore e interrompi tutto.
                         if (newHeader != goldenHeader) {
-                            throw IllegalArgumentException("I file selezionati hanno colonne diverse. L'operazione è stata annullata.")
+                            throw IllegalArgumentException(context.getString(R.string.error_different_columns))
                         }
                         // Se valido, aggiungi le righe alla lista temporanea.
                         allValidRows.addAll(newDataRows)
@@ -202,7 +203,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 // 6. Se si è verificato QUALSIASI errore durante la verifica,
                 //    lo stato di `excelData` rimarrà vuoto (grazie al resetState() iniziale).
                 //    Impostiamo solo il messaggio di errore.
-                loadError.value = e.message ?: "Errore sconosciuto durante l'analisi dei file."
+                loadError.value = e.message ?: context.getString(R.string.error_unknown_file_analysis)
             } finally {
                 // 7. In ogni caso (successo o fallimento), alla fine smetti di caricare.
                 isLoading.value = false
@@ -407,7 +408,7 @@ private fun saveExcelFileInternal(
     supplier: String
 ) {
     val wb = XSSFWorkbook()
-    val sheet = wb.createSheet("Export")
+    val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
 
     // --- 1. Definiamo i tipi di colonna ---
     val numericTypes = setOf(

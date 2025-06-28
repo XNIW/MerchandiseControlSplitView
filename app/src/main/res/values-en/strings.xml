@@ -220,4 +220,14 @@
     <string name="success_product_deleted">Product deleted successfully.</string>
     <string name="error_product_deleted">Error deleting product.</string>
 
+    <string name="error_main_file_needed">Load a main file before adding others.</string>
+    <string name="error_incompatible_file_structure">One of the selected files has an incompatible column structure. Operation cancelled.</string>
+    <string name="error_adding_files">Error while adding files.</string>
+    <string name="error_first_file_empty_or_invalid">The first selected file is empty or has an invalid format.</string>
+    <string name="error_different_columns">The selected files have different columns. Operation cancelled.</string>
+    <string name="error_unknown_file_analysis">Unknown error while analyzing files.</string>
+    <string name="sheet_name_products">Products</string>
+    <string name="sheet_name_export">Export</string>
+    <string name="header_new_purchase_price">New Purchase Price</string>
+    <string name="header_supplier_id">Supplier ID</string>
 </resources>

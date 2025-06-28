@@ -219,4 +219,15 @@
     <string name="success_product_deleted">Producto eliminado correctamente.</string>
     <string name="error_product_deleted">Error al eliminar el producto.</string>
 
+    <string name="error_main_file_needed">Cargue un archivo principal antes de añadir otros.</string>
+    <string name="error_incompatible_file_structure">Uno de los archivos seleccionados tiene una estructura de columnas incompatible. Operación cancelada.</string>
+    <string name="error_adding_files">Error al añadir los archivos.</string>
+    <string name="error_first_file_empty_or_invalid">El primer archivo seleccionado está vacío o tiene un formato no válido.</string>
+    <string name="error_different_columns">Los archivos seleccionados tienen columnas diferentes. Operación cancelada.</string>
+    <string name="error_unknown_file_analysis">Error desconocido al analizar los archivos.</string>
+    <string name="sheet_name_products">Productos</string>
+    <string name="sheet_name_export">Exportación</string>
+    <string name="header_new_purchase_price">Nuevo Precio de Compra</string>
+    <string name="header_supplier_id">ID del Proveedor</string>
+
 </resources>
