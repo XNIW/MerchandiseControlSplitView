@@ -102,7 +102,7 @@ fun DatabaseScreen(
                     }) {
                         Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.import_file))
                     }
-                    IconButton(onClick = { downloadLauncher.launch("prodotti.xlsx") }) {
+                    IconButton(onClick = { downloadLauncher.launch(context.getString(R.string.default_export_filename)) }) {
                         Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
                     }
                 }
@@ -327,10 +327,10 @@ private fun PriceColumn(
 @Composable
 fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Unit) {
     var supplierName by remember { mutableStateOf<String?>(null) }
-
+    val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
     LaunchedEffect(product.supplierId) {
         supplierName = if (product.supplierId != null) {
-            viewModel.getSupplierById(product.supplierId)?.name ?: "ID: ${product.supplierId}"
+            viewModel.getSupplierById(product.supplierId)?.name ?: "$supplierIdPrefix ${product.supplierId}"
         } else {
             "-"
         }
@@ -344,7 +344,11 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(text = product.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text(text = "Barcode: ${product.barcode}  |  Cod. Art.: ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -413,9 +417,10 @@ internal fun EditProductDialog(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    val supplierIdPrefix = stringResource(id = R.string.supplier_id_prefix)
     LaunchedEffect(supplierId) {
         supplierName = if (supplierId != null) {
-            viewModel.getSupplierById(supplierId!!)?.name ?: "ID: $supplierId"
+            viewModel.getSupplierById(supplierId!!)?.name ?: "$supplierIdPrefix $supplierId"
         } else {
             context.getString(R.string.no_supplier)
         }

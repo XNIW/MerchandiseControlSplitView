@@ -110,7 +110,7 @@ fun PreGenerateScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Anteprima File") },
+                title = { Text(stringResource(R.string.preview_file_title)) },
                 navigationIcon = {
                     IconButton(onClick = { onBack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
@@ -161,12 +161,13 @@ fun PreGenerateScreen(
                     ) {
                         CircularProgressIndicator()
                         Spacer(Modifier.height(8.dp))
-                        Text(if(isAnalysisInProgress) "Analisi in corso..." else "Caricamento file...")
+                        val statusText = if(isAnalysisInProgress) stringResource(R.string.analysis_in_progress) else stringResource(R.string.loading_file)
+                        Text(statusText)
                     }
                 }
                 excelLoadError != null || analysisError != null -> {
                     Text(
-                        text = excelLoadError ?: analysisError ?: "Errore sconosciuto",
+                        text = excelLoadError ?: analysisError ?: stringResource(R.string.unknown_error),
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(16.dp).align(Alignment.Center)
                     )
@@ -268,7 +269,7 @@ fun PreGenerateScreen(
                                             }) {
                                                 Icon(
                                                     imageVector = Icons.Default.Close,
-                                                    contentDescription = "Cancella"
+                                                    contentDescription = stringResource(R.string.clear_text)
                                                 )
                                             }
                                         }
@@ -286,7 +287,7 @@ fun PreGenerateScreen(
                                 // Mostra un indicatore se la lista è vuota (es. durante il caricamento iniziale)
                                 if (supplierSuggestions.isEmpty() && supplierInputText.isBlank()) {
                                     DropdownMenuItem(
-                                        text = { Text("Nessun fornitore trovato") },
+                                        text = { Text(stringResource(R.string.no_supplier_found)) },
                                         onClick = {},
                                         enabled = false
                                     )
@@ -306,7 +307,7 @@ fun PreGenerateScreen(
                                 // Logica per aggiungere un nuovo fornitore (invariata)
                                 if (supplierSuggestions.none { it.name.equals(supplierInputText, true) } && supplierInputText.isNotBlank()) {
                                     DropdownMenuItem(
-                                        text = { Text("Aggiungi \"$supplierInputText\"") },
+                                        text = { Text(stringResource(R.string.add_new_supplier_prompt, supplierInputText)) },
                                         onClick = {
                                             scope.launch {
                                                 val newSupplier = databaseViewModel.addSupplier(supplierInputText)

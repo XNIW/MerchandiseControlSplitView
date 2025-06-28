@@ -198,7 +198,7 @@ fun GeneratedScreen(
                             excelViewModel.errorRowIndexes.value = emptySet()
                             val header = excelData.firstOrNull()
                             if (header == null) {
-                                Toast.makeText(context, "Dati non validi per l'analisi.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.invalid_data_for_analysis), Toast.LENGTH_SHORT).show()
                                 return@IconButton
                             }
 
@@ -221,7 +221,7 @@ fun GeneratedScreen(
                             }
 
                             databaseViewModel.analyzeGridData(gridDataForAnalysis)
-                            Toast.makeText(context, "Analisi per la sincronizzazione avviata.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.sync_analysis_started), Toast.LENGTH_SHORT).show()
                             // LA RIGA PER MOSTRARE LA SPUNTA VERRÀ RIMOSSA AL PUNTO 2
                         }) {
                             // SOSTITUIAMO IL VECCHIO ROW CON IL NUOVO STATUSICON
@@ -294,8 +294,8 @@ fun GeneratedScreen(
             if (showExitDialog) {
                 AlertDialog(
                     onDismissRequest = { showExitDialog = false },
-                    title = { Text("Conferma uscita") },
-                    text = { Text("Sei sicuro di voler uscire? I progressi inseriti sono stati salvati nella cronologia.") },
+                    title = { Text(stringResource(R.string.exit_confirmation_title))},
+                    text = { Text(stringResource(R.string.exit_confirmation_message)) },
                     confirmButton = {
                         TextButton(
                             onClick = {
@@ -303,12 +303,12 @@ fun GeneratedScreen(
                                 onConfirmAction() // Esegue l'azione salvata (Indietro o Home)
                             }
                         ) {
-                            Text("Esci")
+                            Text(stringResource(R.string.exit))
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { showExitDialog = false }) {
-                            Text("Annulla")
+                            Text(stringResource(R.string.cancel))
                         }
                     }
                 )
@@ -333,14 +333,14 @@ fun GeneratedScreen(
                     }) {
                         Icon(
                             Icons.Filled.CameraAlt,
-                            contentDescription = R.string.scan_icon_desc.toString()
+                            contentDescription = stringResource(R.string.scan_icon_desc)
                         )
                     }
 
                     FloatingActionButton(onClick = { searchText = ""; showSearchDialog = true }) {
                         Icon(
                             Icons.Filled.Search,
-                            contentDescription = R.string.search_icon_desc.toString()
+                            contentDescription = stringResource(R.string.search_icon_desc)
                         )
                     }
                 }
@@ -447,7 +447,7 @@ fun GeneratedScreen(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text(
-                                                    getLocalizedHeader(context, name) + ":",
+                                                    "${getLocalizedHeader(context, name)}:",
                                                     Modifier.weight(1f),
                                                     style = MaterialTheme.typography.bodyMedium
                                                 )
@@ -519,7 +519,7 @@ fun GeneratedScreen(
                                                 ) {
                                                     Icon(
                                                         Icons.Filled.Calculate,
-                                                        contentDescription = "Calcola nuovo valore"
+                                                        contentDescription = stringResource(R.string.calculate_new_value)
                                                     )
                                                 }
                                             }
@@ -776,8 +776,9 @@ fun CalculatorDialog(
                         .padding(bottom = 6.dp)
                 )
                 // --- RISULTATO appena sotto il campo input ---
+                val errorText = stringResource(R.string.error_label)
                 Text(
-                    text = if (result.isNotBlank() && result != "Errore") {
+                    text = if (result.isNotBlank() && result != errorText) {
                         stringResource(R.string.result) + " ${result.toDoubleOrNull()?.let { String.format(Locale.US, "%.2f", it) } ?: result}"
                     } else stringResource(R.string.result),
                     style = MaterialTheme.typography.titleMedium,
@@ -826,7 +827,7 @@ fun CalculatorDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                if (result.isNotBlank() && result != "Errore") {
+                if (result.isNotBlank() && result != errorText) {
                     onResult(result)
                 } else {
                     onResult(input)
@@ -901,7 +902,7 @@ private fun StatusIcon(
             BadgeType.SUCCESS -> {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Completato",
+                    contentDescription = stringResource(R.string.status_completed),
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
@@ -912,7 +913,7 @@ private fun StatusIcon(
             BadgeType.WARNING -> {
                 Icon(
                     imageVector = Icons.Default.Error, // Icona di errore/avviso
-                    contentDescription = "Avviso",
+                    contentDescription = stringResource(R.string.status_warning),
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)

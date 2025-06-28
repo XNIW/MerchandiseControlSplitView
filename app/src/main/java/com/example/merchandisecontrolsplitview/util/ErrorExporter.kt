@@ -47,8 +47,10 @@ object ErrorExporter {
                         dataRow.createCell(colIndex).setCellValue(cellValue)
                     }
                 }
-                // Aggiunge il motivo dell'errore nell'ultima colonna
-                dataRow.createCell(headers.size - 1).setCellValue(error.errorReason)
+                val reasonText = context.getString(error.errorReasonResId, *error.formatArgs.toTypedArray())
+
+                // Aggiunge il motivo dell'errore (ora correttamente recuperato) nell'ultima colonna.
+                dataRow.createCell(headers.size - 1).setCellValue(reasonText)
             }
 
             // --- 3. Adatta la larghezza delle colonne al contenuto ---

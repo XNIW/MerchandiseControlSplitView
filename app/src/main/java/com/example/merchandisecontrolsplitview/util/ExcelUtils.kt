@@ -74,7 +74,7 @@ fun readAndAnalyzeExcel(
         }
     } else {
         val colCount = rows.maxOfOrNull { it.size } ?: 0
-        header = (1..colCount).map { "Colonna $it" }.toMutableList()
+        header = (1..colCount).map { "${context.getString(R.string.generated_column_prefix)} $it" }.toMutableList()
         headerSource = MutableList(header.size) { "generated" }
         dataRows = rows
     }

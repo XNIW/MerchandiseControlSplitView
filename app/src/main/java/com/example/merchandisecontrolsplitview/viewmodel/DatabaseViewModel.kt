@@ -36,6 +36,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private val _filter = MutableStateFlow<String?>(null)
+
+    private val appContext = getApplication<Application>().applicationContext
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
     val pager = filter.flatMapLatest { filterStr ->
@@ -82,7 +84,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val (normalizedHeader, dataRows, _) = readAndAnalyzeExcel(context, uri)
                 if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
-                    _uiState.value = UiState.Error("Il file Excel è vuoto o non ha un'intestazione valida.")
+                    _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
                     return@launch
                 }
                 val importedRowsAsMap = dataRows.map { row ->
@@ -91,12 +93,12 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     }.toMap()
                 }
                 val currentDbProducts = dao.getAll()
-                val analysis = ImportAnalyzer.analyze(importedRowsAsMap, currentDbProducts, supplierDao)
+                val analysis = ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, supplierDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error("Errore durante l'analisi del file: ${e.message}")
+                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, e.message ?: "sconosciuto"))
             }
         }
     }
@@ -129,7 +131,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val products = dao.getAll()
                 if (products.isEmpty()) {
-                    _uiState.value = UiState.Error("Nessun prodotto da esportare.")
+                    _uiState.value = UiState.Error(context.getString(R.string.error_no_products_to_export))
                     return@launch
                 }
                 writeProductsToExcel(context, uri, products)
@@ -144,10 +146,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 dao.insert(product)
-                _uiState.value = UiState.Success("Prodotto aggiunto con successo.")
+                _uiState.value = UiState.Success(appContext.getString(R.string.success_product_added))
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error("Errore durante l'aggiunta del prodotto.")
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_product_added))
             }
         }
     }
@@ -156,10 +158,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 dao.update(product)
-                _uiState.value = UiState.Success("Prodotto aggiornato con successo.")
+                _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error("Errore durante l'aggiornamento del prodotto.")
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_product_updated))
             }
         }
     }
@@ -168,10 +170,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 dao.delete(product)
-                _uiState.value = UiState.Success("Prodotto eliminato con successo.")
+                _uiState.value = UiState.Success(appContext.getString(R.string.success_product_deleted))
             } catch (e: Exception) {
                 e.printStackTrace()
-                _uiState.value = UiState.Error("Errore durante l'eliminazione del prodotto.")
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_product_deleted))
             }
         }
     }
@@ -212,7 +214,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val currentDbProducts = dao.getAll()
-                val analysis = ImportAnalyzer.analyze(gridData, currentDbProducts, supplierDao)
+                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, supplierDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {

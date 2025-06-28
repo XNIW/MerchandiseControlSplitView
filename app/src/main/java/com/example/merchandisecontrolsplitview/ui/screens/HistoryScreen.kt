@@ -194,8 +194,8 @@ private fun HistoryRow(
                     else -> Color.Transparent
                 }
                 val icon = when (direction) {
-                    SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Edit
-                    SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete
+                    SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Edit to stringResource(R.string.rename_file)
+                    SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete to stringResource(R.string.delete)
                     else -> null
                 }
                 val align = when (direction) {
@@ -211,7 +211,7 @@ private fun HistoryRow(
                         .padding(horizontal = 20.dp),
                     contentAlignment = align
                 ) {
-                    icon?.let { Icon(it, contentDescription = null, tint = Color.White) }
+                    icon?.let { (img, desc) -> Icon(img, contentDescription = desc, tint = Color.White) }
                 }
             }
         }
@@ -235,11 +235,11 @@ private fun HistoryRow(
                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        text = "Data: ${entry.timestamp}",
+                        text = "${stringResource(R.string.date_label)} ${entry.timestamp}",
                         style = MaterialTheme.typography.bodySmall
                     )
                     if (entry.supplier.isNotBlank()) {
-                        Text("Fornitore: ${entry.supplier}", style = MaterialTheme.typography.bodySmall)
+                        Text("${stringResource(R.string.supplier_label)} ${entry.supplier}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -257,13 +257,13 @@ private fun HistoryRow(
                             SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
                             SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
                         },
-                        contentDescription = "Stato Sincronizzazione"
+                        contentDescription = stringResource(R.string.sync_status)
                     )
                     StatusIcon(
                         baseIcon = Icons.Default.FileDownload,
                         // MODIFICA: Usa badgeType anche qui per coerenza
                         badgeType = if (entry.wasExported) BadgeType.SUCCESS else BadgeType.NONE,
-                        contentDescription = "Stato Esportazione"
+                        contentDescription = stringResource(R.string.export_status)
                     )
                 }
             }
@@ -297,7 +297,7 @@ private fun StatusIcon(
             BadgeType.SUCCESS -> {
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Completato",
+                    contentDescription = stringResource(R.string.status_completed),
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
@@ -308,7 +308,7 @@ private fun StatusIcon(
             BadgeType.WARNING -> {
                 Icon(
                     imageVector = Icons.Default.Error, // Icona di errore/avviso
-                    contentDescription = "Avviso",
+                    contentDescription = stringResource(R.string.status_warning),
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)

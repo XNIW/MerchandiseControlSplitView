@@ -155,4 +155,74 @@
     <string name="action_completed">Azione completata</string>
     <string name="file_exported_successfully">File esportato con successo</string>
 
+    <string name="import_analysis_title">Revisione Importazione</string>
+    <string name="confirm_import">Conferma Importazione</string>
+    <string name="new_products_to_add">Nuovi prodotti da aggiungere: %1$d</string>
+    <string name="no_new_products">Nessun nuovo prodotto.</string>
+    <string name="products_to_update">Prodotti da aggiornare: %1$d</string>
+    <string name="no_products_to_update">Nessun prodotto da aggiornare.</string>
+    <string name="errors_found">Errori trovati: %1$d</string>
+    <string name="no_critical_errors_found">Nessun errore critico trovato.</string>
+    <string name="export_errors">Esporta Errori</string>
+    <string name="correct_errors">Correggi</string>
+    <string name="edit_update">Modifica Aggiornamento</string>
+    <string name="error_file_exported">File errori esportato.</string>
+    <string name="collapse">Comprimi</string>
+    <string name="expand">Espandi</string>
+    <string name="row_prefix">Riga</string>
+    <string name="counted_quantity_label">Quantità contata</string>
+    <string name="new_retail_price_short_label">Nuovo prezzo v.</string>
+
+    <string name="error_unexpected_parsing">Errore di parsing imprevisto: %1$s</string>
+    <string name="error_invalid_retail_price">Il prezzo di vendita non è un numero valido.</string>
+    <string name="error_negative_prices">I prezzi non possono essere negativi.</string>
+    <string name="field_product_name">Nome Prodotto</string>
+    <string name="field_item_number">Codice Articolo</string>
+    <string name="field_purchase_price">Prezzo Acquisto</string>
+    <string name="field_retail_price">Prezzo Vendita</string>
+    <string name="field_supplier">Fornitore</string>
+
+    <string name="invalid_data_for_analysis">Dati non validi per l\'analisi.</string>
+    <string name="sync_analysis_started">Analisi per la sincronizzazione avviata.</string>
+    <string name="exit_confirmation_title">Conferma uscita</string>
+    <string name="exit_confirmation_message">Sei sicuro di voler uscire? I progressi inseriti sono stati salvati nella cronologia.</string>
+    <string name="calculate_new_value">Calcola nuovo valore</string>
+    <string name="status_completed">Completato</string>
+    <string name="status_warning">Avviso</string>
+    <string name="preview_file_title">Anteprima File</string>
+    <string name="analysis_in_progress">Analisi in corso…</string>
+    <string name="loading_file">Caricamento file…</string>
+    <string name="unknown_error">Errore sconosciuto</string>
+    <string name="no_supplier_found">Nessun fornitore trovato</string>
+
+    <string name="date_label">Data:</string>
+    <string name="sync_status">Stato Sincronizzazione</string>
+    <string name="export_status">Stato Esportazione</string>
+
+    <string name="generated_column_prefix">Colonna</string>
+
+    <string name="default_export_filename">prodotti.xlsx</string>
+    <string name="supplier_id_prefix">ID:</string>
+    <string name="edit_product">Modifica Prodotto</string>
+
+    <string name="barcode_prefix">Barcode:</string>
+    <string name="item_number_prefix">Cod. Art.:</string>
+    <string name="purchase_prefix">Acq:</string>
+    <string name="sell_prefix">Ven:</string>
+    <string name="compare_field">Campo</string>
+    <string name="compare_previous">Precedente</string>
+    <string name="compare_new">Nuovo</string>
+    <string name="unidentified_product">Prodotto non identificato</string>
+    <string name="unknown">sconosciuto</string>
+
+    <string name="error_file_empty_or_invalid">Il file Excel è vuoto o non ha un\'intestazione valida.</string>
+    <string name="error_no_products_to_export">Nessun prodotto da esportare.</string>
+    <string name="error_data_analysis">Errore durante l\'analisi dei dati: %1$s</string>
+
+    <string name="success_product_added">Prodotto aggiunto con successo.</string>
+    <string name="error_product_added">Errore durante l\'aggiunta del prodotto.</string>
+    <string name="success_product_updated">Prodotto aggiornato con successo.</string>
+    <string name="error_product_updated">Errore durante l\'aggiornamento del prodotto.</string>
+    <string name="success_product_deleted">Prodotto eliminato con successo.</string>
+    <string name="error_product_deleted">Errore durante l\'eliminazione del prodotto.</string>
 </resources>

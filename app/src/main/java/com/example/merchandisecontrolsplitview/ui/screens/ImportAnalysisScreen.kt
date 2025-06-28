@@ -32,6 +32,8 @@ import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import androidx.compose.ui.res.stringResource
+import com.example.merchandisecontrolsplitview.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,7 +62,7 @@ fun ImportAnalysisScreen(
     ) { uri ->
         uri?.let {
             ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
-            Toast.makeText(context, "File errori esportato.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.error_file_exported), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -91,7 +93,7 @@ fun ImportAnalysisScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Revisione Importazione") }) },
+        topBar = { TopAppBar(title = { Text(stringResource(R.string.import_analysis_title)) }) },
         bottomBar = {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -100,8 +102,8 @@ fun ImportAnalysisScreen(
                 Button(
                     onClick = { onConfirm(editableNewProducts, editableUpdatedProducts) },
                     enabled = editableNewProducts.isNotEmpty() || editableUpdatedProducts.isNotEmpty()
-                ) { Text("Conferma Importazione") }
-                OutlinedButton(onClick = onCancel) { Text("Annulla") }
+                ) { Text(stringResource(R.string.confirm_import)) }
+                OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
             }
         }
     ) { paddingValues ->
@@ -112,12 +114,13 @@ fun ImportAnalysisScreen(
         ) {
             item {
                 ExpandableSection(
-                    title = "Nuovi prodotti da aggiungere: ${editableNewProducts.size}",
+                    title = stringResource(R.string.new_products_to_add, editableNewProducts.size),
                     isExpanded = newProductsExpanded,
                     onToggle = { newProductsExpanded = !newProductsExpanded }
                 ) {
                     if (editableNewProducts.isEmpty()) {
-                        Text("Nessun nuovo prodotto.", modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_new_products), modifier = Modifier.padding(12.dp))
+
                     }
                 }
             }
@@ -132,12 +135,12 @@ fun ImportAnalysisScreen(
 
             item {
                 ExpandableSection(
-                    title = "Prodotti da aggiornare: ${editableUpdatedProducts.size}",
+                    title = stringResource(R.string.products_to_update, editableUpdatedProducts.size),
                     isExpanded = updatedProductsExpanded,
                     onToggle = { updatedProductsExpanded = !updatedProductsExpanded }
                 ) {
                     if (editableUpdatedProducts.isEmpty()) {
-                        Text("Nessun prodotto da aggiornare.", modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_products_to_update), modifier = Modifier.padding(12.dp))
                     }
                 }
             }
@@ -152,24 +155,24 @@ fun ImportAnalysisScreen(
 
             item {
                 ExpandableSection(
-                    title = "Errori trovati: ${importAnalysis.errors.size}",
+                    title = stringResource(R.string.errors_found, importAnalysis.errors.size),
                     isExpanded = errorsExpanded,
                     onToggle = { errorsExpanded = !errorsExpanded }
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { exportErrorsLauncher.launch("errori_importazione.xlsx") }) {
-                                Text("Esporta Errori")
+                                Text(stringResource(R.string.export_errors))
                             }
                             OutlinedButton(onClick = {
                                 excelViewModel.errorRowIndexes.value = importAnalysis.errors.map { it.rowNumber }.toSet()
                                 onCancel()
                             }) {
-                                Text("Correggi")
+                                Text(stringResource(R.string.correct_errors))
                             }
                         }
                     } else {
-                        Text("Nessun errore critico trovato.", modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_critical_errors_found), modifier = Modifier.padding(12.dp))
                     }
                 }
             }
@@ -191,17 +194,17 @@ private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(Modifier.weight(1f)) {
-                Text(product.productName ?: "Senza Nome", fontWeight = FontWeight.Bold)
-                Text("Barcode: ${product.barcode}", style = MaterialTheme.typography.bodySmall)
-                Text("Cod. Art.: ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
+                Text(product.productName ?: stringResource(R.string.unnamed_product), fontWeight = FontWeight.Bold)
+                Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
+                Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
                 // --- MODIFICA QUI ---
-                Text("Acq: ${product.newPurchasePrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
-                Text("Ven: ${product.newRetailPrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.purchase_prefix)} ${product.newPurchasePrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.sell_prefix)} ${product.newRetailPrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onEditClick) {
-                Icon(Icons.Default.Edit, contentDescription = "Modifica Prodotto")
+                Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_product))
             }
         }
     }
@@ -219,38 +222,40 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(productUpdate.oldProduct.productName ?: "Senza Nome", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(productUpdate.oldProduct.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = onEditClick) {
-                    Icon(Icons.Default.Edit, contentDescription = "Modifica Aggiornamento")
+                    Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_update))
                 }
             }
-            Text("Barcode: ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
+            Text("${stringResource(R.string.barcode_prefix)} ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             Row(Modifier.fillMaxWidth()) {
-                Text("Campo", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.5f))
-                Text("Precedente", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("Nuovo", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.compare_field), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.5f))
+                Text(stringResource(R.string.compare_previous), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.compare_new), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             }
-            productUpdate.changedFields.forEach { field ->
-                CompareRow(field = field, old = productUpdate.oldProduct, new = productUpdate.newProduct)
+            productUpdate.changedFields.forEach { fieldResId -> // 'fieldResId' ora è un Int (es: R.string.field_product_name)
+                CompareRow(fieldResId = fieldResId, old = productUpdate.oldProduct, new = productUpdate.newProduct)
             }
         }
     }
 }
 
 @Composable
-private fun CompareRow(field: String, old: Product, new: Product) {
-    val (oldValue, newValue) = when (field) {
-        "Nome Prodotto" -> old.productName to new.productName
-        "Codice Articolo" -> old.itemNumber to new.itemNumber
-        // --- MODIFICA QUI ---
-        "Prezzo Acquisto" -> old.newPurchasePrice?.toLong()?.toString() to new.newPurchasePrice?.toLong()?.toString()
-        "Prezzo Vendita" -> old.newRetailPrice?.toLong()?.toString() to new.newRetailPrice?.toLong()?.toString()
-        "Fornitore" -> old.supplierId?.toString() to new.supplierId?.toString() // Questo può rimanere ID o nome
+private fun CompareRow(fieldResId: Int, old: Product, new: Product) { // 'fieldResId' è un Int
+    val (oldValue, newValue) = when (fieldResId) { // Confronta con ID di risorsa
+        R.string.field_product_name -> old.productName to new.productName
+        R.string.header_item_number -> old.itemNumber to new.itemNumber // Assicurati di usare l'ID corretto che hai messo in getChangedFields
+        R.string.purchase_price_label -> old.newPurchasePrice?.toLong()?.toString() to new.newPurchasePrice?.toLong()?.toString()
+        R.string.retail_price_label -> old.newRetailPrice?.toLong()?.toString() to new.newRetailPrice?.toLong()?.toString()
+        R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString() // Qui potresti voler recuperare il nome del fornitore
         else -> "" to ""
     }
+
+    // Usa stringResource per ottenere il testo localizzato dall'ID
+    val fieldName = stringResource(fieldResId)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(field, modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium)
+        Text(fieldName, modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium)
         Text(text = oldValue ?: "-", modifier = Modifier.weight(1f), textDecoration = TextDecoration.LineThrough, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(text = newValue ?: "-", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Color(0xFF006400))
     }
@@ -273,7 +278,7 @@ private fun ExpandableSection(
             ) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 val rotationAngle by animateFloatAsState(targetValue = if (isExpanded) 180f else 0f, label = "rotation")
-                Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = if (isExpanded) "Comprimi" else "Espandi", modifier = Modifier.rotate(rotationAngle))
+                Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = if (isExpanded) stringResource(R.string.collapse) else stringResource(R.string.expand), modifier = Modifier.rotate(rotationAngle))
             }
             AnimatedVisibility(visible = isExpanded) {
                 Column { content() }
@@ -286,25 +291,25 @@ private fun ExpandableSection(
 private fun ErrorRow(error: RowImportError) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text("Riga ${error.rowNumber}: ${error.errorReason}", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            val errorReasonText = stringResource(error.errorReasonResId, *error.formatArgs.toTypedArray())
+            Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
-            val problematicKey = when {
-                error.errorReason.contains("prezzo di vendita") -> "newRetailPrice"
-                error.errorReason.contains("quantità") -> "quantity"
-                error.errorReason.contains("barcode") -> "barcode"
-                error.errorReason.contains("nome del prodotto") -> "productName"
+            val problematicKey = when (error.errorReasonResId) {
+                R.string.error_invalid_retail_price -> "newRetailPrice"
+                R.string.error_barcode_required -> "barcode"
+                R.string.error_productname_required -> "productName"
                 else -> null
             }
             val barcode = error.rowContent["barcode"] ?: "-"
-            val productName = error.rowContent["productName"] ?: "Prodotto non identificato"
+            val productName = error.rowContent["productName"] ?: stringResource(R.string.unnamed_product)
             val quantity = error.rowContent["quantity"] ?: "-"
             val retailPrice = error.rowContent["newRetailPrice"] ?: "-"
 
-            ErrorDetailText(label = "Barcode", value = barcode, isHighlighted = problematicKey == "barcode")
-            ErrorDetailText(label = "Nome Prodotto", value = productName, isHighlighted = problematicKey == "productName")
+            ErrorDetailText(label = stringResource(R.string.header_barcode), value = barcode, isHighlighted = problematicKey == "barcode")
+            ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = problematicKey == "productName")
             Spacer(Modifier.height(4.dp))
-            ErrorDetailText(label = "Quantità contata", value = quantity, isHighlighted = problematicKey == "quantity")
-            ErrorDetailText(label = "Nuovo prezzo v.", value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
+            ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
+            ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
         }
     }
 }
