@@ -75,11 +75,15 @@ fun PreGenerateScreen(
     val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
     val scope = rememberCoroutineScope()
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        // Quando un file viene scelto, ricarica i dati nel ViewModel.
-        uri?.let { excelViewModel.loadFromUri(context, it) }
+    val reloadLauncher = rememberLauncherForActivityResult(
+        // 1. Cambia il contratto in OpenMultipleDocuments
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> -> // 2. La callback ora riceve una lista di Uri
+        if (uris.isNotEmpty()) {
+            // 3. Chiama la stessa funzione usata per il caricamento iniziale.
+            //    Questa funzione resetta già lo stato prima di caricare i nuovi file.
+            excelViewModel.loadFromMultipleUris(context, uris)
+        }
     }
 
     val appendLauncher = rememberLauncherForActivityResult(
@@ -126,14 +130,14 @@ fun PreGenerateScreen(
                         )
                     }
                     IconButton(onClick = {
-                        launcher.launch(arrayOf(
+                        reloadLauncher.launch(arrayOf(
                             "application/vnd.ms-excel",
                             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         ))
                     }) {
                         Icon(
                             Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.reload_file)
+                            contentDescription = stringResource(R.string.reload_file) // Assicurati di avere questa stringa
                         )
                     }
                 }

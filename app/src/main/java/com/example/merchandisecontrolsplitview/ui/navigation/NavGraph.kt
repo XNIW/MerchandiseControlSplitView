@@ -38,8 +38,10 @@ fun AppNavGraph() {
         composable(Screen.FilePicker.route) {
             FilePickerScreen(
                 viewModel = excelViewModel,
-                onFilePicked = { uri ->
-                    excelViewModel.loadFromUri(context, uri)
+                onFilesPicked = { uris ->
+                    // 1. Chiama la funzione del ViewModel per avviare l'elaborazione
+                    excelViewModel.loadFromMultipleUris(context, uris)
+                    // 2. Naviga immediatamente a PreGenerateScreen
                     navController.navigate(Screen.PreGenerate.route)
                 },
                 onViewHistory = { navController.navigate(Screen.History.route) },

@@ -21,14 +21,9 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-
-/**
- * Screen that allows the user to pick an Excel file from device storage.
- * @param onFilePicked callback invoked with the chosen file's Uri
- */
 @Composable
 fun FilePickerScreen(
-    onFilePicked: (Uri) -> Unit,
+    onFilesPicked: (List<Uri>) -> Unit,
     onViewHistory: () -> Unit,
     onDatabase: () -> Unit,
     onOptions: () -> Unit,
@@ -38,10 +33,15 @@ fun FilePickerScreen(
         viewModel.resetState()
     }
 
+
+
     val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let(onFilePicked)
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        // Se l'utente ha scelto almeno un file, invoca la callback
+        if (uris.isNotEmpty()) {
+            onFilesPicked(uris)
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize()) {

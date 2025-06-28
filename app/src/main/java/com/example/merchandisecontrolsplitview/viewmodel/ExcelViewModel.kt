@@ -58,7 +58,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             entry?.wasExported ?: false
         )
     }
-
     val headerTypes = mutableStateListOf<String>()
 
     private val db = AppDatabase.getDatabase(application)
@@ -70,7 +69,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     init {
         loadHistoryFromPrefs()
     }
-
     @Suppress("SENSELESS_COMPARISON")
     private fun loadHistoryFromPrefs() {
         prefs.getString("history_list", null)?.let { json ->
@@ -92,33 +90,10 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             historyEntries.addAll(fixedList) // Use the corrected list
         }
     }
-
     private fun saveHistoryToPrefs() {
         val json = gson.toJson(historyEntries.toList())
         prefs.edit {
             putString("history_list", json)
-        }
-    }
-
-    fun loadFromUri(context: Context, uri: Uri) {
-        viewModelScope.launch {
-            isLoading.value = true
-            loadError.value = null
-            try {
-                val (header, dataRows, headerSource) = withContext(Dispatchers.IO) { readAndAnalyzeExcel(context, uri) }
-                excelData.clear()
-                if (header.isNotEmpty()) {
-                    excelData.add(header)
-                    excelData.addAll(dataRows)
-                }
-                headerTypes.clear()
-                headerTypes.addAll(headerSource)
-                generated.value = false
-                initPreGenerateState()
-            } catch (_: Exception) {
-                loadError.value = "Errore nel leggere il file Excel"
-            }
-            isLoading.value = false
         }
     }
     fun appendFromMultipleUris(context: Context, uris: List<Uri>) {
@@ -173,62 +148,67 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    fun loadFromMultipleUris(context: Context, uris: List<Uri>) {
+        if (uris.isEmpty()) return
 
-    fun appendFromUri(context: Context, uri: Uri) {
         viewModelScope.launch {
-            // 1. Inizia il caricamento e resetta gli errori
+            // 1. Imposta lo stato iniziale: caricamento in corso, nessun errore.
             isLoading.value = true
             loadError.value = null
-
-            // 2. Controlla se esiste già un file caricato a cui accodare i dati
-            if (excelData.isEmpty()) {
-                loadError.value = "Caricare un file principale prima di aggiungerne altri."
-                isLoading.value = false
-                return@launch
-            }
+            resetState() // Pulisce completamente lo stato precedente.
 
             try {
-                // Salva l'intestazione corrente come riferimento
-                val originalHeader = excelData.first()
+                // --- FASE DI VERIFICA (lavora su variabili temporanee) ---
 
-                // 3. Leggi e analizza il nuovo file
-                val (_, newDataRows, _) = withContext(Dispatchers.IO) {
-                    readAndAnalyzeExcel(context, uri)
+                // 2. Leggi il primo file per ottenere l'header di riferimento.
+                val (goldenHeader, firstDataRows, headerSource) = withContext(Dispatchers.IO) {
+                    readAndAnalyzeExcel(context, uris.first())
                 }
 
-                // Leggi nuovamente l'header del file appeno letto per confrontarlo
-                // NOTA: readAndAnalyzeExcel restituisce l'header normalizzato, che è ciò che ci serve per un confronto affidabile.
-                val newFileHeader = readAndAnalyzeExcel(context, uri).first
-
-                // 4. --- VALIDAZIONE CRUCIALE ---
-                // Confronta l'header del nuovo file con quello originale.
-                // Devono essere identici (stesso numero di colonne e stessi nomi nello stesso ordine).
-                if (originalHeader != newFileHeader) {
-                    loadError.value = "Le colonne del file non corrispondono. Impossibile unire."
-                    isLoading.value = false
-                    return@launch
+                // Se il primo file è vuoto o non valido, lancia un errore.
+                if (goldenHeader.isEmpty()) {
+                    throw IllegalStateException("Il primo file selezionato è vuoto o ha un formato non valido.")
                 }
 
-                // 5. Se la validazione passa, accoda i nuovi dati
-                if (newDataRows.isNotEmpty()) {
-                    excelData.addAll(newDataRows)
+                // 3. Crea una lista temporanea per contenere TUTTE le righe valide.
+                val allValidRows = mutableListOf<List<String>>()
+                allValidRows.addAll(firstDataRows)
 
-                    // Estendi anche gli altri stati per mantenere la coerenza
-                    repeat(newDataRows.size) {
-                        editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
-                        completeStates.add(false)
+                // 4. Se ci sono altri file, controllali TUTTI prima di procedere.
+                if (uris.size > 1) {
+                    for (uri in uris.drop(1)) {
+                        val (newHeader, newDataRows, _) = withContext(Dispatchers.IO) {
+                            readAndAnalyzeExcel(context, uri)
+                        }
+                        // Se un header non corrisponde, lancia un errore e interrompi tutto.
+                        if (newHeader != goldenHeader) {
+                            throw IllegalArgumentException("I file selezionati hanno colonne diverse. L'operazione è stata annullata.")
+                        }
+                        // Se valido, aggiungi le righe alla lista temporanea.
+                        allValidRows.addAll(newDataRows)
                     }
                 }
-                // Se non ci sono righe di dati, non fare nulla ma non segnalare errore.
+
+                // --- FASE DI COMMIT ---
+
+                // 5. SOLO SE tutti i file sono stati verificati con successo,
+                //    aggiorna lo stato del ViewModel che la UI osserva.
+                excelData.add(goldenHeader)
+                excelData.addAll(allValidRows)
+                headerTypes.addAll(headerSource)
+                initPreGenerateState()
 
             } catch (e: Exception) {
-                loadError.value = "Errore nell'aggiungere dati dal file: ${e.message}"
+                // 6. Se si è verificato QUALSIASI errore durante la verifica,
+                //    lo stato di `excelData` rimarrà vuoto (grazie al resetState() iniziale).
+                //    Impostiamo solo il messaggio di errore.
+                loadError.value = e.message ?: "Errore sconosciuto durante l'analisi dei file."
             } finally {
+                // 7. In ogni caso (successo o fallimento), alla fine smetti di caricare.
                 isLoading.value = false
             }
         }
     }
-
     private fun initPreGenerateState() {
         selectedColumns.clear()
         excelData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(true) } }
