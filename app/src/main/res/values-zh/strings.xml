@@ -176,6 +176,7 @@
     <string name="error_unexpected_parsing">解析出现意外错误：%1$s</string>
     <string name="error_invalid_retail_price">售价不是有效数字。</string>
     <string name="error_negative_prices">价格不能为负数。</string>
+    <string name="error_invalid_quantity">数量不是有效数字。</string>
     <string name="field_product_name">产品名称</string>
     <string name="field_item_number">商品编码</string>
     <string name="field_purchase_price">进货价</string>
@@ -229,5 +230,6 @@
     <string name="sheet_name_export">导出</string>
     <string name="header_new_purchase_price">新进价</string>
     <string name="header_supplier_id">供应商ID</string>
+    <string name="default_error_export_filename">导入错误.xlsx</string>
 
 </resources>

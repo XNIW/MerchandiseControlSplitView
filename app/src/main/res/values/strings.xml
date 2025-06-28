@@ -177,6 +177,7 @@
     <string name="error_invalid_retail_price">Il prezzo di vendita non è un numero valido.</string>
     <string name="error_negative_prices">I prezzi non possono essere negativi.</string>
     <string name="field_product_name">Nome Prodotto</string>
+    <string name="error_invalid_quantity">La quanità non è un numero valido.</string>
     <string name="field_item_number">Codice Articolo</string>
     <string name="field_purchase_price">Prezzo Acquisto</string>
     <string name="field_retail_price">Prezzo Vendita</string>
@@ -238,4 +239,6 @@
 
     <string name="header_new_purchase_price">Nuovo Prezzo Acquisto</string>
     <string name="header_supplier_id">ID Fornitore</string>
+
+    <string name="default_error_export_filename">errori_importazione.xlsx</string>
 </resources>

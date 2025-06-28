@@ -177,6 +177,7 @@
     <string name="error_unexpected_parsing">Unexpected parsing error: %1$s</string>
     <string name="error_invalid_retail_price">Retail price is not a valid number.</string>
     <string name="error_negative_prices">Prices cannot be negative.</string>
+    <string name="error_invalid_quantity">The quantity is not a valid number.</string>
     <string name="field_product_name">Product Name</string>
     <string name="field_item_number">Item Code</string>
     <string name="field_purchase_price">Purchase Price</string>
@@ -230,4 +231,5 @@
     <string name="sheet_name_export">Export</string>
     <string name="header_new_purchase_price">New Purchase Price</string>
     <string name="header_supplier_id">Supplier ID</string>
+    <string name="default_error_export_filename">import_errors.xlsx</string>
 </resources>

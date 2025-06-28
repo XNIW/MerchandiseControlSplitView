@@ -161,7 +161,8 @@ fun ImportAnalysisScreen(
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { exportErrorsLauncher.launch("errori_importazione.xlsx") }) {
+                            val exportErrorsFilename = stringResource(R.string.default_error_export_filename)
+                            Button(onClick = { exportErrorsLauncher.launch(exportErrorsFilename) }) {
                                 Text(stringResource(R.string.export_errors))
                             }
                             OutlinedButton(onClick = {
@@ -294,12 +295,18 @@ private fun ErrorRow(error: RowImportError) {
             val errorReasonText = stringResource(error.errorReasonResId, *error.formatArgs.toTypedArray())
             Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
+
+            // --- CORREZIONE QUI ---
             val problematicKey = when (error.errorReasonResId) {
                 R.string.error_invalid_retail_price -> "newRetailPrice"
                 R.string.error_barcode_required -> "barcode"
                 R.string.error_productname_required -> "productName"
+                // Aggiungi un caso per l'errore sulla quantità
+                // (ipotizzando che esista R.string.error_invalid_quantity)
+                R.string.error_invalid_quantity -> "quantity"
                 else -> null
             }
+
             val barcode = error.rowContent["barcode"] ?: "-"
             val productName = error.rowContent["productName"] ?: stringResource(R.string.unnamed_product)
             val quantity = error.rowContent["quantity"] ?: "-"
@@ -308,6 +315,7 @@ private fun ErrorRow(error: RowImportError) {
             ErrorDetailText(label = stringResource(R.string.header_barcode), value = barcode, isHighlighted = problematicKey == "barcode")
             ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = problematicKey == "productName")
             Spacer(Modifier.height(4.dp))
+            // Ora questa riga può funzionare correttamente
             ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
             ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
         }

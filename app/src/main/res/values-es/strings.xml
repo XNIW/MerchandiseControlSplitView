@@ -176,6 +176,7 @@
     <string name="error_unexpected_parsing">Error de análisis inesperado: %1$s</string>
     <string name="error_invalid_retail_price">El precio de venta no es un número válido.</string>
     <string name="error_negative_prices">Los precios no pueden ser negativos.</string>
+    <string name="error_invalid_quantity">La cantidad no es un número válido.</string>
     <string name="field_product_name">Nombre del Producto</string>
     <string name="field_item_number">Código del Artículo</string>
     <string name="field_purchase_price">Precio de Compra</string>
@@ -229,5 +230,6 @@
     <string name="sheet_name_export">Exportación</string>
     <string name="header_new_purchase_price">Nuevo Precio de Compra</string>
     <string name="header_supplier_id">ID del Proveedor</string>
+    <string name="default_error_export_filename">errores_importación.xlsx</string>
 
 </resources>
