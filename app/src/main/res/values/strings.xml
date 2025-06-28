@@ -47,6 +47,7 @@
     <string name="custom_column_type">Nome personalizzato</string>
     <string name="close">Chiudi</string>
     <string name="reload_file">Ricarica file</string>
+    <string name="append_file">Aggiungi al file</string>
 
     <!-- Schermata GenerateScreen -->
     <string name="row_info">Informazioni riga</string>

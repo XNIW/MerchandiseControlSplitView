@@ -48,6 +48,8 @@
     <string name="custom_column_type">Custom name</string>
     <string name="close">Close</string>
     <string name="reload_file">Reload file</string>
+    <string name="append_file">Append to file</string>
+
 
     <!-- GenerateScreen -->
     <string name="row_info">Row information</string>

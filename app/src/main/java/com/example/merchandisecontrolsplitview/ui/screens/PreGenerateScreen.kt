@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
@@ -81,6 +82,16 @@ fun PreGenerateScreen(
         uri?.let { excelViewModel.loadFromUri(context, it) }
     }
 
+    val appendLauncher = rememberLauncherForActivityResult(
+        // 1. Usa il contratto per la selezione multipla
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> -> // 2. Il risultato è una lista di Uri
+        // 3. Se la lista non è vuota, passala alla nuova funzione nel ViewModel
+        if (uris.isNotEmpty()) {
+            excelViewModel.appendFromMultipleUris(context, uris)
+        }
+    }
+
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
         "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
@@ -102,6 +113,18 @@ fun PreGenerateScreen(
                     }
                 },
                 actions = {
+                    // Bottone per accodare un nuovo file
+                    IconButton(onClick = {
+                        appendLauncher.launch(arrayOf(
+                            "application/vnd.ms-excel",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        ))
+                    }) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.append_file)
+                        )
+                    }
                     IconButton(onClick = {
                         launcher.launch(arrayOf(
                             "application/vnd.ms-excel",

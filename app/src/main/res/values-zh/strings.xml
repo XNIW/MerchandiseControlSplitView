@@ -47,6 +47,8 @@
     <string name="custom_column_type">自定义名称</string>
     <string name="close">关闭</string>
     <string name="reload_file">重新加载文件</string>
+    <string name="append_file">添加到文件</string>
+
 
     <!-- 生成页面 -->
     <string name="row_info">行信息</string>

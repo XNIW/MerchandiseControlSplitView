@@ -121,6 +121,113 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             isLoading.value = false
         }
     }
+    fun appendFromMultipleUris(context: Context, uris: List<Uri>) {
+        viewModelScope.launch {
+            isLoading.value = true
+            loadError.value = null
+
+            if (excelData.isEmpty()) {
+                loadError.value = "Caricare un file principale prima di aggiungerne altri."
+                isLoading.value = false
+                return@launch
+            }
+
+            try {
+                val originalHeader = excelData.first()
+                val allNewDataRows = mutableListOf<List<String>>()
+
+                // 1. Cicla su ogni Uri per validare e raccogliere i dati
+                withContext(Dispatchers.IO) {
+                    for (uri in uris) {
+                        // Leggi e analizza il file corrente
+                        val (newHeader, newDataRows, _) = readAndAnalyzeExcel(context, uri)
+
+                        // 2. --- VALIDAZIONE ---
+                        // Se l'header non corrisponde, interrompi l'intera operazione.
+                        if (originalHeader != newHeader) {
+                            // Lancia un'eccezione per bloccare il processo
+                            throw IllegalArgumentException("Uno dei file selezionati ha una struttura di colonne non compatibile. Operazione annullata.")
+                        }
+
+                        // Se valido, aggiungi le sue righe alla lista temporanea
+                        allNewDataRows.addAll(newDataRows)
+                    }
+                }
+
+                // 3. Se il ciclo è completato senza errori, accoda tutti i dati raccolti
+                if (allNewDataRows.isNotEmpty()) {
+                    excelData.addAll(allNewDataRows)
+
+                    // Estendi gli altri stati per mantenere la coerenza
+                    repeat(allNewDataRows.size) {
+                        editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+                        completeStates.add(false)
+                    }
+                }
+
+            } catch (e: Exception) {
+                // Cattura sia le eccezioni di I/O che la nostra eccezione di validazione
+                loadError.value = e.message ?: "Errore durante l'aggiunta dei file."
+            } finally {
+                isLoading.value = false
+            }
+        }
+    }
+
+    fun appendFromUri(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            // 1. Inizia il caricamento e resetta gli errori
+            isLoading.value = true
+            loadError.value = null
+
+            // 2. Controlla se esiste già un file caricato a cui accodare i dati
+            if (excelData.isEmpty()) {
+                loadError.value = "Caricare un file principale prima di aggiungerne altri."
+                isLoading.value = false
+                return@launch
+            }
+
+            try {
+                // Salva l'intestazione corrente come riferimento
+                val originalHeader = excelData.first()
+
+                // 3. Leggi e analizza il nuovo file
+                val (_, newDataRows, _) = withContext(Dispatchers.IO) {
+                    readAndAnalyzeExcel(context, uri)
+                }
+
+                // Leggi nuovamente l'header del file appeno letto per confrontarlo
+                // NOTA: readAndAnalyzeExcel restituisce l'header normalizzato, che è ciò che ci serve per un confronto affidabile.
+                val newFileHeader = readAndAnalyzeExcel(context, uri).first
+
+                // 4. --- VALIDAZIONE CRUCIALE ---
+                // Confronta l'header del nuovo file con quello originale.
+                // Devono essere identici (stesso numero di colonne e stessi nomi nello stesso ordine).
+                if (originalHeader != newFileHeader) {
+                    loadError.value = "Le colonne del file non corrispondono. Impossibile unire."
+                    isLoading.value = false
+                    return@launch
+                }
+
+                // 5. Se la validazione passa, accoda i nuovi dati
+                if (newDataRows.isNotEmpty()) {
+                    excelData.addAll(newDataRows)
+
+                    // Estendi anche gli altri stati per mantenere la coerenza
+                    repeat(newDataRows.size) {
+                        editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+                        completeStates.add(false)
+                    }
+                }
+                // Se non ci sono righe di dati, non fare nulla ma non segnalare errore.
+
+            } catch (e: Exception) {
+                loadError.value = "Errore nell'aggiungere dati dal file: ${e.message}"
+            } finally {
+                isLoading.value = false
+            }
+        }
+    }
 
     private fun initPreGenerateState() {
         selectedColumns.clear()

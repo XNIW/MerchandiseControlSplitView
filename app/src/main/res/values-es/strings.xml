@@ -47,6 +47,8 @@
     <string name="custom_column_type">Nombre personalizado</string>
     <string name="close">Cerrar</string>
     <string name="reload_file">Recargar archivo</string>
+    <string name="append_file">Agregar al archivo</string>
+
 
     <!-- Pantalla GenerateScreen -->
     <string name="row_info">Información de fila</string>
