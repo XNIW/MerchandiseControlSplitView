@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AlertDialog
@@ -29,7 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.merchandisecontrolsplitview.viewmodel.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SwipeToDismissBox
@@ -38,11 +39,10 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -252,12 +252,17 @@ private fun HistoryRow(
                 ) {
                     StatusIcon(
                         baseIcon = Icons.Default.Sync,
-                        showBadge = entry.wasSyncedSuccessfully,
+                        badgeType = when (entry.syncStatus) {
+                            SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
+                            SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
+                            SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                        },
                         contentDescription = "Stato Sincronizzazione"
                     )
                     StatusIcon(
                         baseIcon = Icons.Default.FileDownload,
-                        showBadge = entry.wasExported,
+                        // MODIFICA: Usa badgeType anche qui per coerenza
+                        badgeType = if (entry.wasExported) BadgeType.SUCCESS else BadgeType.NONE,
                         contentDescription = "Stato Esportazione"
                     )
                 }
@@ -270,10 +275,14 @@ private fun HistoryRow(
 /**
  * Composable helper per visualizzare un'icona con un badge di conferma opzionale.
  */
+enum class BadgeType {
+    NONE, SUCCESS, WARNING
+}
+
 @Composable
 private fun StatusIcon(
     baseIcon: ImageVector,
-    showBadge: Boolean,
+    badgeType: BadgeType, // <-- Usa il nuovo enum invece di un Boolean
     contentDescription: String
 ) {
     Box {
@@ -283,16 +292,31 @@ private fun StatusIcon(
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (showBadge) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = "Completato",
-                modifier = Modifier
-                    .size(12.dp)
-                    .align(Alignment.TopEnd)
-                    .offset(x = 4.dp, y = (-4).dp),
-                tint = Color(0xFF00C853) // Colore verde per il badge
-            )
+        // Usa un when per decidere quale badge mostrare
+        when (badgeType) {
+            BadgeType.SUCCESS -> {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Completato",
+                    modifier = Modifier
+                        .size(12.dp)
+                        .align(Alignment.TopEnd)
+                        .offset(x = 4.dp, y = (-4).dp),
+                    tint = Color(0xFF00C853) // Verde
+                )
+            }
+            BadgeType.WARNING -> {
+                Icon(
+                    imageVector = Icons.Default.Error, // Icona di errore/avviso
+                    contentDescription = "Avviso",
+                    modifier = Modifier
+                        .size(12.dp)
+                        .align(Alignment.TopEnd)
+                        .offset(x = 4.dp, y = (-4).dp),
+                    tint = Color(0xFFFFA000) // Arancione/Ambra
+                )
+            }
+            BadgeType.NONE -> { /* Non mostrare nulla */ }
         }
     }
 }

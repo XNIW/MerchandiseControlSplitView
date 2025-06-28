@@ -10,6 +10,8 @@ import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.google.gson.Gson
@@ -22,21 +24,6 @@ import org.apache.poi.ss.usermodel.IndexedColors
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-
-// Le data class e altre parti del ViewModel rimangono invariate
-
-/** Un singolo record di cronologia. */
-data class HistoryEntry(
-    val id: String,
-    val timestamp: String,
-    val data: List<List<String>>,
-    val editable: List<List<String>>,
-    val complete: List<Boolean>,
-    val supplier: String = "",
-    val wasExported: Boolean = false,
-    val wasSyncedSuccessfully: Boolean = false
-)
-
 /**
  * ViewModel per gestione griglia Excel e cronologia persistente.
  */
@@ -61,6 +48,17 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     val historyEntries  = mutableStateListOf<HistoryEntry>()
     private var currentIndex: Int? = null
 
+    val currentEntryStatus = mutableStateOf(Pair(SyncStatus.NOT_ATTEMPTED, false))
+
+    /** Aggiorna lo stato reattivo in base all'elemento corrente. */
+    private fun updateCurrentEntryStatus() {
+        val entry = currentIndex?.let { historyEntries.getOrNull(it) }
+        currentEntryStatus.value = Pair(
+            entry?.syncStatus ?: SyncStatus.NOT_ATTEMPTED, // <-- Legge dal nuovo stato
+            entry?.wasExported ?: false
+        )
+    }
+
     val headerTypes = mutableStateListOf<String>()
 
     private val db = AppDatabase.getDatabase(application)
@@ -73,12 +71,25 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         loadHistoryFromPrefs()
     }
 
+    @Suppress("SENSELESS_COMPARISON")
     private fun loadHistoryFromPrefs() {
         prefs.getString("history_list", null)?.let { json ->
             val type = object : TypeToken<List<HistoryEntry>>() {}.type
             val list: List<HistoryEntry> = gson.fromJson(json, type)
+
+            // Add this block to fix old data
+            val fixedList = list.map { entry ->
+                // If syncStatus is null (because the entry is old), set a default value.
+                if (entry.syncStatus == null) {
+                    entry.copy(syncStatus = SyncStatus.NOT_ATTEMPTED)
+                } else {
+                    entry
+                }
+            }
+            // End of correction block
+
             historyEntries.clear()
-            historyEntries.addAll(list)
+            historyEntries.addAll(fixedList) // Use the corrected list
         }
     }
 
@@ -191,6 +202,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         )
         historyEntries.add(0, entry)
         currentIndex = 0
+        updateCurrentEntryStatus()
     }
 
     // ... il resto del ViewModel non cambia ...
@@ -230,6 +242,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             completeStates.clear(); completeStates.addAll(entry.complete)
             generated.value = true
             currentSupplierName = entry.supplier
+            updateCurrentEntryStatus()
         }
     }
 
@@ -243,6 +256,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         isLoading.value = false
         loadError.value = null
         currentIndex = null
+        updateCurrentEntryStatus()
     }
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
@@ -269,16 +283,27 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             if (!entry.wasExported) {
                 historyEntries[idx] = entry.copy(wasExported = true)
                 saveHistoryToPrefs() // Salva la modifica
+                updateCurrentEntryStatus()
             }
         }
     }
 
-    fun markCurrentEntryAsSynced() {
+    fun markCurrentEntryAsSyncedSuccessfully() {
+        updateSyncStatus(SyncStatus.SYNCED_SUCCESSFULLY)
+    }
+
+    fun markCurrentEntryAsSyncedWithErrors() {
+        updateSyncStatus(SyncStatus.ATTEMPTED_WITH_ERRORS)
+    }
+
+    // AGGIUNGI questa funzione helper privata
+    private fun updateSyncStatus(newStatus: SyncStatus) {
         currentIndex?.takeIf { it in historyEntries.indices }?.let { idx ->
             val entry = historyEntries[idx]
-            if (!entry.wasSyncedSuccessfully) {
-                historyEntries[idx] = entry.copy(wasSyncedSuccessfully = true)
+            if (entry.syncStatus != newStatus) {
+                historyEntries[idx] = entry.copy(syncStatus = newStatus)
                 saveHistoryToPrefs()
+                updateCurrentEntryStatus()
             }
         }
     }

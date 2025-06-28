@@ -151,5 +151,7 @@
     <string name="add_new_supplier_prompt">Agregar "%1$s" como nuevo proveedor</string>
     <string name="save">Guardar</string>
     <string name="import_analysis_in_progress">Análisis del archivo en curso…</string>
+    <string name="action_completed">Acción completada</string>
+    <string name="file_exported_successfully">Archivo exportado correctamente</string>
 
 </resources>

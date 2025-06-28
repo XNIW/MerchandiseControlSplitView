@@ -110,8 +110,11 @@ fun AppNavGraph() {
                     onConfirm = { newProducts, updatedProducts ->
                         // Controlla se l'analisi originale non aveva errori
                         if (importAnalysisResult?.errors?.isEmpty() == true) {
-                            excelViewModel.markCurrentEntryAsSynced()
+                            excelViewModel.markCurrentEntryAsSyncedSuccessfully() // <-- Chiama la nuova funzione per il SUCCESSO
+                        } else {
+                            excelViewModel.markCurrentEntryAsSyncedWithErrors()   // <-- Chiama la nuova funzione per gli ERRORI
                         }
+
                         dbViewModel.importProducts(newProducts, updatedProducts, context)
                         navController.navigate(Screen.FilePicker.route) {
                             popUpTo(navController.graph.startDestinationId) {
