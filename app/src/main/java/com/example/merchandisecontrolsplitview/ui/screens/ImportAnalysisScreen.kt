@@ -34,6 +34,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -212,10 +213,15 @@ private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
                 Spacer(Modifier.height(4.dp)) // Aggiungiamo un piccolo spazio
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
+
+                if (!product.category.isNullOrBlank()) {
+                    Text("${stringResource(R.string.header_category)}: ${product.category}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("${stringResource(R.string.counted_quantity_label)}: ${formatNumberAsRoundedString(product.stockQuantity)}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("${stringResource(R.string.purchase_prefix)} ${product.newPurchasePrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
-                Text("${stringResource(R.string.sell_prefix)} ${product.newRetailPrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.purchase_prefix)} ${formatNumberAsRoundedString(product.purchasePrice)}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.sell_prefix)} ${formatNumberAsRoundedString(product.retailPrice)}", style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onEditClick) {
                 Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_product))
@@ -272,14 +278,13 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
 private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
     val (oldValue, newValue) = when (fieldResId) {
         R.string.field_product_name -> old.productName to new.productName
-        // --- INIZIO MODIFICA ---
-        // Aggiungi il caso per il secondo nome prodotto
         R.string.field_second_product_name -> old.secondProductName to new.secondProductName
-        // --- FINE MODIFICA ---
         R.string.header_item_number -> old.itemNumber to new.itemNumber
-        R.string.purchase_price_label -> old.newPurchasePrice?.toLong()?.toString() to new.newPurchasePrice?.toLong()?.toString()
-        R.string.retail_price_label -> old.newRetailPrice?.toLong()?.toString() to new.newRetailPrice?.toLong()?.toString()
+        R.string.purchase_price_label -> formatNumberAsRoundedString(old.purchasePrice) to formatNumberAsRoundedString(new.purchasePrice)
+        R.string.retail_price_label -> formatNumberAsRoundedString(old.retailPrice) to formatNumberAsRoundedString(new.retailPrice)
         R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString()
+        R.string.field_category -> old.category to new.category
+        R.string.field_stock_quantity -> formatNumberAsRoundedString(old.stockQuantity) to formatNumberAsRoundedString(new.stockQuantity)
         else -> "" to ""
     }
 
@@ -328,7 +333,7 @@ private fun ErrorRow(error: RowImportError) {
 
             // --- INIZIO MODIFICA ---
             val problematicKey = when (error.errorReasonResId) {
-                R.string.error_invalid_retail_price -> "newRetailPrice"
+                R.string.error_invalid_retail_price -> "RetailPrice"
                 R.string.error_barcode_required -> "barcode"
                 // Se l'errore è che manca almeno un nome, li evidenziamo entrambi
                 R.string.error_productname_required_at_least_one -> "productName" // Usiamo questo per evidenziare entrambi i campi nome
@@ -341,7 +346,7 @@ private fun ErrorRow(error: RowImportError) {
             val productName = error.rowContent["productName"] ?: "-" // Rimuoviamo il fallback a "unnamed_product" per mostrare il campo vuoto
             val secondProductName = error.rowContent["secondProductName"] ?: "-" // Leggiamo il secondo nome
             val quantity = error.rowContent["quantity"] ?: "-"
-            val retailPrice = error.rowContent["newRetailPrice"] ?: "-"
+            val retailPrice = error.rowContent["RetailPrice"] ?: "-"
 
             val highlightNames = problematicKey == "productName"
 
@@ -351,7 +356,7 @@ private fun ErrorRow(error: RowImportError) {
             ErrorDetailText(label = stringResource(R.string.header_second_product_name), value = secondProductName, isHighlighted = highlightNames)
             Spacer(Modifier.height(4.dp))
             ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
-            ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
+            ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "RetailPrice")
             // --- FINE MODIFICA ---
         }
     }

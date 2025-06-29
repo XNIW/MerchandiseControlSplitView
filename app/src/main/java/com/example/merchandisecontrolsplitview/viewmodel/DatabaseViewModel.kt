@@ -194,7 +194,9 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_new_retail_price),
             context.getString(R.string.header_old_purchase_price),
             context.getString(R.string.header_old_retail_price),
-            context.getString(R.string.header_supplier_id)
+            context.getString(R.string.header_supplier_id),
+            context.getString(R.string.header_category),
+            context.getString(R.string.header_stock_quantity)
         )
         headers.forEachIndexed { index, header ->
             headerRow.createCell(index).setCellValue(header)
@@ -205,11 +207,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(1).setCellValue(product.itemNumber ?: "")
             row.createCell(2).setCellValue(product.productName ?: "")
             row.createCell(3).setCellValue(product.secondProductName ?: "")
-            row.createCell(3).setCellValue(product.newPurchasePrice ?: 0.0)
-            row.createCell(4).setCellValue(product.newRetailPrice ?: 0.0)
+            row.createCell(3).setCellValue(product.purchasePrice ?: 0.0)
+            row.createCell(4).setCellValue(product.retailPrice ?: 0.0)
             row.createCell(5).setCellValue(product.oldPurchasePrice ?: 0.0)
             row.createCell(6).setCellValue(product.oldRetailPrice ?: 0.0)
             row.createCell(7).setCellValue(product.supplierId?.toDouble() ?: 0.0)
+            row.createCell(8).setCellValue(product.category ?: "")
+            row.createCell(9).setCellValue(product.stockQuantity ?: 0.0)
         }
         try {
             context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }

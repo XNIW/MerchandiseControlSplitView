@@ -84,7 +84,7 @@
     <string name="header_old_purchase_price">Precio de compra anterior</string>
     <string name="header_old_retail_price">Precio de venta anterior</string>
     <string name="header_new_retail_price">Nuevo precio de venta</string>
-    <string name="header_autocount">Cantidad contada</string>
+    <string name="header_real_quantity">Cantidad contada</string>
     <string name="header_row_number">No</string>
     <string name="header_discount">Descuento</string>
     <string name="header_discounted_price">Precio con descuento</string>
@@ -235,5 +235,11 @@
     <string name="header_new_purchase_price">Nuevo Precio de Compra</string>
     <string name="header_supplier_id">ID del Proveedor</string>
     <string name="default_error_export_filename">errores_importación.xlsx</string>
+    <string name="header_category">Categoría</string>
+    <string name="header_stock_quantity">Existencias</string>
+    <string name="field_category">Categoría</string>
+    <string name="field_stock_quantity">Existencias</string>
+    <string name="no_valid_rows_to_sync">No hay filas válidas para sincronizar. Introduce cantidad y precio de venta.</string>
+    <string name="error_invalid_or_missing_retail_price">El precio de venta es obligatorio, debe ser un número y mayor que cero.</string>
 
 </resources>

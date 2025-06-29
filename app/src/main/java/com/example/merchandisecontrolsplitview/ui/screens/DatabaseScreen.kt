@@ -47,6 +47,8 @@ import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.ui.text.style.TextDecoration
 import kotlinx.coroutines.launch
 import androidx.paging.LoadState
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -299,7 +301,8 @@ private fun PriceColumn(
     labelNew: String,
     priceNew: String?,
     labelOld: String,
-    priceOld: String?,
+    // --- MODIFICA 1: Cambia il tipo di parametro da String? a Double? ---
+    priceOldValue: Double?,
     horizontalAlignment: Alignment.Horizontal
 ) {
     Column(horizontalAlignment = horizontalAlignment) {
@@ -310,11 +313,13 @@ private fun PriceColumn(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        if (priceOld != null && priceOld.isNotBlank()) {
+        // --- MODIFICA 2: La condizione ora controlla direttamente se il valore Double è nullo ---
+        if (priceOldValue != null) {
             Spacer(Modifier.height(8.dp))
             Text(text = labelOld, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = priceOld,
+                // La formattazione avviene solo se il valore esiste
+                text = formatNumberAsRoundedString(priceOldValue),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textDecoration = TextDecoration.LineThrough
@@ -374,19 +379,20 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                // --- CORREZIONE ---
                 PriceColumn(
                     labelNew = stringResource(R.string.product_purchase_price_new_short),
-                    priceNew = formatPriceAsInteger(product.newPurchasePrice),
+                    priceNew = formatNumberAsRoundedString(product.purchasePrice),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
-                    priceOld = formatPriceAsInteger(product.oldPurchasePrice),
+                    // --- MODIFICA 3: Passa il valore Double? originale, non la stringa formattata ---
+                    priceOldValue = product.oldPurchasePrice,
                     horizontalAlignment = Alignment.Start
                 )
                 PriceColumn(
                     labelNew = stringResource(R.string.product_retail_price_new_short),
-                    priceNew = formatPriceAsInteger(product.newRetailPrice),
+                    priceNew = formatNumberAsRoundedString(product.retailPrice),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
-                    priceOld = formatPriceAsInteger(product.oldRetailPrice),
+                    // --- MODIFICA 4: Passa il valore Double? originale, non la stringa formattata ---
+                    priceOldValue = product.oldRetailPrice,
                     horizontalAlignment = Alignment.End
                 )
             }
@@ -395,6 +401,18 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
                 // --- CORREZIONE ---
                 Text(text = "${stringResource(R.string.product_supplier_full)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(text = supplierName ?: "...", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Normal)
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                if (!product.category.isNullOrBlank()) {
+                    Row {
+                        Text(text = "${stringResource(R.string.header_category)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(text = product.category, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Row {
+                    Text(text = "${stringResource(R.string.header_stock_quantity)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(text = formatNumberAsRoundedString(product.stockQuantity), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
@@ -412,10 +430,12 @@ internal fun EditProductDialog(
     var productName by remember { mutableStateOf(product.productName ?: "") }
     var secondProductName by remember { mutableStateOf(product.secondProductName ?: "") }
     var itemNumber by remember { mutableStateOf(product.itemNumber ?: "") }
-    var newPurchasePrice by remember { mutableStateOf(formatPriceAsInteger(product.newPurchasePrice)) }
-    var newRetailPrice by remember { mutableStateOf(formatPriceAsInteger(product.newRetailPrice)) }
-    var oldPurchasePrice by remember { mutableStateOf(formatPriceAsInteger(product.oldPurchasePrice)) }
-    var oldRetailPrice by remember { mutableStateOf(formatPriceAsInteger(product.oldRetailPrice)) }
+    var purchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.purchasePrice)) }
+    var retailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.retailPrice)) }
+    var oldPurchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldPurchasePrice)) }
+    var oldRetailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldRetailPrice)) }
+    var category by remember { mutableStateOf(product.category ?: "") }
+    var stockQuantity by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.stockQuantity)) }
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
     var productNameError by remember { mutableStateOf<String?>(null) }
@@ -426,6 +446,12 @@ internal fun EditProductDialog(
     var showSecondNameField by remember(product) {
         // Il campo è visibile se il prodotto ha già un secondo nome
         mutableStateOf(!product.secondProductName.isNullOrBlank())
+    }
+    var showItemNumberField by remember(product) {
+        mutableStateOf(!product.itemNumber.isNullOrBlank())
+    }
+    var showCategoryField by remember(product) {
+        mutableStateOf(!product.category.isNullOrBlank())
     }
 
     // La funzione 'validate' ora non ha chiamate a funzioni Composable o di Context.
@@ -526,8 +552,8 @@ internal fun EditProductDialog(
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = newPurchasePrice, onValueChange = { newPurchasePrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                    OutlinedTextField(value = newRetailPrice, onValueChange = { newRetailPrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    OutlinedTextField(value = purchasePrice, onValueChange = { purchasePrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    OutlinedTextField(value = retailPrice, onValueChange = { retailPrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 }
 
                 var showOldPrices by remember(product) {
@@ -545,8 +571,52 @@ internal fun EditProductDialog(
                     }
                 }
 
+                if (showItemNumberField) {
+                    OutlinedTextField(
+                        value = itemNumber,
+                        onValueChange = { itemNumber = it },
+                        label = { Text(stringResource(R.string.item_code_label)) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    TextButton(onClick = { showItemNumberField = true }) {
+                        Text("Aggiungi codice articolo")
+                    }
+                }
+                // --- FINE MODIFICA ---
+
+
+                // --- INIZIO MODIFICA: Logica condizionale per Categoria ---
+                if (showCategoryField) {
+                    OutlinedTextField(
+                        value = category,
+                        onValueChange = { category = it },
+                        label = { Text(stringResource(R.string.header_category)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                } else {
+                    TextButton(onClick = { showCategoryField = true }) {
+                        Text("Aggiungi categoria")
+                    }
+                }
+
                 OutlinedTextField(value = itemNumber, onValueChange = { itemNumber = it }, label = { Text(stringResource(R.string.item_code_label)) }, modifier = Modifier.fillMaxWidth())
 
+                OutlinedTextField(
+                    value = category,
+                    onValueChange = { category = it },
+                    label = { Text(stringResource(R.string.header_category)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = stockQuantity,
+                    onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                    label = { Text(stringResource(R.string.header_stock_quantity)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
                 Box(modifier = Modifier.fillMaxWidth().clickable { showSupplierSelectionDialog = true }) {
                     OutlinedTextField(
                         value = supplierName,
@@ -575,11 +645,13 @@ internal fun EditProductDialog(
                                 productName = productName.trim(), // Pulisce gli spazi prima di salvare
                                 secondProductName = secondProductName.trim().takeIf { it.isNotBlank() }, // Pulisce anche questo
                                 itemNumber = itemNumber.trim().takeIf { it.isNotBlank() }, // E anche questo
-                                newPurchasePrice = newPurchasePrice.toDoubleOrNull(),
-                                newRetailPrice = newRetailPrice.toDoubleOrNull(),
+                                purchasePrice = purchasePrice.toDoubleOrNull(),
+                                retailPrice = retailPrice.toDoubleOrNull(),
                                 oldPurchasePrice = oldPurchasePrice.toDoubleOrNull(),
                                 oldRetailPrice = oldRetailPrice.toDoubleOrNull(),
-                                supplierId = supplierId
+                                supplierId = supplierId,
+                                category = category.trim().takeIf { it.isNotBlank() },
+                                stockQuantity = stockQuantity.replace(',', '.').toDoubleOrNull()
                             )
                             onSave(productToSave)
                         }
@@ -668,12 +740,4 @@ private fun SupplierSelectionDialog(
             }
         }
     )
-}
-
-// --- RIMOSSO --- Funzione non più utilizzata
-// @Composable
-// fun PriceInfo(...)
-
-private fun formatPriceAsInteger(price: Double?): String {
-    return price?.toLong()?.toString() ?: ""
 }

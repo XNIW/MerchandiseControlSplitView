@@ -85,7 +85,7 @@
     <string name="header_old_purchase_price">Old purchase price</string>
     <string name="header_old_retail_price">Old retail price</string>
     <string name="header_new_retail_price">New retail price</string>
-    <string name="header_autocount">Counted quantity</string>
+    <string name="header_real_quantity">Counted quantity</string>
     <string name="header_row_number">No</string>
     <string name="header_discount">Discount</string>
     <string name="header_discounted_price">Discounted Price</string>
@@ -236,4 +236,11 @@
     <string name="header_new_purchase_price">New Purchase Price</string>
     <string name="header_supplier_id">Supplier ID</string>
     <string name="default_error_export_filename">import_errors.xlsx</string>
+    <string name="header_category">Category</string>
+    <string name="header_stock_quantity">Stock Quantity</string>
+    <string name="field_category">Category</string>
+    <string name="field_stock_quantity">Stock Quantity</string>
+    <string name="no_valid_rows_to_sync">No valid rows to sync. Please enter quantity and selling price.</string>
+    <string name="error_invalid_or_missing_retail_price">The selling price is required, must be a number, and greater than zero.</string>
+
 </resources>

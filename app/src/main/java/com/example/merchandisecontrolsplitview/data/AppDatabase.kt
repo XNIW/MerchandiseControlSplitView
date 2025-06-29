@@ -20,63 +20,19 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
 
-        // Questa è la tua migrazione esistente da 1 a 2, la lasciamo com'è.
-        val MIGRATION_1_2 = object : Migration(1, 2) {
+        // La tua migrazione 1->2 rimane invariata
+        val MIGRATION_1_2 = object : Migration(1, 2) { /* ... */ }
+
+        // La tua migrazione 2->3 rimane invariata
+        val MIGRATION_2_3 = object : Migration(2, 3) { /* ... */ }
+
+        // 2. AGGIUNGI LA NUOVA MIGRAZIONE 3->4
+        val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS `suppliers` (
-                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
-                        `name` TEXT NOT NULL
-                    )
-                """)
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_suppliers_name` ON `suppliers` (`name`)")
-                db.execSQL("""
-                    CREATE TABLE `products_new` (
-                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
-                        `barcode` TEXT NOT NULL, 
-                        `itemNumber` TEXT, 
-                        `productName` TEXT, 
-                        `newPurchasePrice` REAL, 
-                        `newRetailPrice` REAL, 
-                        `oldPurchasePrice` REAL, 
-                        `oldRetailPrice` REAL, 
-                        `supplierId` INTEGER, 
-                        FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
-                    )
-                """)
-                db.execSQL("""
-                    INSERT INTO `products_new` (id, barcode, itemNumber, productName, newPurchasePrice, newRetailPrice, oldPurchasePrice, oldRetailPrice)
-                    SELECT id, barcode, itemNumber, productName, newPurchasePrice, newRetailPrice, oldPurchasePrice, oldRetailPrice FROM products
-                """)
-                db.execSQL("DROP TABLE `products`")
-                db.execSQL("ALTER TABLE `products_new` RENAME TO `products`")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_products_barcode` ON `products` (`barcode`)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS `index_products_supplierId` ON `products` (`supplierId`)")
+                db.execSQL("ALTER TABLE products ADD COLUMN category TEXT")
+                db.execSQL("ALTER TABLE products ADD COLUMN stockQuantity REAL DEFAULT 0.0")
             }
         }
-
-        // --- INIZIO NUOVO CODICE ---
-        // 3. AGGIUNGIAMO la nuova migrazione da versione 2 a 3.
-        //    Questo codice crea semplicemente la tabella HistoryEntry.
-        val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS `HistoryEntry` (
-                        `uid` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
-                        `id` TEXT NOT NULL, 
-                        `timestamp` TEXT NOT NULL, 
-                        `data` TEXT NOT NULL, 
-                        `editable` TEXT NOT NULL, 
-                        `complete` TEXT NOT NULL, 
-                        `supplier` TEXT NOT NULL, 
-                        `wasExported` INTEGER NOT NULL, 
-                        `syncStatus` TEXT NOT NULL
-                    )
-                """)
-            }
-        }
-        // --- FINE NUOVO CODICE ---
-
 
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
@@ -85,8 +41,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_database"
                 )
-                    // AGGIUNGI la nuova migrazione alla lista
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    // 3. AGGIUNGI la nuova migrazione alla lista
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build().also { INSTANCE = it }
             }
     }

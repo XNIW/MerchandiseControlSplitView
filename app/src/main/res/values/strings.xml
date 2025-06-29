@@ -83,7 +83,7 @@
     <string name="header_old_purchase_price">Prezzo vecchio acquisto</string>
     <string name="header_old_retail_price">Prezzo vecchio vendita</string>
     <string name="header_new_retail_price">Nuovo prezzo vendita</string>
-    <string name="header_autocount">Quantità contata</string>
+    <string name="header_real_quantity">Quantità contata</string>
     <string name="header_row_number">No</string>
     <string name="header_discount">Sconto</string>
     <string name="header_discounted_price">Prezzo scontato</string>
@@ -239,10 +239,14 @@
     <string name="error_unknown_file_analysis">Errore sconosciuto durante l\'analisi dei file.</string>
     <string name="sheet_name_products">Prodotti</string>
     <string name="sheet_name_export">Esportazione</string>
-
-
     <string name="header_new_purchase_price">Nuovo Prezzo Acquisto</string>
     <string name="header_supplier_id">ID Fornitore</string>
-
     <string name="default_error_export_filename">errori_importazione.xlsx</string>
+
+    <string name="header_category">Categoria</string>
+    <string name="header_stock_quantity">Giacenza</string>
+    <string name="field_category">Categoria</string>
+    <string name="field_stock_quantity">Giacenza</string>
+    <string name="no_valid_rows_to_sync">Nessuna riga valida da sincronizzare. Inserisci quantità e prezzo di vendita.</string>
+    <string name="error_invalid_or_missing_retail_price">Il prezzo di vendita è obbligatorio, deve essere un numero e maggiore di zero.</string>
 </resources>

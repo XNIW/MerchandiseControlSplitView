@@ -213,30 +213,36 @@ fun GeneratedScreen(
 
                             val dataRows = excelData.drop(1)
                             val gridDataForAnalysis = dataRows.mapIndexed { rowIndex, rowData ->
-                                // ... la logica di creazione della mappa rimane la stessa
                                 val actualRowIndex = rowIndex + 1
+
+                                // Prendiamo i valori inseriti dall'utente, senza validarli qui.
+                                // L'analizzatore gestirà stringhe vuote o non numeriche.
+                                val finalQuantityStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value ?: ""
+                                val finalPriceStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value ?: ""
+
+                                // Creiamo la mappa dei dati per ogni riga
                                 val map = header.mapIndexed { colIndex, headerKey ->
                                     headerKey to (rowData.getOrNull(colIndex) ?: "")
                                 }.toMap().toMutableMap()
-                                val finalQuantity = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value
-                                    ?.replace(',', '.') ?: ""
-                                val finalPrice = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value
-                                    ?.replace(',', '.') ?: ""
-                                map["quantity"] = finalQuantity
-                                map["newRetailPrice"] = finalPrice
-                                map["supplier"] = excelViewModel.supplierName
-                                map.remove("autocount")
-                                map.toMap()
-                            }
 
-                            databaseViewModel.analyzeGridData(gridDataForAnalysis)
-                            Toast.makeText(context, context.getString(R.string.sync_analysis_started), Toast.LENGTH_SHORT).show()
-                            // LA RIGA PER MOSTRARE LA SPUNTA VERRÀ RIMOSSA AL PUNTO 2
+                                map["realQuantity"] = finalQuantityStr
+                                map["retailPrice"] = finalPriceStr
+                                map["supplier"] = excelViewModel.supplierName
+
+                                map.toMap() // Ritorna sempre la mappa, anche se i valori sono vuoti o invalidi
+                            }
+                            // --- FINE LOGICA MIGLIORATA ---
+
+                            if (gridDataForAnalysis.isEmpty()) {
+                                Toast.makeText(context, context.getString(R.string.no_valid_rows_to_sync), Toast.LENGTH_SHORT).show()
+                            } else {
+                                databaseViewModel.analyzeGridData(gridDataForAnalysis)
+                                Toast.makeText(context, context.getString(R.string.sync_analysis_started), Toast.LENGTH_SHORT).show()
+                            }
                         }) {
-                            // SOSTITUIAMO IL VECCHIO ROW CON IL NUOVO STATUSICON
+                            // L'icona rimane la stessa
                             StatusIcon(
                                 baseIcon = Icons.Default.Sync,
-                                // MODIFICA: Collega il nuovo stato al tipo di badge
                                 badgeType = when (syncStatus) {
                                     com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
                                     com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
@@ -409,7 +415,6 @@ fun GeneratedScreen(
                 )
             }
 
-            // Info dialog (autocount/newRetailPrice)
             if (showInfoDialog && infoRowIndex in excelData.indices) {
 
                 val header = excelData.first()
@@ -441,8 +446,8 @@ fun GeneratedScreen(
                             header.forEachIndexed { ci, name ->
                                 if (name != "complete") {
                                     when (name) {
-                                        "autocount", "newRetailPrice" -> {
-                                            val idx = if (name == "autocount") 0 else 1
+                                        "realQuantity", "RetailPrice" -> {
+                                            val idx = if (name == "realQuantity") 0 else 1
                                             val req = if (idx == 0) qtyReq else priceReq
                                             var tf by remember {
                                                 mutableStateOf(

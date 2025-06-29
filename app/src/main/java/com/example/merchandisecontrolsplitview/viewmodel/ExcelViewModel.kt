@@ -22,6 +22,7 @@ import org.apache.poi.ss.usermodel.IndexedColors
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 
 /**
  * ViewModel per gestione griglia Excel e cronologia persistente.
@@ -183,7 +184,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             val filtered = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
                     row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
-                            listOf("oldPurchasePrice", "oldRetailPrice", "autocount", "newRetailPrice", "complete")
+                            listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
                 } else {
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
                     val barcodeIdx = excelData.firstOrNull()?.indexOf("barcode") ?: -1
@@ -195,8 +196,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                             productDao.findByBarcode(barcode) // Usa il DAO definito all'inizio
                         }
                         if (product != null) {
-                            oldPurchase = product.newPurchasePrice?.toString() ?: ""
-                            oldRetail = product.newRetailPrice?.toString() ?: ""
+                            oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
+                            oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
                         }
                     }
                     original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
@@ -380,8 +381,8 @@ private fun saveExcelFileInternal(
     val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
     val numericTypes = setOf(
         "quantity", "purchasePrice", "retailPrice", "totalPrice", "rowNumber",
-        "discount", "discountedPrice", "realQuantity", "newRetailPrice",
-        "oldPurchasePrice", "oldRetailPrice", "autocount"
+        "discount", "discountedPrice", "realQuantity",
+        "oldPurchasePrice", "oldRetailPrice"
     )
     val styleComplete = wb.createCellStyle().apply {
         fillForegroundColor = IndexedColors.LIGHT_GREEN.index
@@ -412,8 +413,8 @@ private fun saveExcelFileInternal(
         headerWithIndices.forEachIndexed { newIndex, (originalIndex, headerKey) ->
             val cell = excelRow.createCell(newIndex)
             val cellValue: String = when (headerKey) {
-                "autocount" -> editable.getOrNull(rowIndex + 1)?.getOrNull(0)?.value ?: ""
-                "newRetailPrice" -> editable.getOrNull(rowIndex + 1)?.getOrNull(1)?.value ?: ""
+                "realQuantity" -> editable.getOrNull(rowIndex + 1)?.getOrNull(0)?.value ?: ""
+                "RetailPrice" -> editable.getOrNull(rowIndex + 1)?.getOrNull(1)?.value ?: ""
                 else -> rowData.getOrNull(originalIndex) ?: ""
             }
             if (numericTypes.contains(headerKey)) {

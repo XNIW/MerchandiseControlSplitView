@@ -84,7 +84,7 @@
     <string name="header_old_purchase_price">旧进价</string>
     <string name="header_old_retail_price">旧零售价</string>
     <string name="header_new_retail_price">新零售价</string>
-    <string name="header_autocount">实点数量</string>
+    <string name="header_real_quantity">实点数量</string>
     <string name="header_row_number">序号</string>
     <string name="header_discount">折扣</string>
     <string name="header_discounted_price">折后价</string>
@@ -235,5 +235,11 @@
     <string name="header_new_purchase_price">新进价</string>
     <string name="header_supplier_id">供应商ID</string>
     <string name="default_error_export_filename">导入错误.xlsx</string>
+    <string name="header_category">类别</string>
+    <string name="header_stock_quantity">库存数量</string>
+    <string name="field_category">类别</string>
+    <string name="field_stock_quantity">库存数量</string>
+    <string name="no_valid_rows_to_sync">没有可同步的有效行。请输入数量和销售价格。</string>
+    <string name="error_invalid_or_missing_retail_price">销售价格为必填项，必须是数字且大于零。</string>
 
 </resources>

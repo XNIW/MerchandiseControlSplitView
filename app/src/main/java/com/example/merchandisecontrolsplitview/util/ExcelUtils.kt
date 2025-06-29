@@ -5,6 +5,7 @@ import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.WorkbookFactory
+import kotlin.math.roundToLong
 
 fun readAndAnalyzeExcel(
     context: Context,
@@ -95,8 +96,9 @@ fun readAndAnalyzeExcel(
         "discount" to listOf("discount", "sconto", "折扣", "descuento", "rabatt", "sc.", "dcto", "scnto", "scnt.", "rebaja", "remise", "D%", "D.%"),
         "discountedPrice" to listOf("discountedprice", "prezzoscontato", "precio con descuento", "precio descontado", "折后价", "prezzo scontato", "precio rebajado", "rebate price", "after discount price", "final price", "prezzo finale", "售价", "Pre.-D%"),
         "realQuantity" to listOf("实点数量", "Counted quantity", "Quantità contata", "Cantidad contada"),
-        // **LA CORREZIONE È QUI**: Ho spostato l'alias "New Retail Price" sotto la chiave corretta "newRetailPrice"
-        "newRetailPrice" to listOf("newretailprice", "New Retail Price", "新零售价", "nuovo prezzo vendita", "新售价", "Nuevo precio de venta", "Nuevo precio venta")
+        //"RetailPrice" to listOf("retailprice", "Retail Price", "零售价", "prezzo vendita", "售价", "precio de venta", "precio venta"),
+        "category" to listOf("category", "categoria", "reparto", "department", "分类"),
+        //"stockQuantity" to listOf("stock", "quantity", "stockquantity", "giacenza", "quantità", "scorte", "库存")
     )
 
     val headerMap = mutableMapOf<String, Int>()
@@ -106,7 +108,7 @@ fun readAndAnalyzeExcel(
     if (hasHeader) {
         // L'ordine è importante per evitare che un alias più generico "rubi" una colonna.
         // Diamo priorità alle chiavi più specifiche.
-        val prioritizedKeys = listOf("newRetailPrice", "purchasePrice") + possibleNames.keys.filterNot { it == "newRetailPrice" || it == "purchasePrice" }
+        val prioritizedKeys = listOf("RetailPrice", "purchasePrice") + possibleNames.keys.filterNot { it == "RetailPrice" || it == "purchasePrice" }
 
         for (key in prioritizedKeys) {
             val aliases = possibleNames[key] ?: continue
@@ -312,14 +314,13 @@ fun getLocalizedHeader(context: Context, key: String): String {
         "supplier"     -> context.getString(R.string.header_supplier)
         "oldPurchasePrice" -> context.getString(R.string.header_old_purchase_price)
         "oldRetailPrice" -> context.getString(R.string.header_old_retail_price)
-        "newRetailPrice" -> context.getString(R.string.header_new_retail_price)
-        "autocount"      -> context.getString(R.string.header_autocount)
+        "RetailPrice" -> context.getString(R.string.header_retail_price)
         "complete" -> context.getString(R.string.header_complete)
         "secondProductName" -> context.getString(R.string.header_second_product_name)
         "rowNumber" -> context.getString(R.string.header_row_number)
         "discount" -> context.getString(R.string.header_discount)
         "discountedPrice" -> context.getString(R.string.header_discounted_price)
-        "realQuantity" -> context.getString(R.string.header_autocount)
+        "realQuantity" -> context.getString(R.string.header_real_quantity)
         else           -> key // fallback: mostra la chiave originale
     }
 }
@@ -335,4 +336,24 @@ fun parseNumber(value: String?): Double? {
         else ->
             clean.replace(",", ".").toDoubleOrNull()
     }
+}
+
+/**
+ * Formatta un numero Double? in una stringa per la visualizzazione.
+ * - Arrotonda il numero all'intero più vicino.
+ * - Restituisce "-" se il numero è nullo, ideale per le viste di sola lettura.
+ */
+fun formatNumberAsRoundedString(number: Double?): String {
+    if (number == null) return "-"
+    return number.roundToLong().toString()
+}
+
+/**
+ * Formatta un numero Double? in una stringa per i campi di input.
+ * - Arrotonda il numero all'intero più vicino.
+ * - Restituisce una stringa vuota se il numero è nullo, ideale per i TextField.
+ */
+fun formatNumberAsRoundedStringForInput(number: Double?): String {
+    if (number == null) return ""
+    return number.roundToLong().toString()
 }
