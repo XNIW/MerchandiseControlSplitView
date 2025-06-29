@@ -141,6 +141,10 @@
     <string name="select_supplier">选择供应商</string>
     <string name="edit_product_title">编辑产品</string>
     <string name="product_name_label">产品名称</string>
+    <string name="second_product_name_label">产品第二名称</string>
+    <string name="field_second_product_name">产品第二名称</string>
+    <string name="add_second_name">添加第二名称</string>
+    <string name="error_productname_required_at_least_one">至少需要一个产品名称（主名称或第二名称）。</string>
     <string name="barcode_label">条码</string>
     <string name="item_code_label">商品编码</string>
     <string name="purchase_price_label">进货价</string>

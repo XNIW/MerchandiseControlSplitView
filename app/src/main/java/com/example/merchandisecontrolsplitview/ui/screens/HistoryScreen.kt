@@ -90,7 +90,7 @@ fun HistoryScreen(
                 .padding(padding)
                 .padding(horizontal = 8.dp)
         ) {
-            items(historyList, key = { it.id }) { entry ->
+            items(historyList, key = { it.uid }) { entry ->
                 // La LazyColumn ora è molto più pulita, chiama solo il componente HistoryRow
                 HistoryRow(
                     entry = entry,

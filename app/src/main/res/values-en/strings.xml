@@ -142,6 +142,10 @@
     <string name="select_supplier">Select supplier</string>
     <string name="edit_product_title">Edit product</string>
     <string name="product_name_label">Product name</string>
+    <string name="second_product_name_label">Second product name</string>
+    <string name="field_second_product_name">Second Product Name</string>
+    <string name="error_productname_required_at_least_one">At least one Product Name (main or secondary) is required.</string>
+    <string name="add_second_name">Add second name</string>
     <string name="barcode_label">Barcode</string>
     <string name="item_code_label">Item code</string>
     <string name="purchase_price_label">Purchase price</string>

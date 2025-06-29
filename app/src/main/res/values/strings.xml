@@ -140,6 +140,10 @@
     <string name="select_supplier">Seleziona fornitore</string>
     <string name="edit_product_title">Modifica prodotto</string>
     <string name="product_name_label">Nome prodotto</string>
+    <string name="second_product_name_label">Secondo nome prodotto</string>
+    <string name="field_second_product_name">Secondo Nome Prodotto</string>
+    <string name="add_second_name">Aggiungi secondo nome</string>
+    <string name="error_productname_required_at_least_one">È richiesto almeno un Nome Prodotto (principale o secondario).</string>
     <string name="barcode_label">Barcode</string>
     <string name="item_code_label">Codice articolo</string>
     <string name="purchase_price_label">Prezzo acquisto</string>

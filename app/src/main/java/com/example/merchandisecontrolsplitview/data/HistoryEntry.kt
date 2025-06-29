@@ -1,11 +1,19 @@
 package com.example.merchandisecontrolsplitview.data
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+@Entity // <-- Dice a Room che questa è una tabella
 data class HistoryEntry(
-    val id: String,
+    @PrimaryKey(autoGenerate = true)
+    val uid: Long = 0, // <-- Chiave primaria unica, gestita dal database
+
+    val id: String, // Il vecchio ID (nome file)
     val timestamp: String,
     val data: List<List<String>>,
     val editable: List<List<String>>,
     val complete: List<Boolean>,
     val supplier: String = "",
     val wasExported: Boolean = false,
-    val syncStatus: SyncStatus = SyncStatus.NOT_ATTEMPTED // <-- Assicurati che sia così
+    val syncStatus: SyncStatus = SyncStatus.NOT_ATTEMPTED
 )

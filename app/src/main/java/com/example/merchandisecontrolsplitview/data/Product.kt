@@ -25,6 +25,7 @@ data class Product(
     val barcode: String,
     val itemNumber: String? = null,
     val productName: String?,
+    val secondProductName: String? = null,
     val newPurchasePrice: Double? = null,
     val newRetailPrice: Double? = null,
     val oldPurchasePrice: Double? = null,

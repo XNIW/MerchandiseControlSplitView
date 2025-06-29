@@ -189,6 +189,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_barcode),
             context.getString(R.string.header_item_number),
             context.getString(R.string.header_product_name),
+            context.getString(R.string.header_second_product_name),
             context.getString(R.string.header_new_purchase_price),
             context.getString(R.string.header_new_retail_price),
             context.getString(R.string.header_old_purchase_price),
@@ -203,6 +204,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(0).setCellValue(product.barcode)
             row.createCell(1).setCellValue(product.itemNumber ?: "")
             row.createCell(2).setCellValue(product.productName ?: "")
+            row.createCell(3).setCellValue(product.secondProductName ?: "")
             row.createCell(3).setCellValue(product.newPurchasePrice ?: 0.0)
             row.createCell(4).setCellValue(product.newRetailPrice ?: 0.0)
             row.createCell(5).setCellValue(product.oldPurchasePrice ?: 0.0)

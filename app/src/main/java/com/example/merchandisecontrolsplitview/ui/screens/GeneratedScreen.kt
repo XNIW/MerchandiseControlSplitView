@@ -100,6 +100,15 @@ fun GeneratedScreen(
     var showExitDialog by remember { mutableStateOf(false) }
     var onConfirmAction by remember { mutableStateOf({}) }
 
+    var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
+    var showCustomHeaderDialog by remember { mutableStateOf(false) }
+    var customHeader by remember { mutableStateOf("") }
+
+    val possibleKeys = listOf(
+        "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
+        "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
+        "discount", "discountedPrice"
+    )
 
     BackHandler {
         onConfirmAction = { onBackToStart() }
@@ -286,7 +295,8 @@ fun GeneratedScreen(
                         },
                         onRowCellClick = { r ->
                             infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
-                        }
+                        },
+                        onHeaderClick = { colIdx -> headerDialogIndex = colIdx }
                     )
                 }
             }
@@ -676,6 +686,49 @@ fun GeneratedScreen(
             onDismiss = { showGenericCalcDialog = false }
         )
     }
+
+    // Dialog per la selezione del tipo di colonna
+    if (showCustomHeaderDialog && headerDialogIndex != null) {
+        AlertDialog(
+            onDismissRequest = { showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null },
+            title = { Text(stringResource(R.string.custom_header_dialog_title)) },
+            text = {
+                OutlinedTextField(
+                    value = customHeader, onValueChange = { customHeader = it },
+                    label = { Text(stringResource(R.string.custom_header_label)) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val idx = headerDialogIndex!!
+                    if (customHeader.isNotBlank()) {
+                        excelViewModel.setHeaderType(idx, customHeader.trim())
+                        showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null
+                    }
+                }) { Text(stringResource(R.string.confirm)) }
+            },
+            dismissButton = { TextButton(onClick = { showCustomHeaderDialog = false; customHeader = "" }) { Text(stringResource(R.string.cancel)) } }
+        )
+    }
+
+    headerDialogIndex?.let { colIdx ->
+        AlertDialog(
+            onDismissRequest = { headerDialogIndex = null },
+            title = { Text(stringResource(R.string.select_column_type)) },
+            text = {
+                Column {
+                    possibleKeys.forEach { key ->
+                        TextButton(onClick = { excelViewModel.setHeaderType(colIdx, key); headerDialogIndex = null }) { Text(getLocalizedHeader(context, key)) }
+                    }
+                    TextButton(onClick = { showCustomHeaderDialog = true; headerDialogIndex = colIdx }) { Text(stringResource(R.string.custom_column_type)) }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { headerDialogIndex = null }) { Text(stringResource(R.string.close)) } }
+        )
+    }
+
 }
 
 

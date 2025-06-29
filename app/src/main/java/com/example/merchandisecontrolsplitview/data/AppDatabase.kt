@@ -4,38 +4,32 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Product::class, Supplier::class], version = 2)
+// 1. AGGIUNGI HistoryEntry::class alla lista.
+// 2. INCREMENTA la versione a 3.
+@Database(entities = [Product::class, Supplier::class, HistoryEntry::class], version = 3)
+@TypeConverters(HistoryEntryConverters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun productDao(): ProductDao
     abstract fun supplierDao(): SupplierDao
+    abstract fun historyEntryDao(): HistoryEntryDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
 
-        // --- INIZIO NUOVO CODICE PER LA MIGRAZIONE ---
-        /**
-         * Definisce la migrazione dalla versione 1 alla 2 del database.
-         */
+        // Questa è la tua migrazione esistente da 1 a 2, la lasciamo com'è.
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // 1. Crea la nuova tabella 'suppliers'
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `suppliers` (
                         `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
                         `name` TEXT NOT NULL
                     )
                 """)
-                // Aggiungi l'indice univoco per il nome del fornitore
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_suppliers_name` ON `suppliers` (`name`)")
-
-                // 2. Ricostruisce la tabella 'products' per aggiungere 'supplierId'
-                //    e rimuovere la vecchia colonna 'supplier'.
-                //    Questo processo è standard in SQLite per modifiche complesse.
-
-                // Crea una tabella temporanea con la nuova struttura
                 db.execSQL("""
                     CREATE TABLE `products_new` (
                         `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
@@ -50,25 +44,39 @@ abstract class AppDatabase : RoomDatabase() {
                         FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
                     )
                 """)
-
-                // Copia i dati dalla vecchia tabella alla nuova (la colonna 'supplier' viene persa)
                 db.execSQL("""
                     INSERT INTO `products_new` (id, barcode, itemNumber, productName, newPurchasePrice, newRetailPrice, oldPurchasePrice, oldRetailPrice)
                     SELECT id, barcode, itemNumber, productName, newPurchasePrice, newRetailPrice, oldPurchasePrice, oldRetailPrice FROM products
                 """)
-
-                // Elimina la vecchia tabella
                 db.execSQL("DROP TABLE `products`")
-
-                // Rinomina la nuova tabella con il nome corretto
                 db.execSQL("ALTER TABLE `products_new` RENAME TO `products`")
-
-                // Ricrea gli indici necessari sulla nuova tabella 'products'
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_products_barcode` ON `products` (`barcode`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_products_supplierId` ON `products` (`supplierId`)")
             }
         }
+
+        // --- INIZIO NUOVO CODICE ---
+        // 3. AGGIUNGIAMO la nuova migrazione da versione 2 a 3.
+        //    Questo codice crea semplicemente la tabella HistoryEntry.
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `HistoryEntry` (
+                        `uid` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, 
+                        `id` TEXT NOT NULL, 
+                        `timestamp` TEXT NOT NULL, 
+                        `data` TEXT NOT NULL, 
+                        `editable` TEXT NOT NULL, 
+                        `complete` TEXT NOT NULL, 
+                        `supplier` TEXT NOT NULL, 
+                        `wasExported` INTEGER NOT NULL, 
+                        `syncStatus` TEXT NOT NULL
+                    )
+                """)
+            }
+        }
         // --- FINE NUOVO CODICE ---
+
 
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
@@ -77,8 +85,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_database"
                 )
-                    // --- MODIFICA: Sostituisci il metodo deprecato con la migrazione ---
-                    .addMigrations(MIGRATION_1_2)
+                    // AGGIUNGI la nuova migrazione alla lista
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build().also { INSTANCE = it }
             }
     }

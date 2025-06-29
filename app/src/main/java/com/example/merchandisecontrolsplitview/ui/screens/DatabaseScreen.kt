@@ -342,8 +342,30 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text(text = product.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
+            Column(
+                // Questo fa sì che la colonna occupi lo spazio necessario,
+                // senza aggiungere padding extra sotto se il secondo nome non c'è.
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = product.productName ?: stringResource(R.string.unnamed_product),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                // Mostra il secondo nome solo se esiste
+                if (!product.secondProductName.isNullOrBlank()) {
+                    Text(
+                        text = product.secondProductName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        // Nessun padding custom qui per tenerlo vicino al primo nome
+                    )
+                }
+            }
+
+            // 2. Lo Spacer ora è fuori dal blocco condizionale, garantendo
+            //    uno spazio consistente dopo i nomi e prima del codice a barre.
+            Spacer(Modifier.height(8.dp))
             Text(
                 text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
                 style = MaterialTheme.typography.bodySmall,
@@ -388,6 +410,7 @@ internal fun EditProductDialog(
 ) {
     var barcode by remember { mutableStateOf(product.barcode) }
     var productName by remember { mutableStateOf(product.productName ?: "") }
+    var secondProductName by remember { mutableStateOf(product.secondProductName ?: "") }
     var itemNumber by remember { mutableStateOf(product.itemNumber ?: "") }
     var newPurchasePrice by remember { mutableStateOf(formatPriceAsInteger(product.newPurchasePrice)) }
     var newRetailPrice by remember { mutableStateOf(formatPriceAsInteger(product.newRetailPrice)) }
@@ -399,12 +422,25 @@ internal fun EditProductDialog(
 
     // --- CORREZIONE: Otteniamo le stringhe di errore qui, nel contesto @Composable ---
     val barcodeRequiredErrorText = stringResource(id = R.string.error_barcode_required)
-    val productNameRequiredErrorText = stringResource(id = R.string.error_productname_required)
+
+    var showSecondNameField by remember(product) {
+        // Il campo è visibile se il prodotto ha già un secondo nome
+        mutableStateOf(!product.secondProductName.isNullOrBlank())
+    }
 
     // La funzione 'validate' ora non ha chiamate a funzioni Composable o di Context.
+    val productNameRequiredAtLeastOneErrorText = stringResource(id = R.string.error_productname_required_at_least_one)
+
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
-        productNameError = if (productName.isBlank()) productNameRequiredErrorText else null
+
+        // Nuova logica: controlla se entrambi i nomi sono vuoti
+        productNameError = if (productName.isBlank() && secondProductName.isBlank()) {
+            productNameRequiredAtLeastOneErrorText
+        } else {
+            null
+        }
+
         return barcodeError == null && productNameError == null
     }
 
@@ -464,14 +500,30 @@ internal fun EditProductDialog(
                     isError = barcodeError != null,
                     supportingText = { barcodeError?.let { Text(it) } }
                 )
-                OutlinedTextField(
-                    value = productName,
-                    onValueChange = { productName = it; productNameError = null },
-                    label = { Text(stringResource(R.string.product_name_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = productNameError != null,
-                    supportingText = { productNameError?.let { Text(it) } }
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedTextField(
+                        value = productName,
+                        onValueChange = { productName = it; productNameError = null },
+                        label = { Text(stringResource(R.string.product_name_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = productNameError != null,
+                        supportingText = { productNameError?.let { Text(it) } }
+                    )
+
+                    // 3. Logica condizionale: mostra il campo di testo o il pulsante "Aggiungi"
+                    if (showSecondNameField) {
+                        OutlinedTextField(
+                            value = secondProductName,
+                            onValueChange = { secondProductName = it },
+                            label = { Text(stringResource(R.string.second_product_name_label)) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        TextButton(onClick = { showSecondNameField = true }) {
+                            Text(stringResource(R.string.add_second_name))
+                        }
+                    }
+                }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = newPurchasePrice, onValueChange = { newPurchasePrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
@@ -519,9 +571,10 @@ internal fun EditProductDialog(
                     Button(onClick = {
                         if (validate()) {
                             val productToSave = product.copy(
-                                barcode = barcode,
-                                productName = productName,
-                                itemNumber = itemNumber,
+                                barcode = barcode.trim(), // Aggiungiamo .trim() anche qui per sicurezza
+                                productName = productName.trim(), // Pulisce gli spazi prima di salvare
+                                secondProductName = secondProductName.trim().takeIf { it.isNotBlank() }, // Pulisce anche questo
+                                itemNumber = itemNumber.trim().takeIf { it.isNotBlank() }, // E anche questo
                                 newPurchasePrice = newPurchasePrice.toDoubleOrNull(),
                                 newRetailPrice = newRetailPrice.toDoubleOrNull(),
                                 oldPurchasePrice = oldPurchasePrice.toDoubleOrNull(),

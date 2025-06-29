@@ -195,12 +195,25 @@ private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(Modifier.weight(1f)) {
+                // Nome prodotto principale (invariato)
                 Text(product.productName ?: stringResource(R.string.unnamed_product), fontWeight = FontWeight.Bold)
+
+                // --- INIZIO MODIFICA ---
+                // Mostra il secondo nome prodotto se non è nullo o vuoto
+                if (!product.secondProductName.isNullOrBlank()) {
+                    Text(
+                        text = product.secondProductName,
+                        style = MaterialTheme.typography.bodySmall, // Stile più piccolo
+                        color = MaterialTheme.colorScheme.onSurfaceVariant // Colore meno evidente
+                    )
+                }
+                // --- FINE MODIFICA ---
+
+                Spacer(Modifier.height(4.dp)) // Aggiungiamo un piccolo spazio
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
-                // --- MODIFICA QUI ---
                 Text("${stringResource(R.string.purchase_prefix)} ${product.newPurchasePrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
                 Text("${stringResource(R.string.sell_prefix)} ${product.newRetailPrice?.toLong()?.toString() ?: "-"}", style = MaterialTheme.typography.bodyMedium)
             }
@@ -223,11 +236,24 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Visualizza il nome principale del prodotto (invariato)
                 Text(productUpdate.oldProduct.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = onEditClick) {
                     Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_update))
                 }
             }
+
+            // --- INIZIO MODIFICA ---
+            // Mostra il secondo nome del prodotto (vecchio) se esiste
+            if (!productUpdate.oldProduct.secondProductName.isNullOrBlank()) {
+                Text(
+                    text = productUpdate.oldProduct.secondProductName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // --- FINE MODIFICA ---
+
             Text("${stringResource(R.string.barcode_prefix)} ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             Row(Modifier.fillMaxWidth()) {
@@ -235,7 +261,7 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 Text(stringResource(R.string.compare_previous), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 Text(stringResource(R.string.compare_new), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             }
-            productUpdate.changedFields.forEach { fieldResId -> // 'fieldResId' ora è un Int (es: R.string.field_product_name)
+            productUpdate.changedFields.forEach { fieldResId ->
                 CompareRow(fieldResId = fieldResId, old = productUpdate.oldProduct, new = productUpdate.newProduct)
             }
         }
@@ -243,13 +269,17 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
 }
 
 @Composable
-private fun CompareRow(fieldResId: Int, old: Product, new: Product) { // 'fieldResId' è un Int
-    val (oldValue, newValue) = when (fieldResId) { // Confronta con ID di risorsa
+private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
+    val (oldValue, newValue) = when (fieldResId) {
         R.string.field_product_name -> old.productName to new.productName
-        R.string.header_item_number -> old.itemNumber to new.itemNumber // Assicurati di usare l'ID corretto che hai messo in getChangedFields
+        // --- INIZIO MODIFICA ---
+        // Aggiungi il caso per il secondo nome prodotto
+        R.string.field_second_product_name -> old.secondProductName to new.secondProductName
+        // --- FINE MODIFICA ---
+        R.string.header_item_number -> old.itemNumber to new.itemNumber
         R.string.purchase_price_label -> old.newPurchasePrice?.toLong()?.toString() to new.newPurchasePrice?.toLong()?.toString()
         R.string.retail_price_label -> old.newRetailPrice?.toLong()?.toString() to new.newRetailPrice?.toLong()?.toString()
-        R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString() // Qui potresti voler recuperare il nome del fornitore
+        R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString()
         else -> "" to ""
     }
 
@@ -296,28 +326,33 @@ private fun ErrorRow(error: RowImportError) {
             Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
 
-            // --- CORREZIONE QUI ---
+            // --- INIZIO MODIFICA ---
             val problematicKey = when (error.errorReasonResId) {
                 R.string.error_invalid_retail_price -> "newRetailPrice"
                 R.string.error_barcode_required -> "barcode"
-                R.string.error_productname_required -> "productName"
-                // Aggiungi un caso per l'errore sulla quantità
-                // (ipotizzando che esista R.string.error_invalid_quantity)
+                // Se l'errore è che manca almeno un nome, li evidenziamo entrambi
+                R.string.error_productname_required_at_least_one -> "productName" // Usiamo questo per evidenziare entrambi i campi nome
+                R.string.error_productname_required -> "productName" // Manteniamo per retrocompatibilità se serve
                 R.string.error_invalid_quantity -> "quantity"
                 else -> null
             }
 
             val barcode = error.rowContent["barcode"] ?: "-"
-            val productName = error.rowContent["productName"] ?: stringResource(R.string.unnamed_product)
+            val productName = error.rowContent["productName"] ?: "-" // Rimuoviamo il fallback a "unnamed_product" per mostrare il campo vuoto
+            val secondProductName = error.rowContent["secondProductName"] ?: "-" // Leggiamo il secondo nome
             val quantity = error.rowContent["quantity"] ?: "-"
             val retailPrice = error.rowContent["newRetailPrice"] ?: "-"
 
+            val highlightNames = problematicKey == "productName"
+
             ErrorDetailText(label = stringResource(R.string.header_barcode), value = barcode, isHighlighted = problematicKey == "barcode")
-            ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = problematicKey == "productName")
+            ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = highlightNames)
+            // Aggiungiamo la visualizzazione del secondo nome prodotto
+            ErrorDetailText(label = stringResource(R.string.header_second_product_name), value = secondProductName, isHighlighted = highlightNames)
             Spacer(Modifier.height(4.dp))
-            // Ora questa riga può funzionare correttamente
             ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
             ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "newRetailPrice")
+            // --- FINE MODIFICA ---
         }
     }
 }
