@@ -249,4 +249,5 @@
     <string name="field_stock_quantity">Giacenza</string>
     <string name="no_valid_rows_to_sync">Nessuna riga valida da sincronizzare. Inserisci quantità e prezzo di vendita.</string>
     <string name="error_invalid_or_missing_retail_price">Il prezzo di vendita è obbligatorio, deve essere un numero e maggiore di zero.</string>
+    <string name="header_old_purchase_price_short">Acq. Vecchio</string>
 </resources>

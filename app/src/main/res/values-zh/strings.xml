@@ -241,5 +241,6 @@
     <string name="field_stock_quantity">库存数量</string>
     <string name="no_valid_rows_to_sync">没有可同步的有效行。请输入数量和销售价格。</string>
     <string name="error_invalid_or_missing_retail_price">销售价格为必填项，必须是数字且大于零。</string>
+    <string name="header_old_purchase_price_short">原进价</string>
 
 </resources>

@@ -5,7 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -22,7 +21,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -52,11 +50,11 @@ import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import java.util.Locale
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextDecoration
 
 
 /**
@@ -430,156 +428,152 @@ fun GeneratedScreen(
                     title = { Text(stringResource(R.string.row_info)) },
                     text = {
                         Column(
-                            Modifier
-                                .verticalScroll(rememberScrollState())
-                                .fillMaxWidth()
-                                .focusRequester(backgroundFocusRequester)
-                                .focusable()
-                                .clickable(
-                                    indication = null,
-                                    interactionSource = remember { MutableInteractionSource() }
-                                ) {
-                                    // 4. Richiedi il focus sullo sfondo
-                                    backgroundFocusRequester.requestFocus()
-                                }
+                            modifier = Modifier.verticalScroll(rememberScrollState()).fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            header.forEachIndexed { ci, name ->
-                                if (name != "complete") {
-                                    when (name) {
-                                        "realQuantity", "RetailPrice" -> {
-                                            val idx = if (name == "realQuantity") 0 else 1
-                                            val req = if (idx == 0) qtyReq else priceReq
-                                            var tf by remember {
-                                                mutableStateOf(
-                                                    TextFieldValue(
-                                                        editableValues[infoRowIndex][idx].value,
-                                                        TextRange(editableValues[infoRowIndex][idx].value.length)
-                                                    )
-                                                )
-                                            }
-                                            Row(
-                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    "${getLocalizedHeader(context, name)}:",
-                                                    Modifier.weight(1f),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                TextField(
-                                                    value = tf,
-                                                    onValueChange = { nv ->
-                                                        tf =
-                                                            nv; editableValues[infoRowIndex][idx].value =
-                                                        nv.text; excelViewModel.updateHistoryEntry()
-                                                    },
-                                                    singleLine = true,
-                                                    keyboardOptions = KeyboardOptions(
-                                                        keyboardType = KeyboardType.Number,
-                                                        imeAction = if (idx == 0) ImeAction.Next else ImeAction.Done
-                                                    ),
-                                                    keyboardActions = KeyboardActions(
-                                                        onNext = { if (idx == 0) priceReq.requestFocus() },
-                                                        onDone = {
-                                                            completeStates[infoRowIndex] =
-                                                                !completeStates[infoRowIndex]; excelViewModel.updateHistoryEntry(); showInfoDialog =
-                                                            false
-                                                        }),
-                                                    modifier = Modifier.weight(1f).height(48.dp)
-                                                        .border(
-                                                            1.dp,
-                                                            Color.Gray,
-                                                            RoundedCornerShape(4.dp)
-                                                        ).clip(RoundedCornerShape(4.dp))
-                                                        .focusRequester(req)
-                                                )
-                                            }
-                                        }
+                            // Estrazione dati e InfoRow (invariati)
+                            val getVal: (String) -> String = { key -> row.getOrNull(header.indexOf(key)) ?: "" }
+                            val productName = getVal("productName")
+                            val secondProductName = getVal("secondProductName")
+                            val barcode = getVal("barcode")
+                            val itemNumber = getVal("itemNumber")
+                            val purchasePrice = getVal("purchasePrice")
+                            val oldPurchasePrice = getVal("oldPurchasePrice")
+                            val oldRetailPrice = getVal("oldRetailPrice")
+                            val quantity = getVal("quantity")
+                            val totalPrice = getVal("totalPrice")
 
-                                        "purchasePrice" -> {
-                                            val idx = header.indexOf("purchasePrice")
-                                            val value = row.getOrNull(idx) ?: ""
-                                            Row(
-                                                Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    getLocalizedHeader(context, name) + ":",
-                                                    Modifier.weight(1f),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                Text(
-                                                    value,
-                                                    Modifier
-                                                        .weight(1f)
-                                                        .background(
-                                                            MaterialTheme.colorScheme.surfaceVariant,
-                                                            RoundedCornerShape(4.dp)
-                                                        )
-                                                        .padding(
-                                                            horizontal = 8.dp,
-                                                            vertical = 2.dp
-                                                        ),
-                                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                        fontWeight = FontWeight.Bold
-                                                    )
-                                                )
-                                                IconButton(
-                                                    onClick = {
-                                                        calcInput = value
-                                                        calcRowIndex = infoRowIndex
-                                                        showCalcDialog = true
-                                                    }
-                                                ) {
-                                                    Icon(
-                                                        Icons.Filled.Calculate,
-                                                        contentDescription = stringResource(R.string.calculate_new_value)
-                                                    )
-                                                }
-                                            }
-                                        }
+                            @Composable
+                            fun InfoRow(label: String, value: String) {
+                                if (value.isNotBlank()) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            "$label:",
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            value,
+                                            Modifier.weight(1f),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
 
-                                        else -> {
-                                            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                                Text(
-                                                    getLocalizedHeader(context, name) + ":",
-                                                    Modifier.weight(1f),
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                val value = row.getOrNull(ci) ?: ""
-                                                if (name == "oldPurchasePrice" || name == "oldRetailPrice") {
-                                                    Text(
-                                                        value,
-                                                        Modifier.weight(1f)
-                                                            .background(
-                                                                if (value.isNotBlank()) MaterialTheme.colorScheme.primary.copy(
-                                                                    alpha = 0.10f
-                                                                ) else Color.Transparent,
-                                                                RoundedCornerShape(4.dp)
-                                                            )
-                                                            .padding(
-                                                                horizontal = 8.dp,
-                                                                vertical = 2.dp
-                                                            ),
-                                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                                            color = if (value.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                                            fontWeight = if (value.isNotBlank()) FontWeight.Bold else FontWeight.Normal
-                                                        )
-                                                    )
-                                                } else {
-                                                    Text(
-                                                        value,
-                                                        Modifier.weight(1f),
-                                                        style = MaterialTheme.typography.bodyMedium
-                                                    )
-                                                }
-                                            }
+                            // Sezione Info Generali (invariata)
+                            InfoRow(stringResource(R.string.header_product_name), productName)
+                            InfoRow(stringResource(R.string.header_second_product_name), secondProductName)
+                            InfoRow(stringResource(R.string.header_barcode), barcode)
+                            InfoRow(stringResource(R.string.header_item_number), itemNumber)
+                            InfoRow(stringResource(R.string.header_quantity), quantity)
+                            InfoRow(stringResource(R.string.header_total_price), totalPrice)
+
+                            HorizontalDivider()
+
+                            // --- INIZIO NUOVO LAYOUT PREZZI ---
+
+                            // 1. Blocco Prezzi di Acquisto: Vecchio (a sx) e Nuovo (a dx)
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                                // Colonna per Prezzo Vecchio Acquisto (mostrata solo se esiste)
+                                if (oldPurchasePrice.isNotBlank()) {
+                                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                                        Text(stringResource(R.string.header_old_purchase_price_short), style = MaterialTheme.typography.labelMedium)
+                                        Text(
+                                            text = oldPurchasePrice,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            textDecoration = TextDecoration.LineThrough,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f)) // Placeholder per mantenere l'allineamento
+                                }
+
+                                // Colonna per Prezzo di Acquisto Nuovo
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    Text(stringResource(R.string.header_purchase_price), style = MaterialTheme.typography.labelMedium)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .background(MaterialTheme.colorScheme.secondaryContainer) // Aggiungiamo lo sfondo
+                                            .padding(4.dp) // Un po' di spazio intorno al testo
+                                            .focusRequester(backgroundFocusRequester) // Assegniamo il focus requester
+                                            .focusable() // Rendiamo il Row focusable
+                                    ) {
+                                        Text(
+                                            text = purchasePrice,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+// Calcolatrice
+                                        IconButton(
+                                            onClick = {
+                                                calcInput = purchasePrice
+                                                calcRowIndex = infoRowIndex
+                                                showCalcDialog = true
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Calculate,
+                                                contentDescription = stringResource(R.string.calculate_new_value),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
                                         }
                                     }
                                 }
                             }
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+                            // 3. Prezzo Vecchio di Vendita (mostrato solo se esiste)
+                            if (oldRetailPrice.isNotBlank()) {
+                                InfoRow(stringResource(R.string.header_old_retail_price), oldRetailPrice)
+                            }
+
+                            HorizontalDivider()
+
+                            // 4. Campi editabili raggruppati alla fine
+                            // Quantità Contata
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${getLocalizedHeader(context, "realQuantity")}:",
+                                    Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                var qtyTf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][0].value, TextRange(editableValues[infoRowIndex][0].value.length))) }
+                                TextField(
+                                    value = qtyTf,
+                                    onValueChange = { nv -> qtyTf = nv; editableValues[infoRowIndex][0].value = nv.text; excelViewModel.updateHistoryEntry() },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                    keyboardActions = KeyboardActions(onNext = { priceReq.requestFocus() }),
+                                    modifier = Modifier.weight(1f).height(48.dp).focusRequester(qtyReq)
+                                )
+                            }
+
+                            // Prezzo Vendita
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${getLocalizedHeader(context, "RetailPrice")}:",
+                                    Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                var priceTf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][1].value, TextRange(editableValues[infoRowIndex][1].value.length))) }
+                                TextField(
+                                    value = priceTf,
+                                    onValueChange = { nv -> priceTf = nv; editableValues[infoRowIndex][1].value = nv.text; excelViewModel.updateHistoryEntry() },
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { showInfoDialog = false }),
+                                    modifier = Modifier.weight(1f).height(48.dp).focusRequester(priceReq)
+                                )
+                            }
+                            // --- FINE NUOVO LAYOUT ---
                         }
                     },
                     dismissButton = {
@@ -983,6 +977,8 @@ private fun StatusIcon(
         }
     }
 }
+
+
 
 fun formatDecimal(num: Double, digits: Int = 2): String =
     String.format(Locale.US, "%.${digits}f", num)

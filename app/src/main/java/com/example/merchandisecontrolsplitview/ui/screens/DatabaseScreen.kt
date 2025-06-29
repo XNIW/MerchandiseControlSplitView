@@ -583,10 +583,7 @@ internal fun EditProductDialog(
                         Text("Aggiungi codice articolo")
                     }
                 }
-                // --- FINE MODIFICA ---
 
-
-                // --- INIZIO MODIFICA: Logica condizionale per Categoria ---
                 if (showCategoryField) {
                     OutlinedTextField(
                         value = category,
@@ -601,15 +598,6 @@ internal fun EditProductDialog(
                     }
                 }
 
-                OutlinedTextField(value = itemNumber, onValueChange = { itemNumber = it }, label = { Text(stringResource(R.string.item_code_label)) }, modifier = Modifier.fillMaxWidth())
-
-                OutlinedTextField(
-                    value = category,
-                    onValueChange = { category = it },
-                    label = { Text(stringResource(R.string.header_category)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
                 OutlinedTextField(
                     value = stockQuantity,
                     onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
@@ -617,6 +605,7 @@ internal fun EditProductDialog(
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                 )
+
                 Box(modifier = Modifier.fillMaxWidth().clickable { showSupplierSelectionDialog = true }) {
                     OutlinedTextField(
                         value = supplierName,

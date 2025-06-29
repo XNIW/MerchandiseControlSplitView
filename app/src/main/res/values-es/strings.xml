@@ -241,5 +241,6 @@
     <string name="field_stock_quantity">Existencias</string>
     <string name="no_valid_rows_to_sync">No hay filas válidas para sincronizar. Introduce cantidad y precio de venta.</string>
     <string name="error_invalid_or_missing_retail_price">El precio de venta es obligatorio, debe ser un número y mayor que cero.</string>
+    <string name="header_old_purchase_price_short">Comp. Ant.</string>
 
 </resources>

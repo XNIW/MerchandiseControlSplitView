@@ -242,5 +242,6 @@
     <string name="field_stock_quantity">Stock Quantity</string>
     <string name="no_valid_rows_to_sync">No valid rows to sync. Please enter quantity and selling price.</string>
     <string name="error_invalid_or_missing_retail_price">The selling price is required, must be a number, and greater than zero.</string>
+    <string name="header_old_purchase_price_short">Old Purch.</string>
 
 </resources>
