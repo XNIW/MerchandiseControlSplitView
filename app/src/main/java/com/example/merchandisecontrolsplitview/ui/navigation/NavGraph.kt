@@ -39,9 +39,7 @@ fun AppNavGraph() {
             FilePickerScreen(
                 viewModel = excelViewModel,
                 onFilesPicked = { uris ->
-                    // 1. Chiama la funzione del ViewModel per avviare l'elaborazione
                     excelViewModel.loadFromMultipleUris(context, uris)
-                    // 2. Naviga immediatamente a PreGenerateScreen
                     navController.navigate(Screen.PreGenerate.route)
                 },
                 onViewHistory = { navController.navigate(Screen.History.route) },
@@ -56,7 +54,6 @@ fun AppNavGraph() {
                 excelViewModel = excelViewModel,
                 databaseUiState = dbUiState,
                 databaseViewModel = dbViewModel,
-                // QUESTA CHIAMATA È CORRETTA E ORA CORRISPONDE ALLA FIRMA DEL VIEWMODEL
                 onGenerate = { supplierName, categoryName ->
                     excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryId ->
                         navController.navigate(Screen.Generated.createRoute(entryId))
@@ -78,14 +75,18 @@ fun AppNavGraph() {
         }
 
         composable(Screen.History.route) {
+            // NUOVO: Raccoglie lo stato dal Flow e passa la funzione per filtrare
+            val historyList by excelViewModel.historyEntries.collectAsState()
+
             HistoryScreen(
                 navController = navController,
-                historyList = excelViewModel.historyEntries,
+                historyList = historyList,
                 onSelect = { entry ->
                     excelViewModel.loadHistoryEntry(entry)
                 },
                 onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
                 onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },
+                onSetFilter = { filter -> excelViewModel.setDateFilter(filter) }, // Passa la callback
                 onBack = { navController.popBackStack() }
             )
         }
@@ -108,14 +109,13 @@ fun AppNavGraph() {
             importAnalysisResult?.let { analysis ->
                 ImportAnalysisScreen(
                     excelViewModel = excelViewModel,
-                    databaseViewModel = dbViewModel, // <-- QUESTA È LA CORREZIONE
+                    databaseViewModel = dbViewModel,
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
-                        // Controlla se l'analisi originale non aveva errori
                         if (importAnalysisResult?.errors?.isEmpty() == true) {
-                            excelViewModel.markCurrentEntryAsSyncedSuccessfully() // <-- Chiama la nuova funzione per il SUCCESSO
+                            excelViewModel.markCurrentEntryAsSyncedSuccessfully()
                         } else {
-                            excelViewModel.markCurrentEntryAsSyncedWithErrors()   // <-- Chiama la nuova funzione per gli ERRORI
+                            excelViewModel.markCurrentEntryAsSyncedWithErrors()
                         }
 
                         dbViewModel.importProducts(newProducts, updatedProducts, context)

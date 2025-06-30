@@ -258,5 +258,14 @@
     <string name="products_label">产品</string>
     <string name="order_value_label">订单金额</string>
     <string name="payment_total_label">支付总额</string>
+    <string name="filter">筛选</string>
+    <string name="filter_all">显示全部</string>
+    <string name="filter_current_month">本月</string>
+    <string name="filter_previous_month">上月</string>
+    <string name="filter_custom_range">自定义范围…</string>
+
+    <string name="next">下一步</string>
+    <string name="select_start_date">选择开始日期</string>
+    <string name="select_end_date">选择结束日期</string>
 
 </resources>

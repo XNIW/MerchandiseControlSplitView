@@ -12,38 +12,29 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FilterList // NUOVA ICONA
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.merchandisecontrolsplitview.data.HistoryEntry
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
+import com.example.merchandisecontrolsplitview.viewmodel.DateFilter // NUOVO IMPORT
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.text.NumberFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,17 +45,26 @@ fun HistoryScreen(
     onSelect: (HistoryEntry) -> Unit,
     onRename: (HistoryEntry, String) -> Unit,
     onDelete: (HistoryEntry) -> Unit,
+    onSetFilter: (DateFilter) -> Unit, // <-- NUOVO: Callback per impostare il filtro
     onBack: () -> Unit
 ) {
-    // Stati per i dialog, gestiti a livello di schermata
+    // Stati per i dialog di rename/delete (invariati)
     var showRenameDialog by remember { mutableStateOf(false) }
     var entryToRename by remember { mutableStateOf<HistoryEntry?>(null) }
     var renameText by remember { mutableStateOf("") }
-
     var showDeleteDialog by remember { mutableStateOf(false) }
     var entryToDelete by remember { mutableStateOf<HistoryEntry?>(null) }
 
+    // Stato per la navigazione (invariato)
     var navigateToEntryId by remember { mutableStateOf<String?>(null) }
+
+    // --- NUOVA GESTIONE STATI PER FILTRI ---
+    var showFilterMenu by remember { mutableStateOf(false) }
+    var showDatePickerDialog by remember { mutableStateOf(false) }
+    var datePickerTargetIsStart by remember { mutableStateOf(true) } // true = data inizio, false = data fine
+    var customStartDate by remember { mutableStateOf<LocalDate?>(null) }
+    var customEndDate by remember { mutableStateOf<LocalDate?>(null) }
+
 
     LaunchedEffect(navigateToEntryId) {
         navigateToEntryId?.let { entryId ->
@@ -83,10 +83,54 @@ fun HistoryScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
+                },
+                // --- NUOVA SEZIONE ACTIONS PER IL FILTRO ---
+                actions = {
+                    Box {
+                        IconButton(onClick = { showFilterMenu = true }) {
+                            Icon(Icons.Default.FilterList, contentDescription = stringResource(R.string.filter))
+                        }
+                        DropdownMenu(
+                            expanded = showFilterMenu,
+                            onDismissRequest = { showFilterMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.filter_all)) },
+                                onClick = {
+                                    onSetFilter(DateFilter.All)
+                                    showFilterMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.filter_current_month)) },
+                                onClick = {
+                                    onSetFilter(DateFilter.LastMonth)
+                                    showFilterMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.filter_previous_month)) },
+                                onClick = {
+                                    onSetFilter(DateFilter.PreviousMonth)
+                                    showFilterMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.filter_custom_range)) },
+                                onClick = {
+                                    customStartDate = LocalDate.now()
+                                    customEndDate = LocalDate.now()
+                                    showDatePickerDialog = true
+                                    showFilterMenu = false
+                                }
+                            )
+                        }
+                    }
                 }
             )
         }
     ) { padding ->
+        // LazyColumn e Dialog sono invariati
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -94,7 +138,6 @@ fun HistoryScreen(
                 .padding(horizontal = 8.dp)
         ) {
             items(historyList, key = { it.uid }) { entry ->
-                // La LazyColumn ora è molto più pulita, chiama solo il componente HistoryRow
                 HistoryRow(
                     entry = entry,
                     onClick = {
@@ -115,7 +158,55 @@ fun HistoryScreen(
         }
     }
 
-    // I dialog rimangono a livello di schermata per essere gestiti centralmente
+    // --- NUOVO DIALOG PER LA SELEZIONE DELLA DATA ---
+    if (showDatePickerDialog) {
+        val dateToSelect = if(datePickerTargetIsStart) customStartDate else customEndDate
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = dateToSelect
+                ?.atStartOfDay(ZoneId.systemDefault())
+                ?.toInstant()
+                ?.toEpochMilli()
+        )
+
+        DatePickerDialog(
+            onDismissRequest = { showDatePickerDialog = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val selectedDate = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
+                        if (datePickerTargetIsStart) {
+                            customStartDate = selectedDate
+                            // Passa automaticamente alla selezione della data di fine
+                            datePickerTargetIsStart = false
+                        } else {
+                            customEndDate = selectedDate
+                            // Una volta selezionata anche la data di fine, chiudi il dialog e applica il filtro
+                            showDatePickerDialog = false
+                            if (customStartDate != null) {
+                                onSetFilter(DateFilter.CustomRange(customStartDate!!, customEndDate!!))
+                            }
+                        }
+                    }
+                }) {
+                    Text(if (datePickerTargetIsStart) stringResource(R.string.next) else stringResource(R.string.confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePickerDialog = false }) { Text(stringResource(R.string.cancel)) }
+            }
+        ) {
+            DatePicker(
+                state = datePickerState,
+                title = {
+                    Text(
+                        text = if(datePickerTargetIsStart) stringResource(R.string.select_start_date) else stringResource(R.string.select_end_date),
+                        modifier = Modifier.padding(start = 24.dp, top = 16.dp, end = 24.dp)
+                    )
+                }
+            )
+        }
+    }
+
     if (showRenameDialog && entryToRename != null) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
@@ -158,10 +249,7 @@ fun HistoryScreen(
     }
 }
 
-/**
- * NUOVO Composable che rappresenta una singola riga della cronologia.
- * Contiene tutta la logica di UI, incluso lo swipe.
- */
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryRow(
@@ -170,8 +258,8 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    // Il codice di HistoryRow rimane invariato
     val currencyFormat = remember {
-        // NUOVO: Metodo moderno per creare il Locale, che risolve il warning 'deprecated'
         val chileLocale = Locale.Builder().setLanguage("es").setRegion("CL").build()
         NumberFormat.getCurrencyInstance(chileLocale).apply {
             maximumFractionDigits = 0
@@ -182,11 +270,11 @@ private fun HistoryRow(
             when (value) {
                 SwipeToDismissBoxValue.EndToStart -> {
                     onDeleteClick()
-                    false // Non far scomparire la riga, mostriamo un dialogo
+                    false
                 }
                 SwipeToDismissBoxValue.StartToEnd -> {
                     onRenameClick()
-                    false // Non far scomparire la riga, mostriamo un dialogo
+                    false
                 }
                 SwipeToDismissBoxValue.Settled -> false
             }
@@ -200,7 +288,7 @@ private fun HistoryRow(
             if (direction != SwipeToDismissBoxValue.Settled) {
                 val color = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Color.DarkGray
-                    SwipeToDismissBoxValue.EndToStart -> Color(0xFFB00020) // Un rosso più scuro
+                    SwipeToDismissBoxValue.EndToStart -> Color(0xFFB00020)
                     else -> Color.Transparent
                 }
                 val icon = when (direction) {
@@ -237,7 +325,7 @@ private fun HistoryRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp) // Più padding a destra per le icone
+                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp)
                 ) {
                     Text(
                         text = entry.id,
@@ -249,7 +337,6 @@ private fun HistoryRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    // --- VISUALIZZAZIONE MIGLIORATA ---
                     val details = mutableListOf<String>()
                     if (entry.supplier.isNotBlank()) details.add(entry.supplier)
                     if (entry.category.isNotBlank()) details.add(entry.category)
@@ -282,7 +369,6 @@ private fun HistoryRow(
                     }
                 }
 
-                // Icone di Stato (rimangono invariate)
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -300,7 +386,6 @@ private fun HistoryRow(
                     )
                     StatusIcon(
                         baseIcon = Icons.Default.FileDownload,
-                        // MODIFICA: Usa badgeType anche qui per coerenza
                         badgeType = if (entry.wasExported) BadgeType.SUCCESS else BadgeType.NONE,
                         contentDescription = stringResource(R.string.export_status)
                     )
@@ -311,9 +396,6 @@ private fun HistoryRow(
 }
 
 
-/**
- * Composable helper per visualizzare un'icona con un badge di conferma opzionale.
- */
 enum class BadgeType {
     NONE, SUCCESS, WARNING
 }
@@ -321,9 +403,10 @@ enum class BadgeType {
 @Composable
 private fun StatusIcon(
     baseIcon: ImageVector,
-    badgeType: BadgeType, // <-- Usa il nuovo enum invece di un Boolean
+    badgeType: BadgeType,
     contentDescription: String
 ) {
+    // Il codice di StatusIcon rimane invariato
     Box {
         Icon(
             imageVector = baseIcon,
@@ -331,7 +414,6 @@ private fun StatusIcon(
             modifier = Modifier.size(20.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        // Usa un when per decidere quale badge mostrare
         when (badgeType) {
             BadgeType.SUCCESS -> {
                 Icon(
@@ -341,18 +423,18 @@ private fun StatusIcon(
                         .size(12.dp)
                         .align(Alignment.TopEnd)
                         .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFF00C853) // Verde
+                    tint = Color(0xFF00C853)
                 )
             }
             BadgeType.WARNING -> {
                 Icon(
-                    imageVector = Icons.Default.Error, // Icona di errore/avviso
+                    imageVector = Icons.Default.Error,
                     contentDescription = stringResource(R.string.status_warning),
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
                         .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFFFFA000) // Arancione/Ambra
+                    tint = Color(0xFFFFA000)
                 )
             }
             BadgeType.NONE -> { /* Non mostrare nulla */ }

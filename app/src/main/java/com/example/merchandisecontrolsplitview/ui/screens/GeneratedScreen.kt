@@ -225,8 +225,8 @@ fun GeneratedScreen(
 
                                 map["realQuantity"] = finalQuantityStr
                                 map["retailPrice"] = finalPriceStr
-                                map["supplier"] = excelViewModel.supplierName
-                                map["category"] = excelViewModel.categoryName
+                                map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
+                                map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
 
                                 map.toMap() // Ritorna sempre la mappa, anche se i valori sono vuoti o invalidi
                             }
@@ -252,14 +252,12 @@ fun GeneratedScreen(
 
                         // --- MODIFICA QUI: PULSANTE ESPORTA ---
                         IconButton(onClick = { saveLauncher.launch(entryId) }) {
-                            IconButton(onClick = { saveLauncher.launch(entryId) }) {
-                                StatusIcon(
-                                    baseIcon = Icons.Default.FileDownload,
-                                    // MODIFICA: Usa badgeType anche qui per coerenza
-                                    badgeType = if (wasExported) BadgeType.SUCCESS else BadgeType.NONE,
-                                    contentDescription = stringResource(R.string.export_file)
-                                )
-                            }
+                            StatusIcon(
+                                baseIcon = Icons.Default.FileDownload,
+                                // MODIFICA: Usa badgeType anche qui per coerenza
+                                badgeType = if (wasExported) BadgeType.SUCCESS else BadgeType.NONE,
+                                contentDescription = stringResource(R.string.export_file)
+                            )
                         }
                     }
                 }
@@ -558,7 +556,7 @@ fun GeneratedScreen(
                             // Prezzo Vendita
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    "${getLocalizedHeader(context, "RetailPrice")}:",
+                                    "${getLocalizedHeader(context, "retailPrice")}:",
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
@@ -654,7 +652,9 @@ fun GeneratedScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val entry = excelViewModel.historyEntries.find { it.id == entryId }
+                    // --- LA RIGA CORRETTA È QUESTA ---
+                    val entry = excelViewModel.historyEntries.value.find { it.id == entryId }
+
                     if (entry != null && renameText.isNotBlank()) {
                         excelViewModel.renameHistoryEntry(entry, renameText)
                         titleText = renameText
