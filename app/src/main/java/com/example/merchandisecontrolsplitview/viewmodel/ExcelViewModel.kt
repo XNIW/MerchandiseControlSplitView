@@ -29,33 +29,31 @@ import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringF
  */
 class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
-    // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
     val selectedColumns = mutableStateListOf<Boolean>()
     val editableValues = mutableStateListOf<MutableList<MutableState<String>>>()
     val completeStates = mutableStateListOf<Boolean>()
     val errorRowIndexes = mutableStateOf<Set<Int>>(emptySet())
-
-    // Flag UI
     val generated = mutableStateOf(false)
     val isLoading = mutableStateOf(false)
     val loadError = mutableStateOf<String?>(null)
-
-    // Cronologia persistente
     val historyEntries = mutableStateListOf<HistoryEntry>()
     private var currentIndex: Int? = null
-
     val currentEntryStatus = mutableStateOf(Pair(SyncStatus.NOT_ATTEMPTED, false))
     val headerTypes = mutableStateListOf<String>()
 
-    // --- BLOCCO DATABASE CORRETTO ---
     private val db = AppDatabase.getDatabase(application)
     private val historyDao = db.historyEntryDao()
-    private val productDao = db.productDao() // Definiamo qui il DAO per i prodotti
+    private val productDao = db.productDao()
 
     private var currentSupplierName: String = ""
     val supplierName: String
         get() = currentSupplierName
+
+    // --- NUOVO: Aggiungiamo la gestione del nome della categoria ---
+    private var currentCategoryName: String = ""
+    val categoryName: String
+        get() = currentCategoryName
 
     init {
         loadHistoryFromDb()
@@ -179,55 +177,112 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         repeat(excelData.size) { completeStates.add(false) }
     }
 
-    fun generateFilteredWithOldPrices(supplierName: String, onResult: (String) -> Unit) {
+    fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (String) -> Unit) {
+        // Mantieni isLoading=true se hai una variabile del genere per mostrare un caricamento
         viewModelScope.launch {
-            val filtered = excelData.mapIndexed { idx, row ->
-                if (idx == 0) {
-                    row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
-                            listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
-                } else {
-                    val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
-                    val barcodeIdx = excelData.firstOrNull()?.indexOf("barcode") ?: -1
-                    val barcode = excelData[idx].getOrNull(barcodeIdx)
-                    var oldPurchase = ""
-                    var oldRetail = ""
-                    if (!barcode.isNullOrBlank()) {
-                        val product = withContext(Dispatchers.IO) {
-                            productDao.findByBarcode(barcode) // Usa il DAO definito all'inizio
+            // --- SPOSTA TUTTO IL LAVORO PESANTE IN BACKGROUND ---
+            val filteredData = withContext(Dispatchers.IO) {
+                excelData.mapIndexed { idx, row ->
+                    if (idx == 0) {
+                        row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
+                                listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
+                    } else {
+                        val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
+                        val barcodeIdx = excelData.firstOrNull()?.indexOf("barcode") ?: -1
+                        val barcode = excelData[idx].getOrNull(barcodeIdx)
+                        var oldPurchase = ""
+                        var oldRetail = ""
+                        if (!barcode.isNullOrBlank()) {
+                            // Questa chiamata è già IO, ma ora è dentro un blocco IO più grande
+                            val product = productDao.findByBarcode(barcode)
+                            if (product != null) {
+                                oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
+                                oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
+                            }
                         }
-                        if (product != null) {
-                            oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
-                            oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
-                        }
+                        original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
                     }
-                    original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
                 }
             }
+
+            // --- APPLICA I RISULTATI SUL THREAD PRINCIPALE ---
             excelData.clear()
-            excelData.addAll(filtered)
+            excelData.addAll(filteredData)
+
+            // Il resto della configurazione rimane uguale
             editableValues.clear()
             editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
-            filtered.drop(1).forEach { row ->
+
+            // --- CORREZIONE: Usa 'filteredData' invece di 'filtered' ---
+            filteredData.drop(1).forEach { row ->
                 val q = row.getOrNull(row.size - 3) ?: ""
                 val p = row.getOrNull(row.size - 2) ?: ""
                 editableValues.add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
             }
             completeStates.clear()
-            repeat(filtered.size) { completeStates.add(false) }
+            // --- CORREZIONE: Usa 'filteredData' invece di 'filtered' ---
+            repeat(filteredData.size) { completeStates.add(false) }
             selectedColumns.clear()
-            filtered.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+            // --- CORREZIONE: Usa 'filteredData' invece di 'filtered' ---
+            filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
             generated.value = true
+
+            var calculatedOrderTotal = 0.0
+            var calculatedPaymentTotal = 0.0
+            val itemsCount = if (filteredData.isNotEmpty()) filteredData.size - 1 else 0
+
+            val header = filteredData.firstOrNull()
+            if (header != null && itemsCount > 0) {
+                val purchasePriceIdx = header.indexOf("purchasePrice")
+                // CORREZIONE: Cerca la quantità nella colonna originale "quantity"
+                val quantityIdx = header.indexOf("quantity")
+                val discountedPriceIdx = header.indexOf("discountedPrice")
+
+                filteredData.drop(1).forEach { row ->
+                    val quantity = row.getOrNull(quantityIdx)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+                    val purchasePrice = row.getOrNull(purchasePriceIdx)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+
+                    calculatedOrderTotal += quantity * purchasePrice
+
+                    val finalPrice = if (discountedPriceIdx != -1) {
+                        row.getOrNull(discountedPriceIdx)?.replace(",",".")?.toDoubleOrNull() ?: purchasePrice
+                    } else {
+                        purchasePrice
+                    }
+                    calculatedPaymentTotal += quantity * finalPrice
+                }
+            }
+
             val now = LocalDateTime.now()
             val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"))
             val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
             val id = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
+
+            // Salva entrambi i nomi
             currentSupplierName = supplierName
-            addHistoryEntryWithId(id, supplierName)
+            currentCategoryName = categoryName
+
+            // Passa entrambi alla cronologia
+            addHistoryEntryWithId(
+                id = id,
+                supplier = supplierName,
+                category = categoryName,
+                orderTotal = calculatedOrderTotal,
+                paymentTotal = calculatedPaymentTotal,
+                totalItems = itemsCount
+            )
             onResult(id)
         }
     }
 
-    private fun addHistoryEntryWithId(id: String, supplier: String) {
+    private fun addHistoryEntryWithId(
+        id: String,
+        supplier: String,
+        category: String,
+        orderTotal: Double,
+        paymentTotal: Double,
+        totalItems: Int
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             val now = LocalDateTime.now()
             val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
@@ -237,7 +292,12 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 data = excelData.map { it.toList() },
                 editable = editableValues.map { row -> row.map { it.value } },
                 complete = completeStates.toList(),
-                supplier = supplier
+                supplier = supplier,
+                category = category,
+                // --- SALVA I NUOVI VALORI ---
+                orderTotal = orderTotal,
+                paymentTotal = paymentTotal,
+                totalItems = totalItems
             )
             historyDao.insert(entry)
             val updatedList = historyDao.getAll()
@@ -288,7 +348,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadHistoryEntry(entry: HistoryEntry) {
-        // La logica qui è principalmente sulla UI, quindi non serve cambiare molto
         val idx = historyEntries.indexOfFirst { it.uid == entry.uid }
         if (idx >= 0) {
             currentIndex = idx
@@ -297,7 +356,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             editableValues.clear(); entry.editable.forEach { row -> editableValues.add(row.map { mutableStateOf(it) }.toMutableList()) }
             completeStates.clear(); completeStates.addAll(entry.complete)
             generated.value = true
+            // Carica entrambi i nomi dalla cronologia
             currentSupplierName = entry.supplier
+            currentCategoryName = entry.category // Assumendo esista in HistoryEntry
             updateCurrentEntryStatus()
         }
     }
@@ -316,9 +377,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName)
+        // Passa entrambi i nomi alla funzione di salvataggio
+        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName, currentCategoryName)
     }
-
     fun setHeaderType(colIdx: Int, type: String?) {
         if (colIdx in headerTypes.indices) {
             headerTypes[colIdx] = type ?: "unknown"
@@ -375,7 +436,8 @@ private fun saveExcelFileInternal(
     data: List<List<String>>,
     editable: List<List<MutableState<String>>>,
     complete: List<Boolean>,
-    supplier: String
+    supplier: String,
+    category: String // <-- NUOVO PARAMETRO
 ) {
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
@@ -401,10 +463,19 @@ private fun saveExcelFileInternal(
     filteredHeader.forEachIndexed { newIndex, headerKey ->
         headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
     }
-    headerRow.createCell(filteredHeader.size).setCellValue(getLocalizedHeader(context, "supplier"))
+    // Aggiungi le colonne Fornitore e Categoria all'header
+    val supplierColIdx = filteredHeader.size
+    val categoryColIdx = supplierColIdx + 1
+    headerRow.createCell(supplierColIdx).setCellValue(getLocalizedHeader(context, "supplier"))
+    headerRow.createCell(categoryColIdx).setCellValue(getLocalizedHeader(context, "category"))
+
     data.drop(1).forEachIndexed { rowIndex, rowData ->
         val excelRow = sheet.createRow(rowIndex + 1)
         var hasEditableValues = false
+        val isComplete = complete.getOrNull(rowIndex + 1) == true
+        if (!isComplete) {
+            hasEditableValues = editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true
+        }
         if (complete.getOrNull(rowIndex + 1) == true) {
             // Flag per colorare tutta la riga dopo
         } else if (editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true) {
@@ -433,12 +504,19 @@ private fun saveExcelFileInternal(
                 cell.cellStyle = styleFilled
             }
         }
-        val supplierCell = excelRow.createCell(filteredHeader.size)
+        val supplierCell = excelRow.createCell(supplierColIdx)
         supplierCell.setCellValue(supplier)
-        if (complete.getOrNull(rowIndex + 1) == true) {
+
+        val categoryCell = excelRow.createCell(categoryColIdx)
+        categoryCell.setCellValue(category)
+
+        // Applica lo stile anche a queste nuove celle
+        if (isComplete) {
             supplierCell.cellStyle = styleComplete
+            categoryCell.cellStyle = styleComplete
         } else if (hasEditableValues) {
             supplierCell.cellStyle = styleFilled
+            categoryCell.cellStyle = styleFilled
         }
     }
     sheet.defaultColumnWidth = 15

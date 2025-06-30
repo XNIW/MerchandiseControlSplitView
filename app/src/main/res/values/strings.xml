@@ -250,4 +250,24 @@
     <string name="no_valid_rows_to_sync">Nessuna riga valida da sincronizzare. Inserisci quantità e prezzo di vendita.</string>
     <string name="error_invalid_or_missing_retail_price">Il prezzo di vendita è obbligatorio, deve essere un numero e maggiore di zero.</string>
     <string name="header_old_purchase_price_short">Acq. Vecchio</string>
+
+    <string name="category_label">Categoria</string>
+    <string name="category_id_prefix">ID Categoria</string>
+    <string name="no_category">Nessuna Categoria</string>
+    <string name="select_category">Seleziona Categoria</string>
+    <string name="select_category_title">Seleziona Categoria</string>
+    <string name="search_or_add_category">Cerca o aggiungi categoria</string>
+    <string name="add_new_category_prompt">Aggiungi nuova categoria: %1$s</string>
+
+    <string name="header_category_id">ID Categoria</string>
+
+    <string name="add_item_code">Aggiungi codice articolo</string>
+    <string name="supplier_and_category_dialog_title">Seleziona Fornitore e Categoria</string>
+    <string name="loading_ellipsis">Caricamento…</string>
+
+    <string name="not_found_short">Non Trovato</string>
+    <string name="summary_label">Riepilogo</string>
+    <string name="products_label">prodotti</string>
+    <string name="order_value_label">Valore Ordine</string>
+    <string name="payment_total_label">Totale Pagamento</string>
 </resources>

@@ -1,4 +1,3 @@
-// in ui/screens/ImportAnalysisScreen.kt
 package com.example.merchandisecontrolsplitview.ui.screens
 
 import android.widget.Toast
@@ -22,19 +21,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.ImportAnalysis
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
-import androidx.compose.ui.res.stringResource
-import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +49,6 @@ fun ImportAnalysisScreen(
     val editableNewProducts = remember { importAnalysis.newProducts.map { it.copy() }.toMutableStateList() }
     val editableUpdatedProducts = remember { importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList() }
 
-    // --- CORREZIONE ERRORE DI BATTITURA ---
     var newProductsExpanded by remember { mutableStateOf(true) }
     var updatedProductsExpanded by remember { mutableStateOf(true) }
     var errorsExpanded by remember { mutableStateOf(true) }
@@ -97,7 +95,9 @@ fun ImportAnalysisScreen(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.import_analysis_title)) }) },
         bottomBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
             ) {
                 Button(
@@ -109,7 +109,9 @@ fun ImportAnalysisScreen(
         }
     ) { paddingValues ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -121,7 +123,6 @@ fun ImportAnalysisScreen(
                 ) {
                     if (editableNewProducts.isEmpty()) {
                         Text(stringResource(R.string.no_new_products), modifier = Modifier.padding(12.dp))
-
                     }
                 }
             }
@@ -129,6 +130,7 @@ fun ImportAnalysisScreen(
                 itemsIndexed(editableNewProducts, key = { index, p -> "new-${p.barcode}-$index" }) { index, product ->
                     DisplayProductRow(
                         product = product,
+                        databaseViewModel = databaseViewModel, // <-- AGGIUNGI QUESTO PARAMETRO
                         onEditClick = { itemToEdit = index to product }
                     )
                 }
@@ -188,35 +190,68 @@ fun ImportAnalysisScreen(
 }
 
 @Composable
-private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
+private fun DisplayProductRow(
+    product: Product,
+    databaseViewModel: DatabaseViewModel, // <-- 1. AGGIUNGI IL VIEWMODEL
+    onEditClick: () -> Unit
+) {
+    // --- 2. STATI PER CONSERVARE I NOMI RECUPERATI ---
+    var supplierName by remember { mutableStateOf<String?>(null) }
+    var categoryName by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+
+    // --- 3. EFFETTO PER CARICARE I NOMI QUANDO GLI ID CAMBIANO ---
+    LaunchedEffect(product.supplierId) {
+        if (product.supplierId != null) {
+            // Se non è già stato caricato, impostiamo un testo temporaneo
+            if (supplierName == null) supplierName = context.getString(R.string.loading_ellipsis)
+
+            // Chiamata asincrona per ottenere il nome
+            val supplier = databaseViewModel.getSupplierById(product.supplierId)
+            supplierName = supplier?.name ?: context.getString(R.string.not_found_short)
+        }
+    }
+
+    LaunchedEffect(product.categoryId) {
+        if (product.categoryId != null) {
+            if (categoryName == null) categoryName = context.getString(R.string.loading_ellipsis)
+
+            val category = databaseViewModel.getCategoryById(product.categoryId)
+            categoryName = category?.name ?: context.getString(R.string.not_found_short)
+        }
+    }
+
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(Modifier.weight(1f)) {
-                // Nome prodotto principale (invariato)
                 Text(product.productName ?: stringResource(R.string.unnamed_product), fontWeight = FontWeight.Bold)
 
-                // --- INIZIO MODIFICA ---
-                // Mostra il secondo nome prodotto se non è nullo o vuoto
                 if (!product.secondProductName.isNullOrBlank()) {
                     Text(
                         text = product.secondProductName,
-                        style = MaterialTheme.typography.bodySmall, // Stile più piccolo
-                        color = MaterialTheme.colorScheme.onSurfaceVariant // Colore meno evidente
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                // --- FINE MODIFICA ---
 
-                Spacer(Modifier.height(4.dp)) // Aggiungiamo un piccolo spazio
+                Spacer(Modifier.height(4.dp))
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
 
-                if (!product.category.isNullOrBlank()) {
-                    Text("${stringResource(R.string.header_category)}: ${product.category}", style = MaterialTheme.typography.bodySmall)
+                // --- 4. VISUALIZZA I NOMI RECUPERATI ---
+                if (supplierName != null) {
+                    Text("${stringResource(R.string.supplier_label)}: $supplierName", style = MaterialTheme.typography.bodySmall)
                 }
+                if (categoryName != null) {
+                    Text("${stringResource(R.string.category_label)}: $categoryName", style = MaterialTheme.typography.bodySmall)
+                }
+
                 Text("${stringResource(R.string.counted_quantity_label)}: ${formatNumberAsRoundedString(product.stockQuantity)}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
@@ -234,7 +269,9 @@ private fun DisplayProductRow(product: Product, onEditClick: () -> Unit) {
 private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: () -> Unit) {
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
@@ -242,15 +279,12 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Visualizza il nome principale del prodotto (invariato)
                 Text(productUpdate.oldProduct.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 IconButton(onClick = onEditClick) {
                     Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_update))
                 }
             }
 
-            // --- INIZIO MODIFICA ---
-            // Mostra il secondo nome del prodotto (vecchio) se esiste
             if (!productUpdate.oldProduct.secondProductName.isNullOrBlank()) {
                 Text(
                     text = productUpdate.oldProduct.secondProductName,
@@ -258,7 +292,6 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            // --- FINE MODIFICA ---
 
             Text("${stringResource(R.string.barcode_prefix)} ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -276,6 +309,7 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
 
 @Composable
 private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
+    // --- CORREZIONE: Assicura che tutti i rami del 'when' restituiscano Pair<String?, String?> ---
     val (oldValue, newValue) = when (fieldResId) {
         R.string.field_product_name -> old.productName to new.productName
         R.string.field_second_product_name -> old.secondProductName to new.secondProductName
@@ -283,12 +317,11 @@ private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
         R.string.purchase_price_label -> formatNumberAsRoundedString(old.purchasePrice) to formatNumberAsRoundedString(new.purchasePrice)
         R.string.retail_price_label -> formatNumberAsRoundedString(old.retailPrice) to formatNumberAsRoundedString(new.retailPrice)
         R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString()
-        R.string.field_category -> old.category to new.category
+        R.string.field_category -> old.categoryId?.toString() to new.categoryId?.toString() // Ora usa categoryId e lo converte in String
         R.string.field_stock_quantity -> formatNumberAsRoundedString(old.stockQuantity) to formatNumberAsRoundedString(new.stockQuantity)
         else -> "" to ""
     }
 
-    // Usa stringResource per ottenere il testo localizzato dall'ID
     val fieldName = stringResource(fieldResId)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(fieldName, modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium)
@@ -296,7 +329,6 @@ private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
         Text(text = newValue ?: "-", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Color(0xFF006400))
     }
 }
-
 
 @Composable
 private fun ExpandableSection(
@@ -308,7 +340,10 @@ private fun ExpandableSection(
     Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(0.dp)) {
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggle)
+                    .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -326,25 +361,25 @@ private fun ExpandableSection(
 @Composable
 private fun ErrorRow(error: RowImportError) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+        Column(modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp)) {
             val errorReasonText = stringResource(error.errorReasonResId, *error.formatArgs.toTypedArray())
             Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
 
-            // --- INIZIO MODIFICA ---
             val problematicKey = when (error.errorReasonResId) {
                 R.string.error_invalid_retail_price -> "RetailPrice"
                 R.string.error_barcode_required -> "barcode"
-                // Se l'errore è che manca almeno un nome, li evidenziamo entrambi
-                R.string.error_productname_required_at_least_one -> "productName" // Usiamo questo per evidenziare entrambi i campi nome
-                R.string.error_productname_required -> "productName" // Manteniamo per retrocompatibilità se serve
+                R.string.error_productname_required_at_least_one -> "productName"
+                R.string.error_productname_required -> "productName"
                 R.string.error_invalid_quantity -> "quantity"
                 else -> null
             }
 
             val barcode = error.rowContent["barcode"] ?: "-"
-            val productName = error.rowContent["productName"] ?: "-" // Rimuoviamo il fallback a "unnamed_product" per mostrare il campo vuoto
-            val secondProductName = error.rowContent["secondProductName"] ?: "-" // Leggiamo il secondo nome
+            val productName = error.rowContent["productName"] ?: "-"
+            val secondProductName = error.rowContent["secondProductName"] ?: "-"
             val quantity = error.rowContent["quantity"] ?: "-"
             val retailPrice = error.rowContent["RetailPrice"] ?: "-"
 
@@ -352,12 +387,10 @@ private fun ErrorRow(error: RowImportError) {
 
             ErrorDetailText(label = stringResource(R.string.header_barcode), value = barcode, isHighlighted = problematicKey == "barcode")
             ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = highlightNames)
-            // Aggiungiamo la visualizzazione del secondo nome prodotto
             ErrorDetailText(label = stringResource(R.string.header_second_product_name), value = secondProductName, isHighlighted = highlightNames)
             Spacer(Modifier.height(4.dp))
             ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
             ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "RetailPrice")
-            // --- FINE MODIFICA ---
         }
     }
 }
@@ -365,7 +398,9 @@ private fun ErrorRow(error: RowImportError) {
 @Composable
 private fun ErrorDetailText(label: String, value: String, isHighlighted: Boolean) {
     val rowModifier = if (isHighlighted) {
-        Modifier.background(color = Color.Red.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)
+        Modifier
+            .background(color = Color.Red.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
     } else {
         Modifier
     }

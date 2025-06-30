@@ -243,5 +243,21 @@
     <string name="no_valid_rows_to_sync">No valid rows to sync. Please enter quantity and selling price.</string>
     <string name="error_invalid_or_missing_retail_price">The selling price is required, must be a number, and greater than zero.</string>
     <string name="header_old_purchase_price_short">Old Purch.</string>
+    <string name="category_label">Category</string>
+    <string name="category_id_prefix">Category ID</string>
+    <string name="no_category">No Category</string>
+    <string name="select_category">Select Category</string>
+    <string name="select_category_title">Select Category</string>
+    <string name="search_or_add_category">Search or add category</string>
+    <string name="add_new_category_prompt">Add new category: %1$s</string>
+    <string name="header_category_id">Category ID</string>
+    <string name="add_item_code">Add item code</string>
+    <string name="supplier_and_category_dialog_title">Select Supplier and Category</string>
+    <string name="loading_ellipsis">Loading…</string>
+    <string name="not_found_short">Not Found</string>
+    <string name="summary_label">Summary</string>
+    <string name="products_label">Products</string>
+    <string name="order_value_label">Order Value</string>
+    <string name="payment_total_label">Total Payment</string>
 
 </resources>

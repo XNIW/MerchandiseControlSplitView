@@ -56,8 +56,9 @@ fun AppNavGraph() {
                 excelViewModel = excelViewModel,
                 databaseUiState = dbUiState,
                 databaseViewModel = dbViewModel,
-                onGenerate = { supplierName ->
-                    excelViewModel.generateFilteredWithOldPrices(supplierName) { entryId ->
+                // QUESTA CHIAMATA È CORRETTA E ORA CORRISPONDE ALLA FIRMA DEL VIEWMODEL
+                onGenerate = { supplierName, categoryName ->
+                    excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryId ->
                         navController.navigate(Screen.Generated.createRoute(entryId))
                     }
                 },

@@ -38,6 +38,7 @@ import androidx.compose.ui.window.Dialog
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Supplier
+import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -122,12 +123,13 @@ fun DatabaseScreen(
                     value = filter ?: "",
                     onValueChange = { viewModel.setFilter(it) },
                     label = { Text(stringResource(R.string.barcode_filter_label)) },
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
                     singleLine = true,
                     trailingIcon = {
                         if (filter?.isNotEmpty() == true) {
                             IconButton(onClick = { viewModel.setFilter("") }) {
-                                // --- CORREZIONE ---
                                 Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.clear_text))
                             }
                         }
@@ -189,7 +191,10 @@ fun DatabaseScreen(
                                                 else -> Color.Transparent
                                             }
                                             Box(
-                                                Modifier.fillMaxSize().background(color).padding(horizontal = 20.dp),
+                                                Modifier
+                                                    .fillMaxSize()
+                                                    .background(color)
+                                                    .padding(horizontal = 20.dp),
                                                 contentAlignment = Alignment.CenterEnd
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.delete), tint = Color.White)
@@ -207,7 +212,9 @@ fun DatabaseScreen(
 
                             if (loadState.append is LoadState.Loading) {
                                 item {
-                                    Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                                    Box(modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp)) {
                                         CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                                     }
                                 }
@@ -218,7 +225,9 @@ fun DatabaseScreen(
             }
 
             Column(
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 24.dp),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 24.dp, bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.End
             ) {
@@ -235,7 +244,7 @@ fun DatabaseScreen(
                     Icon(Icons.Filled.CameraAlt, contentDescription = stringResource(R.string.scan_barcode))
                 }
                 FloatingActionButton(onClick = {
-                    itemToEdit = Product(barcode = "", productName = "")
+                    itemToEdit = Product(id = 0L, barcode = "", productName = "")
                 }) {
                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.add_product))
                 }
@@ -244,8 +253,8 @@ fun DatabaseScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f)) // Sfondo semi-trasparente
-                        .clickable(enabled = false, onClick = {}), // Blocca l'interazione
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
+                        .clickable(enabled = false, onClick = {}),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -301,7 +310,6 @@ private fun PriceColumn(
     labelNew: String,
     priceNew: String?,
     labelOld: String,
-    // --- MODIFICA 1: Cambia il tipo di parametro da String? a Double? ---
     priceOldValue: Double?,
     horizontalAlignment: Alignment.Horizontal
 ) {
@@ -313,12 +321,10 @@ private fun PriceColumn(
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        // --- MODIFICA 2: La condizione ora controlla direttamente se il valore Double è nullo ---
         if (priceOldValue != null) {
             Spacer(Modifier.height(8.dp))
             Text(text = labelOld, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                // La formattazione avviene solo se il valore esiste
                 text = formatNumberAsRoundedString(priceOldValue),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -328,11 +334,14 @@ private fun PriceColumn(
     }
 }
 
-
 @Composable
 fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Unit) {
     var supplierName by remember { mutableStateOf<String?>(null) }
     val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
+
+    var categoryName by remember { mutableStateOf<String?>(null) }
+    val categoryIdPrefix = stringResource(R.string.category_id_prefix)
+
     LaunchedEffect(product.supplierId) {
         supplierName = if (product.supplierId != null) {
             viewModel.getSupplierById(product.supplierId)?.name ?: "$supplierIdPrefix ${product.supplierId}"
@@ -341,35 +350,37 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
         }
     }
 
+    LaunchedEffect(product.categoryId) {
+        categoryName = if (product.categoryId != null) {
+            viewModel.getCategoryById(product.categoryId)?.name ?: "$categoryIdPrefix ${product.categoryId}"
+        } else {
+            null
+        }
+    }
+
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Column(
-                // Questo fa sì che la colonna occupi lo spazio necessario,
-                // senza aggiungere padding extra sotto se il secondo nome non c'è.
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = product.productName ?: stringResource(R.string.unnamed_product),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-                // Mostra il secondo nome solo se esiste
                 if (!product.secondProductName.isNullOrBlank()) {
                     Text(
                         text = product.secondProductName,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                        // Nessun padding custom qui per tenerlo vicino al primo nome
                     )
                 }
             }
 
-            // 2. Lo Spacer ora è fuori dal blocco condizionale, garantendo
-            //    uno spazio consistente dopo i nomi e prima del codice a barre.
             Spacer(Modifier.height(8.dp))
             Text(
                 text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
@@ -383,7 +394,6 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
                     labelNew = stringResource(R.string.product_purchase_price_new_short),
                     priceNew = formatNumberAsRoundedString(product.purchasePrice),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
-                    // --- MODIFICA 3: Passa il valore Double? originale, non la stringa formattata ---
                     priceOldValue = product.oldPurchasePrice,
                     horizontalAlignment = Alignment.Start
                 )
@@ -391,24 +401,26 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
                     labelNew = stringResource(R.string.product_retail_price_new_short),
                     priceNew = formatNumberAsRoundedString(product.retailPrice),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
-                    // --- MODIFICA 4: Passa il valore Double? originale, non la stringa formattata ---
                     priceOldValue = product.oldRetailPrice,
                     horizontalAlignment = Alignment.End
                 )
             }
             Spacer(Modifier.height(8.dp))
             Row {
-                // --- CORREZIONE ---
                 Text(text = "${stringResource(R.string.product_supplier_full)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(text = supplierName ?: "...", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Normal)
             }
+
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                if (!product.category.isNullOrBlank()) {
+                if (categoryName != null) {
                     Row {
                         Text(text = "${stringResource(R.string.header_category)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(text = product.category, style = MaterialTheme.typography.bodyMedium)
+                        Text(text = categoryName!!, style = MaterialTheme.typography.bodyMedium)
                     }
+                } else {
+                    Spacer(modifier = Modifier)
                 }
+
                 Row {
                     Text(text = "${stringResource(R.string.header_stock_quantity)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(text = formatNumberAsRoundedString(product.stockQuantity), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
@@ -418,7 +430,6 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditProductDialog(
     product: Product,
@@ -434,57 +445,47 @@ internal fun EditProductDialog(
     var retailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.retailPrice)) }
     var oldPurchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldPurchasePrice)) }
     var oldRetailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldRetailPrice)) }
-    var category by remember { mutableStateOf(product.category ?: "") }
     var stockQuantity by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.stockQuantity)) }
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
     var productNameError by remember { mutableStateOf<String?>(null) }
-
-    // --- CORREZIONE: Otteniamo le stringhe di errore qui, nel contesto @Composable ---
     val barcodeRequiredErrorText = stringResource(id = R.string.error_barcode_required)
-
-    var showSecondNameField by remember(product) {
-        // Il campo è visibile se il prodotto ha già un secondo nome
-        mutableStateOf(!product.secondProductName.isNullOrBlank())
-    }
-    var showItemNumberField by remember(product) {
-        mutableStateOf(!product.itemNumber.isNullOrBlank())
-    }
-    var showCategoryField by remember(product) {
-        mutableStateOf(!product.category.isNullOrBlank())
-    }
-
-    // La funzione 'validate' ora non ha chiamate a funzioni Composable o di Context.
     val productNameRequiredAtLeastOneErrorText = stringResource(id = R.string.error_productname_required_at_least_one)
+
+    var showSecondNameField by remember(product) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
+    var showItemNumberField by remember(product) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
 
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
-
-        // Nuova logica: controlla se entrambi i nomi sono vuoti
-        productNameError = if (productName.isBlank() && secondProductName.isBlank()) {
-            productNameRequiredAtLeastOneErrorText
-        } else {
-            null
-        }
-
+        productNameError = if (productName.isBlank() && secondProductName.isBlank()) productNameRequiredAtLeastOneErrorText else null
         return barcodeError == null && productNameError == null
     }
 
+    val scope = rememberCoroutineScope()
+
     var supplierId by remember { mutableStateOf(product.supplierId) }
     val noSupplierText = stringResource(R.string.no_supplier)
-    // 2. Usa la stringa (non la funzione) per inizializzare lo stato
     var supplierName by remember { mutableStateOf(noSupplierText) }
-
     var showSupplierSelectionDialog by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-
     val supplierIdPrefix = stringResource(id = R.string.supplier_id_prefix)
     LaunchedEffect(supplierId) {
         supplierName = if (supplierId != null) {
             viewModel.getSupplierById(supplierId!!)?.name ?: "$supplierIdPrefix $supplierId"
         } else {
-            context.getString(R.string.no_supplier)
+            noSupplierText
+        }
+    }
+
+    var categoryId by remember { mutableStateOf(product.categoryId) }
+    val noCategoryText = stringResource(R.string.no_category)
+    var categoryName by remember { mutableStateOf(noCategoryText) }
+    var showCategorySelectionDialog by remember { mutableStateOf(false) }
+    val categoryIdPrefix = stringResource(id = R.string.category_id_prefix)
+    LaunchedEffect(categoryId) {
+        categoryName = if (categoryId != null) {
+            viewModel.getCategoryById(categoryId!!)?.name ?: "$categoryIdPrefix $categoryId"
+        } else {
+            noCategoryText
         }
     }
 
@@ -498,11 +499,25 @@ internal fun EditProductDialog(
             },
             onAddNewSupplier = { name ->
                 scope.launch {
-                    val newSupplier = viewModel.addSupplier(name)
-                    if (newSupplier != null) {
-                        supplierId = newSupplier.id
-                    }
+                    viewModel.addSupplier(name)?.let { supplierId = it.id }
                     showSupplierSelectionDialog = false
+                }
+            }
+        )
+    }
+
+    if (showCategorySelectionDialog) {
+        CategorySelectionDialog(
+            viewModel = viewModel,
+            onDismiss = { showCategorySelectionDialog = false },
+            onCategorySelected = { selectedCategory ->
+                categoryId = selectedCategory.id
+                showCategorySelectionDialog = false
+            },
+            onAddNewCategory = { name ->
+                scope.launch {
+                    viewModel.addCategory(name)?.let { categoryId = it.id }
+                    showCategorySelectionDialog = false
                 }
             }
         )
@@ -518,128 +533,82 @@ internal fun EditProductDialog(
             ) {
                 Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
-                OutlinedTextField(
-                    value = barcode,
-                    onValueChange = { barcode = it; barcodeError = null },
-                    label = { Text(stringResource(R.string.barcode_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = barcodeError != null,
-                    supportingText = { barcodeError?.let { Text(it) } }
-                )
+                OutlinedTextField(value = barcode, onValueChange = { barcode = it; barcodeError = null }, label = { Text(stringResource(R.string.barcode_label)) }, modifier = Modifier.fillMaxWidth(), isError = barcodeError != null, supportingText = { barcodeError?.let { Text(it) } })
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    OutlinedTextField(
-                        value = productName,
-                        onValueChange = { productName = it; productNameError = null },
-                        label = { Text(stringResource(R.string.product_name_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        isError = productNameError != null,
-                        supportingText = { productNameError?.let { Text(it) } }
-                    )
-
-                    // 3. Logica condizionale: mostra il campo di testo o il pulsante "Aggiungi"
+                    OutlinedTextField(value = productName, onValueChange = { productName = it; productNameError = null }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
                     if (showSecondNameField) {
-                        OutlinedTextField(
-                            value = secondProductName,
-                            onValueChange = { secondProductName = it },
-                            label = { Text(stringResource(R.string.second_product_name_label)) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
                     } else {
-                        TextButton(onClick = { showSecondNameField = true }) {
-                            Text(stringResource(R.string.add_second_name))
-                        }
+                        TextButton(onClick = { showSecondNameField = true }) { Text(stringResource(R.string.add_second_name)) }
                     }
                 }
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = purchasePrice, onValueChange = { purchasePrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                    OutlinedTextField(value = retailPrice, onValueChange = { retailPrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    OutlinedTextField(value = purchasePrice, onValueChange = { purchasePrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    OutlinedTextField(value = retailPrice, onValueChange = { retailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 }
 
-                var showOldPrices by remember(product) {
-                    mutableStateOf(product.oldPurchasePrice != null || product.oldRetailPrice != null)
-                }
-
+                var showOldPrices by remember(product) { mutableStateOf(product.oldPurchasePrice != null || product.oldRetailPrice != null) }
                 if (showOldPrices) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = oldPurchasePrice, onValueChange = { oldPurchasePrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.old_purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                        OutlinedTextField(value = oldRetailPrice, onValueChange = { oldRetailPrice = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.old_retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                        OutlinedTextField(value = oldPurchasePrice, onValueChange = { oldPurchasePrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.old_purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                        OutlinedTextField(value = oldRetailPrice, onValueChange = { oldRetailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.old_retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                     }
                 } else {
-                    TextButton(onClick = { showOldPrices = true }) {
-                        Text(stringResource(R.string.add_previous_prices))
-                    }
+                    TextButton(onClick = { showOldPrices = true }) { Text(stringResource(R.string.add_previous_prices)) }
                 }
 
                 if (showItemNumberField) {
-                    OutlinedTextField(
-                        value = itemNumber,
-                        onValueChange = { itemNumber = it },
-                        label = { Text(stringResource(R.string.item_code_label)) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    OutlinedTextField(value = itemNumber, onValueChange = { itemNumber = it }, label = { Text(stringResource(R.string.item_code_label)) }, modifier = Modifier.fillMaxWidth())
                 } else {
-                    TextButton(onClick = { showItemNumberField = true }) {
-                        Text("Aggiungi codice articolo")
-                    }
+                    TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
                 }
 
-                if (showCategoryField) {
-                    OutlinedTextField(
-                        value = category,
-                        onValueChange = { category = it },
-                        label = { Text(stringResource(R.string.header_category)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                } else {
-                    TextButton(onClick = { showCategoryField = true }) {
-                        Text("Aggiungi categoria")
-                    }
+                OutlinedTextField(value = stockQuantity, onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.header_stock_quantity)) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showSupplierSelectionDialog = true }) {
+                    OutlinedTextField(value = supplierName, onValueChange = {}, label = { Text(stringResource(R.string.supplier_label)) }, enabled = false, modifier = Modifier.fillMaxWidth(), trailingIcon = { Icon(Icons.Default.ArrowDropDown, stringResource(R.string.select_supplier)) }, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline, disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant, disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant))
                 }
 
-                OutlinedTextField(
-                    value = stockQuantity,
-                    onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
-                    label = { Text(stringResource(R.string.header_stock_quantity)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-
-                Box(modifier = Modifier.fillMaxWidth().clickable { showSupplierSelectionDialog = true }) {
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showCategorySelectionDialog = true }) {
                     OutlinedTextField(
-                        value = supplierName,
+                        value = categoryName,
                         onValueChange = {},
-                        label = { Text(stringResource(R.string.supplier_label)) },
+                        label = { Text(stringResource(R.string.category_label)) },
                         enabled = false,
                         modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, stringResource(R.string.select_supplier)) },
+                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, stringResource(R.string.select_category)) },
                         colors = OutlinedTextFieldDefaults.colors(
                             disabledTextColor = MaterialTheme.colorScheme.onSurface,
                             disabledBorderColor = MaterialTheme.colorScheme.outline,
-                            disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     )
                 }
 
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                Row(modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
                         if (validate()) {
                             val productToSave = product.copy(
-                                barcode = barcode.trim(), // Aggiungiamo .trim() anche qui per sicurezza
-                                productName = productName.trim(), // Pulisce gli spazi prima di salvare
-                                secondProductName = secondProductName.trim().takeIf { it.isNotBlank() }, // Pulisce anche questo
-                                itemNumber = itemNumber.trim().takeIf { it.isNotBlank() }, // E anche questo
-                                purchasePrice = purchasePrice.toDoubleOrNull(),
-                                retailPrice = retailPrice.toDoubleOrNull(),
-                                oldPurchasePrice = oldPurchasePrice.toDoubleOrNull(),
-                                oldRetailPrice = oldRetailPrice.toDoubleOrNull(),
+                                barcode = barcode.trim(),
+                                productName = productName.trim(),
+                                secondProductName = secondProductName.trim().takeIf { it.isNotBlank() },
+                                itemNumber = itemNumber.trim().takeIf { it.isNotBlank() },
+                                purchasePrice = purchasePrice.replace(',', '.').toDoubleOrNull(),
+                                retailPrice = retailPrice.replace(',', '.').toDoubleOrNull(),
+                                oldPurchasePrice = oldPurchasePrice.replace(',', '.').toDoubleOrNull(),
+                                oldRetailPrice = oldRetailPrice.replace(',', '.').toDoubleOrNull(),
                                 supplierId = supplierId,
-                                category = category.trim().takeIf { it.isNotBlank() },
+                                categoryId = categoryId,
                                 stockQuantity = stockQuantity.replace(',', '.').toDoubleOrNull()
                             )
                             onSave(productToSave)
@@ -651,7 +620,6 @@ internal fun EditProductDialog(
     }
 }
 
-
 @Composable
 private fun SupplierSelectionDialog(
     viewModel: DatabaseViewModel,
@@ -662,9 +630,7 @@ private fun SupplierSelectionDialog(
     val suppliers by viewModel.suppliers.collectAsState()
     var searchText by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) {
-        viewModel.onSupplierSearchQueryChanged("")
-    }
+    LaunchedEffect(Unit) { viewModel.onSupplierSearchQueryChanged("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -673,18 +639,81 @@ private fun SupplierSelectionDialog(
             Column {
                 OutlinedTextField(
                     value = searchText,
+                    onValueChange = { searchText = it; viewModel.onSupplierSearchQueryChanged(it) },
+                    label = { Text(stringResource(R.string.search_or_add_supplier)) },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    trailingIcon = {
+                        if (searchText.isNotBlank()) {
+                            IconButton(onClick = { searchText = ""; viewModel.onSupplierSearchQueryChanged("") }) {
+                                Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.clear_text))
+                            }
+                        }
+                    }
+                )
+                Spacer(Modifier.height(16.dp))
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    items(suppliers) { supplier ->
+                        Text(
+                            text = supplier.name,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSupplierSelected(supplier) }
+                                .padding(vertical = 14.dp)
+                        )
+                    }
+                    if (suppliers.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
+                        item {
+                            Text(
+                                text = stringResource(R.string.add_new_supplier_prompt, searchText),
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onAddNewSupplier(searchText) }
+                                    .padding(vertical = 14.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } }
+    )
+}
+
+@Composable
+private fun CategorySelectionDialog(
+    viewModel: DatabaseViewModel,
+    onDismiss: () -> Unit,
+    onCategorySelected: (Category) -> Unit,
+    onAddNewCategory: (String) -> Unit
+) {
+    val categories by viewModel.categories.collectAsState()
+    var searchText by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        viewModel.onCategorySearchQueryChanged("")
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.select_category_title)) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = searchText,
                     onValueChange = {
                         searchText = it
-                        viewModel.onSupplierSearchQueryChanged(it)
+                        viewModel.onCategorySearchQueryChanged(it)
                     },
-                    label = { Text(stringResource(R.string.search_or_add_supplier)) },
+                    label = { Text(stringResource(R.string.search_or_add_category)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     trailingIcon = {
                         if (searchText.isNotBlank()) {
                             IconButton(onClick = {
                                 searchText = ""
-                                viewModel.onSupplierSearchQueryChanged("")
+                                viewModel.onCategorySearchQueryChanged("")
                             }) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
@@ -697,25 +726,25 @@ private fun SupplierSelectionDialog(
                 Spacer(Modifier.height(16.dp))
 
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    items(suppliers) { supplier ->
+                    items(categories) { category ->
                         Text(
-                            text = supplier.name,
+                            text = category.name,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSupplierSelected(supplier) }
+                                .clickable { onCategorySelected(category) }
                                 .padding(vertical = 14.dp)
                         )
                     }
 
-                    if (suppliers.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
+                    if (categories.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
                         item {
                             Text(
-                                text = stringResource(R.string.add_new_supplier_prompt, searchText),
+                                text = stringResource(R.string.add_new_category_prompt, searchText),
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onAddNewSupplier(searchText) }
+                                    .clickable { onAddNewCategory(searchText) }
                                     .padding(vertical = 14.dp)
                             )
                         }

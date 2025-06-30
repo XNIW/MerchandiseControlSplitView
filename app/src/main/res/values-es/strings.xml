@@ -242,5 +242,21 @@
     <string name="no_valid_rows_to_sync">No hay filas válidas para sincronizar. Introduce cantidad y precio de venta.</string>
     <string name="error_invalid_or_missing_retail_price">El precio de venta es obligatorio, debe ser un número y mayor que cero.</string>
     <string name="header_old_purchase_price_short">Comp. Ant.</string>
+    <string name="category_label">Categoría</string>
+    <string name="category_id_prefix">ID de categoría</string>
+    <string name="no_category">Sin categoría</string>
+    <string name="select_category">Seleccionar categoría</string>
+    <string name="select_category_title">Seleccionar categoría</string>
+    <string name="search_or_add_category">Buscar o agregar categoría</string>
+    <string name="add_new_category_prompt">Agregar nueva categoría: %1$s</string>
+    <string name="header_category_id">ID de categoría</string>
+    <string name="add_item_code">Agregar código de artículo</string>
+    <string name="supplier_and_category_dialog_title">Selecciona proveedor y categoría</string>
+    <string name="loading_ellipsis">Cargando…</string>
+    <string name="not_found_short">No encontrado</string>
+    <string name="summary_label">Resumen</string>
+    <string name="products_label">Productos</string>
+    <string name="order_value_label">Valor del pedido</string>
+    <string name="payment_total_label">Pago total</string>
 
 </resources>

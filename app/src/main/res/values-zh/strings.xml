@@ -242,5 +242,21 @@
     <string name="no_valid_rows_to_sync">没有可同步的有效行。请输入数量和销售价格。</string>
     <string name="error_invalid_or_missing_retail_price">销售价格为必填项，必须是数字且大于零。</string>
     <string name="header_old_purchase_price_short">原进价</string>
+    <string name="category_label">类别</string>
+    <string name="category_id_prefix">类别ID</string>
+    <string name="no_category">无类别</string>
+    <string name="select_category">选择类别</string>
+    <string name="select_category_title">选择类别</string>
+    <string name="search_or_add_category">搜索或添加类别</string>
+    <string name="add_new_category_prompt">添加新类别：%1$s</string>
+    <string name="header_category_id">类别ID</string>
+    <string name="add_item_code">添加商品编码</string>
+    <string name="supplier_and_category_dialog_title">选择供应商和类别</string>
+    <string name="loading_ellipsis">加载中…</string>
+    <string name="not_found_short">未找到</string>
+    <string name="summary_label">汇总</string>
+    <string name="products_label">产品</string>
+    <string name="order_value_label">订单金额</string>
+    <string name="payment_total_label">支付总额</string>
 
 </resources>

@@ -43,6 +43,9 @@ import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.navigation.Screen
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.NumberFormat
+import java.util.Locale
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -167,6 +170,13 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    val currencyFormat = remember {
+        // NUOVO: Metodo moderno per creare il Locale, che risolve il warning 'deprecated'
+        val chileLocale = Locale.Builder().setLanguage("es").setRegion("CL").build()
+        NumberFormat.getCurrencyInstance(chileLocale).apply {
+            maximumFractionDigits = 0
+        }
+    }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
@@ -227,23 +237,52 @@ private fun HistoryRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        // Padding verticale ridotto per rendere la riga più sottile
-                        .padding(top = 10.dp, bottom = 30.dp, start = 16.dp, end = 16.dp)
+                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp) // Più padding a destra per le icone
                 ) {
                     Text(
                         text = entry.id,
-                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                     )
                     Text(
-                        text = "${stringResource(R.string.date_label)} ${entry.timestamp}",
-                        style = MaterialTheme.typography.bodySmall
+                        text = "${stringResource(R.string.date_label)}: ${entry.timestamp}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (entry.supplier.isNotBlank()) {
-                        Text("${stringResource(R.string.supplier_label)} ${entry.supplier}", style = MaterialTheme.typography.bodySmall)
+
+                    // --- VISUALIZZAZIONE MIGLIORATA ---
+                    val details = mutableListOf<String>()
+                    if (entry.supplier.isNotBlank()) details.add(entry.supplier)
+                    if (entry.category.isNotBlank()) details.add(entry.category)
+
+                    if(details.isNotEmpty()){
+                        Text(
+                            text = details.joinToString(" | "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    if (entry.totalItems > 0) {
+                        Text(
+                            text = "${stringResource(R.string.summary_label)}: ${entry.totalItems} ${stringResource(R.string.products_label)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "${stringResource(R.string.order_value_label)}: ${currencyFormat.format(entry.orderTotal)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "${stringResource(R.string.payment_total_label)}: ${currencyFormat.format(entry.paymentTotal)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
-                // Icone di Stato in basso a destra
+                // Icone di Stato (rimangono invariate)
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)

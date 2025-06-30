@@ -31,6 +31,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
     private val dao = db.productDao()
     private val supplierDao = db.supplierDao()
+    private val categoryDao = db.categoryDao()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -46,18 +47,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }.flow.cachedIn(viewModelScope)
     }
 
-    // --- BLOCCO FORNITORI FINALE E OTTIMIZZATO ---
-
-    // 1. Questo StateFlow è l'unica fonte di verità per il testo nel campo di ricerca.
     private val _supplierInputText = MutableStateFlow("")
     val supplierInputText: StateFlow<String> = _supplierInputText.asStateFlow()
 
-    // 2. Funzione per la UI per aggiornare il testo.
     fun onSupplierSearchQueryChanged(query: String) {
         _supplierInputText.value = query
     }
 
-    // 3. Il flusso dei suggerimenti reagisce a _supplierInputText con debounce.
     val suppliers: StateFlow<List<Supplier>> = _supplierInputText
         .debounce(300L)
         .distinctUntilChanged()
@@ -66,6 +62,25 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 flow { emit(supplierDao.getAll()) }
             else
                 flow { emit(supplierDao.searchByName(query)) }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    private val _categoryInputText = MutableStateFlow("")
+    val categoryInputText: StateFlow<String> = _categoryInputText.asStateFlow()
+
+    fun onCategorySearchQueryChanged(query: String) {
+        _categoryInputText.value = query
+    }
+
+    val categories: StateFlow<List<Category>> = _categoryInputText
+        .debounce(300L)
+        .distinctUntilChanged()
+        .flatMapLatest { query ->
+            if (query.isBlank())
+                flow { emit(categoryDao.getAll()) }
+            else
+                flow { emit(categoryDao.searchByName(query)) }
         }
         .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
@@ -93,7 +108,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     }.toMap()
                 }
                 val currentDbProducts = dao.getAll()
-                val analysis = ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, supplierDao)
+                // --- CORREZIONE QUI ---
+                val analysis = ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, supplierDao, categoryDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -195,7 +211,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_old_purchase_price),
             context.getString(R.string.header_old_retail_price),
             context.getString(R.string.header_supplier_id),
-            context.getString(R.string.header_category),
+            context.getString(R.string.header_category_id),
             context.getString(R.string.header_stock_quantity)
         )
         headers.forEachIndexed { index, header ->
@@ -207,13 +223,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(1).setCellValue(product.itemNumber ?: "")
             row.createCell(2).setCellValue(product.productName ?: "")
             row.createCell(3).setCellValue(product.secondProductName ?: "")
-            row.createCell(3).setCellValue(product.purchasePrice ?: 0.0)
-            row.createCell(4).setCellValue(product.retailPrice ?: 0.0)
-            row.createCell(5).setCellValue(product.oldPurchasePrice ?: 0.0)
-            row.createCell(6).setCellValue(product.oldRetailPrice ?: 0.0)
-            row.createCell(7).setCellValue(product.supplierId?.toDouble() ?: 0.0)
-            row.createCell(8).setCellValue(product.category ?: "")
-            row.createCell(9).setCellValue(product.stockQuantity ?: 0.0)
+            row.createCell(4).setCellValue(product.purchasePrice ?: 0.0)
+            row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
+            row.createCell(6).setCellValue(product.oldPurchasePrice ?: 0.0)
+            row.createCell(7).setCellValue(product.oldRetailPrice ?: 0.0)
+            row.createCell(8).setCellValue(product.supplierId?.toDouble() ?: 0.0)
+            row.createCell(9).setCellValue(product.categoryId?.toDouble() ?: 0.0)
+            row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
         }
         try {
             context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
@@ -229,14 +245,12 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val currentDbProducts = dao.getAll()
-                // Usiamo appContext anche qui per coerenza
-                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, supplierDao)
+                // --- CORREZIONE QUI ---
+                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, supplierDao, categoryDao)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
                 e.printStackTrace()
-                // --- CORREZIONE QUI ---
-                // Usa appContext invece di un 'context' inesistente
                 val errorMessage = e.message ?: appContext.getString(R.string.unknown_error)
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_data_analysis, errorMessage))
             }
@@ -255,7 +269,23 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    suspend fun addCategory(name: String): Category? {
+        if (name.isBlank()) return null
+        val existing = categoryDao.findByName(name)
+        if (existing != null) return existing
+
+        val newCategory = Category(name = name)
+        return withContext(Dispatchers.IO) {
+            categoryDao.insert(newCategory)
+            categoryDao.findByName(name)
+        }
+    }
+
     suspend fun getSupplierById(id: Long): Supplier? {
         return supplierDao.getById(id)
+    }
+
+    suspend fun getCategoryById(id: Long): Category? {
+        return categoryDao.getById(id)
     }
 }

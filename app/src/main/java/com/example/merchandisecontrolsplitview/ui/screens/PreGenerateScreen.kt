@@ -11,7 +11,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
@@ -22,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.Category // <-- IMPORT AGGIUNTO
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
@@ -30,23 +30,13 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.launch
 
-/**
- * Schermata di anteprima di un file Excel.
- * Funge da punto di partenza sia per la generazione di un nuovo foglio filtrato
- * sia per avviare il flusso di importazione/sincronizzazione con il database.
- *
- * @param excelViewModel ViewModel per la gestione dello stato del foglio Excel (dati, selezioni).
- * @param databaseUiState Lo stato della UI dal DatabaseViewModel, per mostrare feedback durante l'analisi.
- * @param onGenerate Callback per generare un nuovo foglio Excel filtrato.
- * @param onBack Callback per tornare alla schermata precedente.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreGenerateScreen(
     excelViewModel: ExcelViewModel,
     databaseUiState: UiState,
     databaseViewModel: DatabaseViewModel,
-    onGenerate: (String) -> Unit,
+    onGenerate: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
     // State from ExcelViewModel
@@ -64,33 +54,35 @@ fun PreGenerateScreen(
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
-
-    // --- STATO PER IL NUOVO DIALOGO FORNITORE ---
-    val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
-    var showSupplierDialog by remember { mutableStateOf(false) }
-    var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
-    var isDropdownExpanded by remember { mutableStateOf(false) }
-
-    // Raccogli la lista di fornitori dal ViewModel
-    val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
     val scope = rememberCoroutineScope()
 
+    // --- STATO PER DIALOGO UNIFICATO ---
+    var showSelectionDialog by remember { mutableStateOf(false) }
+
+    // Stato Fornitore
+    val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
+    var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
+    var isSupplierDropdownExpanded by remember { mutableStateOf(false) }
+    val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
+
+    // Stato Categoria
+    val categoryInputText by databaseViewModel.categoryInputText.collectAsState()
+    var selectedCategory by remember { mutableStateOf<Category?>(null) }
+    var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
+    val categorySuggestions by databaseViewModel.categories.collectAsState()
+
+
     val reloadLauncher = rememberLauncherForActivityResult(
-        // 1. Cambia il contratto in OpenMultipleDocuments
         contract = ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris: List<Uri> -> // 2. La callback ora riceve una lista di Uri
+    ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            // 3. Chiama la stessa funzione usata per il caricamento iniziale.
-            //    Questa funzione resetta già lo stato prima di caricare i nuovi file.
             excelViewModel.loadFromMultipleUris(context, uris)
         }
     }
 
     val appendLauncher = rememberLauncherForActivityResult(
-        // 1. Usa il contratto per la selezione multipla
         contract = ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris: List<Uri> -> // 2. Il risultato è una lista di Uri
-        // 3. Se la lista non è vuota, passala alla nuova funzione nel ViewModel
+    ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             excelViewModel.appendFromMultipleUris(context, uris)
         }
@@ -102,10 +94,7 @@ fun PreGenerateScreen(
         "discount", "discountedPrice"
     )
 
-    // Intercept back gesture to confirm exit
-    BackHandler {
-        onBack()
-    }
+    BackHandler { onBack() }
 
     Scaffold(
         topBar = {
@@ -117,28 +106,15 @@ fun PreGenerateScreen(
                     }
                 },
                 actions = {
-                    // Bottone per accodare un nuovo file
                     IconButton(onClick = {
-                        appendLauncher.launch(arrayOf(
-                            "application/vnd.ms-excel",
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        ))
+                        appendLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                     }) {
-                        Icon(
-                            Icons.Default.Add,
-                            contentDescription = stringResource(R.string.append_file)
-                        )
+                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.append_file))
                     }
                     IconButton(onClick = {
-                        reloadLauncher.launch(arrayOf(
-                            "application/vnd.ms-excel",
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        ))
+                        reloadLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
                     }) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.reload_file) // Assicurati di avere questa stringa
-                        )
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.reload_file))
                     }
                 }
             )
@@ -196,7 +172,6 @@ fun PreGenerateScreen(
                 }
             }
 
-            // FABs per il flusso di "Generazione"
             if (excelData.isNotEmpty() && !isAnalysisInProgress) {
                 Column(
                     horizontalAlignment = Alignment.End,
@@ -220,13 +195,16 @@ fun PreGenerateScreen(
                         )
                     }
                     if (!editMode) {
-                        // --- MODIFICA ONCLICK ---
+                        // --- CORREZIONE ONCLICK ---
                         FloatingActionButton(onClick = {
                             // Resetta lo stato nel ViewModel prima di aprire il dialogo
-                            databaseViewModel.onSupplierSearchQueryChanged("") // <-- CORREZIONE
+                            databaseViewModel.onSupplierSearchQueryChanged("")
+                            databaseViewModel.onCategorySearchQueryChanged("")
                             selectedSupplier = null
-                            isDropdownExpanded = false
-                            showSupplierDialog = true
+                            selectedCategory = null
+                            isSupplierDropdownExpanded = false
+                            isCategoryDropdownExpanded = false
+                            showSelectionDialog = true // <-- Mostra il dialogo unificato
                         }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
                         }
@@ -234,91 +212,100 @@ fun PreGenerateScreen(
                 }
             }
 
-            // --- BLOCCO DIALOGO COMPLETAMENTE SOSTITUITO ---
-            if (showSupplierDialog) {
+            // --- DIALOGO UNICO PER FORNITORE E CATEGORIA ---
+            if (showSelectionDialog) {
                 AlertDialog(
-                    onDismissRequest = { showSupplierDialog = false },
-                    title = { Text(stringResource(R.string.supplier_dialog_title)) },
+                    onDismissRequest = { showSelectionDialog = false },
+                    title = { Text(stringResource(R.string.supplier_and_category_dialog_title)) },
                     text = {
-                        ExposedDropdownMenuBox(
-                            // --- MODIFICA 1: La visibilità dipende solo dallo stato booleano ---
-                            expanded = isDropdownExpanded,
-                            // --- MODIFICA 2: Cliccando si inverte lo stato ---
-                            onExpandedChange = { isDropdownExpanded = !isDropdownExpanded }
-                        ) {
-                            OutlinedTextField(
-                                value = supplierInputText,
-                                onValueChange = { text ->
-                                    databaseViewModel.onSupplierSearchQueryChanged(text)
-                                    isDropdownExpanded = true
-                                },
-                                label = { Text(stringResource(R.string.supplier_label)) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                trailingIcon = {
-                                    Row(
-                                        // Aggiungiamo l'allineamento verticale per centrare le icone
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        // 1. Mostriamo la X (se il testo non è vuoto) PRIMA del triangolo
-                                        if (supplierInputText.isNotBlank()) {
-                                            IconButton(onClick = {
-                                                databaseViewModel.onSupplierSearchQueryChanged("")
-                                                isDropdownExpanded = true // riapre la lista completa!
-                                            }) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = stringResource(R.string.clear_text)
-                                                )
-                                            }
-                                        }
-                                        // 2. Mostriamo il triangolo del dropdown DOPO la X
-                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = isDropdownExpanded)
-                                    }
-                                }
-                            )
-
-                            ExposedDropdownMenu(
-                                // --- MODIFICA 3: Anche qui la visibilità dipende solo dallo stato ---
-                                expanded = isDropdownExpanded,
-                                onDismissRequest = { isDropdownExpanded = false }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Menu a discesa per il Fornitore
+                            ExposedDropdownMenuBox(
+                                expanded = isSupplierDropdownExpanded,
+                                onExpandedChange = { isSupplierDropdownExpanded = !isSupplierDropdownExpanded }
                             ) {
-                                // Mostra un indicatore se la lista è vuota (es. durante il caricamento iniziale)
-                                if (supplierSuggestions.isEmpty() && supplierInputText.isBlank()) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.no_supplier_found)) },
-                                        onClick = {},
-                                        enabled = false
-                                    )
-                                }
-
-                                supplierSuggestions.forEach { suggestion ->
-                                    DropdownMenuItem(
-                                        text = { Text(suggestion.name) },
-                                        onClick = {
-                                            databaseViewModel.onSupplierSearchQueryChanged(suggestion.name)
-                                            selectedSupplier = suggestion
-                                            isDropdownExpanded = false
-                                        }
-                                    )
-                                }
-
-                                // Logica per aggiungere un nuovo fornitore (invariata)
-                                if (supplierSuggestions.none { it.name.equals(supplierInputText, true) } && supplierInputText.isNotBlank()) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.add_new_supplier_prompt, supplierInputText)) },
-                                        onClick = {
-                                            scope.launch {
-                                                val newSupplier = databaseViewModel.addSupplier(supplierInputText)
-                                                newSupplier?.let {
-                                                    databaseViewModel.onSupplierSearchQueryChanged(it.name)
-                                                    selectedSupplier = it
-                                                    isDropdownExpanded = false
+                                OutlinedTextField(
+                                    value = supplierInputText,
+                                    onValueChange = {
+                                        databaseViewModel.onSupplierSearchQueryChanged(it)
+                                        isSupplierDropdownExpanded = true
+                                    },
+                                    label = { Text(stringResource(R.string.supplier_label)) },
+                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = isSupplierDropdownExpanded,
+                                    onDismissRequest = { isSupplierDropdownExpanded = false }
+                                ) {
+                                    supplierSuggestions.forEach { suggestion ->
+                                        DropdownMenuItem(
+                                            text = { Text(suggestion.name) },
+                                            onClick = {
+                                                databaseViewModel.onSupplierSearchQueryChanged(suggestion.name)
+                                                selectedSupplier = suggestion
+                                                isSupplierDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                    if (supplierSuggestions.none { it.name.equals(supplierInputText, true) } && supplierInputText.isNotBlank()) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.add_new_supplier_prompt, supplierInputText)) },
+                                            onClick = {
+                                                scope.launch {
+                                                    databaseViewModel.addSupplier(supplierInputText)?.let {
+                                                        databaseViewModel.onSupplierSearchQueryChanged(it.name)
+                                                        selectedSupplier = it
+                                                        isSupplierDropdownExpanded = false
+                                                    }
                                                 }
                                             }
-                                        }
-                                    )
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Menu a discesa per la Categoria
+                            ExposedDropdownMenuBox(
+                                expanded = isCategoryDropdownExpanded,
+                                onExpandedChange = { isCategoryDropdownExpanded = !isCategoryDropdownExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = categoryInputText,
+                                    onValueChange = {
+                                        databaseViewModel.onCategorySearchQueryChanged(it)
+                                        isCategoryDropdownExpanded = true
+                                    },
+                                    label = { Text(stringResource(R.string.category_label)) },
+                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = isCategoryDropdownExpanded,
+                                    onDismissRequest = { isCategoryDropdownExpanded = false }
+                                ) {
+                                    categorySuggestions.forEach { suggestion ->
+                                        DropdownMenuItem(
+                                            text = { Text(suggestion.name) },
+                                            onClick = {
+                                                databaseViewModel.onCategorySearchQueryChanged(suggestion.name)
+                                                selectedCategory = suggestion
+                                                isCategoryDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                    if (categorySuggestions.none { it.name.equals(categoryInputText, true) } && categoryInputText.isNotBlank()) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.add_new_category_prompt, categoryInputText)) },
+                                            onClick = {
+                                                scope.launch {
+                                                    databaseViewModel.addCategory(categoryInputText)?.let {
+                                                        databaseViewModel.onCategorySearchQueryChanged(it.name)
+                                                        selectedCategory = it
+                                                        isCategoryDropdownExpanded = false
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -326,18 +313,21 @@ fun PreGenerateScreen(
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                selectedSupplier?.let {
-                                    showSupplierDialog = false
-                                    onGenerate(it.name)
+                                selectedSupplier?.let { supplier ->
+                                    selectedCategory?.let { category ->
+                                        showSelectionDialog = false
+                                        onGenerate(supplier.name, category.name)
+                                    }
                                 }
                             },
-                            enabled = selectedSupplier != null && selectedSupplier?.name == supplierInputText
+                            enabled = selectedSupplier != null && selectedSupplier?.name == supplierInputText &&
+                                    selectedCategory != null && selectedCategory?.name == categoryInputText
                         ) {
                             Text(stringResource(R.string.confirm))
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showSupplierDialog = false }) {
+                        TextButton(onClick = { showSelectionDialog = false }) {
                             Text(stringResource(R.string.cancel))
                         }
                     }

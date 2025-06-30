@@ -226,10 +226,10 @@ fun GeneratedScreen(
                                 map["realQuantity"] = finalQuantityStr
                                 map["retailPrice"] = finalPriceStr
                                 map["supplier"] = excelViewModel.supplierName
+                                map["category"] = excelViewModel.categoryName
 
                                 map.toMap() // Ritorna sempre la mappa, anche se i valori sono vuoti o invalidi
                             }
-                            // --- FINE LOGICA MIGLIORATA ---
 
                             if (gridDataForAnalysis.isEmpty()) {
                                 Toast.makeText(context, context.getString(R.string.no_valid_rows_to_sync), Toast.LENGTH_SHORT).show()
@@ -252,7 +252,6 @@ fun GeneratedScreen(
 
                         // --- MODIFICA QUI: PULSANTE ESPORTA ---
                         IconButton(onClick = { saveLauncher.launch(entryId) }) {
-                            // SOSTITUIAMO IL VECCHIO ROW CON IL NUOVO STATUSICON
                             IconButton(onClick = { saveLauncher.launch(entryId) }) {
                                 StatusIcon(
                                     baseIcon = Icons.Default.FileDownload,
@@ -511,7 +510,7 @@ fun GeneratedScreen(
                                             style = MaterialTheme.typography.bodyLarge,
                                             fontWeight = FontWeight.Bold
                                         )
-// Calcolatrice
+                                        // Calcolatrice
                                         IconButton(
                                             onClick = {
                                                 calcInput = purchasePrice
@@ -573,7 +572,6 @@ fun GeneratedScreen(
                                     modifier = Modifier.weight(1f).height(48.dp).focusRequester(priceReq)
                                 )
                             }
-                            // --- FINE NUOVO LAYOUT ---
                         }
                     },
                     dismissButton = {
@@ -729,7 +727,6 @@ fun GeneratedScreen(
     }
 
 }
-
 
 fun evalSimpleExpr(expr: String): Double {
     val clean = expr.replace(",", ".").replace(" ", "")
@@ -977,8 +974,6 @@ private fun StatusIcon(
         }
     }
 }
-
-
 
 fun formatDecimal(num: Double, digits: Int = 2): String =
     String.format(Locale.US, "%.${digits}f", num)
