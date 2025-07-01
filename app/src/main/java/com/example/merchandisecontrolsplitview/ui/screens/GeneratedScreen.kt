@@ -6,7 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +25,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager // <-- IMPORTA QUESTO
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,8 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Calculate
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.ui.res.stringResource
@@ -73,7 +76,10 @@ fun GeneratedScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // ViewModel state
+    // --- Controller per la gestione del focus ---
+    val focusManager = LocalFocusManager.current // <-- AGGIUNGI QUESTA RIGA
+
+    // ... tutti gli altri stati rimangono invariati ...
     val excelData by remember { derivedStateOf { excelViewModel.excelData } }
     val editableValues by remember { derivedStateOf { excelViewModel.editableValues } }
     val completeStates by remember { derivedStateOf { excelViewModel.completeStates } }
@@ -101,6 +107,19 @@ fun GeneratedScreen(
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
+
+    // --- NUOVO STATO PER LA MODALITÀ EDIT DEL DIALOGO ---
+    var isInfoDialogInEditMode by remember { mutableStateOf(false) }
+
+    val secondProductNameState = remember { mutableStateOf(TextFieldValue()) }
+    val barcodeState = remember { mutableStateOf(TextFieldValue()) }
+    val itemNumberState = remember { mutableStateOf(TextFieldValue()) }
+    val quantityState = remember { mutableStateOf(TextFieldValue()) }
+    val totalPriceState = remember { mutableStateOf(TextFieldValue()) }
+    val purchasePriceState = remember { mutableStateOf(TextFieldValue()) }
+    val oldPurchasePriceState = remember { mutableStateOf(TextFieldValue()) }
+    val oldRetailPriceState = remember { mutableStateOf(TextFieldValue()) }
+    val productNameState = remember { mutableStateOf(TextFieldValue()) }
 
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
@@ -181,7 +200,6 @@ fun GeneratedScreen(
                 },
                 actions = {
                     if (excelData.isNotEmpty() && generated) {
-                        // Pulsante Home (invariato)
                         IconButton(onClick = {
                             onConfirmAction = {
                                 navController.navigate(Screen.FilePicker.route) {
@@ -198,10 +216,7 @@ fun GeneratedScreen(
                                 contentDescription = stringResource(R.string.go_to_home)
                             )
                         }
-
-                        // --- PULSANTE SINCRONIZZA MODIFICATO ---
                         IconButton(onClick = {
-                            // La logica qui dentro verrà modificata nel prossimo punto
                             excelViewModel.errorRowIndexes.value = emptySet()
                             val header = excelData.firstOrNull()
                             if (header == null) {
@@ -212,13 +227,8 @@ fun GeneratedScreen(
                             val dataRows = excelData.drop(1)
                             val gridDataForAnalysis = dataRows.mapIndexed { rowIndex, rowData ->
                                 val actualRowIndex = rowIndex + 1
-
-                                // Prendiamo i valori inseriti dall'utente, senza validarli qui.
-                                // L'analizzatore gestirà stringhe vuote o non numeriche.
                                 val finalQuantityStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value ?: ""
                                 val finalPriceStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value ?: ""
-
-                                // Creiamo la mappa dei dati per ogni riga
                                 val map = header.mapIndexed { colIndex, headerKey ->
                                     headerKey to (rowData.getOrNull(colIndex) ?: "")
                                 }.toMap().toMutableMap()
@@ -228,7 +238,7 @@ fun GeneratedScreen(
                                 map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
                                 map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
 
-                                map.toMap() // Ritorna sempre la mappa, anche se i valori sono vuoti o invalidi
+                                map.toMap()
                             }
 
                             if (gridDataForAnalysis.isEmpty()) {
@@ -238,7 +248,6 @@ fun GeneratedScreen(
                                 Toast.makeText(context, context.getString(R.string.sync_analysis_started), Toast.LENGTH_SHORT).show()
                             }
                         }) {
-                            // L'icona rimane la stessa
                             StatusIcon(
                                 baseIcon = Icons.Default.Sync,
                                 badgeType = when (syncStatus) {
@@ -250,11 +259,9 @@ fun GeneratedScreen(
                             )
                         }
 
-                        // --- MODIFICA QUI: PULSANTE ESPORTA ---
                         IconButton(onClick = { saveLauncher.launch(entryId) }) {
                             StatusIcon(
                                 baseIcon = Icons.Default.FileDownload,
-                                // MODIFICA: Usa badgeType anche qui per coerenza
                                 badgeType = if (wasExported) BadgeType.SUCCESS else BadgeType.NONE,
                                 contentDescription = stringResource(R.string.export_file)
                             )
@@ -311,7 +318,7 @@ fun GeneratedScreen(
                         TextButton(
                             onClick = {
                                 showExitDialog = false
-                                onConfirmAction() // Esegue l'azione salvata (Indietro o Home)
+                                onConfirmAction()
                             }
                         ) {
                             Text(stringResource(R.string.exit))
@@ -325,7 +332,6 @@ fun GeneratedScreen(
                 )
             }
 
-            // FAB Scanner e Cerca
             if (excelData.isNotEmpty() && generated) {
                 Column(
                     Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 88.dp),
@@ -357,7 +363,6 @@ fun GeneratedScreen(
                 }
             }
 
-            // Dialog di ricerca
             if (showSearchDialog) {
                 AlertDialog(
                     onDismissRequest = {},
@@ -414,45 +419,117 @@ fun GeneratedScreen(
 
                 val header = excelData.first()
                 val row = excelData[infoRowIndex]
+
+
+                // Inizializza gli stati quando il dialogo viene mostrato
+                LaunchedEffect(infoRowIndex) {
+                    fun getValue(key: String): String = row.getOrNull(header.indexOf(key)) ?: ""
+                    productNameState.value = TextFieldValue(getValue("productName"))
+                    secondProductNameState.value = TextFieldValue(getValue("secondProductName"))
+                    barcodeState.value = TextFieldValue(getValue("barcode"))
+                    itemNumberState.value = TextFieldValue(getValue("itemNumber"))
+                    quantityState.value = TextFieldValue(getValue("quantity"))
+                    totalPriceState.value = TextFieldValue(getValue("totalPrice"))
+                    purchasePriceState.value = TextFieldValue(getValue("purchasePrice"))
+                    oldPurchasePriceState.value = TextFieldValue(getValue("oldPurchasePrice"))
+                    oldRetailPriceState.value = TextFieldValue(getValue("oldRetailPrice"))
+                }
+
+
                 val qtyReq = remember { FocusRequester() }
                 val priceReq = remember { FocusRequester() }
-                val backgroundFocusRequester = remember { FocusRequester() }
+
                 LaunchedEffect(showInfoDialog, infoDialogFocusField) {
                     if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
                 }
+
                 AlertDialog(
-                    onDismissRequest = { showInfoDialog = false },
-                    title = { Text(stringResource(R.string.row_info)) },
+                    onDismissRequest = {
+                        showInfoDialog = false
+                        isInfoDialogInEditMode = false // Resetta lo stato in uscita
+                    },
+                    // --- TITOLO MODIFICATO CON PULSANTE EDIT/SAVE ---
+                    title = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(stringResource(R.string.row_info))
+                            IconButton(onClick = {
+                                // Se stiamo salvando (da modalità edit a view)
+                                if (isInfoDialogInEditMode) {
+                                    val updatedRow = excelData[infoRowIndex].toMutableList()
+                                    fun setValue(key: String, value: String) {
+                                        val idx = header.indexOf(key)
+                                        if (idx != -1) updatedRow[idx] = value
+                                    }
+                                    setValue("secondProductName", secondProductNameState.value.text)
+                                    setValue("barcode", barcodeState.value.text)
+                                    setValue("itemNumber", itemNumberState.value.text)
+                                    setValue("quantity", quantityState.value.text)
+                                    setValue("totalPrice", totalPriceState.value.text)
+                                    setValue("purchasePrice", purchasePriceState.value.text)
+                                    // Non rendiamo i prezzi vecchi editabili di solito, ma è possibile se necessario
+
+                                    excelViewModel.excelData[infoRowIndex] = updatedRow
+                                    excelViewModel.updateHistoryEntry()
+                                    Toast.makeText(context, context.getString(R.string.row_updated), Toast.LENGTH_SHORT).show()
+                                }
+                                isInfoDialogInEditMode = !isInfoDialogInEditMode
+                            }) {
+                                Icon(
+                                    imageVector = if (isInfoDialogInEditMode) Icons.Default.Check else Icons.Default.Edit,
+                                    contentDescription = if (isInfoDialogInEditMode) stringResource(R.string.save_changes) else stringResource(R.string.edit_row)
+                                )
+                            }
+                        }
+                    },
                     text = {
                         Column(
-                            modifier = Modifier.verticalScroll(rememberScrollState()).fillMaxWidth(),
+                            modifier = Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth()
+                                // Aggiungi il clickable qui, insieme agli altri modifier
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    focusManager.clearFocus() // Nasconde la tastiera
+                                },
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            // Estrazione dati e InfoRow (invariati)
-                            val getVal: (String) -> String = { key -> row.getOrNull(header.indexOf(key)) ?: "" }
-                            val productName = getVal("productName")
-                            val secondProductName = getVal("secondProductName")
-                            val barcode = getVal("barcode")
-                            val itemNumber = getVal("itemNumber")
-                            val purchasePrice = getVal("purchasePrice")
-                            val oldPurchasePrice = getVal("oldPurchasePrice")
-                            val oldRetailPrice = getVal("oldRetailPrice")
-                            val quantity = getVal("quantity")
-                            val totalPrice = getVal("totalPrice")
-
+                                // --- COMPOSABLE LOCALE PER RIGA EDITABILE ---
                             @Composable
-                            fun InfoRow(label: String, value: String) {
-                                if (value.isNotBlank()) {
-                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            "$label:",
-                                            Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fun EditableInfoRow(
+                                label: String,
+                                state: MutableState<TextFieldValue>,
+                                kType: KeyboardType = KeyboardType.Text
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "$label:",
+                                        Modifier.weight(0.8f), // Più spazio per il label
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (isInfoDialogInEditMode) {
+                                        OutlinedTextField(
+                                            value = state.value,
+                                            onValueChange = { state.value = it },
+                                            modifier = Modifier.weight(1.2f)
+                                                .heightIn(min = 48.dp),
+                                            textStyle = MaterialTheme.typography.bodyMedium,
+                                            singleLine = true,
+                                            keyboardOptions = KeyboardOptions(keyboardType = kType)
                                         )
+                                    } else {
                                         Text(
-                                            value,
-                                            Modifier.weight(1f),
+                                            state.value.text,
+                                            Modifier.weight(1.2f),
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold
                                         )
@@ -460,58 +537,102 @@ fun GeneratedScreen(
                                 }
                             }
 
-                            // Sezione Info Generali (invariata)
-                            InfoRow(stringResource(R.string.header_product_name), productName)
-                            InfoRow(stringResource(R.string.header_second_product_name), secondProductName)
-                            InfoRow(stringResource(R.string.header_barcode), barcode)
-                            InfoRow(stringResource(R.string.header_item_number), itemNumber)
-                            InfoRow(stringResource(R.string.header_quantity), quantity)
-                            InfoRow(stringResource(R.string.header_total_price), totalPrice)
+                            if (header.contains("productName")) {
+                                EditableInfoRow(
+                                    stringResource(R.string.header_product_name),
+                                    productNameState
+                                )
+                            }
+
+                            if (header.contains("secondProductName")) {
+                                EditableInfoRow(
+                                    stringResource(R.string.header_second_product_name),
+                                    secondProductNameState
+                                )
+                            }
+                            EditableInfoRow(
+                                stringResource(R.string.header_barcode),
+                                barcodeState,
+                                kType = KeyboardType.Number
+                            )
+                            if (header.contains("itemNumber")) {
+                                EditableInfoRow(
+                                    stringResource(R.string.header_item_number),
+                                    itemNumberState,
+                                    kType = KeyboardType.Number
+                                )
+                            }
+                            EditableInfoRow(
+                                stringResource(R.string.header_quantity),
+                                quantityState,
+                                kType = KeyboardType.Number
+                            )
+                            EditableInfoRow(
+                                stringResource(R.string.header_total_price),
+                                totalPriceState,
+                                kType = KeyboardType.Number
+                            )
 
                             HorizontalDivider()
 
-                            // --- INIZIO NUOVO LAYOUT PREZZI ---
-
-                            // 1. Blocco Prezzi di Acquisto: Vecchio (a sx) e Nuovo (a dx)
-                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                                // Colonna per Prezzo Vecchio Acquisto (mostrata solo se esiste)
-                                if (oldPurchasePrice.isNotBlank()) {
-                                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-                                        Text(stringResource(R.string.header_old_purchase_price_short), style = MaterialTheme.typography.labelMedium)
+                            // --- LAYOUT PREZZI ---
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                if (oldPurchasePriceState.value.text.isNotBlank()) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
                                         Text(
-                                            text = oldPurchasePrice,
+                                            stringResource(R.string.header_old_purchase_price_short),
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                        Text(
+                                            text = oldPurchasePriceState.value.text,
                                             style = MaterialTheme.typography.bodyLarge,
                                             textDecoration = TextDecoration.LineThrough,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 } else {
-                                    Spacer(modifier = Modifier.weight(1f)) // Placeholder per mantenere l'allineamento
+                                    Spacer(modifier = Modifier.weight(1f))
                                 }
 
-                                // Colonna per Prezzo di Acquisto Nuovo
                                 Column(
                                     modifier = Modifier.weight(1f),
                                     horizontalAlignment = Alignment.Start
                                 ) {
-                                    Text(stringResource(R.string.header_purchase_price), style = MaterialTheme.typography.labelMedium)
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier
-                                            .background(MaterialTheme.colorScheme.secondaryContainer) // Aggiungiamo lo sfondo
-                                            .padding(4.dp) // Un po' di spazio intorno al testo
-                                            .focusRequester(backgroundFocusRequester) // Assegniamo il focus requester
-                                            .focusable() // Rendiamo il Row focusable
-                                    ) {
-                                        Text(
-                                            text = purchasePrice,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                    Text(
+                                        stringResource(R.string.header_purchase_price),
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (isInfoDialogInEditMode) {
+                                            OutlinedTextField(
+                                                value = purchasePriceState.value,
+                                                onValueChange = {
+                                                    purchasePriceState.value = it
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                                textStyle = MaterialTheme.typography.bodyLarge,
+                                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                singleLine = true
+                                            )
+                                        } else {
+                                            Text(
+                                                text = purchasePriceState.value.text,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
+                                                    .padding(4.dp)
+                                            )
+                                        }
                                         // Calcolatrice
                                         IconButton(
                                             onClick = {
-                                                calcInput = purchasePrice
+                                                calcInput = purchasePriceState.value.text
                                                 calcRowIndex = infoRowIndex
                                                 showCalcDialog = true
                                             },
@@ -527,91 +648,146 @@ fun GeneratedScreen(
                                 }
                             }
 
-                            // 3. Prezzo Vecchio di Vendita (mostrato solo se esiste)
-                            if (oldRetailPrice.isNotBlank()) {
-                                InfoRow(stringResource(R.string.header_old_retail_price), oldRetailPrice)
+                            if (oldRetailPriceState.value.text.isNotBlank()) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "${stringResource(R.string.header_old_retail_price)}:",
+                                        Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        oldRetailPriceState.value.text,
+                                        Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
 
                             HorizontalDivider()
 
-                            // 4. Campi editabili raggruppati alla fine
-                            // Quantità Contata
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            // Campi editabili (Quantità contata e Prezzo vendita) rimangono invariati
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
                                     "${getLocalizedHeader(context, "realQuantity")}:",
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
-                                var qtyTf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][0].value, TextRange(editableValues[infoRowIndex][0].value.length))) }
+                                var qtyTf by remember {
+                                    mutableStateOf(
+                                        TextFieldValue(
+                                            editableValues[infoRowIndex][0].value,
+                                            TextRange(editableValues[infoRowIndex][0].value.length)
+                                        )
+                                    )
+                                }
                                 TextField(
                                     value = qtyTf,
-                                    onValueChange = { nv -> qtyTf = nv; editableValues[infoRowIndex][0].value = nv.text; excelViewModel.updateHistoryEntry() },
+                                    onValueChange = { nv ->
+                                        qtyTf = nv; editableValues[infoRowIndex][0].value =
+                                        nv.text; excelViewModel.updateHistoryEntry()
+                                    },
                                     singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Number,
+                                        imeAction = ImeAction.Next
+                                    ),
                                     keyboardActions = KeyboardActions(onNext = { priceReq.requestFocus() }),
-                                    modifier = Modifier.weight(1f).height(48.dp).focusRequester(qtyReq)
+                                    modifier = Modifier.weight(1f).height(48.dp)
+                                        .focusRequester(qtyReq)
                                 )
                             }
 
-                            // Prezzo Vendita
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
                                     "${getLocalizedHeader(context, "retailPrice")}:",
                                     Modifier.weight(1f),
                                     style = MaterialTheme.typography.bodyMedium
                                 )
-                                var priceTf by remember { mutableStateOf(TextFieldValue(editableValues[infoRowIndex][1].value, TextRange(editableValues[infoRowIndex][1].value.length))) }
+                                var priceTf by remember {
+                                    mutableStateOf(
+                                        TextFieldValue(
+                                            editableValues[infoRowIndex][1].value,
+                                            TextRange(editableValues[infoRowIndex][1].value.length)
+                                        )
+                                    )
+                                }
                                 TextField(
                                     value = priceTf,
-                                    onValueChange = { nv -> priceTf = nv; editableValues[infoRowIndex][1].value = nv.text; excelViewModel.updateHistoryEntry() },
+                                    onValueChange = { nv ->
+                                        priceTf = nv; editableValues[infoRowIndex][1].value =
+                                        nv.text; excelViewModel.updateHistoryEntry()
+                                    },
                                     singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                                    keyboardActions = KeyboardActions(onDone = { showInfoDialog = false }),
-                                    modifier = Modifier.weight(1f).height(48.dp).focusRequester(priceReq)
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Number,
+                                        imeAction = ImeAction.Done
+                                    ),
+                                    keyboardActions = KeyboardActions(onDone = {
+                                        // 1. Recupera i valori delle quantità come stringhe
+                                        val countedQtyString = editableValues[infoRowIndex][0].value
+                                        val originalQtyString = quantityState.value.text
+
+                                        // 2. Converti in numeri in modo sicuro (restituisce null se non è un numero)
+                                        val countedQty = countedQtyString.toDoubleOrNull()
+                                        val originalQty = originalQtyString.toDoubleOrNull()
+
+                                        // 3. Controlla se i valori sono validi e uguali
+                                        if (countedQty != null && countedQty == originalQty) {
+                                            // 4. Se sono uguali, esegui l'azione "Completo"
+                                            completeStates[infoRowIndex] = true
+                                            excelViewModel.updateHistoryEntry()
+                                        }
+                                        // 5. In ogni caso (sia che siano uguali o diversi), chiudi il dialogo
+                                        showInfoDialog = false
+                                        isInfoDialogInEditMode = false
+                                    }),
+                                    modifier = Modifier.weight(1f).height(48.dp)
+                                        .focusRequester(priceReq)
                                 )
                             }
                         }
                     },
-                    dismissButton = {
-                        // Lasciamo questo vuoto perché gestiamo tutto nel confirmButton
-                    },
+                    dismissButton = {},
                     confirmButton = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // 1. Icona della calcolatrice a sinistra
-                            IconButton(onClick = { showGenericCalcDialog = true }) {
-                                Icon(
-                                    imageVector = Icons.Filled.Calculate,
-                                    contentDescription = stringResource(R.string.fast_calculator_desc)
-                                )
-                            }
-
-                            // 2. Spacer flessibile che spinge tutto a destra
-                            Spacer(Modifier.weight(1f))
-
-                            // 3. Pulsante secondario "Confirmar" (per chiudere il dialogo)
-                            TextButton(onClick = { showInfoDialog = false }) {
-                                Text(stringResource(R.string.confirm)) // O il testo appropriato per "Chiudi"
-                            }
-
-                            // Aggiungiamo un piccolo spazio tra i pulsanti
-                            Spacer(Modifier.width(8.dp))
-
-                            // 4. Pulsante primario "Completo" con riempimento
-                            Button(
-                                onClick = {
-                                    completeStates[infoRowIndex] = !completeStates[infoRowIndex]
-                                    excelViewModel.updateHistoryEntry()
-                                    showInfoDialog = false
-                                }
+                        if (!isInfoDialogInEditMode) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(getLocalizedHeader(context, "complete"))
+                                IconButton(onClick = { showGenericCalcDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Calculate,
+                                        contentDescription = stringResource(R.string.fast_calculator_desc)
+                                    )
+                                }
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = { showInfoDialog = false }) {
+                                    Text(stringResource(R.string.confirm))
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Button(
+                                    onClick = {
+                                        completeStates[infoRowIndex] = !completeStates[infoRowIndex]
+                                        excelViewModel.updateHistoryEntry()
+                                        showInfoDialog = false
+                                    }
+                                ) {
+                                    Text(getLocalizedHeader(context, "complete"))
+                                }
                             }
                         }
                     }
-
                 )
             }
 
@@ -621,12 +797,14 @@ fun GeneratedScreen(
                     value = calcInput,
                     onValueChange = { calcInput = it },
                     onResult = { res ->
-                        // Aggiorna la cella della purchasePrice SOLO per questa riga
+                        val formattedRes = formatDecimal(res)
+                        // Aggiorna sia lo stato del dialogo che i dati reali del ViewModel
+                        purchasePriceState.value = TextFieldValue(formattedRes)
                         val idx = excelViewModel.excelData.first().indexOf("purchasePrice")
                         if (idx > -1) {
                             excelViewModel.excelData[infoRowIndex] =
                                 excelViewModel.excelData[infoRowIndex].toMutableList()
-                                    .also { it[idx] = formatDecimal(res) }
+                                    .also { it[idx] = formattedRes }
                             excelViewModel.updateHistoryEntry()
                         }
                     },
@@ -636,7 +814,11 @@ fun GeneratedScreen(
         }
     }
 
-    // Dialog rinomina file
+    // Aggiungo alcune stringhe mancanti per completezza (da aggiungere in strings.xml)
+    // R.string.edit_row = "Modifica riga"
+    // R.string.save_changes = "Salva modifiche"
+    // R.string.row_updated = "Riga aggiornata"
+
     if (showRenameDialog) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
@@ -652,9 +834,7 @@ fun GeneratedScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    // --- LA RIGA CORRETTA È QUESTA ---
                     val entry = excelViewModel.historyEntries.value.find { it.id == entryId }
-
                     if (entry != null && renameText.isNotBlank()) {
                         excelViewModel.renameHistoryEntry(entry, renameText)
                         titleText = renameText
@@ -678,7 +858,6 @@ fun GeneratedScreen(
             title = stringResource(R.string.generic_calculator_title),
             value = genericCalcInput,
             onValueChange = { genericCalcInput = it },
-            // onResult è vuota o semplicemente chiude il dialogo. NON modifica i dati.
             onResult = { /* Non fa nulla con il risultato */ },
             onDismiss = { showGenericCalcDialog = false }
         )
@@ -903,7 +1082,7 @@ fun CalculatorKeyboard(
         listOf("*", "1", "2", "3"),
         listOf("/", ".", "0", "="),
 
-    )
+        )
     Column(
         Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally

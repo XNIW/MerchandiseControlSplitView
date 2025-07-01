@@ -280,4 +280,7 @@
     <string name="next">Avanti</string>
     <string name="select_start_date">Seleziona data di inizio</string>
     <string name="select_end_date">Seleziona data di fine</string>
+    <string name="edit_row">Modifica riga</string>
+    <string name="save_changes">Salva modifiche</string>
+    <string name="row_updated">Riga aggiornata</string>
 </resources>
