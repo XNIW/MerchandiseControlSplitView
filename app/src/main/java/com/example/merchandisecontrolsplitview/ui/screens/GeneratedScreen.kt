@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,7 +26,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager // <-- IMPORTA QUESTO
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -76,8 +76,6 @@ fun GeneratedScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // --- Controller per la gestione del focus ---
-    val focusManager = LocalFocusManager.current // <-- AGGIUNGI QUESTA RIGA
 
     // ... tutti gli altri stati rimangono invariati ...
     val excelData by remember { derivedStateOf { excelViewModel.excelData } }
@@ -438,6 +436,7 @@ fun GeneratedScreen(
 
                 val qtyReq = remember { FocusRequester() }
                 val priceReq = remember { FocusRequester() }
+                val backgroundFocusRequester = remember { FocusRequester() }
 
                 LaunchedEffect(showInfoDialog, infoDialogFocusField) {
                     if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
@@ -490,12 +489,14 @@ fun GeneratedScreen(
                             modifier = Modifier
                                 .verticalScroll(rememberScrollState())
                                 .fillMaxWidth()
-                                // Aggiungi il clickable qui, insieme agli altri modifier
-                                .clickable(
+                                // --- INIZIO MODIFICA ---
+                                .focusRequester(backgroundFocusRequester) // 1. Associa il requester
+                                .focusable() // 2. Rendi il componente "focalizzabile"
+                                .clickable( // 3. Al click, richiedi il focus
                                     interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
+                                    indication = null // Per non mostrare l'effetto ripple
                                 ) {
-                                    focusManager.clearFocus() // Nasconde la tastiera
+                                    backgroundFocusRequester.requestFocus() // Nasconde la tastiera togliendo il focus ai TextField
                                 },
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
