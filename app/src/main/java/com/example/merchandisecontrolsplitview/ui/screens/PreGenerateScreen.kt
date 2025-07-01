@@ -10,9 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DoneAll
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,7 +48,6 @@ fun PreGenerateScreen(
 
     // Local UI state
     val context = LocalContext.current
-    var editMode by remember { mutableStateOf(false) }
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
@@ -160,7 +157,7 @@ fun PreGenerateScreen(
                         searchMatches = emptySet(),
                         errorRowIndexes = emptySet(),
                         generated = false,
-                        editMode = editMode,
+                        editMode = false,
                         onCompleteToggle = {},
                         onCellEditRequest = { _, _ -> },
                         onQuantityCellClick = {},
@@ -180,34 +177,23 @@ fun PreGenerateScreen(
                         .align(Alignment.BottomEnd)
                         .padding(16.dp)
                 ) {
-                    if (!editMode) {
-                        FloatingActionButton(onClick = {
-                            val anyUnselected = selectedColumns.any { !it }
-                            selectedColumns.forEachIndexed { idx, _ -> selectedColumns[idx] = anyUnselected }
-                        }) {
-                            Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
-                        }
+                    FloatingActionButton(onClick = {
+                        val anyUnselected = selectedColumns.any { !it }
+                        selectedColumns.forEachIndexed { idx, _ -> selectedColumns[idx] = anyUnselected }
+                    }) {
+                        Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
                     }
-                    FloatingActionButton(onClick = { editMode = !editMode }) {
-                        Icon(
-                            if (editMode) Icons.Default.Check else Icons.Default.Edit,
-                            contentDescription = if (editMode) stringResource(R.string.exit_edit) else stringResource(R.string.edit)
-                        )
-                    }
-                    if (!editMode) {
-                        // --- CORREZIONE ONCLICK ---
-                        FloatingActionButton(onClick = {
-                            // Resetta lo stato nel ViewModel prima di aprire il dialogo
-                            databaseViewModel.onSupplierSearchQueryChanged("")
-                            databaseViewModel.onCategorySearchQueryChanged("")
-                            selectedSupplier = null
-                            selectedCategory = null
-                            isSupplierDropdownExpanded = false
-                            isCategoryDropdownExpanded = false
-                            showSelectionDialog = true // <-- Mostra il dialogo unificato
-                        }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
-                        }
+                    FloatingActionButton(onClick = {
+                        // Resetta lo stato nel ViewModel prima di aprire il dialogo
+                        databaseViewModel.onSupplierSearchQueryChanged("")
+                        databaseViewModel.onCategorySearchQueryChanged("")
+                        selectedSupplier = null
+                        selectedCategory = null
+                        isSupplierDropdownExpanded = false
+                        isCategoryDropdownExpanded = false
+                        showSelectionDialog = true
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
                     }
                 }
             }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -144,6 +145,13 @@ fun GeneratedScreen(
                 Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
             }
         } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
+    }
+
+    val dialogScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result?.contents?.let { code ->
+            // Aggiorna direttamente lo stato del TextField del codice a barre
+            barcodeState.value = TextFieldValue(code)
+        }
     }
 
     val saveLauncher = rememberLauncherForActivityResult(
@@ -477,10 +485,24 @@ fun GeneratedScreen(
                                 }
                                 isInfoDialogInEditMode = !isInfoDialogInEditMode
                             }) {
-                                Icon(
-                                    imageVector = if (isInfoDialogInEditMode) Icons.Default.Check else Icons.Default.Edit,
-                                    contentDescription = if (isInfoDialogInEditMode) stringResource(R.string.save_changes) else stringResource(R.string.edit_row)
-                                )
+                                if (isInfoDialogInEditMode) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = stringResource(R.string.save_changes),
+                                        tint = Color.White,
+                                        modifier = Modifier
+                                            .size(28.dp) // <-- Aumenta la dimensione totale
+                                            .background(MaterialTheme.colorScheme.primary, shape = CircleShape)
+                                            .padding(2.dp) // <-- Riduci il padding per ingrandire il tick
+                                    )
+                                } else {
+                                    // Altrimenti, mostra la normale icona "Modifica"
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = stringResource(R.string.edit_row),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                         }
                     },
@@ -551,11 +573,62 @@ fun GeneratedScreen(
                                     secondProductNameState
                                 )
                             }
-                            EditableInfoRow(
-                                stringResource(R.string.header_barcode),
-                                barcodeState,
-                                kType = KeyboardType.Number
-                            )
+//                            EditableInfoRow(
+//                                stringResource(R.string.header_barcode),
+//                                barcodeState,
+//                                kType = KeyboardType.Number
+//                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Etichetta "Codice a barre:" (sempre visibile)
+                                Text(
+                                    text = "${stringResource(R.string.header_barcode)}:",
+                                    modifier = Modifier.weight(0.8f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                // Contenuto a destra: cambia in base alla modalità
+                                if (isInfoDialogInEditMode) {
+                                    // Modalità di modifica: Campo di testo con bottone
+                                    OutlinedTextField(
+                                        value = barcodeState.value,
+                                        onValueChange = { barcodeState.value = it },
+                                        modifier = Modifier.weight(1.2f),
+                                        textStyle = MaterialTheme.typography.bodyMedium,
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        trailingIcon = {
+                                            IconButton(onClick = {
+                                                val opts = ScanOptions().apply {
+                                                    setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                                    setCaptureActivity(PortraitCaptureActivity::class.java)
+                                                    setOrientationLocked(true)
+                                                    setBeepEnabled(true)
+                                                    setPrompt(context.getString(R.string.scan_prompt))
+                                                }
+                                                dialogScanLauncher.launch(opts)
+                                            }) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.CameraAlt,
+                                                    contentDescription = stringResource(R.string.scan_barcode_for_editing),
+                                                    tint = MaterialTheme.colorScheme.primary // <-- RIGA AGGIUNTA
+                                                )
+                                            }
+                                        }
+                                    )
+                                } else {
+                                    // Modalità di sola visualizzazione: Testo semplice
+                                    Text(
+                                        text = barcodeState.value.text,
+                                        modifier = Modifier.weight(1.2f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                             if (header.contains("itemNumber")) {
                                 EditableInfoRow(
                                     stringResource(R.string.header_item_number),
