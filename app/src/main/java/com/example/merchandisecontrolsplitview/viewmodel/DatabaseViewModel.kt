@@ -197,28 +197,39 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
+    private suspend fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
+        // Fetch names for all suppliers and categories in one go to avoid N+1 queries.
+        val suppliersMap = supplierDao.getAll().associateBy { it.id }
+        val categoriesMap = categoryDao.getAll().associateBy { it.id }
+
         val workbook: Workbook = XSSFWorkbook()
         val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
+
+        // Define user-friendly headers that are also compatible with the import alias system.
         val headerRow = sheet.createRow(0)
         val headers = listOf(
             context.getString(R.string.header_barcode),
             context.getString(R.string.header_item_number),
             context.getString(R.string.header_product_name),
             context.getString(R.string.header_second_product_name),
-            context.getString(R.string.header_new_purchase_price),
-            context.getString(R.string.header_new_retail_price),
+            context.getString(R.string.header_purchase_price),
+            context.getString(R.string.header_retail_price),
             context.getString(R.string.header_old_purchase_price),
             context.getString(R.string.header_old_retail_price),
-            context.getString(R.string.header_supplier_id),
-            context.getString(R.string.header_category_id),
+            context.getString(R.string.header_supplier),  // User-friendly "Fornitore"
+            context.getString(R.string.header_category),  // User-friendly "Categoria"
             context.getString(R.string.header_stock_quantity)
         )
         headers.forEachIndexed { index, header ->
             headerRow.createCell(index).setCellValue(header)
         }
+
+        // Populate rows with product data, using names for supplier and category.
         products.forEachIndexed { index, product ->
             val row = sheet.createRow(index + 1)
+            val supplierName = product.supplierId?.let { suppliersMap[it]?.name } ?: ""
+            val categoryName = product.categoryId?.let { categoriesMap[it]?.name } ?: ""
+
             row.createCell(0).setCellValue(product.barcode)
             row.createCell(1).setCellValue(product.itemNumber ?: "")
             row.createCell(2).setCellValue(product.productName ?: "")
@@ -227,8 +238,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
             row.createCell(6).setCellValue(product.oldPurchasePrice ?: 0.0)
             row.createCell(7).setCellValue(product.oldRetailPrice ?: 0.0)
-            row.createCell(8).setCellValue(product.supplierId?.toDouble() ?: 0.0)
-            row.createCell(9).setCellValue(product.categoryId?.toDouble() ?: 0.0)
+            row.createCell(8).setCellValue(supplierName) // Write supplier name
+            row.createCell(9).setCellValue(categoryName) // Write category name
             row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
         }
         try {

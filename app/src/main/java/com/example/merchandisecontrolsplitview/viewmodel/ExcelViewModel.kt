@@ -289,8 +289,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             val now = LocalDateTime.now()
             val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
-            // --- MODIFICA QUI ---
-            // Ora passiamo solo excelData, perché 'editableValues' non è più necessario
             val (totalItems, orderTotal, paymentTotal) = calculateSummary(excelData)
 
             val entry = HistoryEntry(
@@ -315,36 +313,27 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-
     fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val updatedEntry = entry.copy(id = newName)
             historyDao.update(updatedEntry)
-            // L'aggiornamento manuale della lista non è più necessario.
         }
     }
 
     fun deleteHistoryEntry(entry: HistoryEntry) {
         viewModelScope.launch(Dispatchers.IO) {
             historyDao.delete(entry)
-            // La rimozione manuale dalla lista non è più necessaria.
         }
     }
 
     fun updateHistoryEntry() {
-        // Accediamo alla lista corrente tramite .value dello StateFlow
         currentIndex?.takeIf { it in historyEntries.value.indices }?.let { idx ->
             val e = historyEntries.value[idx]
-
-            // --- MODIFICA CHIAVE: Le righe seguenti che ricalcolavano i totali sono state RIMOSSE ---
-            // val (totalItems, orderTotal, paymentTotal) = calculateSummary(excelData, editableValues) // <-- RIMOSSA
 
             val updatedEntry = e.copy(
                 data = excelData.map { it.toList() },
                 editable = editableValues.map { row -> row.map { it.value } },
                 complete = completeStates.toList()
-                // I campi totalItems, orderTotal, e paymentTotal non vengono più toccati,
-                // conservando i valori originali calcolati alla creazione.
             )
 
             viewModelScope.launch(Dispatchers.IO) {
@@ -354,7 +343,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadHistoryEntry(entry: HistoryEntry) {
-        // Troviamo l'indice nella lista corrente (.value)
         val idx = historyEntries.value.indexOfFirst { it.uid == entry.uid }
         if (idx >= 0) {
             currentIndex = idx
@@ -364,6 +352,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             completeStates.clear(); completeStates.addAll(entry.complete)
             generated.value = true
             currentSupplierName = entry.supplier
+            currentCategoryName = entry.category // Assicurati di caricare anche la categoria
             updateCurrentEntryStatus()
         }
     }
@@ -378,11 +367,13 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         isLoading.value = false
         loadError.value = null
         currentIndex = null
+        currentSupplierName = ""
+        currentCategoryName = ""
         updateCurrentEntryStatus()
     }
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName)
+        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName, currentCategoryName)
     }
 
     fun setHeaderType(colIdx: Int, type: String?) {
@@ -406,7 +397,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch(Dispatchers.IO) {
                     historyDao.update(updatedEntry)
                 }
-                updateCurrentEntryStatus() // L'aggiornamento dello stato avviene in modo ottimistico
+                currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
             }
         }
     }
@@ -427,19 +418,18 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch(Dispatchers.IO) {
                     historyDao.update(updatedEntry)
                 }
-                updateCurrentEntryStatus()
+                currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
             }
         }
     }
 
     private fun calculateSummary(data: List<List<String>>): Triple<Int, Double, Double> {
         var totalItems = 0
-        var orderTotal = 0.0      // Totale basato sul prezzo d'acquisto standard
-        var paymentTotal = 0.0    // Totale basato sul prezzo finale (scontato se esiste)
+        var orderTotal = 0.0
+        var paymentTotal = 0.0
 
         val header = data.firstOrNull() ?: return Triple(0, 0.0, 0.0)
 
-        // Indici delle colonne necessarie
         val purchasePriceIndex = header.indexOf("purchasePrice")
         val discountedPriceIndex = header.indexOf("discountedPrice")
         val discountIndex = header.indexOf("discount")
@@ -447,24 +437,19 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         val realQuantityIndex = header.indexOf("realQuantity")
 
         data.drop(1).forEach { rowData ->
-            // --- Logica Quantità ---
             val realQuantityStr = if (realQuantityIndex != -1) rowData.getOrNull(realQuantityIndex) ?: "" else ""
             val originalQuantityStr = if (originalQuantityIndex != -1) rowData.getOrNull(originalQuantityIndex) ?: "0" else "0"
 
-            // Applichiamo il suggerimento dell'IDE per un codice più pulito
             val quantityToUseStr = realQuantityStr.ifBlank { originalQuantityStr }
             val quantity = quantityToUseStr.replace(",", ".").toDoubleOrNull() ?: 0.0
 
             if (quantity > 0) {
                 totalItems++
 
-                // --- Logica Prezzi ---
                 val purchasePriceFromFile = (if (purchasePriceIndex != -1) rowData.getOrNull(purchasePriceIndex) else "0")
                     ?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
-
                 val discountedPriceFromFile = (if (discountedPriceIndex != -1) rowData.getOrNull(discountedPriceIndex) else null)
                     ?.replace(",", ".")?.toDoubleOrNull()
-
                 val discountFromFile = (if (discountIndex != -1) rowData.getOrNull(discountIndex) else null)
                     ?.replace(",", ".")?.toDoubleOrNull()
 
@@ -483,23 +468,25 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-// Questa funzione ausiliaria rimane invariata
 private fun saveExcelFileInternal(
     context: Context,
     uri: Uri,
     data: List<List<String>>,
     editable: List<List<MutableState<String>>>,
     complete: List<Boolean>,
-    supplier: String
+    supplier: String,
+    category: String // 1. AGGIUNGI IL PARAMETRO MANCANTE
 ) {
-    // ... implementazione identica a prima
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
+
+    // Questa variabile è usata, l'avviso era dovuto a codice incompleto
     val numericTypes = setOf(
         "quantity", "purchasePrice", "retailPrice", "totalPrice", "rowNumber",
         "discount", "discountedPrice", "realQuantity",
         "oldPurchasePrice", "oldRetailPrice"
     )
+
     val styleComplete = wb.createCellStyle().apply {
         fillForegroundColor = IndexedColors.LIGHT_GREEN.index
         fillPattern = FillPatternType.SOLID_FOREGROUND
@@ -508,24 +495,33 @@ private fun saveExcelFileInternal(
         fillForegroundColor = IndexedColors.LIGHT_YELLOW.index
         fillPattern = FillPatternType.SOLID_FOREGROUND
     }
+
     val originalHeader = data.firstOrNull() ?: return
     val headerWithIndices = originalHeader.mapIndexedNotNull { index, header ->
         if (header != "complete") index to header else null
     }
+
     val filteredHeader = headerWithIndices.map { it.second }
     val headerRow = sheet.createRow(0)
+
     filteredHeader.forEachIndexed { newIndex, headerKey ->
         headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
     }
+
+    // 2. AGGIUNGI LE INTESTAZIONI PER FORNITORE E CATEGORIA
     headerRow.createCell(filteredHeader.size).setCellValue(getLocalizedHeader(context, "supplier"))
+    headerRow.createCell(filteredHeader.size + 1).setCellValue(getLocalizedHeader(context, "category"))
+
     data.drop(1).forEachIndexed { rowIndex, rowData ->
         val excelRow = sheet.createRow(rowIndex + 1)
         var hasEditableValues = false
         if (complete.getOrNull(rowIndex + 1) == true) {
-            // Flag per colorare tutta la riga dopo
+            // Flag per colorare
         } else if (editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true) {
             hasEditableValues = true
         }
+
+        // 3. RIPRISTINA LA LOGICA COMPLETA PER SCRIVERE LE CELLE
         headerWithIndices.forEachIndexed { newIndex, (originalIndex, headerKey) ->
             val cell = excelRow.createCell(newIndex)
             val cellValue: String = when (headerKey) {
@@ -549,14 +545,24 @@ private fun saveExcelFileInternal(
                 cell.cellStyle = styleFilled
             }
         }
+
+        // 4. AGGIUNGI I VALORI NELLE CELLE DI FORNITORE E CATEGORIA
         val supplierCell = excelRow.createCell(filteredHeader.size)
         supplierCell.setCellValue(supplier)
+
+        val categoryCell = excelRow.createCell(filteredHeader.size + 1)
+        categoryCell.setCellValue(category) // Usa il parametro 'category'
+
+        // Applica gli stili anche alla nuova cella
         if (complete.getOrNull(rowIndex + 1) == true) {
             supplierCell.cellStyle = styleComplete
+            categoryCell.cellStyle = styleComplete
         } else if (hasEditableValues) {
             supplierCell.cellStyle = styleFilled
+            categoryCell.cellStyle = styleFilled
         }
     }
+
     sheet.defaultColumnWidth = 15
     context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
     wb.close()
