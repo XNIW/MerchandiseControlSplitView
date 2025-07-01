@@ -284,4 +284,9 @@
     <string name="save_changes">Salva modifiche</string>
     <string name="row_updated">Riga aggiornata</string>
     <string name="scan_barcode_for_editing">Scansiona codice a barre</string>
+
+    <string name="duplicate_warnings_found">Avvisi duplicati trovati (%d)</string>
+    <string name="warning_duplicate_barcode">Barcode: %1$s</string>
+    <string name="warning_duplicate_found_in_rows">Trovato nelle righe: %1$s</string>
+    <string name="warning_duplicate_resolution">I dati dell\'ultima riga verranno usati e le quantità verranno sommate.</string>
 </resources>

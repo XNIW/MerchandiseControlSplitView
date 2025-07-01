@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.DuplicateWarning
 import com.example.merchandisecontrolsplitview.data.ImportAnalysis
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
@@ -52,6 +54,7 @@ fun ImportAnalysisScreen(
     var newProductsExpanded by remember { mutableStateOf(true) }
     var updatedProductsExpanded by remember { mutableStateOf(true) }
     var errorsExpanded by remember { mutableStateOf(true) }
+    var warningsExpanded by remember { mutableStateOf(true) }
 
     var itemToEdit by remember { mutableStateOf<Pair<Int, Product>?>(null) }
     var updateToEdit by remember { mutableStateOf<Pair<Int, ProductUpdate>?>(null) }
@@ -115,6 +118,22 @@ fun ImportAnalysisScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (importAnalysis.warnings.isNotEmpty()) {
+                item {
+                    ExpandableSection(
+                        title = stringResource(R.string.duplicate_warnings_found, importAnalysis.warnings.size),
+                        isExpanded = warningsExpanded,
+                        onToggle = { warningsExpanded = !warningsExpanded }
+                    ) {
+                        // Questo content non è necessario se la lista è sempre mostrata sotto
+                    }
+                }
+                if (warningsExpanded) {
+                    items(importAnalysis.warnings, key = { "warning-${it.barcode}" }) { warning ->
+                        WarningRow(warning = warning)
+                    }
+                }
+            }
             item {
                 ExpandableSection(
                     title = stringResource(R.string.new_products_to_add, editableNewProducts.size),
@@ -189,6 +208,42 @@ fun ImportAnalysisScreen(
     }
 }
 
+@Composable
+private fun WarningRow(warning: DuplicateWarning) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.warning_duplicate_barcode, warning.barcode),
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.5f)
+            )
+            Text(
+                text = stringResource(R.string.warning_duplicate_found_in_rows, warning.rowNumbers.joinToString(", ")),
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = stringResource(R.string.warning_duplicate_resolution),
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
 @Composable
 private fun DisplayProductRow(
     product: Product,

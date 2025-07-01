@@ -22,26 +22,72 @@ object ImportAnalyzer {
         val newProducts = mutableListOf<Product>()
         val updatedProducts = mutableListOf<ProductUpdate>()
         val errors = mutableListOf<RowImportError>()
+        val warnings = mutableListOf<DuplicateWarning>() // <-- Lista per i nuovi avvisi
 
-        for ((rowIndex, row) in importedRows.withIndex()) {
+        // --- INIZIO LOGICA DI RILEVAMENTO E UNIONE DUPLICATI ---
+
+        // 1. Raggruppa le righe per barcode, mantenendo l'indice originale (basato su 0)
+        val rowsWithIndex = importedRows.withIndex()
+        val groupedByBarcode = rowsWithIndex.groupBy { (_, row) -> row["barcode"]?.trim() ?: "" }
+
+
+        for ((barcode, group) in groupedByBarcode) {
+            if (barcode.isBlank()) {
+                // Gestisci le righe senza barcode come errori individuali
+                group.forEach { (rowIndex, row) ->
+                    errors.add(RowImportError(rowIndex + 1, row, R.string.error_barcode_required))
+                }
+                continue // Salta al prossimo gruppo
+            }
+
+            val finalRow: Map<String, String>
+            val originalRowIndex: Int // L'indice della riga che useremo per i messaggi di errore
+
+            if (group.size > 1) {
+                // 3. SE CI SONO DUPLICATI, UNISCI I DATI
+                warnings.add(DuplicateWarning(
+                    barcode = barcode,
+                    rowNumbers = group.map { it.index + 1 } // Numeri di riga basati su 1 per l'utente
+                ))
+
+                // Prendi l'ultima riga come base per la maggior parte dei dati
+                val lastRowInfo = group.last()
+                originalRowIndex = lastRowInfo.index
+                val mergedRow = lastRowInfo.value.toMutableMap()
+
+                // Somma le quantità da tutte le righe del gruppo
+                val totalStockQuantity = group.sumOf { (_, row) ->
+                    val stockQty = row["stockQuantity"]?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
+                    val realQty = row["realQuantity"]?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
+                    realQty.takeIf { it > 0 } ?: stockQty
+                }
+                mergedRow["stockQuantity"] = totalStockQuantity.toString()
+
+                finalRow = mergedRow.toMap()
+
+            } else {
+                // 4. SE NON CI SONO DUPLICATI, USA LA RIGA ORIGINALE
+                val singleRowInfo = group.first()
+                originalRowIndex = singleRowInfo.index
+                finalRow = singleRowInfo.value
+            }
+
+            // 5. ELABORA LA RIGA FINALE (ORIGINALE O UNITA)
             try {
-                val barcode = row["barcode"]?.trim() ?: ""
-                val itemNumber = row["itemNumber"]?.trim()?.takeIf { it.isNotBlank() }
-                val productName = row["productName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
-                val secondProductName = row["secondProductName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
-                val supplierName = row["supplier"]?.trim()?.takeIf { it.isNotBlank() }
+                // Usa 'finalRow' e 'originalRowIndex' per il resto della logica
+                val itemNumber = finalRow["itemNumber"]?.trim()?.takeIf { it.isNotBlank() }
+                val productName = finalRow["productName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val secondProductName = finalRow["secondProductName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val supplierName = finalRow["supplier"]?.trim()?.takeIf { it.isNotBlank() }
+                val categoryName = finalRow["category"]?.trim()?.takeIf { it.isNotBlank() }
 
-                // --- MODIFICA 2: Leggi il nome della categoria dal file ---
-                val categoryName = row["category"]?.trim()?.takeIf { it.isNotBlank() }
+                // La quantità è già aggregata per i duplicati
+                val quantityToUse = finalRow["stockQuantity"]?.replace(",", ".")?.toDoubleOrNull()
 
-                val stockQuantityFromFile = row["stockQuantity"]?.replace(",", ".")?.toDoubleOrNull()
-                val realQuantityFromFile = row["realQuantity"]?.replace(",", ".")?.toDoubleOrNull()
-                val quantityToUse = realQuantityFromFile ?: stockQuantityFromFile
-
-                val purchasePriceFromFile = row["purchasePrice"]?.replace(",", ".")?.toDoubleOrNull()
-                val retailPriceFromFile = row["retailPrice"]?.replace(",", ".")?.toDoubleOrNull()
-                val discountFromFile = row["discount"]?.replace(",", ".")?.toDoubleOrNull()
-                val discountedPriceFromFile = row["discountedPrice"]?.replace(",", ".")?.toDoubleOrNull()
+                val purchasePriceFromFile = finalRow["purchasePrice"]?.replace(",", ".")?.toDoubleOrNull()
+                val retailPriceFromFile = finalRow["retailPrice"]?.replace(",", ".")?.toDoubleOrNull()
+                val discountFromFile = finalRow["discount"]?.replace(",", ".")?.toDoubleOrNull()
+                val discountedPriceFromFile = finalRow["discountedPrice"]?.replace(",", ".")?.toDoubleOrNull()
 
                 val finalPurchasePrice = when {
                     discountedPriceFromFile != null -> discountedPriceFromFile
@@ -49,7 +95,7 @@ object ImportAnalyzer {
                     else -> purchasePriceFromFile
                 }
 
-                val validationError = validateRow(rowIndex, row, barcode, productName, secondProductName, finalPurchasePrice, retailPriceFromFile)
+                val validationError = validateRow(originalRowIndex, finalRow, barcode, productName, secondProductName, finalPurchasePrice, retailPriceFromFile)
                 if (validationError != null) {
                     errors.add(validationError)
                     continue
@@ -64,7 +110,6 @@ object ImportAnalyzer {
                     supplier?.id
                 } else { null }
 
-                // --- MODIFICA 3: Logica per trovare/creare la categoria e ottenere l'ID ---
                 val categoryId: Long? = if (categoryName != null) {
                     var category = categoryDao.findByName(categoryName)
                     if (category == null) {
@@ -77,7 +122,6 @@ object ImportAnalyzer {
                 val existingProduct = dbProductByBarcode[barcode]
 
                 if (existingProduct == null) {
-                    // --- MODIFICA 4: Crea il nuovo prodotto usando categoryId ---
                     val newProduct = Product(
                         barcode = barcode,
                         itemNumber = itemNumber,
@@ -86,27 +130,25 @@ object ImportAnalyzer {
                         purchasePrice = finalPurchasePrice,
                         retailPrice = retailPriceFromFile,
                         supplierId = supplierId,
-                        categoryId = categoryId, // Assegna l'ID della categoria
+                        categoryId = categoryId,
                         stockQuantity = quantityToUse ?: 0.0
                     )
                     newProducts.add(newProduct)
                 } else {
-                    // --- MODIFICA 5: Aggiorna il prodotto esistente usando categoryId ---
+                    // Per gli aggiornamenti, la quantità non è più additiva qui, perché è già stata aggregata.
                     val updatedProduct = existingProduct.copy(
                         itemNumber = itemNumber ?: existingProduct.itemNumber,
                         productName = productName ?: existingProduct.productName,
                         secondProductName = secondProductName ?: existingProduct.secondProductName,
                         supplierId = supplierId ?: existingProduct.supplierId,
-                        categoryId = categoryId ?: existingProduct.categoryId, // Aggiorna l'ID della categoria
-
+                        categoryId = categoryId ?: existingProduct.categoryId,
                         oldPurchasePrice = if(finalPurchasePrice != existingProduct.purchasePrice) existingProduct.purchasePrice else existingProduct.oldPurchasePrice,
                         oldRetailPrice = if(retailPriceFromFile != existingProduct.retailPrice) existingProduct.retailPrice else existingProduct.oldRetailPrice,
                         purchasePrice = finalPurchasePrice ?: existingProduct.purchasePrice,
                         retailPrice = retailPriceFromFile ?: existingProduct.retailPrice,
-                        stockQuantity = (existingProduct.stockQuantity ?: 0.0) + (quantityToUse ?: 0.0)
+                        stockQuantity = quantityToUse ?: existingProduct.stockQuantity // Usa la quantità aggregata
                     )
 
-                    // Passa anche categoryDao a getChangedFields
                     val changedFields = getChangedFields(existingProduct, updatedProduct, supplierDao, categoryDao)
                     if (changedFields.isNotEmpty()) {
                         updatedProducts.add(ProductUpdate(existingProduct, updatedProduct, changedFields))
@@ -115,15 +157,16 @@ object ImportAnalyzer {
             } catch (ex: Exception) {
                 errors.add(
                     RowImportError(
-                        rowNumber = rowIndex + 1,
-                        rowContent = row,
+                        rowNumber = originalRowIndex + 1,
+                        rowContent = finalRow,
                         errorReasonResId = R.string.error_unexpected_parsing,
                         formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
                     )
                 )
             }
         }
-        return ImportAnalysis(newProducts, updatedProducts, errors)
+
+        return ImportAnalysis(newProducts, updatedProducts, errors, warnings) // <-- Restituisci anche gli avvisi
     }
 
     private fun validateRow(

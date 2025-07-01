@@ -272,4 +272,9 @@
     <string name="row_updated">行已更新</string>
     <string name="scan_barcode_for_editing">扫描条码</string>
 
+    <string name="duplicate_warnings_found">发现重复警告（%d）</string>
+    <string name="warning_duplicate_barcode">条码：%1$s</string>
+    <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
+    <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>
+
 </resources>
