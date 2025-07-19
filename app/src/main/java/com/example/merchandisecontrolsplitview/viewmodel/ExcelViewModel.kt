@@ -308,7 +308,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 currentIndex = 0
-                updateCurrentEntryStatus()
+                currentEntryStatus.value = Pair(SyncStatus.NOT_ATTEMPTED, false)
             }
         }
     }
