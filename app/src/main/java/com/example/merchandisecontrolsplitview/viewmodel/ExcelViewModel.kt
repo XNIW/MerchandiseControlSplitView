@@ -91,6 +91,61 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     val categoryName: String
         get() = currentCategoryName
 
+    private var _originalHistoryEntryState: HistoryEntry? = null
+    private var _preGenerateStateBackup: List<List<String>>? = null
+
+    /**
+     * Funzione helper PRIVATA che popola lo stato live del ViewModel.
+     * Non tocca i backup.
+     */
+    private fun populateStateFromEntry(entry: HistoryEntry) {
+        excelData.clear()
+        selectedColumns.clear()
+        editableValues.clear()
+        completeStates.clear()
+        errorRowIndexes.value = emptySet()
+        excelData.addAll(entry.data)
+        entry.editable.forEach { row ->
+            editableValues.add(row.map { mutableStateOf(it) }.toMutableList())
+        }
+        completeStates.addAll(entry.complete)
+        excelData.firstOrNull()?.size?.let { cols ->
+            repeat(cols) { selectedColumns.add(false) }
+        }
+        generated.value = true
+        currentSupplierName = entry.supplier
+        currentCategoryName = entry.category
+        currentEntryStatus.value = Triple(entry.syncStatus, entry.wasExported, entry.uid)
+    }
+
+    /**
+     * Sovrascrive la voce corrente nel database con il backup originale.
+     * Questa è l'azione attiva di "Annulla modifiche".
+     */
+    suspend fun revertDatabaseToOriginalState() {
+        _originalHistoryEntryState?.let { originalEntry ->
+            withContext(Dispatchers.IO) {
+                historyDao.update(originalEntry)
+            }
+        }
+    }
+
+    /**
+     * Ripristina lo stato della griglia a come era in PreGenerateScreen.
+     */
+    fun revertToPreGenerateState() {
+        _preGenerateStateBackup?.let { backupData ->
+            resetState()
+            excelData.addAll(backupData)
+            initPreGenerateState()
+            generated.value = false
+        }
+    }
+
+    fun clearOriginalState() {
+        _originalHistoryEntryState = null
+    }
+
     /**
      * NUOVO: Funzione helper che sceglie la query DAO corretta in base al filtro.
      * Converte i filtri (es. LastMonth) in date concrete (stringhe "AAAA-MM-GG HH:mm:ss").
@@ -227,6 +282,9 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
+        // Prima di qualsiasi modifica, salviamo lo stato attuale della griglia.
+        _preGenerateStateBackup = excelData.map { it.toList() }
+
         viewModelScope.launch(Dispatchers.IO) { // Esegui operazioni pesanti su un thread in background
             // 1. Filtra i dati in base alle colonne selezionate e aggiungi i prezzi vecchi
             val filteredData = excelData.mapIndexed { idx, row ->
@@ -354,34 +412,17 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadHistoryEntry(entry: HistoryEntry) {
-        // 1. Pulisci lo stato precedente della griglia
-        excelData.clear()
-        selectedColumns.clear()
-        editableValues.clear()
-        completeStates.clear()
-        errorRowIndexes.value = emptySet()
-
-        // 2. Carica tutti i dati dalla voce di cronologia selezionata
-        excelData.addAll(entry.data)
-
-        // Ricrea gli stati mutabili per i valori editabili e lo stato di completamento
-        entry.editable.forEach { row ->
-            editableValues.add(row.map { mutableStateOf(it) }.toMutableList())
+        // Se lo stato originale non è ancora stato impostato, o se l'ID è diverso,
+        // impostalo. Altrimenti, non fare nulla per non sovrascrivere il backup
+        // quando chiamiamo la funzione per un ripristino.
+        if (_originalHistoryEntryState == null || _originalHistoryEntryState?.uid != entry.uid) {
+            _originalHistoryEntryState = entry.copy(
+                data = entry.data.map { it.toList() },
+                editable = entry.editable.map { it.toMutableList() },
+                complete = entry.complete.toList()
+            )
         }
-        completeStates.addAll(entry.complete)
-
-        // Imposta le colonne come non selezionate (la selezione non viene salvata)
-        excelData.firstOrNull()?.size?.let { cols ->
-            repeat(cols) { selectedColumns.add(false) }
-        }
-
-        // 3. Imposta i metadati e lo stato della UI
-        generated.value = true
-        currentSupplierName = entry.supplier
-        currentCategoryName = entry.category
-
-        // Aggiorna lo stato della UI con i dati specifici di questa voce (fondamentale per il fix)
-        currentEntryStatus.value = Triple(entry.syncStatus, entry.wasExported, entry.uid)
+        populateStateFromEntry(entry)
     }
 
     fun resetState() {

@@ -85,8 +85,15 @@ fun AppNavGraph() {
             GeneratedScreen(
                 excelViewModel = excelViewModel,
                 databaseViewModel = dbViewModel,
-                navController = navController,
                 onBackToStart = { navController.popBackStack() },
+                onNavigateToHome = { // <-- AGGIUNGI QUESTO
+                    navController.navigate(Screen.FilePicker.route) {
+                        popUpTo(navController.graph.startDestinationId) {
+                            inclusive = true
+                        }
+                        launchSingleTop = true
+                    }
+                },
                 entryUid = entryUid,
                 isNewEntry = isNewEntry // Passa il flag alla schermata
             )

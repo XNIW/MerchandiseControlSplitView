@@ -48,12 +48,10 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
-import androidx.navigation.NavHostController
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import java.util.Locale
-import com.example.merchandisecontrolsplitview.ui.navigation.Screen
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
@@ -70,13 +68,19 @@ import androidx.compose.ui.text.style.TextDecoration
 fun GeneratedScreen(
     excelViewModel: ExcelViewModel,
     databaseViewModel: DatabaseViewModel,
-    navController: NavHostController,
     onBackToStart: () -> Unit,
+    onNavigateToHome: () -> Unit,
     entryUid: Long,
     isNewEntry: Boolean
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    DisposableEffect(Unit) {
+        onDispose {
+            excelViewModel.clearOriginalState()
+        }
+    }
 
     val excelData by remember { derivedStateOf { excelViewModel.excelData } }
     val editableValues by remember { derivedStateOf { excelViewModel.editableValues } }
@@ -111,16 +115,19 @@ fun GeneratedScreen(
 
     var showGenericCalcDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
+    // Stato per il nuovo dialogo a 3 opzioni (quando si esce da una voce di cronologia)
+    var showExitFromHistoryDialog by remember { mutableStateOf(false) }
+    // Stato per mostrare il caricamento durante il salvataggio o il ripristino
+    var isSavingOrReverting by remember { mutableStateOf(false) }
 
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
 
-    var isSavingOnExit by remember { mutableStateOf(false) }
-    var onConfirmExitAction by remember { mutableStateOf<suspend () -> Unit>({}) }
-
     // --- NUOVO STATO PER LA MODALITÀ EDIT DEL DIALOGO ---
     var isInfoDialogInEditMode by remember { mutableStateOf(false) }
+
+    var showExitToHomeDialog by remember { mutableStateOf(false) }
 
     val secondProductNameState = remember { mutableStateOf(TextFieldValue()) }
     val barcodeState = remember { mutableStateOf(TextFieldValue()) }
@@ -139,23 +146,13 @@ fun GeneratedScreen(
     )
 
     val handleBackPress = {
-        // Imposta l'azione di conferma in base al flag 'isNewEntry'
-        onConfirmExitAction = if (isNewEntry) {
-            // Se l'entry è nuova, l'uscita la ELIMINA
-            {
-                excelViewModel.historyEntries.value.find { it.uid == entryUid }?.let { entryToDelete ->
-                    excelViewModel.deleteHistoryEntry(entryToDelete)
-                }
-                onBackToStart() // Torna indietro
-            }
+        if (isNewEntry) {
+            // Se l'entry è nuova, mostriamo il dialogo per eliminare la bozza.
+            showExitDialog = true
         } else {
-            // Altrimenti, SALVA (comportamento classico)
-            {
-                excelViewModel.saveCurrentStateToHistory(entryUid)
-                onBackToStart()
-            }
+            // Se l'entry viene dalla cronologia, mostriamo il nuovo dialogo a 3 opzioni.
+            showExitFromHistoryDialog = true
         }
-        showExitDialog = true // Mostra il dialogo
     }
 
     BackHandler {
@@ -235,16 +232,7 @@ fun GeneratedScreen(
                 actions = {
                     if (excelData.isNotEmpty() && generated) {
                         IconButton(onClick = {
-                            onConfirmExitAction = {
-                                excelViewModel.saveCurrentStateToHistory(entryUid)
-                                navController.navigate(Screen.FilePicker.route) {
-                                    popUpTo(navController.graph.startDestinationId) {
-                                        inclusive = true
-                                    }
-                                    launchSingleTop = true
-                                }
-                            }
-                            showExitDialog = true
+                            showExitToHomeDialog = true // <-- Mostra il nuovo dialogo
                         }) {
                             Icon(Icons.Default.Home, contentDescription = stringResource(R.string.go_to_home))
                         }
@@ -341,29 +329,52 @@ fun GeneratedScreen(
                 }
             }
 
+            // 1. Dialogo per le NUOVE voci (quando isNewEntry = true)
             if (showExitDialog) {
-                // Definisci testi e titoli in base al contesto
-                val dialogTitle = if (isNewEntry)
-                    stringResource(R.string.discard_and_exit_title) // "Annulla e Torna Indietro"
-                else
-                    stringResource(R.string.exit_confirmation_title) // "Conferma Uscita"
-
-                val dialogText = if (isNewEntry)
-                    stringResource(R.string.discard_and_exit_message) // "La voce di cronologia verrà eliminata. Continuare?"
-                else
-                    stringResource(R.string.exit_confirmation_message) // "Salvare le modifiche prima di uscire?"
-
-                val confirmButtonText = if (isNewEntry)
-                    stringResource(R.string.discard) // "Elimina"
-                else
-                    stringResource(R.string.exit) // "Salva ed Esci" (o simile)
-
-
                 AlertDialog(
-                    onDismissRequest = { if (!isSavingOnExit) showExitDialog = false },
-                    title = { Text(dialogTitle) },
+                    onDismissRequest = { if (!isSavingOrReverting) showExitDialog = false },
+                    title = { Text(stringResource(R.string.discard_and_exit_title)) },
+                    text = { Text(stringResource(R.string.discard_and_exit_message)) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                // 1. Nascondi subito il dialogo
+                                showExitDialog = false
+                                // 2. Avvia l'azione completa
+                                scope.launch {
+                                    isSavingOrReverting = true
+                                    excelViewModel.historyEntries.value.find { it.uid == entryUid }?.let { entryToDelete ->
+                                        excelViewModel.deleteHistoryEntry(entryToDelete)
+                                    }
+                                    // L'AGGIUNTA FONDAMENTALE: ripristina lo stato di PreGenerate
+                                    excelViewModel.revertToPreGenerateState()
+                                    isSavingOrReverting = false
+                                    onBackToStart() // Torna indietro
+                                }
+                            },
+                            enabled = !isSavingOrReverting
+                        ) {
+                            Text(stringResource(R.string.discard), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!isSavingOrReverting) showExitDialog = false },
+                            enabled = !isSavingOrReverting
+                        ) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
+                )
+            }
+
+// 2. NUOVO Dialogo per le voci dalla CRONOLOGIA (quando isNewEntry = false)
+            if (showExitFromHistoryDialog) {
+                AlertDialog(
+                    onDismissRequest = { if (!isSavingOrReverting) showExitFromHistoryDialog = false },
+                    title = { Text(stringResource(R.string.exit_confirmation_title)) },
                     text = {
-                        if (isSavingOnExit) {
+                        if (isSavingOrReverting) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -373,30 +384,60 @@ fun GeneratedScreen(
                                 Text(stringResource(R.string.saving_changes))
                             }
                         } else {
-                            Text(dialogText)
+                            Text("Cosa vuoi fare con le modifiche apportate?")
                         }
                     },
+                    // --- FIX COMPLETO PER LAYOUT E LOGICA ---
                     confirmButton = {
-                        TextButton(
-                            onClick = {
-                                if (!isSavingOnExit) {
-                                    scope.launch {
-                                        isSavingOnExit = true
-                                        onConfirmExitAction() // Esegue o il salvataggio o l'eliminazione
-                                        isSavingOnExit = false
-                                        showExitDialog = false
-                                    }
-                                }
-                            },
-                            enabled = !isSavingOnExit
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(confirmButtonText)
+                            // Bottone "Esci senza Salvare"
+                            TextButton(
+                                onClick = {
+                                    showExitFromHistoryDialog = false
+                                    scope.launch {
+                                        isSavingOrReverting = true
+                                        // 1. Ripristina il DB allo stato originale
+                                        excelViewModel.revertDatabaseToOriginalState()
+
+                                        // 2. RICARICA lo stato nel ViewModel per coerenza immediata
+                                        excelViewModel.historyEntries.value.find { it.uid == entryUid }?.let {
+                                            excelViewModel.loadHistoryEntry(it)
+                                        }
+
+                                        isSavingOrReverting = false
+                                        onBackToStart()
+                                    }
+                                },
+                                enabled = !isSavingOrReverting
+                            ) {
+                                Text("Esci senza Salvare", color = MaterialTheme.colorScheme.error)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            // Bottone "Salva ed Esci"
+                            Button(
+                                onClick = {
+                                    showExitFromHistoryDialog = false
+                                    scope.launch {
+                                        isSavingOrReverting = true
+                                        // La funzione di salvataggio è già corretta
+                                        excelViewModel.saveCurrentStateToHistory(entryUid)
+                                        isSavingOrReverting = false
+                                        onBackToStart()
+                                    }
+                                },
+                                enabled = !isSavingOrReverting
+                            ) {
+                                Text("Salva ed Esci")
+                            }
                         }
                     },
                     dismissButton = {
                         TextButton(
-                            onClick = { if (!isSavingOnExit) showExitDialog = false },
-                            enabled = !isSavingOnExit
+                            onClick = { if (!isSavingOrReverting) showExitFromHistoryDialog = false },
+                            enabled = !isSavingOrReverting
                         ) {
                             Text(stringResource(R.string.cancel))
                         }
@@ -482,6 +523,41 @@ fun GeneratedScreen(
                             Text(
                                 stringResource(R.string.clear)
                             )
+                        }
+                    }
+                )
+            }
+
+            if (showExitToHomeDialog) {
+                AlertDialog(
+                    onDismissRequest = { if (!isSavingOrReverting) showExitToHomeDialog = false },
+                    title = { Text("Torna alla Home") },
+                    text = { Text("Le modifiche verranno salvate. Vuoi continuare?") },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showExitToHomeDialog = false
+                                scope.launch {
+                                    isSavingOrReverting = true
+                                    // Salva sempre lo stato attuale prima di uscire
+                                    excelViewModel.saveCurrentStateToHistory(entryUid)
+                                    isSavingOrReverting = false
+                                    // Esegui la navigazione verso la Home (FilePicker)
+                                    // La logica di popUpTo va gestita nel NavGraph
+                                    onNavigateToHome()
+                                }
+                            },
+                            enabled = !isSavingOrReverting
+                        ) {
+                            Text("Salva ed Esci")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!isSavingOrReverting) showExitToHomeDialog = false },
+                            enabled = !isSavingOrReverting
+                        ) {
+                            Text(stringResource(R.string.cancel))
                         }
                     }
                 )
