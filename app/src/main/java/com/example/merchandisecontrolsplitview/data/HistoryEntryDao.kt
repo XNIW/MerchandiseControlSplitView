@@ -20,7 +20,7 @@ interface HistoryEntryDao {
     fun getEntriesBetweenDatesFlow(startDate: String, endDate: String): Flow<List<HistoryEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(entry: HistoryEntry)
+    suspend fun insert(entry: HistoryEntry): Long
 
     @Update
     suspend fun update(entry: HistoryEntry)
@@ -30,4 +30,7 @@ interface HistoryEntryDao {
 
     @Query("SELECT * FROM HistoryEntry WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): HistoryEntry?
+
+    @Query("SELECT * FROM HistoryEntry WHERE uid = :uid LIMIT 1")
+    suspend fun getByUid(uid: Long): HistoryEntry?
 }

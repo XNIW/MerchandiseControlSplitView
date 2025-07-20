@@ -8,11 +8,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
@@ -27,14 +25,7 @@ fun FilePickerScreen(
     onViewHistory: () -> Unit,
     onDatabase: () -> Unit,
     onOptions: () -> Unit,
-    viewModel: ExcelViewModel
 ) {
-    LaunchedEffect(Unit) {
-        viewModel.resetState()
-    }
-
-
-
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->

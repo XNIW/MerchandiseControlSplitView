@@ -276,5 +276,7 @@
     <string name="warning_duplicate_barcode">条码：%1$s</string>
     <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
     <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>
+    <string name="saving_changes">正在保存更改&#8230;</string>
+    <string name="missing_items_label">缺少商品</string>
 
 </resources>

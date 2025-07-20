@@ -19,5 +19,6 @@ data class HistoryEntry(
     val syncStatus: SyncStatus = SyncStatus.NOT_ATTEMPTED,
     val orderTotal: Double = 0.0,
     val paymentTotal: Double = 0.0,
+    val missingItems: Int = 0,
     val totalItems: Int = 0
 )

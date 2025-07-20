@@ -28,7 +28,22 @@ fun readAndAnalyzeExcel(
                 val cell = row.getCell(i)
                 val txt = when {
                     cell == null -> ""
-                    cell.cellType == CellType.STRING  -> cell.stringCellValue ?: ""
+                    cell.cellType == CellType.STRING -> {
+                        val rawValue = cell.stringCellValue ?: ""
+                        // Controlla se il valore inizia con '$'
+                        if (rawValue.trim().startsWith("$")) {
+                            // Pulisce il valore da '$' e ','
+                            val cleanedValue = rawValue.trim().replace("$", "").replace(",", "")
+                            try {
+                                // Converte in numero, arrotonda e restituisce come stringa
+                                cleanedValue.toDouble().roundToLong().toString()
+                            } catch (_: NumberFormatException) {
+                                rawValue // In caso di errore, mantiene il valore originale
+                            }
+                        } else {
+                            rawValue // Altrimenti, restituisce il valore originale
+                        }
+                    }
                     cell.cellType == CellType.NUMERIC -> {
                         val n = cell.numericCellValue
                         if (n == n.toLong().toDouble())

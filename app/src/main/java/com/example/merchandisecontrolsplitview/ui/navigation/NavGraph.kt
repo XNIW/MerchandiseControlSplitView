@@ -13,6 +13,8 @@ import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import androidx.navigation.NavType // <-- AGGIUNGI QUESTO IMPORT
+import androidx.navigation.navArgument // <-- AGGIUNGI QUESTO IMPORT
 
 @Composable
 fun AppNavGraph() {
@@ -37,8 +39,9 @@ fun AppNavGraph() {
     ) {
         composable(Screen.FilePicker.route) {
             FilePickerScreen(
-                viewModel = excelViewModel,
                 onFilesPicked = { uris ->
+                    excelViewModel.resetState()
+
                     excelViewModel.loadFromMultipleUris(context, uris)
                     navController.navigate(Screen.PreGenerate.route)
                 },
@@ -55,38 +58,45 @@ fun AppNavGraph() {
                 databaseUiState = dbUiState,
                 databaseViewModel = dbViewModel,
                 onGenerate = { supplierName, categoryName ->
-                    excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryId ->
-                        navController.navigate(Screen.Generated.createRoute(entryId))
+                    excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid -> // Riceve il Long
+                        // Assicurati che il percorso di navigazione accetti un long
+                        navController.navigate(Screen.Generated.createRoute(entryUid))
                     }
                 },
                 onBack = { navController.popBackStack() }
             )
         }
 
-        composable(Screen.Generated.route) { backStackEntry ->
-            val entryId = backStackEntry.arguments?.getString("entryId") ?: ""
+        composable(
+            route = Screen.Generated.route,
+            // 1. Specifica che la rotta accetta un argomento 'entryUid' di tipo Long
+            arguments = listOf(navArgument("entryUid") { type = NavType.LongType })
+        ) { backStackEntry ->
+            // 2. Leggi l'argomento come Long
+            val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
             GeneratedScreen(
                 excelViewModel = excelViewModel,
                 databaseViewModel = dbViewModel,
                 navController = navController,
                 onBackToStart = { navController.popBackStack() },
-                entryId = entryId
+                entryUid = entryUid // 3. Passa l'uid Long alla schermata
             )
         }
 
         composable(Screen.History.route) {
-            // NUOVO: Raccoglie lo stato dal Flow e passa la funzione per filtrare
             val historyList by excelViewModel.historyEntries.collectAsState()
 
             HistoryScreen(
-                navController = navController,
                 historyList = historyList,
                 onSelect = { entry ->
+                    // 1. Carica i dati della voce selezionata nel ViewModel
                     excelViewModel.loadHistoryEntry(entry)
+                    // 2. Naviga direttamente alla schermata Generated usando la rotta corretta
+                    navController.navigate(Screen.Generated.createRoute(entry.uid))
                 },
                 onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
                 onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },
-                onSetFilter = { filter -> excelViewModel.setDateFilter(filter) }, // Passa la callback
+                onSetFilter = { filter -> excelViewModel.setDateFilter(filter) },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -112,12 +122,15 @@ fun AppNavGraph() {
                     databaseViewModel = dbViewModel,
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
-                        if (importAnalysisResult?.errors?.isEmpty() == true) {
-                            excelViewModel.markCurrentEntryAsSyncedSuccessfully()
-                        } else {
-                            excelViewModel.markCurrentEntryAsSyncedWithErrors()
-                        }
+                        // 1. Il nome della variabile ora riflette correttamente il tipo di dato (Long uid)
+                        val currentEntryUid = excelViewModel.currentEntryStatus.value.third
 
+                        // 2. La logica sottostante ora funziona come previsto perché le funzioni del ViewModel sono state aggiornate
+                        if (importAnalysisResult?.errors?.isEmpty() == true) {
+                            excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
+                        } else {
+                            excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
+                        }
                         dbViewModel.importProducts(newProducts, updatedProducts, context)
                         navController.navigate(Screen.FilePicker.route) {
                             popUpTo(navController.graph.startDestinationId) {

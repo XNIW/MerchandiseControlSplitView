@@ -23,14 +23,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.SyncStatus
-import com.example.merchandisecontrolsplitview.ui.navigation.Screen
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter // NUOVO IMPORT
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -40,7 +36,6 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
-    navController: NavController,
     historyList: List<HistoryEntry>,
     onSelect: (HistoryEntry) -> Unit,
     onRename: (HistoryEntry, String) -> Unit,
@@ -55,25 +50,12 @@ fun HistoryScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var entryToDelete by remember { mutableStateOf<HistoryEntry?>(null) }
 
-    // Stato per la navigazione (invariato)
-    var navigateToEntryId by remember { mutableStateOf<String?>(null) }
-
     // --- NUOVA GESTIONE STATI PER FILTRI ---
     var showFilterMenu by remember { mutableStateOf(false) }
     var showDatePickerDialog by remember { mutableStateOf(false) }
     var datePickerTargetIsStart by remember { mutableStateOf(true) } // true = data inizio, false = data fine
     var customStartDate by remember { mutableStateOf<LocalDate?>(null) }
     var customEndDate by remember { mutableStateOf<LocalDate?>(null) }
-
-
-    LaunchedEffect(navigateToEntryId) {
-        navigateToEntryId?.let { entryId ->
-            val encodedId = URLEncoder.encode(entryId, StandardCharsets.UTF_8.toString())
-            val route = Screen.Generated.route.replace("{entryId}", encodedId)
-            navController.navigate(route)
-            navigateToEntryId = null
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -140,10 +122,7 @@ fun HistoryScreen(
             items(historyList, key = { it.uid }) { entry ->
                 HistoryRow(
                     entry = entry,
-                    onClick = {
-                        onSelect(entry)
-                        navigateToEntryId = entry.id
-                    },
+                    onClick = { onSelect(entry) },
                     onRenameClick = {
                         entryToRename = entry
                         renameText = entry.id
@@ -361,6 +340,14 @@ private fun HistoryRow(
                             text = "${stringResource(R.string.order_value_label)}: ${currencyFormat.format(entry.orderTotal)}",
                             style = MaterialTheme.typography.bodyMedium
                         )
+                        // ✅ NUOVA RIGA PER I PRODOTTI MANCANTI
+                        if (entry.missingItems > 0) {
+                            Text(
+                                text = "${stringResource(R.string.missing_items_label)}: ${entry.missingItems}", // Aggiungi stringa "Prodotti mancanti"
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error // Evidenzia in rosso
+                            )
+                        }
                         Text(
                             text = "${stringResource(R.string.payment_total_label)}: ${currencyFormat.format(entry.paymentTotal)}",
                             style = MaterialTheme.typography.bodyMedium,

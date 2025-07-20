@@ -75,9 +75,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = emptyList()      // Valore iniziale mentre si attende il primo dato dal DB
         )
 
-    private var currentIndex: Int? = null
-
-    val currentEntryStatus = mutableStateOf(Pair(SyncStatus.NOT_ATTEMPTED, false))
+    val currentEntryStatus = mutableStateOf(Triple(SyncStatus.NOT_ATTEMPTED, false, 0L))
     val headerTypes = mutableStateListOf<String>()
 
     // --- BLOCCO DATABASE ---
@@ -136,15 +134,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun setDateFilter(filter: DateFilter) {
         _dateFilter.value = filter
-    }
-
-    private fun updateCurrentEntryStatus() {
-        // Per accedere alla lista, ora usiamo .value sullo StateFlow
-        val entry = currentIndex?.let { historyEntries.value.getOrNull(it) }
-        currentEntryStatus.value = Pair(
-            entry?.syncStatus ?: SyncStatus.NOT_ATTEMPTED,
-            entry?.wasExported ?: false
-        )
     }
 
     fun loadFromMultipleUris(context: Context, uris: List<Uri>) {
@@ -237,78 +226,85 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         repeat(excelData.size) { completeStates.add(false) }
     }
 
-    fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (String) -> Unit) {
-        viewModelScope.launch {
-            val filtered = excelData.mapIndexed { idx, row ->
+    fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) { // Esegui operazioni pesanti su un thread in background
+            // 1. Filtra i dati in base alle colonne selezionate e aggiungi i prezzi vecchi
+            val filteredData = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
                     row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
                             listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
                 } else {
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
-                    val barcodeIdx = excelData.firstOrNull()?.indexOf("barcode") ?: -1
-                    val barcode = excelData[idx].getOrNull(barcodeIdx)
+                    val barcodeIdx = excelData.first().indexOf("barcode")
+                    val barcode = if (barcodeIdx != -1) excelData[idx].getOrNull(barcodeIdx) else null
                     var oldPurchase = ""
                     var oldRetail = ""
                     if (!barcode.isNullOrBlank()) {
-                        val product = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
-                        if (product != null) {
+                        productDao.findByBarcode(barcode)?.let { product ->
                             oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
                             oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
                         }
                     }
                     original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
                 }
+            }.map { it.toList() } // Assicura che sia una copia immutabile
+
+            // 2. Prepara gli stati per la UI
+            val newEditableValues = mutableStateListOf<MutableList<MutableState<String>>>().apply {
+                add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) // Per la riga header
+                filteredData.drop(1).forEach { row ->
+                    val q = row.getOrNull(row.size - 3) ?: ""
+                    val p = row.getOrNull(row.size - 2) ?: ""
+                    add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
+                }
             }
-            excelData.clear()
-            excelData.addAll(filtered)
-            editableValues.clear()
-            editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
-            filtered.drop(1).forEach { row ->
-                val q = row.getOrNull(row.size - 3) ?: ""
-                val p = row.getOrNull(row.size - 2) ?: ""
-                editableValues.add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
+            val newCompleteStates = mutableStateListOf<Boolean>().apply {
+                repeat(filteredData.size) { add(false) }
             }
-            completeStates.clear()
-            repeat(filtered.size) { completeStates.add(false) }
-            selectedColumns.clear()
-            filtered.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
-            generated.value = true
+
+            // 3. Crea la voce di cronologia da salvare
             val now = LocalDateTime.now()
-            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm"))
-            val cleanedSupplier = supplierName.replace("\\W".toRegex(), "_")
-            val id = if (supplierName.isNotBlank()) "${stamp}_$cleanedSupplier.xlsx" else "$stamp.xlsx"
-            currentSupplierName = supplierName
-            currentCategoryName = categoryName
-            addHistoryEntryWithId(id, supplierName, categoryName)
-            onResult(id)
-        }
-    }
+            val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS")) + "_${supplierName.replace("\\W".toRegex(), "_")}.xlsx"
+            val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+            val (initialTotalItems, initialOrderTotal) = calculateInitialSummary(filteredData)
 
-    private fun addHistoryEntryWithId(id: String, supplier: String, category: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val now = LocalDateTime.now()
-            val stamp = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-
-            val (totalItems, orderTotal, paymentTotal) = calculateSummary(excelData)
-
-            val entry = HistoryEntry(
-                id = id,
-                timestamp = stamp,
-                data = excelData.map { it.toList() },
-                editable = editableValues.map { row -> row.map { it.value } },
-                complete = completeStates.toList(),
-                supplier = supplier,
-                category = category,
-                totalItems = totalItems,
-                orderTotal = orderTotal,
-                paymentTotal = paymentTotal
+            val newEntry = HistoryEntry(
+                id = fileNameId,
+                timestamp = timestampForDb,
+                data = filteredData,
+                editable = newEditableValues.map { r -> r.map { it.value } },
+                complete = newCompleteStates.toList(),
+                supplier = supplierName,
+                category = categoryName,
+                totalItems = initialTotalItems,
+                orderTotal = initialOrderTotal,
+                paymentTotal = initialOrderTotal,
+                missingItems = initialTotalItems,
+                syncStatus = SyncStatus.NOT_ATTEMPTED,
+                wasExported = false
             )
 
-            historyDao.insert(entry)
+            // 4. Inserisci nel DB e ottieni il nuovo 'uid'
+            val newUid = historyDao.insert(newEntry)
 
+            // 5. Aggiorna la UI sul thread principale
             withContext(Dispatchers.Main) {
-                currentIndex = 0
-                currentEntryStatus.value = Pair(SyncStatus.NOT_ATTEMPTED, false)
+                excelData.clear()
+                excelData.addAll(filteredData)
+                editableValues.clear()
+                editableValues.addAll(newEditableValues)
+                completeStates.clear()
+                completeStates.addAll(newCompleteStates)
+                selectedColumns.clear()
+                filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+
+                generated.value = true
+                currentSupplierName = supplierName
+                currentCategoryName = categoryName
+                currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
+
+                // 6. Esegui la callback per la navigazione
+                onResult(newUid)
             }
         }
     }
@@ -326,35 +322,66 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateHistoryEntry() {
-        currentIndex?.takeIf { it in historyEntries.value.indices }?.let { idx ->
-            val e = historyEntries.value[idx]
-
-            val updatedEntry = e.copy(
-                data = excelData.map { it.toList() },
-                editable = editableValues.map { row -> row.map { it.value } },
-                complete = completeStates.toList()
-            )
-
-            viewModelScope.launch(Dispatchers.IO) {
+    fun updateHistoryEntry(entryUid: Long) { // <-- Cambia firma
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao.getByUid(entryUid)?.let { entryToUpdate -> // <-- Usa getByUid
+                val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
+                val updatedEntry = entryToUpdate.copy(
+                    data = excelData.map { it.toList() },
+                    editable = editableValues.map { row -> row.map { it.value } },
+                    complete = completeStates.toList(),
+                    paymentTotal = finalPaymentTotal,
+                    missingItems = finalMissingItems
+                )
                 historyDao.update(updatedEntry)
             }
         }
     }
 
-    fun loadHistoryEntry(entry: HistoryEntry) {
-        val idx = historyEntries.value.indexOfFirst { it.uid == entry.uid }
-        if (idx >= 0) {
-            currentIndex = idx
-            excelData.clear(); excelData.addAll(entry.data)
-            selectedColumns.clear(); excelData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
-            editableValues.clear(); entry.editable.forEach { row -> editableValues.add(row.map { mutableStateOf(it) }.toMutableList()) }
-            completeStates.clear(); completeStates.addAll(entry.complete)
-            generated.value = true
-            currentSupplierName = entry.supplier
-            currentCategoryName = entry.category // Assicurati di caricare anche la categoria
-            updateCurrentEntryStatus()
+    // 3. AGGIUNGI: Nuova funzione `suspend` per il salvataggio garantito
+    suspend fun saveCurrentStateToHistory(entryUid: Long) = withContext(Dispatchers.IO) { // <-- Cambia firma
+        historyDao.getByUid(entryUid)?.let { entryToUpdate -> // <-- Usa getByUid
+            val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
+            val updatedEntry = entryToUpdate.copy(
+                data = excelData.map { it.toList() },
+                editable = editableValues.map { row -> row.map { it.value } },
+                complete = completeStates.toList(),
+                paymentTotal = finalPaymentTotal,
+                missingItems = finalMissingItems
+            )
+            historyDao.update(updatedEntry)
         }
+    }
+
+    fun loadHistoryEntry(entry: HistoryEntry) {
+        // 1. Pulisci lo stato precedente della griglia
+        excelData.clear()
+        selectedColumns.clear()
+        editableValues.clear()
+        completeStates.clear()
+        errorRowIndexes.value = emptySet()
+
+        // 2. Carica tutti i dati dalla voce di cronologia selezionata
+        excelData.addAll(entry.data)
+
+        // Ricrea gli stati mutabili per i valori editabili e lo stato di completamento
+        entry.editable.forEach { row ->
+            editableValues.add(row.map { mutableStateOf(it) }.toMutableList())
+        }
+        completeStates.addAll(entry.complete)
+
+        // Imposta le colonne come non selezionate (la selezione non viene salvata)
+        excelData.firstOrNull()?.size?.let { cols ->
+            repeat(cols) { selectedColumns.add(false) }
+        }
+
+        // 3. Imposta i metadati e lo stato della UI
+        generated.value = true
+        currentSupplierName = entry.supplier
+        currentCategoryName = entry.category
+
+        // Aggiorna lo stato della UI con i dati specifici di questa voce (fondamentale per il fix)
+        currentEntryStatus.value = Triple(entry.syncStatus, entry.wasExported, entry.uid)
     }
 
     fun resetState() {
@@ -366,10 +393,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         generated.value = false
         isLoading.value = false
         loadError.value = null
-        currentIndex = null
         currentSupplierName = ""
         currentCategoryName = ""
-        updateCurrentEntryStatus()
     }
 
     suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
@@ -389,82 +414,120 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun markCurrentEntryAsExported() {
-        currentIndex?.takeIf { it in historyEntries.value.indices }?.let { idx ->
-            val entry = historyEntries.value[idx]
+    fun markCurrentEntryAsExported(entryUid: Long) { // <-- Cambia firma
+        historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
             if (!entry.wasExported) {
                 val updatedEntry = entry.copy(wasExported = true)
                 viewModelScope.launch(Dispatchers.IO) {
                     historyDao.update(updatedEntry)
                 }
-                currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
+                if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
+                    currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
+                }
             }
         }
     }
 
-    fun markCurrentEntryAsSyncedSuccessfully() {
-        updateSyncStatus(SyncStatus.SYNCED_SUCCESSFULLY)
+    fun markCurrentEntryAsSyncedSuccessfully(entryUid: Long) { // <-- Cambia firma
+        updateSyncStatus(entryUid, SyncStatus.SYNCED_SUCCESSFULLY)
     }
 
-    fun markCurrentEntryAsSyncedWithErrors() {
-        updateSyncStatus(SyncStatus.ATTEMPTED_WITH_ERRORS)
+    fun markCurrentEntryAsSyncedWithErrors(entryUid: Long) { // <-- Cambia firma
+        updateSyncStatus(entryUid, SyncStatus.ATTEMPTED_WITH_ERRORS)
     }
 
-    private fun updateSyncStatus(newStatus: SyncStatus) {
-        currentIndex?.takeIf { it in historyEntries.value.indices }?.let { idx ->
-            val entry = historyEntries.value[idx]
+    private fun updateSyncStatus(entryUid: Long, newStatus: SyncStatus) { // <-- Cambia firma
+        historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
             if (entry.syncStatus != newStatus) {
                 val updatedEntry = entry.copy(syncStatus = newStatus)
                 viewModelScope.launch(Dispatchers.IO) {
                     historyDao.update(updatedEntry)
                 }
-                currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
+                if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
+                    currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
+                }
             }
         }
     }
 
-    private fun calculateSummary(data: List<List<String>>): Triple<Int, Double, Double> {
+    private fun calculateInitialSummary(
+        data: List<List<String>>
+    ): Pair<Int, Double> {
         var totalItems = 0
         var orderTotal = 0.0
-        var paymentTotal = 0.0
 
-        val header = data.firstOrNull() ?: return Triple(0, 0.0, 0.0)
-
+        val header = data.firstOrNull() ?: return Pair(0, 0.0)
         val purchasePriceIndex = header.indexOf("purchasePrice")
-        val discountedPriceIndex = header.indexOf("discountedPrice")
-        val discountIndex = header.indexOf("discount")
-        val originalQuantityIndex = header.indexOf("quantity")
-        val realQuantityIndex = header.indexOf("realQuantity")
+        val quantityIndex = header.indexOf("quantity")
 
+        // Itera su tutte le righe di dati, saltando l'intestazione
         data.drop(1).forEach { rowData ->
-            val realQuantityStr = if (realQuantityIndex != -1) rowData.getOrNull(realQuantityIndex) ?: "" else ""
-            val originalQuantityStr = if (originalQuantityIndex != -1) rowData.getOrNull(originalQuantityIndex) ?: "0" else "0"
-
-            val quantityToUseStr = realQuantityStr.ifBlank { originalQuantityStr }
-            val quantity = quantityToUseStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+            val quantity = rowData.getOrNull(quantityIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
 
             if (quantity > 0) {
                 totalItems++
+                val purchasePrice = rowData.getOrNull(purchasePriceIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+                orderTotal += purchasePrice * quantity
+            }
+        }
+        return Pair(totalItems, orderTotal)
+    }
 
-                val purchasePriceFromFile = (if (purchasePriceIndex != -1) rowData.getOrNull(purchasePriceIndex) else "0")
-                    ?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
-                val discountedPriceFromFile = (if (discountedPriceIndex != -1) rowData.getOrNull(discountedPriceIndex) else null)
-                    ?.replace(",", ".")?.toDoubleOrNull()
-                val discountFromFile = (if (discountIndex != -1) rowData.getOrNull(discountIndex) else null)
-                    ?.replace(",", ".")?.toDoubleOrNull()
+    /**
+     * 💡 NUOVO: Calcola i dati FINALI e VARIABILI.
+     * Si basa solo sulle righe segnate come "complete".
+     * Restituisce: (Totale Pagamento Effettivo, Numero di Prodotti Mancanti)
+     */
+    private fun calculateFinalSummary(
+        data: List<List<String>>,
+        editable: List<List<MutableState<String>>>,
+        complete: List<Boolean>
+    ): Pair<Double, Int> {
+        var paymentTotal = 0.0
+        var completedItems = 0
 
-                val finalPaymentPrice = when {
-                    discountedPriceFromFile != null -> discountedPriceFromFile
-                    discountFromFile != null -> purchasePriceFromFile * (1 - (discountFromFile / 100))
-                    else -> purchasePriceFromFile
+        val header = data.firstOrNull() ?: return Pair(0.0, 0)
+        val purchasePriceIndex = header.indexOf("purchasePrice")
+        val originalQuantityIndex = header.indexOf("quantity")
+        // Aggiungiamo indici per i prezzi scontati se presenti
+        val discountedPriceIndex = header.indexOf("discountedPrice")
+        val discountIndex = header.indexOf("discount")
+
+        data.drop(1).forEachIndexed { index, rowData ->
+            val modelIndex = index + 1 // L'indice per le liste di stato (editable, complete)
+
+            // Calcola solo se la riga è segnata come "completa"
+            if (complete.getOrNull(modelIndex) == true) {
+                completedItems++
+
+                // Usa la quantità contata dall'utente, altrimenti quella originale
+                val realQuantityStr = editable.getOrNull(modelIndex)?.getOrNull(0)?.value ?: ""
+                val originalQuantityStr = if (originalQuantityIndex != -1) rowData.getOrNull(originalQuantityIndex) ?: "0" else "0"
+                val quantityToUseStr = realQuantityStr.ifBlank { originalQuantityStr }
+                val quantity = quantityToUseStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+
+                if (quantity > 0) {
+                    val purchasePrice = rowData.getOrNull(purchasePriceIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+
+                    // Logica per calcolare il prezzo finale di pagamento
+                    val discountedPrice = rowData.getOrNull(discountedPriceIndex)?.replace(",",".")?.toDoubleOrNull()
+                    val discountPercent = rowData.getOrNull(discountIndex)?.replace(",",".")?.toDoubleOrNull()
+
+                    val finalPaymentPrice = when {
+                        discountedPrice != null -> discountedPrice
+                        discountPercent != null -> purchasePrice * (1 - (discountPercent / 100))
+                        else -> purchasePrice
+                    }
+
+                    paymentTotal += finalPaymentPrice * quantity
                 }
-
-                orderTotal += purchasePriceFromFile * quantity
-                paymentTotal += finalPaymentPrice * quantity
             }
         }
 
-        return Triple(totalItems, orderTotal, paymentTotal)
+        val totalDataRows = data.size - 1
+        val missingItems = totalDataRows - completedItems
+
+        return Pair(paymentTotal, missingItems)
     }
 }
 
