@@ -384,7 +384,7 @@ fun GeneratedScreen(
                                 Text(stringResource(R.string.saving_changes))
                             }
                         } else {
-                            Text("Cosa vuoi fare con le modifiche apportate?")
+                            Text(stringResource(R.string.exit_changes_question))
                         }
                     },
                     // --- FIX COMPLETO PER LAYOUT E LOGICA ---
@@ -413,7 +413,7 @@ fun GeneratedScreen(
                                 },
                                 enabled = !isSavingOrReverting
                             ) {
-                                Text("Esci senza Salvare", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.exit_without_saving), color = MaterialTheme.colorScheme.error)
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             // Bottone "Salva ed Esci"
@@ -430,7 +430,7 @@ fun GeneratedScreen(
                                 },
                                 enabled = !isSavingOrReverting
                             ) {
-                                Text("Salva ed Esci")
+                                Text(stringResource(R.string.save_and_exit))
                             }
                         }
                     },
@@ -531,8 +531,8 @@ fun GeneratedScreen(
             if (showExitToHomeDialog) {
                 AlertDialog(
                     onDismissRequest = { if (!isSavingOrReverting) showExitToHomeDialog = false },
-                    title = { Text("Torna alla Home") },
-                    text = { Text("Le modifiche verranno salvate. Vuoi continuare?") },
+                    title = { Text(stringResource(R.string.dialog_title_return_home)) },
+                    text = { Text(stringResource(R.string.dialog_message_save_and_return_home)) },
                     confirmButton = {
                         Button(
                             onClick = {
@@ -549,7 +549,7 @@ fun GeneratedScreen(
                             },
                             enabled = !isSavingOrReverting
                         ) {
-                            Text("Salva ed Esci")
+                            Text(stringResource(R.string.save_and_exit))
                         }
                     },
                     dismissButton = {

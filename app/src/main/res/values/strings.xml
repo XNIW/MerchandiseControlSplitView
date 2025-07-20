@@ -296,4 +296,11 @@
     <string name="discard_and_exit_title">Annulla e Torna Indietro</string>
     <string name="discard_and_exit_message">La voce di cronologia appena creata verrà eliminata. Continuare?</string>
     <string name="discard">Elimina</string>
+
+    <string name="exit_changes_question">Cosa vuoi fare con le modifiche apportate?</string>
+    <string name="exit_without_saving">Esci senza Salvare</string>
+    <string name="save_and_exit">Salva ed Esci</string>
+
+    <string name="dialog_title_return_home">Torna alla Home</string>
+    <string name="dialog_message_save_and_return_home">Le modifiche verranno salvate. Vuoi continuare?</string>
 </resources>

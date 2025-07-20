@@ -284,4 +284,11 @@
     <string name="discard_and_exit_message">The newly created history entry will be deleted. Continue?</string>
     <string name="discard">Delete</string>
 
+    <string name="exit_changes_question">What do you want to do with your changes?</string>
+    <string name="exit_without_saving">Exit without Saving</string>
+    <string name="save_and_exit">Save and Exit</string>
+
+    <string name="dialog_title_return_home">Return to Home</string>
+    <string name="dialog_message_save_and_return_home">Changes will be saved. Do you want to continue?</string>
+
 </resources>

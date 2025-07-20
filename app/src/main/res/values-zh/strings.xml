@@ -283,4 +283,11 @@
     <string name="discard_and_exit_message">刚创建的历史记录将被删除。是否继续？</string>
     <string name="discard">删除</string>
 
+    <string name="exit_changes_question">你想如何处理所做的修改？</string>
+    <string name="exit_without_saving">不保存退出</string>
+    <string name="save_and_exit">保存并退出</string>
+
+    <string name="dialog_title_return_home">返回首页</string>
+    <string name="dialog_message_save_and_return_home">修改内容将被保存。是否继续？</string>
+
 </resources>
