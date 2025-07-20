@@ -72,7 +72,8 @@ fun GeneratedScreen(
     databaseViewModel: DatabaseViewModel,
     navController: NavHostController,
     onBackToStart: () -> Unit,
-    entryUid: Long
+    entryUid: Long,
+    isNewEntry: Boolean
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -98,10 +99,12 @@ fun GeneratedScreen(
     var titleText by remember { mutableStateOf("") }
     var renameText by remember { mutableStateOf("") }
 
-    LaunchedEffect(entryUid) {
-        val entry = excelViewModel.historyEntries.value.find { it.uid == entryUid }
+    val historyEntries by excelViewModel.historyEntries.collectAsState()
+
+// Modifica il LaunchedEffect per dipendere anche da 'historyEntries'
+    LaunchedEffect(entryUid, historyEntries) { // <-- AGGIUNGI historyEntries QUI
+        val entry = historyEntries.find { it.uid == entryUid }
         if (entry != null) {
-            // excelViewModel.loadHistoryEntry(entry) // Già caricata da NavGraph
             titleText = entry.id
         }
     }
@@ -135,12 +138,28 @@ fun GeneratedScreen(
         "discount", "discountedPrice"
     )
 
-    BackHandler {
-        onConfirmExitAction = {
-            excelViewModel.saveCurrentStateToHistory(entryUid) // Attendi il salvataggio...
-            onBackToStart()                            // ...poi esegui l'azione originale
+    val handleBackPress = {
+        // Imposta l'azione di conferma in base al flag 'isNewEntry'
+        onConfirmExitAction = if (isNewEntry) {
+            // Se l'entry è nuova, l'uscita la ELIMINA
+            {
+                excelViewModel.historyEntries.value.find { it.uid == entryUid }?.let { entryToDelete ->
+                    excelViewModel.deleteHistoryEntry(entryToDelete)
+                }
+                onBackToStart() // Torna indietro
+            }
+        } else {
+            // Altrimenti, SALVA (comportamento classico)
+            {
+                excelViewModel.saveCurrentStateToHistory(entryUid)
+                onBackToStart()
+            }
         }
-        showExitDialog = true
+        showExitDialog = true // Mostra il dialogo
+    }
+
+    BackHandler {
+        handleBackPress()
     }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -209,13 +228,7 @@ fun GeneratedScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        onConfirmExitAction = {
-                            excelViewModel.saveCurrentStateToHistory(entryUid)
-                            onBackToStart()
-                        }
-                        showExitDialog = true
-                    }) {
+                    IconButton(onClick = { handleBackPress() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
@@ -329,11 +342,27 @@ fun GeneratedScreen(
             }
 
             if (showExitDialog) {
+                // Definisci testi e titoli in base al contesto
+                val dialogTitle = if (isNewEntry)
+                    stringResource(R.string.discard_and_exit_title) // "Annulla e Torna Indietro"
+                else
+                    stringResource(R.string.exit_confirmation_title) // "Conferma Uscita"
+
+                val dialogText = if (isNewEntry)
+                    stringResource(R.string.discard_and_exit_message) // "La voce di cronologia verrà eliminata. Continuare?"
+                else
+                    stringResource(R.string.exit_confirmation_message) // "Salvare le modifiche prima di uscire?"
+
+                val confirmButtonText = if (isNewEntry)
+                    stringResource(R.string.discard) // "Elimina"
+                else
+                    stringResource(R.string.exit) // "Salva ed Esci" (o simile)
+
+
                 AlertDialog(
                     onDismissRequest = { if (!isSavingOnExit) showExitDialog = false },
-                    title = { Text(stringResource(R.string.exit_confirmation_title)) },
+                    title = { Text(dialogTitle) },
                     text = {
-                        // Mostra un caricamento se stiamo salvando
                         if (isSavingOnExit) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
@@ -341,35 +370,27 @@ fun GeneratedScreen(
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 CircularProgressIndicator()
-                                Text(stringResource(R.string.saving_changes)) // Aggiungi questa stringa in strings.xml
+                                Text(stringResource(R.string.saving_changes))
                             }
                         } else {
-                            Text(stringResource(R.string.exit_confirmation_message))
+                            Text(dialogText)
                         }
                     },
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                // Non chiudere il dialogo qui. La coroutine se ne occuperà.
                                 if (!isSavingOnExit) {
                                     scope.launch {
                                         isSavingOnExit = true
-
-                                        // --- FIX ---
-                                        // La lambda onConfirmExitAction contiene già la logica corretta.
-                                        // Questo blocco di lancio assicura che venga eseguita e completata in sequenza.
-                                        // L'azione attenderà prima il salvataggio, poi navigherà.
-                                        onConfirmExitAction()
-
-                                        // Queste righe verranno eseguite solo dopo il completo completamento di onConfirmExitAction.
+                                        onConfirmExitAction() // Esegue o il salvataggio o l'eliminazione
                                         isSavingOnExit = false
                                         showExitDialog = false
                                     }
                                 }
                             },
-                            enabled = !isSavingOnExit // Disabilita il pulsante durante il salvataggio
+                            enabled = !isSavingOnExit
                         ) {
-                            Text(stringResource(R.string.exit))
+                            Text(confirmButtonText)
                         }
                     },
                     dismissButton = {

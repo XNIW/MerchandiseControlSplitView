@@ -279,4 +279,8 @@
     <string name="saving_changes">正在保存更改&#8230;</string>
     <string name="missing_items_label">缺少商品</string>
 
+    <string name="discard_and_exit_title">取消并返回</string>
+    <string name="discard_and_exit_message">刚创建的历史记录将被删除。是否继续？</string>
+    <string name="discard">删除</string>
+
 </resources>

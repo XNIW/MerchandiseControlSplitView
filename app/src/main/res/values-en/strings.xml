@@ -280,4 +280,8 @@
     <string name="saving_changes">Saving changes&#8230;</string>
     <string name="missing_items_label">Missing products</string>
 
+    <string name="discard_and_exit_title">Discard and Go Back</string>
+    <string name="discard_and_exit_message">The newly created history entry will be deleted. Continue?</string>
+    <string name="discard">Delete</string>
+
 </resources>

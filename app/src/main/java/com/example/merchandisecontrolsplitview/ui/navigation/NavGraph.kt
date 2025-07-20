@@ -60,7 +60,7 @@ fun AppNavGraph() {
                 onGenerate = { supplierName, categoryName ->
                     excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid -> // Riceve il Long
                         // Assicurati che il percorso di navigazione accetti un long
-                        navController.navigate(Screen.Generated.createRoute(entryUid))
+                        navController.navigate(Screen.Generated.createRoute(entryUid, isNew = true))
                     }
                 },
                 onBack = { navController.popBackStack() }
@@ -70,17 +70,27 @@ fun AppNavGraph() {
         composable(
             route = Screen.Generated.route,
             // 1. Specifica che la rotta accetta un argomento 'entryUid' di tipo Long
-            arguments = listOf(navArgument("entryUid") { type = NavType.LongType })
+            arguments = listOf(
+                navArgument("entryUid") { type = NavType.LongType },
+                navArgument("isNew") {
+                    type = NavType.BoolType
+                    defaultValue = false // Il valore predefinito è false
+                }
+            )
         ) { backStackEntry ->
-            // 2. Leggi l'argomento come Long
             val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
+            // --- INIZIO MODIFICA ---
+            // Estrai il valore del nuovo argomento
+            val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
             GeneratedScreen(
                 excelViewModel = excelViewModel,
                 databaseViewModel = dbViewModel,
                 navController = navController,
                 onBackToStart = { navController.popBackStack() },
-                entryUid = entryUid // 3. Passa l'uid Long alla schermata
+                entryUid = entryUid,
+                isNewEntry = isNewEntry // Passa il flag alla schermata
             )
+            // --- FINE MODIFICA ---
         }
 
         composable(Screen.History.route) {
@@ -89,9 +99,8 @@ fun AppNavGraph() {
             HistoryScreen(
                 historyList = historyList,
                 onSelect = { entry ->
-                    // 1. Carica i dati della voce selezionata nel ViewModel
                     excelViewModel.loadHistoryEntry(entry)
-                    // 2. Naviga direttamente alla schermata Generated usando la rotta corretta
+                    // Da qui l'entry non è nuova, quindi usiamo il valore predefinito isNew = false
                     navController.navigate(Screen.Generated.createRoute(entry.uid))
                 },
                 onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },

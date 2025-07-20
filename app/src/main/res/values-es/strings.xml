@@ -279,4 +279,8 @@
     <string name="saving_changes">Guardando cambios&#8230;</string>
     <string name="missing_items_label">Productos faltantes</string>
 
+    <string name="discard_and_exit_title">Descartar y Volver Atrás</string>
+    <string name="discard_and_exit_message">La entrada de historial recién creada será eliminada. ¿Continuar?</string>
+    <string name="discard">Eliminar</string>
+
 </resources>

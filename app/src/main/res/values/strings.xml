@@ -292,4 +292,8 @@
 
     <string name="saving_changes">Salvataggio delle modifiche&#8230;</string>
     <string name="missing_items_label">Prodotti mancanti</string>
+
+    <string name="discard_and_exit_title">Annulla e Torna Indietro</string>
+    <string name="discard_and_exit_message">La voce di cronologia appena creata verrà eliminata. Continuare?</string>
+    <string name="discard">Elimina</string>
 </resources>

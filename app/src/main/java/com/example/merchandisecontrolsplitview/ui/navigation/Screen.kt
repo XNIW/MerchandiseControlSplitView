@@ -9,11 +9,10 @@ sealed class Screen(val route: String) {
     data object FilePicker : Screen("filePicker")
     data object PreGenerate : Screen("preGenerate")
     // MODIFICA: La rotta ora include il placeholder per l'argomento
-    data object Generated : Screen("generated/{entryUid}") { // 1. Cambiato placeholder per chiarezza
-        // 2. La funzione ora accetta un Long
-        fun createRoute(entryUid: Long): String {
-            // 3. La codifica URL non è più necessaria per un numero
-            return "generated/$entryUid"
+    data object Generated : Screen("generated/{entryUid}?isNew={isNew}") {
+        // La funzione ora accetta un booleano per indicare se l'entry è nuova
+        fun createRoute(entryUid: Long, isNew: Boolean = false): String {
+            return "generated/$entryUid?isNew=$isNew"
         }
     }
     data object History : Screen("history")
