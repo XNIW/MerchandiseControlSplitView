@@ -56,12 +56,18 @@ object ImportAnalyzer {
                 val mergedRow = lastRowInfo.value.toMutableMap()
 
                 // Somma le quantità da tutte le righe del gruppo
-                val totalStockQuantity = group.sumOf { (_, row) ->
-                    val stockQty = row["stockQuantity"]?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
+                val totalQuantity = group.sumOf { (_, row) ->
+                    // Usa la chiave "quantity" per prendere il valore dal file
+                    val supplierQuantity = row["quantity"]?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
+
+                    // La quantità contata a mano rimane invariata
                     val realQty = row["realQuantity"]?.replace(",", ".")?.toDoubleOrNull() ?: 0.0
-                    realQty.takeIf { it > 0 } ?: stockQty
+
+                    // La logica di priorità ora è chiarissima
+                    realQty.takeIf { it > 0 } ?: supplierQuantity
                 }
-                mergedRow["stockQuantity"] = totalStockQuantity.toString()
+// Aggiorna la riga unita con la nuova chiave
+                mergedRow["quantity"] = totalQuantity.toString()
 
                 finalRow = mergedRow.toMap()
 
@@ -81,8 +87,8 @@ object ImportAnalyzer {
                 val supplierName = finalRow["supplier"]?.trim()?.takeIf { it.isNotBlank() }
                 val categoryName = finalRow["category"]?.trim()?.takeIf { it.isNotBlank() }
 
-                // La quantità è già aggregata per i duplicati
-                val quantityToUse = finalRow["stockQuantity"]?.replace(",", ".")?.toDoubleOrNull()
+                // La quantità è già aggregata per i duplica ti
+                val quantityToUse = finalRow["quantity"]?.replace(",", ".")?.toDoubleOrNull()
 
                 val purchasePriceFromFile = finalRow["purchasePrice"]?.replace(",", ".")?.toDoubleOrNull()
                 val retailPriceFromFile = finalRow["retailPrice"]?.replace(",", ".")?.toDoubleOrNull()

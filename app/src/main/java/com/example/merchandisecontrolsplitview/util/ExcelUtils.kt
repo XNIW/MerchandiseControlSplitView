@@ -99,7 +99,7 @@ fun readAndAnalyzeExcel(
     // --- FIX: Mappa degli alias corretta e allineata ---
     val possibleNames = mapOf(
         "barcode" to listOf("barcode", "条码", "ean", "bar code", "codice a barre", "código de barras", "codigo de barras", "código barras", "codigo barras", "co.barra", "条形码", "Código de barras"),
-        "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量"),
+        "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量", "stock", "stockquantity", "giacenza", "scorte", "库存", "库存数量", "Existencias", "Stock Quantity"),
         "purchasePrice" to listOf("purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格", "原价", "售价", "新进价", "Nuovo prezzo acquisto", "Nuevo Precio de Compra", "New Purchase Price", "折前单价(含税)"),
         "totalPrice" to listOf("totalprice", "total_price", "总价", "totale", "importo", "price total", "precio total", "importe", "total", "importe total", "importe final", "subtotal", "subtotal bruto", "合计", "金额", "总计"),
         "productName" to listOf("productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre", "产品名1", "产品品名", "商品名1", "Nome prodotto", "Nombre del producto", "Product name", "商品名称", "外文描述"),
@@ -112,7 +112,6 @@ fun readAndAnalyzeExcel(
         "retailPrice" to listOf("retailprice", "retail_price", "零售价", "prezzo vendita", "prezzo retail", "sale price", "listino", "precio de venta", "precio venta", "precio al público", "precio retail", "precio al por menor", "Nuovo Prezzo vendita", "新零售价", "Nuevo precio de venta", "New retail price"),
         "realQuantity" to listOf("实点数量", "Counted quantity", "Quantità contata", "Cantidad contada"),
         "category" to listOf("category", "categoria", "reparto", "department", "分类", "类别", "categoría"),
-        "stockQuantity" to listOf("stock", "quantity", "stockquantity", "giacenza", "quantità", "scorte", "库存", "库存数量", "Existencias", "Stock Quantity"),
         "oldpurchasePrice" to listOf("Prezzo vecchio acquisto", "旧进价", "Precio de compra anterior", "Old purchase price"),
         "oldretailPrice" to listOf("Prezzo vecchio vendita", "旧零售价", "Precio de venta anterior", "Old retail price")
     )
