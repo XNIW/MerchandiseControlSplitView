@@ -139,14 +139,19 @@ fun HistoryScreen(
 
     // --- NUOVO DIALOG PER LA SELEZIONE DELLA DATA ---
     if (showDatePickerDialog) {
-        val dateToSelect = if(datePickerTargetIsStart) customStartDate else customEndDate
-        val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = dateToSelect
-                ?.atStartOfDay(ZoneId.systemDefault())
-                ?.toInstant()
-                ?.toEpochMilli()
-        )
+        val dateToSelect = if (datePickerTargetIsStart) customStartDate else customEndDate
 
+        // SOLUZIONE CORRETTA: Usa il Composable `key` per resettare lo stato.
+        val datePickerState = key(datePickerTargetIsStart) {
+            rememberDatePickerState(
+                initialSelectedDateMillis = dateToSelect
+                    ?.atStartOfDay(ZoneId.systemDefault())
+                    ?.toInstant()
+                    ?.toEpochMilli()
+            )
+        }
+
+        // Il resto del codice del DatePickerDialog rimane invariato...
         DatePickerDialog(
             onDismissRequest = { showDatePickerDialog = false },
             confirmButton = {
@@ -159,7 +164,7 @@ fun HistoryScreen(
                             datePickerTargetIsStart = false
                         } else {
                             customEndDate = selectedDate
-                            // Una volta selezionata anche la data di fine, chiudi il dialog e applica il filtro
+                            // Una volta selezionata anche la data di fine, applica il filtro
                             showDatePickerDialog = false
                             if (customStartDate != null) {
                                 onSetFilter(DateFilter.CustomRange(customStartDate!!, customEndDate!!))
@@ -167,6 +172,7 @@ fun HistoryScreen(
                         }
                     }
                 }) {
+                    // Il testo del bottone cambia correttamente in base a `datePickerTargetIsStart`
                     Text(if (datePickerTargetIsStart) stringResource(R.string.next) else stringResource(R.string.confirm))
                 }
             },
