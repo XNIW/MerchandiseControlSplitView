@@ -183,6 +183,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 dao.update(product)
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
+            } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                // AGGIUNTA: Gestione specifica per l'errore di unicità durante l'aggiornamento
+                e.printStackTrace()
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists))
             } catch (e: Exception) {
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_updated))

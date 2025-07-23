@@ -455,8 +455,11 @@ internal fun EditProductDialog(
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
     var productNameError by remember { mutableStateOf<String?>(null) }
+    var retailPriceError by remember { mutableStateOf<String?>(null) } // NUOVA RIGA
     val barcodeRequiredErrorText = stringResource(id = R.string.error_barcode_required)
     val productNameRequiredAtLeastOneErrorText = stringResource(id = R.string.error_productname_required_at_least_one)
+    // NUOVA RIGA: Assicurati di aggiungere questa stringa in res/values/strings.xml
+    val retailPriceErrorText = stringResource(id = R.string.error_invalid_or_missing_retail_price)
 
     var showSecondNameField by remember(product) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
     var showItemNumberField by remember(product) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
@@ -464,7 +467,16 @@ internal fun EditProductDialog(
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
         productNameError = if (productName.isBlank() && secondProductName.isBlank()) productNameRequiredAtLeastOneErrorText else null
-        return barcodeError == null && productNameError == null
+
+        // NUOVA LOGICA DI VALIDAZIONE PER IL PREZZO DI VENDITA
+        val retailPriceValue = retailPrice.replace(',', '.').toDoubleOrNull()
+        retailPriceError = if (retailPriceValue == null || retailPriceValue <= 0) {
+            retailPriceErrorText
+        } else {
+            null
+        }
+
+        return barcodeError == null && productNameError == null && retailPriceError == null
     }
 
     val scope = rememberCoroutineScope()
@@ -551,7 +563,17 @@ internal fun EditProductDialog(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = purchasePrice, onValueChange = { purchasePrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    OutlinedTextField(value = retailPrice, onValueChange = { retailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                    OutlinedTextField(
+                        value = retailPrice,
+                        // Aggiungiamo la chiamata a validate() per un feedback immediato durante la digitazione
+                        onValueChange = { retailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' }; validate() },
+                        label = { Text(stringResource(R.string.retail_price_label)) },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        // Parametri aggiunti per mostrare lo stato di errore
+                        isError = retailPriceError != null,
+                        supportingText = { retailPriceError?.let { Text(it) } }
+                    )
                 }
 
                 var showOldPrices by remember(product) { mutableStateOf(product.oldPurchasePrice != null || product.oldRetailPrice != null) }
