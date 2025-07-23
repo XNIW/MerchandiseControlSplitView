@@ -174,6 +174,26 @@ fun DatabaseScreen(
                         ) {
                             items(products.itemCount, key = { products[it]?.id ?: -1 }) { idx ->
                                 products[idx]?.let { product ->
+                                    var supplierName by remember { mutableStateOf<String?>(null) }
+                                    val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
+                                    var categoryName by remember { mutableStateOf<String?>(null) }
+                                    val categoryIdPrefix = stringResource(R.string.category_id_prefix)
+
+                                    LaunchedEffect(product.supplierId) {
+                                        supplierName = if (product.supplierId != null) {
+                                            viewModel.getSupplierById(product.supplierId)?.name ?: "$supplierIdPrefix ${product.supplierId}"
+                                        } else {
+                                            "-"
+                                        }
+                                    }
+                                    LaunchedEffect(product.categoryId) {
+                                        categoryName = if (product.categoryId != null) {
+                                            viewModel.getCategoryById(product.categoryId)?.name ?: "$categoryIdPrefix ${product.categoryId}"
+                                        } else {
+                                            null
+                                        }
+                                    }
+
                                     val dismissState = rememberSwipeToDismissBoxState(
                                         confirmValueChange = {
                                             if (it == SwipeToDismissBoxValue.EndToStart) {
@@ -203,7 +223,8 @@ fun DatabaseScreen(
                                     ) {
                                         ProductRow(
                                             product = product,
-                                            viewModel = viewModel,
+                                            supplierName = supplierName, // Passa la variabile
+                                            categoryName = categoryName, // Passa la variabile
                                             onClick = { itemToEdit = product }
                                         )
                                     }
@@ -335,29 +356,12 @@ private fun PriceColumn(
 }
 
 @Composable
-fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Unit) {
-    var supplierName by remember { mutableStateOf<String?>(null) }
-    val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
-
-    var categoryName by remember { mutableStateOf<String?>(null) }
-    val categoryIdPrefix = stringResource(R.string.category_id_prefix)
-
-    LaunchedEffect(product.supplierId) {
-        supplierName = if (product.supplierId != null) {
-            viewModel.getSupplierById(product.supplierId)?.name ?: "$supplierIdPrefix ${product.supplierId}"
-        } else {
-            "-"
-        }
-    }
-
-    LaunchedEffect(product.categoryId) {
-        categoryName = if (product.categoryId != null) {
-            viewModel.getCategoryById(product.categoryId)?.name ?: "$categoryIdPrefix ${product.categoryId}"
-        } else {
-            null
-        }
-    }
-
+fun ProductRow(
+    product: Product,
+    supplierName: String?, // <-- 1. Aggiungi questo parametro
+    categoryName: String?, // <-- 2. Aggiungi questo parametro
+    onClick: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -408,14 +412,16 @@ fun ProductRow(product: Product, viewModel: DatabaseViewModel, onClick: () -> Un
             Spacer(Modifier.height(8.dp))
             Row {
                 Text(text = "${stringResource(R.string.product_supplier_full)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(text = supplierName ?: "...", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Normal)
+                // 3. Usa il parametro supplierName
+                Text(text = supplierName ?: "-", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Normal)
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 if (categoryName != null) {
                     Row {
                         Text(text = "${stringResource(R.string.header_category)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(text = categoryName!!, style = MaterialTheme.typography.bodyMedium)
+                        // 4. Usa il parametro categoryName
+                        Text(text = categoryName, style = MaterialTheme.typography.bodyMedium)
                     }
                 } else {
                     Spacer(modifier = Modifier)
@@ -533,11 +539,11 @@ internal fun EditProductDialog(
             ) {
                 Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
-                OutlinedTextField(value = barcode, onValueChange = { barcode = it; barcodeError = null }, label = { Text(stringResource(R.string.barcode_label)) }, modifier = Modifier.fillMaxWidth(), isError = barcodeError != null, supportingText = { barcodeError?.let { Text(it) } })
+                OutlinedTextField(value = barcode, onValueChange = { barcode = it; validate() }, label = { Text(stringResource(R.string.barcode_label)) }, modifier = Modifier.fillMaxWidth(), isError = barcodeError != null, supportingText = { barcodeError?.let { Text(it) } })
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    OutlinedTextField(value = productName, onValueChange = { productName = it; productNameError = null }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
+                    OutlinedTextField(value = productName, onValueChange = { productName = it; validate() }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
                     if (showSecondNameField) {
-                        OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it; validate() }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
                     } else {
                         TextButton(onClick = { showSecondNameField = true }) { Text(stringResource(R.string.add_second_name)) }
                     }

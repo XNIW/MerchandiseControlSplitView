@@ -667,7 +667,7 @@ fun GeneratedScreen(
                                 },
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                                // --- COMPOSABLE LOCALE PER RIGA EDITABILE ---
+                            // --- COMPOSABLE LOCALE PER RIGA EDITABILE ---
                             @Composable
                             fun EditableInfoRow(
                                 label: String,
