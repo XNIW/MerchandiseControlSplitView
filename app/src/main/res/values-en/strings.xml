@@ -291,4 +291,9 @@
     <string name="dialog_title_return_home">Return to Home</string>
     <string name="dialog_message_save_and_return_home">Changes will be saved. Do you want to continue?</string>
 
+    <string name="edit_column_type">Edit column type</string>
+    <string name="error_missing_essential_columns_prompt">
+Action not allowed. Essential columns missing: %1$s. Please identify these columns by clicking their header before proceeding.
+</string>
+
 </resources>

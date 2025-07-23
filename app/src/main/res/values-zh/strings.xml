@@ -290,4 +290,9 @@
     <string name="dialog_title_return_home">返回首页</string>
     <string name="dialog_message_save_and_return_home">修改内容将被保存。是否继续？</string>
 
+    <string name="edit_column_type">编辑列类型</string>
+    <string name="error_missing_essential_columns_prompt">
+操作不允许。缺少必要的列：%1$s。请在继续之前点击这些列的标题进行识别。
+</string>
+
 </resources>

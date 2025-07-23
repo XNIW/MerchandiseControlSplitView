@@ -324,7 +324,10 @@ fun GeneratedScreen(
                         onRowCellClick = { r ->
                             infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
                         },
-                        onHeaderClick = { colIdx -> headerDialogIndex = colIdx }
+                        onHeaderClick = { colIdx -> headerDialogIndex = colIdx },
+                        // --- RIGHE AGGIUNTE PER RISOLVERE L'ERRORE ---
+                        isColumnEssential = { false }, // In questa schermata nessuna colonna ha la logica "essenziale".
+                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx } // Il click sull'icona apre lo stesso dialogo di prima.
                     )
                 }
             }

@@ -43,7 +43,10 @@ fun ZoomableExcelGrid(
     onPriceCellClick: (Int) -> Unit,
     onRowCellClick: (Int) -> Unit,
     headerTypes: List<String>? = null,
-    onHeaderClick: ((colIndex: Int) -> Unit)? = null
+    onHeaderClick: ((colIndex: Int) -> Unit)?,
+    // --- NUOVO: Parametri per gestire le colonne essenziali ---
+    isColumnEssential: (colIndex: Int) -> Boolean,
+    onHeaderEditClick: ((colIndex: Int) -> Unit)?
 ) {
     if (data.isEmpty()) return
 
@@ -70,29 +73,34 @@ fun ZoomableExcelGrid(
                 item {
                     Row {
                         repeat(columnCount) { ci ->
-                            // --- MODIFICA CHIAVE: Logica colori header ---
-                            val headerBgColor = when (headerTypes?.getOrNull(ci)) {
-                                // Verde per le colonne trovate tramite ALIAS
-                                "alias" -> if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
-                                // Arancione per le colonne trovate tramite PATTERN
-                                "pattern" -> if (isSystemInDarkTheme()) Color(0xFFFF9100).copy(alpha = 0.5f) else Color(0xFFFFD180)
-                                // Altrimenti, TableCell userà il suo grigio di default
+                            // --- NUOVO: Verifica se la colonna è essenziale ---
+                            val isEssential = isColumnEssential(ci)
+
+                            // --- MODIFICA: La logica dei colori ora include lo stato "essenziale" ---
+                            val headerBgColor = when {
+                                isEssential -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)
+                                headerTypes?.getOrNull(ci) == "alias" -> if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
+                                headerTypes?.getOrNull(ci) == "pattern" -> if (isSystemInDarkTheme()) Color(0xFFFF9100).copy(alpha = 0.5f) else Color(0xFFFFD180)
                                 else -> null
                             }
+
+                            // --- MODIFICA: La chiamata a TableCell ora passa anche onEditClick ---
                             TableCell(
                                 text = data[0][ci],
                                 width = cellWidth,
                                 height = cellHeight,
                                 isHeader = true,
                                 onCellClick = if (onHeaderClick != null) { { onHeaderClick(ci) } } else null,
-                                overrideBackgroundColor = headerBgColor
+                                onEditClick = if (onHeaderEditClick != null) { { onHeaderEditClick(ci) } } else null,
+                                overrideBackgroundColor = headerBgColor,
+                                isSelectedColumn = selectedColumns.getOrElse(ci) { false }
                             )
                         }
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 1.dp)
                 }
 
-                // Data rows (nessuna modifica qui)
+                // Data rows
                 itemsIndexed(data.drop(1)) { idx, row ->
                     val r = idx + 1
                     val bothFilled = if (hasEditable) {
@@ -101,14 +109,9 @@ fun ZoomableExcelGrid(
                             ?: false
                     } else false
                     val isComplete = completeStates.getOrNull(r) == true
-
-                    // --- LOGICA DI EVIDENZIAZIONE ---
                     val isErrorRow = errorRowIndexes.contains(r)
-                    // Il colore rosso viene usato solo se la riga è errata, altrimenti è null.
                     val highlightColor = if (isErrorRow) Color.Red.copy(alpha = 0.2f) else null
-                    // --- FINE LOGICA ---
 
-                    // La Row ora non ha più uno sfondo
                     Row {
                         row.forEachIndexed { ci, cell ->
                             val isMatch = searchMatches.contains(r to ci)
@@ -119,10 +122,11 @@ fun ZoomableExcelGrid(
                                     height = cellHeight,
                                     isSelectedColumn = selectedColumns.getOrElse(ci) { false },
                                     isSearchMatch = isMatch,
-                                    onCellClick = { selectedColumns[ci] = !selectedColumns[ci] },
-                                    // Passiamo il colore di highlight a ogni cella
+                                    // --- MODIFICA CRUCIALE: onCellClick ora usa la logica protetta ---
+                                    onCellClick = { onHeaderClick?.invoke(ci) },
                                     overrideBackgroundColor = highlightColor
                                 )
+                                // Il resto del codice rimane invariato
                                 generated -> when {
                                     editMode -> {
                                         val text = when (ci) {
@@ -157,12 +161,11 @@ fun ZoomableExcelGrid(
                                             modifier = Modifier
                                                 .width(cellWidth)
                                                 .height(cellHeight)
-                                                // La logica del background ora dà priorità all'errore
                                                 .background(
                                                     when {
-                                                        isErrorRow -> highlightColor!! // Usa il colore rosso se c'è errore
-                                                        isComplete -> completeColor     // Altrimenti il colore verde se completo
-                                                        else -> MaterialTheme.colorScheme.surface // Altrimenti il default
+                                                        isErrorRow -> highlightColor!!
+                                                        isComplete -> completeColor
+                                                        else -> MaterialTheme.colorScheme.surface
                                                     }
                                                 )
                                                 .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)

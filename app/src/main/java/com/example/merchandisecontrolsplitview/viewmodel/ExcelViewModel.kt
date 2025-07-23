@@ -44,7 +44,7 @@ sealed class DateFilter {
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExcelViewModel(application: Application) : AndroidViewModel(application) {
-
+    private val essentialColumns = setOf("barcode", "productName")
     // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
     val selectedColumns = mutableStateListOf<Boolean>()
@@ -93,6 +93,36 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     private var _originalHistoryEntryState: HistoryEntry? = null
     private var _preGenerateStateBackup: List<List<String>>? = null
+
+    // Funzione per verificare se una colonna è essenziale
+    fun isColumnEssential(colIdx: Int): Boolean {
+        val headerKey = excelData.getOrNull(0)?.getOrNull(colIdx)
+        return headerKey in essentialColumns
+    }
+
+    // Funzione per gestire la selezione di una colonna, bloccando quelle essenziali
+    fun toggleColumnSelection(colIdx: Int) {
+        if (isColumnEssential(colIdx)) {
+            return
+        }
+        if (colIdx in selectedColumns.indices) {
+            selectedColumns[colIdx] = !selectedColumns[colIdx]
+        }
+    }
+
+    // Funzione per gestire il "Seleziona/Deseleziona Tutto" in modo sicuro
+    fun toggleSelectAll() {
+        val anyUnselected = selectedColumns.indices.any { idx ->
+            !selectedColumns[idx] && !isColumnEssential(idx)
+        }
+        selectedColumns.indices.forEach { idx ->
+            if (isColumnEssential(idx)) {
+                selectedColumns[idx] = true
+            } else {
+                selectedColumns[idx] = anyUnselected
+            }
+        }
+    }
 
     /**
      * Funzione helper PRIVATA che popola lo stato live del ViewModel.
@@ -274,9 +304,16 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun initPreGenerateState() {
         selectedColumns.clear()
-        excelData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(true) } }
+        excelData.firstOrNull()?.size?.let { cols ->
+            repeat(cols) { colIdx ->
+                // MODIFICA: Semplifica l'espressione. L'obiettivo è che tutte le
+                // colonne partano come selezionate. La logica di blocco è gestita
+                // altrove (in toggleColumnSelection).
+                selectedColumns.add(true)
+            }
+        }
         editableValues.clear()
-        excelData.forEach { _ -> editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
+        repeat(excelData.size) { editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
         completeStates.clear()
         repeat(excelData.size) { completeStates.add(false) }
     }

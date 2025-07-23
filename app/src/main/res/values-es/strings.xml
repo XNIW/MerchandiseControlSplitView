@@ -290,4 +290,9 @@
     <string name="dialog_title_return_home">Volver al inicio</string>
     <string name="dialog_message_save_and_return_home">Los cambios se guardarán. ¿Quieres continuar?</string>
 
+    <string name="edit_column_type">Modificar tipo de columna</string>
+    <string name="error_missing_essential_columns_prompt">
+Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica estas columnas haciendo clic en su encabezado antes de continuar.
+</string>
+
 </resources>

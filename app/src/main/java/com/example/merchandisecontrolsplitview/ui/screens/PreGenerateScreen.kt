@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category // <-- IMPORT AGGIUNTO
@@ -163,8 +164,14 @@ fun PreGenerateScreen(
                         onQuantityCellClick = {},
                         onPriceCellClick = {},
                         onRowCellClick = { },
-                        onHeaderClick = { colIdx -> headerDialogIndex = colIdx },
-                        headerTypes = headerTypes
+                        headerTypes = headerTypes,
+                        // --- MODIFICHE E AGGIUNTE ---
+                        // Passa la funzione per controllare se una colonna è essenziale
+                        isColumnEssential = { colIdx -> excelViewModel.isColumnEssential(colIdx) },
+                        // Il click sulla cella ora gestisce la selezione/deselezione protetta
+                        onHeaderClick = { colIdx -> excelViewModel.toggleColumnSelection(colIdx) },
+                        // Il click sull'icona di modifica apre il dialogo per cambiare tipo
+                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx }
                     )
                 }
             }
@@ -178,8 +185,8 @@ fun PreGenerateScreen(
                         .padding(16.dp)
                 ) {
                     FloatingActionButton(onClick = {
-                        val anyUnselected = selectedColumns.any { !it }
-                        selectedColumns.forEachIndexed { idx, _ -> selectedColumns[idx] = anyUnselected }
+                        // MODIFICA: Chiama la nuova funzione protetta del ViewModel
+                        excelViewModel.toggleSelectAll()
                     }) {
                         Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
                     }
@@ -200,11 +207,30 @@ fun PreGenerateScreen(
 
             // --- DIALOGO UNICO PER FORNITORE E CATEGORIA ---
             if (showSelectionDialog) {
+                // --- NUOVO: Logica di validazione ---
+                val headers = excelViewModel.excelData.firstOrNull() ?: emptyList()
+                val missingEssentialColumns = setOf("barcode", "productName")
+                    .filterNot { headers.contains(it) }
+
                 AlertDialog(
                     onDismissRequest = { showSelectionDialog = false },
                     title = { Text(stringResource(R.string.supplier_and_category_dialog_title)) },
                     text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+                            // --- NUOVO: Messaggio di errore se mancano colonne essenziali ---
+                            if (missingEssentialColumns.isNotEmpty()) {
+                                Text(
+                                    text = stringResource(
+                                        R.string.error_missing_essential_columns_prompt,
+                                        missingEssentialColumns.joinToString { getLocalizedHeader(context, it) }
+                                    ),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
                             // Menu a discesa per il Fornitore
                             ExposedDropdownMenuBox(
                                 expanded = isSupplierDropdownExpanded,
@@ -306,8 +332,10 @@ fun PreGenerateScreen(
                                     }
                                 }
                             },
+                            // --- MODIFICA: Il pulsante è abilitato solo se tutti i requisiti sono soddisfatti ---
                             enabled = selectedSupplier != null && selectedSupplier?.name == supplierInputText &&
-                                    selectedCategory != null && selectedCategory?.name == categoryInputText
+                                    selectedCategory != null && selectedCategory?.name == categoryInputText &&
+                                    missingEssentialColumns.isEmpty() // <-- CONTROLLO FONDAMENTALE
                         ) {
                             Text(stringResource(R.string.confirm))
                         }
