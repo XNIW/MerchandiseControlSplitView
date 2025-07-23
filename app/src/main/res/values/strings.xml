@@ -306,4 +306,5 @@
 
     <string name="edit_column_type">Modifica tipo colonna</string>
     <string name="error_missing_essential_columns_prompt">Azione non permessa. Colonne essenziali mancanti: %1$s. Per favore, identifica queste colonne cliccando sulla loro intestazione prima di procedere.</string>
+    <string name="error_barcode_already_exists">Error: A product with this barcode already exists.</string>
 </resources>

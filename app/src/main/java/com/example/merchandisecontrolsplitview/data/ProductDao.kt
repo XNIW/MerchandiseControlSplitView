@@ -82,4 +82,13 @@ interface ProductDao {
         deleteAll()
         insertAll(products)
     }
+
+    /**
+    * Recupera una lista di prodotti basata su una lista di barcode.
+    * Ottimizzato per evitare il problema N+1 query.
+    * @param barcodes La lista di barcode da cercare.
+    * @return Una lista di prodotti che corrispondono ai barcode forniti.
+    */
+    @Query("SELECT * FROM products WHERE barcode IN (:barcodes)")
+    suspend fun findByBarcodes(barcodes: List<String>): List<Product>
 }

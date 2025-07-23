@@ -324,22 +324,39 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) { // Esegui operazioni pesanti su un thread in background
             // 1. Filtra i dati in base alle colonne selezionate e aggiungi i prezzi vecchi
+            val header = excelData.firstOrNull() ?: return@launch
+            val barcodeIdx = header.indexOf("barcode")
+
+            // 1. Estrai tutti i barcode necessari in una sola passata
+            val allBarcodesInFile = if (barcodeIdx != -1) {
+                excelData.drop(1).mapNotNull { row -> row.getOrNull(barcodeIdx)?.takeIf { it.isNotBlank() } }
+            } else {
+                emptyList()
+            }
+
+            // 2. Esegui UNA SOLA query e crea una mappa per un accesso istantaneo
+            val productMap = if (allBarcodesInFile.isNotEmpty()) {
+                productDao.findByBarcodes(allBarcodesInFile).associateBy { it.barcode }
+            } else {
+                emptyMap()
+            }
+
             val filteredData = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
                     row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
                             listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
                 } else {
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
-                    val barcodeIdx = excelData.first().indexOf("barcode")
-                    val barcode = if (barcodeIdx != -1) excelData[idx].getOrNull(barcodeIdx) else null
+                    val barcode = if (barcodeIdx != -1) row.getOrNull(barcodeIdx) else null
                     var oldPurchase = ""
                     var oldRetail = ""
-                    if (!barcode.isNullOrBlank()) {
-                        productDao.findByBarcode(barcode)?.let { product ->
-                            oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
-                            oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
-                        }
+
+                    // 3. Usa la mappa (accesso istantaneo) invece di una nuova query
+                    productMap[barcode]?.let { product ->
+                        oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
+                        oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
                     }
+
                     original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
                 }
             }.map { it.toList() } // Assicura che sia una copia immutabile

@@ -11,13 +11,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed class UiState {
     data object Idle : UiState()
@@ -166,6 +167,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 dao.insert(product)
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_added))
+            } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                // Errore specifico per violazione di vincoli (es. barcode duplicato)
+                e.printStackTrace()
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists)) // Assicurati di avere questa stringa in strings.xml
             } catch (e: Exception) {
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_added))
@@ -268,27 +273,34 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val supplierMutex = Mutex()
     suspend fun addSupplier(name: String): Supplier? {
         if (name.isBlank()) return null
-        val existing = supplierDao.findByName(name)
-        if (existing != null) return existing
-
-        val newSupplier = Supplier(name = name)
-        return withContext(Dispatchers.IO) {
-            supplierDao.insert(newSupplier)
-            supplierDao.findByName(name)
+        // The withLock block returns the result of the expression inside
+        return supplierMutex.withLock {
+            val existing = supplierDao.findByName(name)
+            if (existing != null) {
+                existing
+            } else {
+                val newSupplier = Supplier(name = name)
+                supplierDao.insert(newSupplier)
+                supplierDao.findByName(name)
+            }
         }
     }
 
+    private val categoryMutex = Mutex()
     suspend fun addCategory(name: String): Category? {
         if (name.isBlank()) return null
-        val existing = categoryDao.findByName(name)
-        if (existing != null) return existing
-
-        val newCategory = Category(name = name)
-        return withContext(Dispatchers.IO) {
-            categoryDao.insert(newCategory)
-            categoryDao.findByName(name)
+        return categoryMutex.withLock {
+            val existing = categoryDao.findByName(name)
+            if (existing != null) {
+                existing
+            } else {
+                val newCategory = Category(name = name)
+                categoryDao.insert(newCategory)
+                categoryDao.findByName(name)
+            }
         }
     }
 

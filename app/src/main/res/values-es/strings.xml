@@ -294,5 +294,6 @@
     <string name="error_missing_essential_columns_prompt">
 Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica estas columnas haciendo clic en su encabezado antes de continuar.
 </string>
+    <string name="error_barcode_already_exists">Error: Ya existe un producto con este código de barras.</string>
 
 </resources>

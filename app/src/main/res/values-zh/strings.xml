@@ -294,5 +294,6 @@
     <string name="error_missing_essential_columns_prompt">
 操作不允许。缺少必要的列：%1$s。请在继续之前点击这些列的标题进行识别。
 </string>
+    <string name="error_barcode_already_exists">错误：已存在具有此条码的产品。</string>
 
 </resources>
