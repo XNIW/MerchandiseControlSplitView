@@ -307,4 +307,15 @@
     <string name="edit_column_type">Modifica tipo colonna</string>
     <string name="error_missing_essential_columns_prompt">Azione non permessa. Colonne essenziali mancanti: %1$s. Per favore, identifica queste colonne cliccando sulla loro intestazione prima di procedere.</string>
     <string name="error_barcode_already_exists">Error: A product with this barcode already exists.</string>
+    <string name="add_products_manually">Aggiungi prodotti manualmente</string>
+    <string name="no_products_add_new">Nessun prodotto presente. Aggiungi un nuovo prodotto!</string>
+    <string name="manual_entry_indicator">Voce inserita manualmente</string>
+
+    <string name="product_already_in_list">Prodotto già in lista. Modifica i dati.</string>
+    <string name="data_from_database">Dati dal Database:</string>
+    <string name="copy_data">Copia Dati</string>
+    <string name="add_and_next">Aggiungi</string>
+
+    <string name="product_found_in_db">Prodotto già presente nel database</string>
+
 </resources>

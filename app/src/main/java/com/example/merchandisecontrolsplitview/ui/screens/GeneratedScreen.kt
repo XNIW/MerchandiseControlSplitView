@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
@@ -57,6 +58,9 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.animation.AnimatedVisibility // <-- Per risolvere l'errore di riferimento non risolto
+import kotlinx.coroutines.delay // <-- Per il debounce nella ricerca
+import androidx.compose.ui.platform.LocalFocusManager
 
 
 /**
@@ -71,7 +75,8 @@ fun GeneratedScreen(
     onBackToStart: () -> Unit,
     onNavigateToHome: () -> Unit,
     entryUid: Long,
-    isNewEntry: Boolean
+    isNewEntry: Boolean,
+    isManualEntry: Boolean
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -105,6 +110,10 @@ fun GeneratedScreen(
 
     val historyEntries by excelViewModel.historyEntries.collectAsState()
 
+    var showManualEntryDialog by remember { mutableStateOf(false) }
+    var productToEditIndex by remember { mutableStateOf<Int?>(null) }
+
+    var productDataToPrefill by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
 // Modifica il LaunchedEffect per dipendere anche da 'historyEntries'
     LaunchedEffect(entryUid, historyEntries) { // <-- AGGIUNGI historyEntries QUI
         val entry = historyEntries.find { it.uid == entryUid }
@@ -139,6 +148,8 @@ fun GeneratedScreen(
     val oldRetailPriceState = remember { mutableStateOf(TextFieldValue()) }
     val productNameState = remember { mutableStateOf(TextFieldValue()) }
 
+    var scannedBarcodeForManualAdd by remember { mutableStateOf<String?>(null) }
+
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
         "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
@@ -146,11 +157,18 @@ fun GeneratedScreen(
     )
 
     val handleBackPress = {
-        if (isNewEntry) {
-            // Se l'entry è nuova, mostriamo il dialogo per eliminare la bozza.
-            showExitDialog = true
+        // La bozza è considerata vuota se siamo in modalità manuale
+        // e la griglia contiene solo la riga dell'intestazione (o nessuna riga).
+        val isManualDraftEmpty = isManualEntry && excelViewModel.excelData.size <= 1
+
+        if (isManualDraftEmpty) {
+            showExitDialog = true // Mostra dialogo "Elimina bozza?"
+        } else if (isNewEntry) {
+            // Se è una nuova entry (da file) con dati, esce e basta
+            onBackToStart()
         } else {
-            // Se l'entry viene dalla cronologia, mostriamo il nuovo dialogo a 3 opzioni.
+            // Se è una entry esistente (da cronologia) con modifiche,
+            // mostra il dialogo "Salva/Esci/Annulla"
             showExitFromHistoryDialog = true
         }
     }
@@ -161,16 +179,56 @@ fun GeneratedScreen(
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
-            val matches = excelData.flatMapIndexed { r, row -> row.mapIndexedNotNull { c, v -> if (v == code) r to c else null } }.toSet()
-            if (matches.isNotEmpty()) {
-                searchMatches = matches
-                val (r, c) = matches.first()
-                infoRowIndex = r
-                infoDialogFocusField = if (c >= excelData[0].size - 2) c - (excelData[0].size - 2) else 0
-                showInfoDialog = true
-                showSearchDialog = false
+            if (isManualEntry) {
+                val header = excelData.firstOrNull() ?: return@let
+                val barcodeIndex = header.indexOf("barcode")
+                if (barcodeIndex == -1) return@let
+
+                val rowIndex = excelData.drop(1).indexOfFirst { it.getOrNull(barcodeIndex) == code }
+
+                if (rowIndex != -1) {
+                    // Caso 1: Trovato nella griglia corrente -> Apri in modifica
+                    productToEditIndex = rowIndex
+                    productDataToPrefill = null // Assicurati che non ci siano dati da pre-compilare
+                    Toast.makeText(context, context.getString(R.string.product_already_in_list), Toast.LENGTH_SHORT).show()
+                    showManualEntryDialog = true
+                } else {
+                    // Caso 2: Non trovato nella griglia, cerca nel DB principale
+                    scope.launch {
+                        val productFromDb = databaseViewModel.findProductByBarcode(code)
+                        if (productFromDb != null) {
+                            // Trovato nel DB -> Apri in aggiunta con dati pre-compilati
+                            productToEditIndex = null
+                            productDataToPrefill = productFromDb
+                            Toast.makeText(context, context.getString(R.string.product_found_in_db), Toast.LENGTH_SHORT).show()
+                        } else {
+                            // Non trovato da nessuna parte -> Apri in aggiunta con solo il barcode
+                            productToEditIndex = null
+                            productDataToPrefill = null
+                            scannedBarcodeForManualAdd = code
+                        }
+                        showManualEntryDialog = true
+                    }
+                }
             } else {
-                Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
+                val matches =
+                    excelData.flatMapIndexed { r, row -> row.mapIndexedNotNull { c, v -> if (v == code) r to c else null } }
+                        .toSet()
+                if (matches.isNotEmpty()) {
+                    searchMatches = matches
+                    val (r, c) = matches.first()
+                    infoRowIndex = r
+                    infoDialogFocusField =
+                        if (c >= excelData[0].size - 2) c - (excelData[0].size - 2) else 0
+                    showInfoDialog = true
+                    showSearchDialog = false
+                } else {
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.not_found),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
     }
@@ -244,21 +302,44 @@ fun GeneratedScreen(
                                 return@IconButton
                             }
 
+                            // Indici delle colonne necessarie
+                            val barcodeIdx = header.indexOf("barcode")
+                            val productNameIdx = header.indexOf("productName")
+                            val quantityIdx = header.indexOf("quantity")
+                            val retailPriceIdx = header.indexOf("retailPrice")
+                            val categoryIdx = header.indexOf("category")
+
                             val dataRows = excelData.drop(1)
-                            val gridDataForAnalysis = dataRows.mapIndexed { rowIndex, rowData ->
-                                val actualRowIndex = rowIndex + 1
-                                val finalQuantityStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value ?: ""
-                                val finalPriceStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value ?: ""
-                                val map = header.mapIndexed { colIndex, headerKey ->
-                                    headerKey to (rowData.getOrNull(colIndex) ?: "")
-                                }.toMap().toMutableMap()
+                            val gridDataForAnalysis = if (isManualEntry) {
+                                // Logica per l'inserimento manuale
+                                dataRows.map { rowData ->
+                                    mapOf(
+                                        "barcode" to (rowData.getOrNull(barcodeIdx) ?: ""),
+                                        "productName" to (rowData.getOrNull(productNameIdx) ?: ""),
+                                        "quantity" to (rowData.getOrNull(quantityIdx) ?: ""),
+                                        "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
+                                        "category" to (rowData.getOrNull(categoryIdx) ?: ""),
+                                        "supplier" to "Manuale" // Fornitore fisso per entry manuali
+                                    )
+                                }
+                            } else {
+                                // La tua logica originale per i file importati
+                                dataRows.mapIndexed { rowIndex, rowData ->
+                                    val actualRowIndex = rowIndex + 1
+                                    val finalQuantityStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(0)?.value ?: ""
+                                    val finalPriceStr = excelViewModel.editableValues.getOrNull(actualRowIndex)?.getOrNull(1)?.value ?: ""
 
-                                map["realQuantity"] = finalQuantityStr
-                                map["retailPrice"] = finalPriceStr
-                                map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
-                                map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
+                                    val map = header.mapIndexed { colIndex, headerKey ->
+                                        headerKey to (rowData.getOrNull(colIndex) ?: "")
+                                    }.toMap().toMutableMap()
 
-                                map.toMap()
+                                    map["realQuantity"] = finalQuantityStr
+                                    map["retailPrice"] = finalPriceStr
+                                    map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
+                                    map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
+
+                                    map.toMap()
+                                }
                             }
 
                             if (gridDataForAnalysis.isEmpty()) {
@@ -296,7 +377,25 @@ fun GeneratedScreen(
                 .fillMaxSize()
                 .padding(paddingValues)) {
             Column(Modifier.fillMaxSize()) {
-                if (excelData.isNotEmpty()) {
+                if (isManualEntry && excelData.size <= 1) {
+                    // Mostra "Empty State" se siamo in modalità manuale e non ci sono dati
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            text = stringResource(R.string.no_products_add_new), // Aggiungi in strings.xml
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                } else if (excelData.isNotEmpty()) {
                     val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
                     val localizedData = listOf(localizedHeader) + excelData.drop(1)
                     ZoomableExcelGrid(
@@ -316,18 +415,32 @@ fun GeneratedScreen(
                         },
                         onCellEditRequest = { _, _ -> },
                         onQuantityCellClick = { r ->
-                            infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                            // 👇 Solo se NON è un'entry manuale
+                            if (!isManualEntry) {
+                                infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                            }
                         },
                         onPriceCellClick = { r ->
-                            infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true
+                            // 👇 Solo se NON è un'entry manuale
+                            if (!isManualEntry) {
+                                infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog = true
+                            }
                         },
                         onRowCellClick = { r ->
-                            infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                            // 👇 Solo se NON è un'entry manuale
+                            if (!isManualEntry) {
+                                infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog = true
+                            } else {
+                                // Per le entry manuali, apriamo il dialog di modifica specifico
+                                productToEditIndex = r - 1 // r è basato su 1, l'indice è basato su 0
+                                showManualEntryDialog = true
+                            }
                         },
                         onHeaderClick = { colIdx -> headerDialogIndex = colIdx },
                         // --- RIGHE AGGIUNTE PER RISOLVERE L'ERRORE ---
                         isColumnEssential = { false }, // In questa schermata nessuna colonna ha la logica "essenziale".
-                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx } // Il click sull'icona apre lo stesso dialogo di prima.
+                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx }, // Il click sull'icona apre lo stesso dialogo di prima.
+                        isManualEntry = isManualEntry
                     )
                 }
             }
@@ -454,29 +567,76 @@ fun GeneratedScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     horizontalAlignment = Alignment.End
                 ) {
-                    FloatingActionButton(onClick = {
-                        val opts = ScanOptions().apply {
-                            setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                            setCaptureActivity(PortraitCaptureActivity::class.java)
-                            setOrientationLocked(true)
-                            setBeepEnabled(true)
-                            setPrompt(context.getString(R.string.scan_prompt))
+                    if (isManualEntry) {
+                        // FAB per la modalità manuale
+                        FloatingActionButton(onClick = {
+                            val opts = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                setCaptureActivity(PortraitCaptureActivity::class.java)
+                                setOrientationLocked(true)
+                                setBeepEnabled(true)
+                                setPrompt(context.getString(R.string.scan_prompt))
+                            }
+                            scanLauncher.launch(opts)
+                        }) {
+                            Icon(Icons.Filled.CameraAlt, contentDescription = "Scan Barcode")
                         }
-                        scanLauncher.launch(opts)
-                    }) {
-                        Icon(
-                            Icons.Filled.CameraAlt,
-                            contentDescription = stringResource(R.string.scan_icon_desc)
-                        )
-                    }
+                    } else {
+                        FloatingActionButton(onClick = {
+                            val opts = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                setCaptureActivity(PortraitCaptureActivity::class.java)
+                                setOrientationLocked(true)
+                                setBeepEnabled(true)
+                                setPrompt(context.getString(R.string.scan_prompt))
+                            }
+                            scanLauncher.launch(opts)
+                        }) {
+                            Icon(
+                                Icons.Filled.CameraAlt,
+                                contentDescription = stringResource(R.string.scan_icon_desc)
+                            )
+                        }
 
-                    FloatingActionButton(onClick = { searchText = ""; showSearchDialog = true }) {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = stringResource(R.string.search_icon_desc)
-                        )
+                        FloatingActionButton(onClick = {
+                            searchText = ""; showSearchDialog = true
+                        }) {
+                            Icon(
+                                Icons.Filled.Search,
+                                contentDescription = stringResource(R.string.search_icon_desc)
+                            )
+                        }
                     }
                 }
+            }
+
+            if (showManualEntryDialog) {
+                ManualEntryDialog(
+                    viewModel = excelViewModel,
+                    databaseViewModel = databaseViewModel,
+                    rowIndexToEdit = productToEditIndex,
+                    entryUid = entryUid,
+                    initialBarcode = scannedBarcodeForManualAdd,
+                    productToPrefill = productDataToPrefill,
+                    onDismiss = {
+                        showManualEntryDialog = false
+                        scannedBarcodeForManualAdd = null
+                        productDataToPrefill = null
+                    },
+                    onScanNext = {
+                        showManualEntryDialog = false
+                        // **3. OPZIONI SCANNER CORRETTE.** Anche "Aggiungi e Successivo"
+                        // ora lancia lo scanner in modalità verticale.
+                        val portraitScanOptions = ScanOptions().apply {
+                            setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                            setBeepEnabled(true)
+                            setPrompt(context.getString(R.string.scan_prompt))
+                            setOrientationLocked(true)
+                            setCaptureActivity(PortraitCaptureActivity::class.java)
+                        }
+                        scanLauncher.launch(portraitScanOptions)
+                    }
+                )
             }
 
             if (showSearchDialog) {
@@ -1371,6 +1531,369 @@ private fun StatusIcon(
             BadgeType.NONE -> { /* Non mostrare nulla */ }
         }
     }
+}
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManualEntryDialog(
+    viewModel: ExcelViewModel,
+    databaseViewModel: DatabaseViewModel,
+    rowIndexToEdit: Int?,
+    entryUid: Long,
+    initialBarcode: String?,
+    productToPrefill: com.example.merchandisecontrolsplitview.data.Product?,
+    onDismiss: () -> Unit,
+    onScanNext: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+
+    val quantityFocusRequester = remember { FocusRequester() }
+    val priceFocusRequester = remember { FocusRequester() }
+    val nameFocusRequester = remember { FocusRequester() }
+
+    val categoryInputText by databaseViewModel.categoryInputText.collectAsState()
+    var selectedCategory by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Category?>(null) }
+    var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
+    val categorySuggestions by databaseViewModel.categories.collectAsState()
+
+    var barcode by remember { mutableStateOf("") }
+    var quantity by remember { mutableStateOf(TextFieldValue("1")) }
+    var retailPrice by remember { mutableStateOf("") }
+    var productName by remember { mutableStateOf("") }
+
+    var productFromDb by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
+    var dbLookupJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    var barcodeError by remember { mutableStateOf<String?>(null) }
+    var originalBarcodeForEdit by remember { mutableStateOf<String?>(null) }
+
+    val isEditMode = rowIndexToEdit != null
+    val header = viewModel.excelData.firstOrNull() ?: return
+
+    val (barIdx, nameIdx, priceIdx, qtyIdx, catIdx) = remember(header) {
+        listOf("barcode", "productName", "retailPrice", "quantity", "category").map { header.indexOf(it) }
+    }
+
+    val context = LocalContext.current
+    val dialogScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        result?.contents?.let { code ->
+            barcode = code
+        } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
+    }
+
+    // ✅ *** CRITICAL FIX: This effect now correctly re-initializes the dialog's state
+    // every time it's shown for a new item or in a new mode.
+    // It's keyed to the inputs, so it re-runs when they change.
+    LaunchedEffect(rowIndexToEdit, productToPrefill, initialBarcode) {
+        // First, reset all fields to a clean state to prevent stale data
+        productName = ""
+        retailPrice = ""
+        quantity = TextFieldValue("1")
+        selectedCategory = null
+        databaseViewModel.onCategorySearchQueryChanged("")
+
+        barcodeError = null
+        originalBarcodeForEdit = null
+
+        if (isEditMode) {
+            // --- 1. EDIT MODE ---
+            // The scanned barcode already exists in the grid. Load its data.
+            val rowData = viewModel.excelData[rowIndexToEdit + 1]
+            val catName = if (catIdx != -1) rowData.getOrNull(catIdx) ?: "" else ""
+            barcode = if (barIdx != -1) rowData.getOrNull(barIdx) ?: "" else ""
+            originalBarcodeForEdit = barcode
+            productName = if (nameIdx != -1) rowData.getOrNull(nameIdx) ?: "" else ""
+            retailPrice = if (priceIdx != -1) rowData.getOrNull(priceIdx) ?: "" else ""
+            val qtyText = if (qtyIdx != -1) rowData.getOrNull(qtyIdx).takeIf { !it.isNullOrBlank() } ?: "1" else "1"
+            quantity = TextFieldValue(qtyText)
+
+            databaseViewModel.onCategorySearchQueryChanged(catName)
+            selectedCategory = databaseViewModel.categories.value.find { it.name.equals(catName, true) }
+
+        } else if (productToPrefill != null) {
+            // --- 2. ADD MODE with DB PRE-FILL ---
+            // The scanned barcode was found in the main database.
+            barcode = productToPrefill.barcode
+            productName = productToPrefill.productName ?: ""
+            retailPrice = productToPrefill.retailPrice?.toString() ?: ""
+            // Default quantity for a new entry
+            quantity = TextFieldValue("1")
+            productToPrefill.categoryId?.let { catId ->
+                scope.launch {
+                    databaseViewModel.getCategoryById(catId)?.let { category ->
+                        selectedCategory = category
+                        databaseViewModel.onCategorySearchQueryChanged(category.name)
+                    }
+                }
+            }
+        } else {
+            // --- 3. ADD MODE (from new scan or '+' button) ---
+            // The barcode is new, or the user clicked the '+' FAB.
+            barcode = initialBarcode ?: ""
+            // Pre-select the last used category for convenience
+            viewModel.lastUsedCategory.value?.let {
+                databaseViewModel.onCategorySearchQueryChanged(it)
+                selectedCategory = viewModel.lastUsedCategory.value?.let { lastCat ->
+                    databaseViewModel.categories.value.find { c -> c.name.equals(lastCat, true) }
+                }
+            }
+        }
+    }
+
+    // This separate effect correctly handles moving focus after a scan
+    LaunchedEffect(initialBarcode, productToPrefill) {
+        if (initialBarcode != null || productToPrefill != null) {
+            priceFocusRequester.requestFocus()
+        }
+    }
+
+    // This effect for debounced DB lookup remains unchanged
+    LaunchedEffect(barcode) {
+        // Ignora la validazione se il campo è vuoto o se il valore non è cambiato in modalità modifica
+        if (barcode.isBlank() || (isEditMode && barcode == originalBarcodeForEdit)) {
+            barcodeError = null
+            dbLookupJob?.cancel()
+            productFromDb = null
+            return@LaunchedEffect
+        }
+
+        delay(350) // Attendi un po' prima di validare
+
+        // 1. Controllo sulla griglia attuale
+        val isDuplicateInGrid = viewModel.excelData
+            .drop(1) // Salta l'header
+            .any { row ->
+                val rowBarcode = if (barIdx != -1) row.getOrNull(barIdx) else null
+                // È un duplicato se il barcode è uguale E non siamo sulla riga che stiamo modificando
+                val rowIndexBeingChecked = viewModel.excelData.indexOf(row) - 1
+                rowBarcode == barcode && (rowIndexToEdit == null || rowIndexToEdit != rowIndexBeingChecked)
+            }
+
+        if (isDuplicateInGrid) {
+            barcodeError = context.getString(R.string.product_already_in_list)
+            return@LaunchedEffect
+        }
+
+        // 2. Controllo sul database
+        dbLookupJob?.cancel()
+        dbLookupJob = if (barcode.length > 5) {
+            scope.launch {
+                val productInDb = databaseViewModel.findProductByBarcode(barcode)
+                if (productInDb != null) {
+                    barcodeError = context.getString(R.string.product_found_in_db)
+                } else {
+                    barcodeError = null
+                }
+                productFromDb = productInDb
+            }
+        } else {
+            productFromDb = null
+            barcodeError = null
+            null // Assegna esplicitamente 'null' a dbLookupJob
+        }
+    }
+
+    val isConfirmEnabled = barcode.isNotBlank() &&
+            barcodeError == null && // <-- QUESTO CONTROLLO BLOCCA IL PULSANTE
+            (retailPrice.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0 &&
+            selectedCategory != null
+
+    fun resetFieldsForNext() {
+        barcode = ""
+        quantity = TextFieldValue("1")
+        retailPrice = ""
+        productName = ""
+        productFromDb = null
+        // The category is kept for the next entry
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isEditMode) stringResource(R.string.edit_product) else stringResource(R.string.add_product)) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                ExposedDropdownMenuBox(
+                    expanded = isCategoryDropdownExpanded,
+                    onExpandedChange = { isCategoryDropdownExpanded = !isCategoryDropdownExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = categoryInputText,
+                        onValueChange = {
+                            databaseViewModel.onCategorySearchQueryChanged(it)
+                            isCategoryDropdownExpanded = true
+                            selectedCategory = null
+                        },
+                        label = { Text(stringResource(R.string.category_label)) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = isCategoryDropdownExpanded,
+                        onDismissRequest = { isCategoryDropdownExpanded = false }
+                    ) {
+                        categorySuggestions.forEach { suggestion ->
+                            DropdownMenuItem(text = { Text(suggestion.name) }, onClick = {
+                                databaseViewModel.onCategorySearchQueryChanged(suggestion.name)
+                                selectedCategory = suggestion
+                                isCategoryDropdownExpanded = false
+                            })
+                        }
+                        if (categorySuggestions.none { it.name.equals(categoryInputText, true) } && categoryInputText.isNotBlank()) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.add_new_category_prompt, categoryInputText)) },
+                                onClick = {
+                                    scope.launch {
+                                        databaseViewModel.addCategory(categoryInputText)?.let {
+                                            databaseViewModel.onCategorySearchQueryChanged(it.name)
+                                            selectedCategory = it
+                                            isCategoryDropdownExpanded = false
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = barcode,
+                    onValueChange = { barcode = it },
+                    label = { Text(stringResource(R.string.header_barcode) + "*") },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            // --- INIZIO MODIFICA ---
+                            // 1. Azzera tutti i campi del dialogo
+                            productName = ""
+                            retailPrice = ""
+                            quantity = TextFieldValue("1") // Resetta la quantità al valore di default
+                            productFromDb = null          // Rimuove i dati pre-compilati dal DB
+                            barcodeError = null           // Rimuove eventuali messaggi di errore
+                            // Lasciamo 'barcode' così com'è, perché verrà sovrascritto dalla nuova scansione.
+                            // --- FINE MODIFICA ---
+
+                            // 2. Lancia lo scanner
+                            val options = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                setBeepEnabled(true)
+                                setPrompt(context.getString(R.string.scan_prompt))
+                                setCaptureActivity(PortraitCaptureActivity::class.java)
+                            }
+                            dialogScanLauncher.launch(options)
+                        }) {
+                            Icon(Icons.Default.CameraAlt, contentDescription = "Scan Barcode")
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { priceFocusRequester.requestFocus() }),
+                    isError = barcodeError != null,
+                    supportingText = {
+                        if (barcodeError != null) {
+                            Text(text = barcodeError!!, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = retailPrice,
+                        onValueChange = { retailPrice = it },
+                        label = { Text(stringResource(R.string.header_retail_price) + "*") },
+                        modifier = Modifier.weight(1f).focusRequester(priceFocusRequester),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+                    )
+                    OutlinedTextField(
+                        value = quantity,
+                        onValueChange = { quantity = it },
+                        label = { Text(stringResource(R.string.header_quantity)) },
+                        modifier = Modifier.weight(1f).focusRequester(quantityFocusRequester),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() })
+                    )
+                }
+
+                OutlinedTextField(
+                    value = productName,
+                    onValueChange = { productName = it },
+                    label = { Text(stringResource(R.string.header_product_name)) },
+                    modifier = Modifier.fillMaxWidth().focusRequester(nameFocusRequester),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+                )
+
+                AnimatedVisibility(visible = productFromDb != null) {
+                    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
+                            Text("${productFromDb?.productName} - Prezzo: ${productFromDb?.retailPrice}")
+                            TextButton(onClick = {
+                                retailPrice = productFromDb?.retailPrice?.toString() ?: ""
+                                productName = productFromDb?.productName ?: ""
+                            }) { Text(stringResource(R.string.copy_data)) }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val newRowData = header.map { key ->
+                when (key) {
+                    "barcode" -> barcode
+                    "productName" -> productName.ifBlank { selectedCategory?.name ?: "" }
+                    "retailPrice" -> retailPrice
+                    "quantity" -> quantity.text
+                    "category" -> selectedCategory?.name ?: ""
+                    else -> ""
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End
+            ) {
+                if (isEditMode) {
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteManualRow(entryUid, rowIndexToEdit)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        modifier = Modifier.weight(1f)
+                    ) { Text(stringResource(R.string.delete)) }
+                }
+
+                if (!isEditMode) {
+                    TextButton(
+                        onClick = {
+                            viewModel.addManualRow(entryUid, newRowData, selectedCategory!!.name)
+                            focusManager.clearFocus(true)
+                            resetFieldsForNext()
+                            onScanNext()
+                        },
+                        enabled = isConfirmEnabled
+                    ) { Text(stringResource(R.string.add_and_next)) }
+                }
+
+                Button(
+                    onClick = {
+                        if (isEditMode) {
+                            viewModel.updateManualRow(entryUid, rowIndexToEdit, newRowData, selectedCategory!!.name)
+                        } else {
+                            viewModel.addManualRow(entryUid, newRowData, selectedCategory!!.name)
+                        }
+                        onDismiss()
+                    },
+                    enabled = isConfirmEnabled
+                ) { Text(stringResource(R.string.confirm)) }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
 }
 
 fun formatDecimal(num: Double, digits: Int = 2): String =

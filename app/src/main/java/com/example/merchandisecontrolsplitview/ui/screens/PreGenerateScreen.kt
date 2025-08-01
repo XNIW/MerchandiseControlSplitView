@@ -171,7 +171,8 @@ fun PreGenerateScreen(
                         // Il click sulla cella ora gestisce la selezione/deselezione protetta
                         onHeaderClick = { colIdx -> excelViewModel.toggleColumnSelection(colIdx) },
                         // Il click sull'icona di modifica apre il dialogo per cambiare tipo
-                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx }
+                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx },
+                        isManualEntry = false
                     )
                 }
             }

@@ -19,6 +19,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 sealed class UiState {
     data object Idle : UiState()
@@ -314,5 +315,12 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun getCategoryById(id: Long): Category? {
         return categoryDao.getById(id)
+    }
+
+    suspend fun findProductByBarcode(barcode: String): Product? {
+        // Esegue la ricerca su un thread in background e restituisce il prodotto o null
+        return withContext(Dispatchers.IO) {
+            dao.findByBarcode(barcode)
+        }
     }
 }

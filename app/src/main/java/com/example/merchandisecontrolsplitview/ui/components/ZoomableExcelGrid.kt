@@ -46,7 +46,8 @@ fun ZoomableExcelGrid(
     onHeaderClick: ((colIndex: Int) -> Unit)?,
     // --- NUOVO: Parametri per gestire le colonne essenziali ---
     isColumnEssential: (colIndex: Int) -> Boolean,
-    onHeaderEditClick: ((colIndex: Int) -> Unit)?
+    onHeaderEditClick: ((colIndex: Int) -> Unit)?,
+    isManualEntry: Boolean
 ) {
     if (data.isEmpty()) return
 
@@ -115,19 +116,22 @@ fun ZoomableExcelGrid(
                     Row {
                         row.forEachIndexed { ci, cell ->
                             val isMatch = searchMatches.contains(r to ci)
-                            when {
-                                !generated -> TableCell(
+                            if (!generated || isManualEntry) {
+                                TableCell(
                                     text = cell,
                                     width = cellWidth,
                                     height = cellHeight,
                                     isSelectedColumn = selectedColumns.getOrElse(ci) { false },
                                     isSearchMatch = isMatch,
-                                    // --- MODIFICA CRUCIALE: onCellClick ora usa la logica protetta ---
-                                    onCellClick = { onHeaderClick?.invoke(ci) },
+                                    // Per la modalità manuale, il click sulla riga apre il dialog di modifica.
+                                    onCellClick = if (isManualEntry) { { onRowCellClick(r) } } else { { onHeaderClick?.invoke(ci) } },
                                     overrideBackgroundColor = highlightColor
                                 )
-                                // Il resto del codice rimane invariato
-                                generated -> when {
+                            }
+                            // CONDIZIONE 2: Altrimenti (quindi, solo se `generated` è true E `isManualEntry` è false),
+                            // usa la logica complessa esistente per le entry da file Excel.
+                            else {
+                                when {
                                     editMode -> {
                                         val text = when (ci) {
                                             indexQuantita -> editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty()

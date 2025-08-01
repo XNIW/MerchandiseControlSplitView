@@ -312,10 +312,23 @@ private fun HistoryRow(
                         .fillMaxWidth()
                         .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp)
                 ) {
-                    Text(
-                        text = entry.id,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = entry.id,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.weight(1f, fill = false) // Per non far espandere il testo
+                        )
+                        // Controlla se è un'entry manuale basandosi sul nome
+                        if (entry.isManualEntry) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = stringResource(R.string.manual_entry_indicator),
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
+                        }
+                    }
                     Text(
                         text = "${stringResource(R.string.date_label)}: ${entry.timestamp}",
                         style = MaterialTheme.typography.bodySmall,

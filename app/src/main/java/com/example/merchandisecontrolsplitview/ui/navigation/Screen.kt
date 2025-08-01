@@ -9,10 +9,19 @@ sealed class Screen(val route: String) {
     data object FilePicker : Screen("filePicker")
     data object PreGenerate : Screen("preGenerate")
     // MODIFICA: La rotta ora include il placeholder per l'argomento
-    data object Generated : Screen("generated/{entryUid}?isNew={isNew}") {
-        // La funzione ora accetta un booleano per indicare se l'entry è nuova
-        fun createRoute(entryUid: Long, isNew: Boolean = false): String {
-            return "generated/$entryUid?isNew=$isNew"
+    data object Generated : Screen("generated/{entryUid}/{isNew}/{isManualEntry}") {
+        /**
+         * Crea la rotta di navigazione per la schermata Generated.
+         * @param entryUid L'ID univoco della voce di cronologia.
+         * @param isNew Flag per indicare se la voce è appena stata creata.
+         * @param isManualEntry Flag per indicare se si tratta di un'aggiunta manuale. [cite: 25]
+         */
+        fun createRoute(
+            entryUid: Long,
+            isNew: Boolean = false,
+            isManualEntry: Boolean = false
+        ): String {
+            return "generated/$entryUid/$isNew/$isManualEntry"
         }
     }
     data object History : Screen("history")

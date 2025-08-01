@@ -47,7 +47,19 @@ fun AppNavGraph() {
                 },
                 onViewHistory = { navController.navigate(Screen.History.route) },
                 onDatabase = { navController.navigate(Screen.Database.route) },
-                onOptions = { navController.navigate(Screen.Options.route) }
+                onOptions = { navController.navigate(Screen.Options.route) },
+                onManualAdd = {
+                    excelViewModel.resetState()
+
+                    excelViewModel.createManualEntry { newUid ->
+                        // Naviga alla GeneratedScreen con i nuovi flag
+                        navController.navigate(Screen.Generated.createRoute(
+                            entryUid = newUid,
+                            isNew = true,
+                            isManualEntry = true
+                        ))
+                    }
+                }
             )
         }
 
@@ -75,18 +87,22 @@ fun AppNavGraph() {
                 navArgument("isNew") {
                     type = NavType.BoolType
                     defaultValue = false // Il valore predefinito è false
+                },
+                navArgument("isManualEntry") {
+                    type = NavType.BoolType
+                    defaultValue = false
                 }
             )
         ) { backStackEntry ->
             val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
-            // --- INIZIO MODIFICA ---
-            // Estrai il valore del nuovo argomento
             val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
+            val isManualEntry = backStackEntry.arguments?.getBoolean("isManualEntry") ?: false
+
             GeneratedScreen(
                 excelViewModel = excelViewModel,
                 databaseViewModel = dbViewModel,
                 onBackToStart = { navController.popBackStack() },
-                onNavigateToHome = { // <-- AGGIUNGI QUESTO
+                onNavigateToHome = {
                     navController.navigate(Screen.FilePicker.route) {
                         popUpTo(navController.graph.startDestinationId) {
                             inclusive = true
@@ -95,7 +111,8 @@ fun AppNavGraph() {
                     }
                 },
                 entryUid = entryUid,
-                isNewEntry = isNewEntry // Passa il flag alla schermata
+                isNewEntry = isNewEntry,
+                isManualEntry = isManualEntry
             )
             // --- FINE MODIFICA ---
         }
@@ -108,7 +125,13 @@ fun AppNavGraph() {
                 onSelect = { entry ->
                     excelViewModel.loadHistoryEntry(entry)
                     // Da qui l'entry non è nuova, quindi usiamo il valore predefinito isNew = false
-                    navController.navigate(Screen.Generated.createRoute(entry.uid))
+                    navController.navigate(
+                        Screen.Generated.createRoute(
+                            entryUid = entry.uid,
+                            isNew = false,
+                            isManualEntry = entry.isManualEntry // <-- USA IL NUOVO CAMPO
+                        )
+                    )
                 },
                 onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
                 onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },

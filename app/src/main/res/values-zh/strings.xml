@@ -295,5 +295,14 @@
 操作不允许。缺少必要的列：%1$s。请在继续之前点击这些列的标题进行识别。
 </string>
     <string name="error_barcode_already_exists">错误：已存在具有此条码的产品。</string>
+    <string name="add_products_manually">手动添加商品</string>
+    <string name="no_products_add_new">没有商品。请添加新商品！</string>
+    <string name="manual_entry_indicator">手动添加的记录</string>
+
+    <string name="product_already_in_list">商品已在列表中。请修改数据。</string>
+    <string name="data_from_database">数据库数据：</string>
+    <string name="copy_data">复制数据</string>
+    <string name="add_and_next">添加并下一个</string>
+    <string name="product_found_in_db">该商品已存在于数据库中</string>
 
 </resources>

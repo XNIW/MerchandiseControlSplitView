@@ -20,5 +20,6 @@ data class HistoryEntry(
     val orderTotal: Double = 0.0,
     val paymentTotal: Double = 0.0,
     val missingItems: Int = 0,
-    val totalItems: Int = 0
+    val totalItems: Int = 0,
+    val isManualEntry: Boolean = false
 )

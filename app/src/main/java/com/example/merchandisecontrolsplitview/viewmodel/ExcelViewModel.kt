@@ -94,6 +94,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     private var _originalHistoryEntryState: HistoryEntry? = null
     private var _preGenerateStateBackup: List<List<String>>? = null
 
+    val lastUsedCategory = mutableStateOf<String?>(null)
+
     // Funzione per verificare se una colonna è essenziale
     fun isColumnEssential(colIdx: Int): Boolean {
         val headerKey = excelData.getOrNull(0)?.getOrNull(colIdx)
@@ -383,6 +385,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             val newEntry = HistoryEntry(
                 id = fileNameId,
                 timestamp = timestampForDb,
+                isManualEntry = false,
                 data = filteredData,
                 editable = newEditableValues.map { r -> r.map { it.value } },
                 complete = newCompleteStates.toList(),
@@ -624,6 +627,97 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
         return Pair(paymentTotal, missingItems)
     }
+
+    // --- 1. AGGIUNGI UNA FUNZIONE PER CREARE L'ENTRY MANUALE ---
+    fun createManualEntry(onResult: (Long) -> Unit) {
+        viewModelScope.launch { // Non serve Dispatchers.IO per questa logica
+            // Definisci l'intestazione standard
+            val manualHeader = listOf("barcode", "productName", "retailPrice", "quantity", "category")
+            val dataGrid = listOf(manualHeader)
+
+            val now = LocalDateTime.now()
+            val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")) + "_Aggiunta_Manuale.xlsx"
+            val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+
+            val newEntry = HistoryEntry(
+                id = fileNameId,
+                timestamp = timestampForDb,
+                isManualEntry = true,
+                data = dataGrid,
+                editable = listOf(listOf("","")), // Aggiungi uno stato per l'header
+                complete = listOf(false),          // Aggiungi uno stato per l'header
+                supplier = "Manuale",
+                category = "",
+                totalItems = 0,
+                orderTotal = 0.0,
+                paymentTotal = 0.0,
+                missingItems = 0,
+                syncStatus = SyncStatus.NOT_ATTEMPTED,
+                wasExported = false
+            )
+
+            // Inserisci e ottieni l'UID sul thread IO
+            val newUid = withContext(Dispatchers.IO) {
+                historyDao.insert(newEntry)
+            }
+
+            // Torna al thread principale per aggiornare lo stato e navigare
+            withContext(Dispatchers.Main) {
+                // 👇 CARICA LA NUOVA ENTRY NELLO STATO DEL VIEWMODEL
+                populateStateFromEntry(newEntry.copy(uid = newUid))
+                onResult(newUid)
+            }
+        }
+    }
+
+    fun addManualRow(entryUid: Long, rowData: List<String>, categoryName: String) {
+        viewModelScope.launch {
+            excelData.add(rowData)
+
+            // CORREZIONE: Le entry manuali non usano la stessa logica di
+            // editableValues e completeStates delle entry da file.
+            // Quando si aggiunge una riga, queste liste devono essere aggiornate
+            // per mantenere la coerenza degli indici, anche se non usate.
+            // Aggiungiamo uno stato "vuoto" per la nuova riga.
+            editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            completeStates.add(false)
+
+            // Salva lo stato completo nel DB
+            saveCurrentStateToHistory(entryUid)
+            lastUsedCategory.value = categoryName
+        }
+    }
+
+    fun updateManualRow(entryUid: Long, index: Int, rowData: List<String>, categoryName: String) {
+        viewModelScope.launch {
+            val dataIndex = index + 1
+            if (dataIndex in excelData.indices) {
+                excelData[dataIndex] = rowData
+                // Non serve modificare editable/complete perché non sono usati qui
+                saveCurrentStateToHistory(entryUid)
+                lastUsedCategory.value = categoryName
+            }
+        }
+    }
+
+    fun deleteManualRow(entryUid: Long, index: Int) {
+        viewModelScope.launch {
+            val dataIndex = index + 1
+            if (dataIndex in excelData.indices) {
+                excelData.removeAt(dataIndex)
+
+                // CORREZIONE: Rimuovi anche lo stato corrispondente per evitare IndexOutOfBounds
+                if (dataIndex in editableValues.indices) {
+                    editableValues.removeAt(dataIndex)
+                }
+                if (dataIndex in completeStates.indices) {
+                    completeStates.removeAt(dataIndex)
+                }
+
+                saveCurrentStateToHistory(entryUid)
+            }
+        }
+    }
 }
 
 private fun saveExcelFileInternal(
@@ -661,6 +755,9 @@ private fun saveExcelFileInternal(
 
     val filteredHeader = headerWithIndices.map { it.second }
     val headerRow = sheet.createRow(0)
+    
+    val header = data.firstOrNull() ?: return
+    val categoryIndexInHeader = header.indexOf("category")
 
     filteredHeader.forEachIndexed { newIndex, headerKey ->
         headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
@@ -709,7 +806,15 @@ private fun saveExcelFileInternal(
         supplierCell.setCellValue(supplier)
 
         val categoryCell = excelRow.createCell(filteredHeader.size + 1)
-        categoryCell.setCellValue(category) // Usa il parametro 'category'
+
+        // Se la colonna 'category' esiste, prendi il valore dalla riga,
+        // altrimenti usa il valore di fallback (comportamento precedente).
+        val rowCategory = if (categoryIndexInHeader != -1) {
+            rowData.getOrNull(categoryIndexInHeader) ?: category
+        } else {
+            category
+        }
+        categoryCell.setCellValue(rowCategory)
 
         // Applica gli stili anche alla nuova cella
         if (complete.getOrNull(rowIndex + 1) == true) {
