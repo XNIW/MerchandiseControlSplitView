@@ -306,4 +306,6 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="add_and_next">Add &amp; Next</string>
     <string name="product_found_in_db">Product already exists in the database</string>
 
+    <string name="mark_as_complete">Mark Complete</string>
+    <string name="mark_as_incomplete">Mark Incomplete</string>
 </resources>

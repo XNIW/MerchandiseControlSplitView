@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import java.util.Locale
 import androidx.compose.material.icons.filled.CheckCircle
@@ -1155,14 +1156,38 @@ fun GeneratedScreen(
                                     Text(stringResource(R.string.confirm))
                                 }
                                 Spacer(Modifier.width(8.dp))
+                                // 1. Determina lo stato attuale della riga
+                                val isCurrentlyComplete = completeStates.getOrNull(infoRowIndex) == true
+
+// 2. Scegli il testo e i colori del pulsante in base allo stato
+                                val buttonText = if (isCurrentlyComplete) {
+                                    stringResource(R.string.mark_as_incomplete) // Testo per annullare: "Annulla Completo"
+                                } else {
+                                    stringResource(R.string.mark_as_complete)   // Testo per confermare: "Segna Completo"
+                                }
+
+                                val buttonColors = if (isCurrentlyComplete) {
+                                    // Usa colori meno evidenti per l'azione di "annullamento" per una migliore UX
+                                    ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                } else {
+                                    // Colori primari standard per l'azione principale
+                                    ButtonDefaults.buttonColors()
+                                }
+
+// 3. Crea il pulsante dinamico
                                 Button(
                                     onClick = {
+                                        // La logica di toggle rimane la stessa
                                         completeStates[infoRowIndex] = !completeStates[infoRowIndex]
                                         excelViewModel.updateHistoryEntry(entryUid)
                                         showInfoDialog = false
-                                    }
+                                    },
+                                    colors = buttonColors // Applica i colori dinamici
                                 ) {
-                                    Text(getLocalizedHeader(context, "complete"))
+                                    Text(buttonText) // Applica il testo dinamico
                                 }
                             }
                         }
@@ -1561,10 +1586,13 @@ fun ManualEntryDialog(
     var retailPrice by remember { mutableStateOf("") }
     var productName by remember { mutableStateOf("") }
 
+    var originalProductData by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
+
     var productFromDb by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
     var dbLookupJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
+    var barcodeInfo by remember { mutableStateOf<String?>(null) }
     var originalBarcodeForEdit by remember { mutableStateOf<String?>(null) }
 
     val isEditMode = rowIndexToEdit != null
@@ -1581,6 +1609,23 @@ fun ManualEntryDialog(
         } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
     }
 
+    val currentNormalized = remember(barcode, productName, retailPrice, quantity, selectedCategory) {
+        toNormalizedProduct(
+            barcode = barcode,
+            name = productName,
+            retailPriceStr = retailPrice,
+            qtyStr = quantity.text,
+            categoryId = selectedCategory?.id
+        )
+    }
+
+    val hasChangesAgainstDb = remember(currentNormalized, productFromDb) {
+        !equalProductsForDb(currentNormalized, productFromDb)   // vedi funzione al punto 2
+    }
+    val hasChangesAgainstOriginal = remember(currentNormalized, originalProductData) {
+        !equalProducts(currentNormalized, originalProductData)
+    }
+
     // ✅ *** CRITICAL FIX: This effect now correctly re-initializes the dialog's state
     // every time it's shown for a new item or in a new mode.
     // It's keyed to the inputs, so it re-runs when they change.
@@ -1594,10 +1639,10 @@ fun ManualEntryDialog(
 
         barcodeError = null
         originalBarcodeForEdit = null
+        originalProductData = null // --- Aggiunto: Resetta lo stato originale
 
         if (isEditMode) {
             // --- 1. EDIT MODE ---
-            // The scanned barcode already exists in the grid. Load its data.
             val rowData = viewModel.excelData[rowIndexToEdit + 1]
             val catName = if (catIdx != -1) rowData.getOrNull(catIdx) ?: "" else ""
             barcode = if (barIdx != -1) rowData.getOrNull(barIdx) ?: "" else ""
@@ -1608,35 +1653,89 @@ fun ManualEntryDialog(
             quantity = TextFieldValue(qtyText)
 
             databaseViewModel.onCategorySearchQueryChanged(catName)
-            selectedCategory = databaseViewModel.categories.value.find { it.name.equals(catName, true) }
+
+            // --- Logica di selezione robusta ---
+            scope.launch {
+                // Prova a cercare fino a 5 volte (1 secondo totale) se la lista non è pronta
+                repeat(5) {
+                    val foundCategory = databaseViewModel.categories.value.find { it.name.equals(catName, true) }
+                    if (foundCategory != null) {
+                        selectedCategory = foundCategory // Imposta la categoria trovata
+
+                        // Costruisci e salva lo stato originale CON l'ID della categoria corretto
+                        originalProductData = com.example.merchandisecontrolsplitview.data.Product(
+                            barcode = barcode,
+                            productName = productName,
+                            retailPrice = retailPrice.replace(",", ".").toDoubleOrNull(),
+                            stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
+                            categoryId = foundCategory.id // <-- Usa l'ID corretto
+                        )
+                        return@launch // Esci dalla coroutine
+                    }
+                    delay(200) // Aspetta un po' prima di riprovare
+                }
+                // Se anche dopo i tentativi non trova nulla, costruisci lo stato originale senza ID
+                originalProductData = com.example.merchandisecontrolsplitview.data.Product(
+                    barcode = barcode,
+                    productName = productName,
+                    retailPrice = retailPrice.replace(",", ".").toDoubleOrNull(),
+                    stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
+                    categoryId = null
+                )
+            }
 
         } else if (productToPrefill != null) {
             // --- 2. ADD MODE with DB PRE-FILL ---
-            // The scanned barcode was found in the main database.
-            barcode = productToPrefill.barcode
-            productName = productToPrefill.productName ?: ""
-            retailPrice = productToPrefill.retailPrice?.toString() ?: ""
-            // Default quantity for a new entry
-            quantity = TextFieldValue("1")
+            val initialBarcode = productToPrefill.barcode
+            val initialProductName = productToPrefill.productName ?: ""
+            val initialRetailPrice = formatNumberAsRoundedStringForInput(productToPrefill.retailPrice)
+            val initialQuantity = "1" // Default per una nuova riga
+
+            // Popola la UI
+            barcode = initialBarcode
+            productName = initialProductName
+            retailPrice = initialRetailPrice
+            quantity = TextFieldValue(initialQuantity)
+
+            // Gestione asincrona della categoria
             productToPrefill.categoryId?.let { catId ->
                 scope.launch {
-                    databaseViewModel.getCategoryById(catId)?.let { category ->
-                        selectedCategory = category
-                        databaseViewModel.onCategorySearchQueryChanged(category.name)
-                    }
+                    val category = databaseViewModel.getCategoryById(catId)
+                    selectedCategory = category
+                    databaseViewModel.onCategorySearchQueryChanged(category?.name ?: "")
+
+                    // --- Logica Corretta: Costruisci lo stato originale in modo che corrisponda alla UI iniziale ---
+                    originalProductData = com.example.merchandisecontrolsplitview.data.Product(
+                        barcode = initialBarcode,
+                        productName = initialProductName,
+                        retailPrice = initialRetailPrice.replace(",", ".").toDoubleOrNull(),
+                        stockQuantity = initialQuantity.replace(",", ".").toDoubleOrNull(),
+                        categoryId = category?.id,
+                        // Copia l'ID originale per coerenza nel confronto
+                        id = productToPrefill.id
+                    )
                 }
+            } ?: run {
+                // Se non c'è categoryId, costruisci subito lo stato originale
+                originalProductData = com.example.merchandisecontrolsplitview.data.Product(
+                    barcode = initialBarcode,
+                    productName = initialProductName,
+                    retailPrice = initialRetailPrice.replace(",", ".").toDoubleOrNull(),
+                    stockQuantity = initialQuantity.replace(",", ".").toDoubleOrNull(),
+                    categoryId = null,
+                    id = productToPrefill.id
+                )
             }
+
         } else {
             // --- 3. ADD MODE (from new scan or '+' button) ---
-            // The barcode is new, or the user clicked the '+' FAB.
             barcode = initialBarcode ?: ""
-            // Pre-select the last used category for convenience
             viewModel.lastUsedCategory.value?.let {
                 databaseViewModel.onCategorySearchQueryChanged(it)
-                selectedCategory = viewModel.lastUsedCategory.value?.let { lastCat ->
-                    databaseViewModel.categories.value.find { c -> c.name.equals(lastCat, true) }
-                }
+                selectedCategory = databaseViewModel.categories.value.find { c -> c.name.equals(it, true) }
             }
+            // --- Aggiunto: Lo stato originale è null perché è una nuova entry ---
+            originalProductData = null
         }
     }
 
@@ -1649,54 +1748,71 @@ fun ManualEntryDialog(
 
     // This effect for debounced DB lookup remains unchanged
     LaunchedEffect(barcode) {
-        // Ignora la validazione se il campo è vuoto o se il valore non è cambiato in modalità modifica
+        // Reset stato quando vuoto o (in edit) è l'originale
         if (barcode.isBlank() || (isEditMode && barcode == originalBarcodeForEdit)) {
             barcodeError = null
-            dbLookupJob?.cancel()
+            barcodeInfo = null
             productFromDb = null
+            dbLookupJob?.cancel()
             return@LaunchedEffect
         }
 
-        delay(350) // Attendi un po' prima di validare
+        delay(350) // debounce
 
-        // 1. Controllo sulla griglia attuale
-        val isDuplicateInGrid = viewModel.excelData
-            .drop(1) // Salta l'header
-            .any { row ->
-                val rowBarcode = if (barIdx != -1) row.getOrNull(barIdx) else null
-                // È un duplicato se il barcode è uguale E non siamo sulla riga che stiamo modificando
-                val rowIndexBeingChecked = viewModel.excelData.indexOf(row) - 1
-                rowBarcode == barcode && (rowIndexToEdit == null || rowIndexToEdit != rowIndexBeingChecked)
-            }
-
+        // 1) DUPLICATO NELLA GRIGLIA (vero errore: blocca i bottoni)
+        val isDuplicateInGrid = viewModel.excelData.drop(1).any { row ->
+            val rowBarcode = if (barIdx != -1) row.getOrNull(barIdx) else null
+            val idxBeingChecked = viewModel.excelData.indexOf(row) - 1
+            rowBarcode == barcode && (rowIndexToEdit == null || rowIndexToEdit != idxBeingChecked)
+        }
         if (isDuplicateInGrid) {
             barcodeError = context.getString(R.string.product_already_in_list)
+            barcodeInfo = null
+            productFromDb = null
+            dbLookupJob?.cancel()
             return@LaunchedEffect
         }
 
-        // 2. Controllo sul database
+        // 2) LOOKUP NEL DB (info, NON errore)
+        barcodeError = null
+        barcodeInfo = null
+        productFromDb = null
         dbLookupJob?.cancel()
         dbLookupJob = if (barcode.length > 5) {
             scope.launch {
-                val productInDb = databaseViewModel.findProductByBarcode(barcode)
-                if (productInDb != null) {
-                    barcodeError = context.getString(R.string.product_found_in_db)
-                } else {
-                    barcodeError = null
-                }
-                productFromDb = productInDb
+                val inDb = databaseViewModel.findProductByBarcode(barcode)
+                productFromDb = inDb
+                barcodeInfo = inDb?.let { context.getString(R.string.product_found_in_db) }
             }
         } else {
-            productFromDb = null
-            barcodeError = null
-            null // Assegna esplicitamente 'null' a dbLookupJob
+            null
         }
     }
 
-    val isConfirmEnabled = barcode.isNotBlank() &&
-            barcodeError == null && // <-- QUESTO CONTROLLO BLOCCA IL PULSANTE
-            (retailPrice.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0 &&
+    LaunchedEffect(productFromDb) {
+        val dbCatId = productFromDb?.categoryId
+        if (dbCatId != null && selectedCategory?.id != dbCatId) {
+            val cat = databaseViewModel.getCategoryById(dbCatId)
+            selectedCategory = cat
+            databaseViewModel.onCategorySearchQueryChanged(cat?.name ?: "")
+        }
+    }
+
+    val basicValid = barcode.isNotBlank() &&
+            barcodeError == null &&
+            (retailPrice.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0 &&
             selectedCategory != null
+
+    val passChangesGate = when {
+        // Prodotto esiste in DB → consenti solo se diverso dal DB
+        productFromDb != null -> hasChangesAgainstDb
+        // Edit di riga o prefill iniziale dal DB → consenti solo se diverso dalla baseline originale
+        isEditMode || productToPrefill != null -> hasChangesAgainstOriginal
+        // Nuova riga “vergine” → basta che i campi siano validi
+        else -> true
+    }
+
+    val isConfirmEnabled = basicValid && passChangesGate
 
     fun resetFieldsForNext() {
         barcode = ""
@@ -1791,6 +1907,8 @@ fun ManualEntryDialog(
                     supportingText = {
                         if (barcodeError != null) {
                             Text(text = barcodeError!!, color = MaterialTheme.colorScheme.error)
+                        } else if (barcodeInfo != null) {
+                            Text(text = barcodeInfo!!, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 )
@@ -1827,9 +1945,11 @@ fun ManualEntryDialog(
                     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
-                            Text("${productFromDb?.productName} - Prezzo: ${productFromDb?.retailPrice}")
+                            // Usa la funzione di formattazione per il prezzo
+                            val formattedPrice = formatNumberAsRoundedStringForInput(productFromDb?.retailPrice)
+                            Text("${productFromDb?.productName} - Prezzo: $formattedPrice")
                             TextButton(onClick = {
-                                retailPrice = productFromDb?.retailPrice?.toString() ?: ""
+                                retailPrice = formattedPrice // Usa il prezzo già formattato
                                 productName = productFromDb?.productName ?: ""
                             }) { Text(stringResource(R.string.copy_data)) }
                         }
@@ -1868,7 +1988,7 @@ fun ManualEntryDialog(
                 if (!isEditMode) {
                     TextButton(
                         onClick = {
-                            viewModel.addManualRow(entryUid, newRowData, selectedCategory!!.name)
+                            viewModel.addManualRow(entryUid, newRowData, selectedCategory?.name.orEmpty())
                             focusManager.clearFocus(true)
                             resetFieldsForNext()
                             onScanNext()
@@ -1882,7 +2002,7 @@ fun ManualEntryDialog(
                         if (isEditMode) {
                             viewModel.updateManualRow(entryUid, rowIndexToEdit, newRowData, selectedCategory!!.name)
                         } else {
-                            viewModel.addManualRow(entryUid, newRowData, selectedCategory!!.name)
+                            viewModel.addManualRow(entryUid, newRowData, selectedCategory?.name.orEmpty())
                         }
                         onDismiss()
                     },
@@ -1896,6 +2016,52 @@ fun ManualEntryDialog(
     )
 }
 
+fun toNormalizedProduct(
+    barcode: String,
+    name: String,
+    retailPriceStr: String,
+    qtyStr: String,
+    categoryId: Long?
+): com.example.merchandisecontrolsplitview.data.Product {
+    fun strToD(s: String) = s.replace(",", ".").trim().toDoubleOrNull()
+    return com.example.merchandisecontrolsplitview.data.Product(
+        barcode = barcode,
+        productName = name.ifBlank { null },
+        retailPrice = strToD(retailPriceStr),
+        stockQuantity = strToD(qtyStr),
+        categoryId = categoryId
+    )
+}
+
+fun almostEqual(a: Double?, b: Double?, eps: Double = 0.005): Boolean =
+    if (a == null && b == null) true
+    else if (a == null || b == null) false
+    else kotlin.math.abs(a - b) <= eps
+
+fun equalProducts(
+    a: com.example.merchandisecontrolsplitview.data.Product?,
+    b: com.example.merchandisecontrolsplitview.data.Product?
+): Boolean {
+    if (a == null && b == null) return true
+    if (a == null || b == null) return false
+    return a.barcode == b.barcode &&
+            (a.productName.orEmpty() == b.productName.orEmpty()) &&
+            almostEqual(a.retailPrice, b.retailPrice) &&
+            almostEqual(a.stockQuantity, b.stockQuantity) &&
+            a.categoryId == b.categoryId
+}
+private fun equalProductsForDb(
+    a: com.example.merchandisecontrolsplitview.data.Product?,
+    b: com.example.merchandisecontrolsplitview.data.Product?
+): Boolean {
+    if (a == null && b == null) return true
+    if (a == null || b == null) return false
+    // come equalProducts ma IGNORA stockQuantity
+    return a.barcode == b.barcode &&
+            (a.productName.orEmpty() == b.productName.orEmpty()) &&
+            almostEqual(a.retailPrice, b.retailPrice) &&
+            a.categoryId == b.categoryId
+}
 fun formatDecimal(num: Double, digits: Int = 2): String =
     String.format(Locale.US, "%.${digits}f", num)
 

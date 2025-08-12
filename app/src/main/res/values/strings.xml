@@ -318,4 +318,6 @@
 
     <string name="product_found_in_db">Prodotto già presente nel database</string>
 
+    <string name="mark_as_complete">Segna Completo</string>
+    <string name="mark_as_incomplete">Annulla Completo</string>
 </resources>

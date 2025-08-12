@@ -305,4 +305,6 @@
     <string name="add_and_next">添加并下一个</string>
     <string name="product_found_in_db">该商品已存在于数据库中</string>
 
+    <string name="mark_as_complete">标为完成</string>
+    <string name="mark_as_incomplete">标为未完成</string>
 </resources>

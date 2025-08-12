@@ -305,4 +305,6 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="add_and_next">Agregar y siguiente</string>
     <string name="product_found_in_db">El producto ya existe en la base de datos</string>
 
+    <string name="mark_as_complete">Marcar completo</string>
+    <string name="mark_as_incomplete">Marcar incompleto</string>
 </resources>
