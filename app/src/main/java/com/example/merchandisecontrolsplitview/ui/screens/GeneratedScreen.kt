@@ -1843,7 +1843,9 @@ fun ManualEntryDialog(
                             selectedCategory = null
                         },
                         label = { Text(stringResource(R.string.category_label)) },
-                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
                     )
                     ExposedDropdownMenu(
                         expanded = isCategoryDropdownExpanded,

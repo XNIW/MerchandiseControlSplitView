@@ -244,7 +244,9 @@ fun PreGenerateScreen(
                                         isSupplierDropdownExpanded = true
                                     },
                                     label = { Text(stringResource(R.string.supplier_label)) },
-                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
                                 )
                                 ExposedDropdownMenu(
                                     expanded = isSupplierDropdownExpanded,
@@ -289,7 +291,9 @@ fun PreGenerateScreen(
                                         isCategoryDropdownExpanded = true
                                     },
                                     label = { Text(stringResource(R.string.category_label)) },
-                                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
                                 )
                                 ExposedDropdownMenu(
                                     expanded = isCategoryDropdownExpanded,
