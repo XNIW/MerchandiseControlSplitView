@@ -727,12 +727,11 @@ private fun saveExcelFileInternal(
     editable: List<List<MutableState<String>>>,
     complete: List<Boolean>,
     supplier: String,
-    category: String // 1. AGGIUNGI IL PARAMETRO MANCANTE
+    category: String
 ) {
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
 
-    // Questa variabile è usata, l'avviso era dovuto a codice incompleto
     val numericTypes = setOf(
         "quantity", "purchasePrice", "retailPrice", "totalPrice", "rowNumber",
         "discount", "discountedPrice", "realQuantity",
@@ -753,30 +752,38 @@ private fun saveExcelFileInternal(
         if (header != "complete") index to header else null
     }
 
-    val filteredHeader = headerWithIndices.map { it.second }
+    val filteredHeaderKeys = headerWithIndices.map { it.second }
     val headerRow = sheet.createRow(0)
-    
-    val header = data.firstOrNull() ?: return
-    val categoryIndexInHeader = header.indexOf("category")
 
-    filteredHeader.forEachIndexed { newIndex, headerKey ->
+    // Scrive le intestazioni esistenti e filtrate
+    filteredHeaderKeys.forEachIndexed { newIndex, headerKey ->
         headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
     }
 
-    // 2. AGGIUNGI LE INTESTAZIONI PER FORNITORE E CATEGORIA
-    headerRow.createCell(filteredHeader.size).setCellValue(getLocalizedHeader(context, "supplier"))
-    headerRow.createCell(filteredHeader.size + 1).setCellValue(getLocalizedHeader(context, "category"))
+    // --- INIZIO MODIFICA: Logica di esportazione robusta ---
+    val originalHeaderKeysSet = originalHeader.toSet()
+    var extraCellIndex = filteredHeaderKeys.size
+
+    // Aggiungi l'intestazione fornitore solo se non esiste già
+    if ("supplier" !in originalHeaderKeysSet) {
+        headerRow.createCell(extraCellIndex).setCellValue(getLocalizedHeader(context, "supplier"))
+        extraCellIndex++
+    }
+
+    // Aggiungi l'intestazione categoria solo se non esiste già
+    if ("category" !in originalHeaderKeysSet) {
+        headerRow.createCell(extraCellIndex).setCellValue(getLocalizedHeader(context, "category"))
+    }
+    // --- FINE MODIFICA ---
 
     data.drop(1).forEachIndexed { rowIndex, rowData ->
         val excelRow = sheet.createRow(rowIndex + 1)
         var hasEditableValues = false
-        if (complete.getOrNull(rowIndex + 1) == true) {
-            // Flag per colorare
-        } else if (editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true) {
+        if (editable.getOrNull(rowIndex + 1)?.all { it.value.isNotEmpty() } == true) {
             hasEditableValues = true
         }
 
-        // 3. RIPRISTINA LA LOGICA COMPLETA PER SCRIVERE LE CELLE
+        // Scrive i dati delle celle esistenti
         headerWithIndices.forEachIndexed { newIndex, (originalIndex, headerKey) ->
             val cell = excelRow.createCell(newIndex)
             val cellValue: String = when (headerKey) {
@@ -801,29 +808,35 @@ private fun saveExcelFileInternal(
             }
         }
 
-        // 4. AGGIUNGI I VALORI NELLE CELLE DI FORNITORE E CATEGORIA
-        val supplierCell = excelRow.createCell(filteredHeader.size)
-        supplierCell.setCellValue(supplier)
+        // --- INIZIO MODIFICA: Aggiunta condizionale dei dati per fornitore e categoria ---
+        extraCellIndex = filteredHeaderKeys.size // Resetta l'indice per la riga corrente
 
-        val categoryCell = excelRow.createCell(filteredHeader.size + 1)
-
-        // Se la colonna 'category' esiste, prendi il valore dalla riga,
-        // altrimenti usa il valore di fallback (comportamento precedente).
-        val rowCategory = if (categoryIndexInHeader != -1) {
-            rowData.getOrNull(categoryIndexInHeader) ?: category
-        } else {
-            category
+        // Aggiungi i dati del fornitore solo se la colonna è stata creata ex novo
+        if ("supplier" !in originalHeaderKeysSet) {
+            val supplierCell = excelRow.createCell(extraCellIndex)
+            supplierCell.setCellValue(supplier)
+            // Applica stile
+            if (complete.getOrNull(rowIndex + 1) == true) {
+                supplierCell.cellStyle = styleComplete
+            } else if (hasEditableValues) {
+                supplierCell.cellStyle = styleFilled
+            }
+            extraCellIndex++
         }
-        categoryCell.setCellValue(rowCategory)
 
-        // Applica gli stili anche alla nuova cella
-        if (complete.getOrNull(rowIndex + 1) == true) {
-            supplierCell.cellStyle = styleComplete
-            categoryCell.cellStyle = styleComplete
-        } else if (hasEditableValues) {
-            supplierCell.cellStyle = styleFilled
-            categoryCell.cellStyle = styleFilled
+        // Aggiungi i dati della categoria solo se la colonna è stata creata ex novo
+        if ("category" !in originalHeaderKeysSet) {
+            val categoryCell = excelRow.createCell(extraCellIndex)
+            // Se la colonna non esisteva, usiamo il valore di fallback passato alla funzione
+            categoryCell.setCellValue(category)
+            // Applica stile
+            if (complete.getOrNull(rowIndex + 1) == true) {
+                categoryCell.cellStyle = styleComplete
+            } else if (hasEditableValues) {
+                categoryCell.cellStyle = styleFilled
+            }
         }
+        // --- FINE MODIFICA ---
     }
 
     sheet.defaultColumnWidth = 15
