@@ -308,4 +308,7 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
 
     <string name="mark_as_complete">Mark Complete</string>
     <string name="mark_as_incomplete">Mark Incomplete</string>
+    <string name="error_negative_quantity">Quantity cannot be negative.</string>
+    <string name="error_invalid_discount">The discount must be a value between 0 and 100.</string>
+
 </resources>

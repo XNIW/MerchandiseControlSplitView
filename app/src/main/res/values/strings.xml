@@ -320,4 +320,6 @@
 
     <string name="mark_as_complete">Segna Completo</string>
     <string name="mark_as_incomplete">Annulla Completo</string>
+    <string name="error_negative_quantity">La quantità non può essere negativa.</string>
+    <string name="error_invalid_discount">Lo sconto deve essere un valore tra 0 e 100.</string>
 </resources>
