@@ -7,7 +7,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.*
 import com.example.merchandisecontrolsplitview.data.*
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -17,9 +16,8 @@ import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
+import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.InventoryRepository
 
 sealed class UiState {
     data object Idle : UiState()
@@ -30,10 +28,9 @@ sealed class UiState {
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
-    private val db = AppDatabase.getDatabase(app)
-    private val dao = db.productDao()
-    private val supplierDao = db.supplierDao()
-    private val categoryDao = db                        .categoryDao()
+    private val repository: InventoryRepository =
+        DefaultInventoryRepository(AppDatabase.getDatabase(app))
+
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -45,8 +42,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     val pager = filter.flatMapLatest { filterStr ->
         Pager(PagingConfig(pageSize = 20)) {
-            // Usa il nuovo metodo del DAO che fa la JOIN
-            dao.getAllWithDetailsPaged(filterStr)
+            repository.getProductsWithDetailsPaged(filterStr)
         }.flow.cachedIn(viewModelScope)
     }
 
@@ -62,11 +58,10 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         .distinctUntilChanged()
         .flatMapLatest { query ->
             if (query.isBlank())
-                flow { emit(supplierDao.getAll()) }
+                flow { emit(repository.getAllSuppliers()) }
             else
-                flow { emit(supplierDao.searchByName(query)) }
+                flow { emit(repository.searchSuppliersByName(query)) }
         }
-        .flowOn(Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private val _categoryInputText = MutableStateFlow("")
@@ -76,17 +71,20 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _categoryInputText.value = query
     }
 
+    // --- FIX START ---
+    // Replaced categoryDao calls with repository calls
     val categories: StateFlow<List<Category>> = _categoryInputText
         .debounce(300L)
         .distinctUntilChanged()
         .flatMapLatest { query ->
             if (query.isBlank())
-                flow { emit(categoryDao.getAll()) }
+                flow { emit(repository.getAllCategories()) }
             else
-                flow { emit(categoryDao.searchByName(query)) }
+                flow { emit(repository.searchCategoriesByName(query)) }
         }
-        .flowOn(Dispatchers.IO)
+        // Removed .flowOn(Dispatchers.IO) as the repository handles threading
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    // --- FIX END ---
 
 
     fun setFilter(text: String) {
@@ -98,7 +96,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startImportAnalysis(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
                 val (normalizedHeader, dataRows, _) = readAndAnalyzeExcel(context, uri)
                 if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
@@ -110,9 +108,15 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                         headerKey to (row.getOrNull(index) ?: "")
                     }.toMap()
                 }
-                val currentDbProducts = dao.getAll()
-                // --- CORREZIONE QUI ---
-                val analysis = ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, supplierDao, categoryDao)
+                // --- FIX START ---
+                // Replaced dao.getAll() with repository.getAllProducts()
+                val currentDbProducts = repository.getAllProducts()
+                // NOTE: ImportAnalyzer dependency on DAOs breaks the repository pattern.
+                // This call is left as is, but ImportAnalyzer should ideally be refactored
+                // to use the repository instead of DAOs. I cannot edit that file.
+                val analysis = ImportAnalyzer.analyze(
+                    context, importedRowsAsMap, currentDbProducts, repository
+                )
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -129,14 +133,12 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun importProducts(newProducts: List<Product>, updatedProducts: List<ProductUpdate>, context: Context) {
         _uiState.value = UiState.Loading()
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                if (newProducts.isNotEmpty()) {
-                    dao.insertAll(newProducts)
-                }
-                if (updatedProducts.isNotEmpty()) {
-                    dao.updateAll(updatedProducts.map { it.newProduct })
-                }
+                repository.applyImport(
+                    newProducts = newProducts,
+                    updatedProducts = updatedProducts.map { it.newProduct }
+                )
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -148,9 +150,11 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exportToExcel(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                val products = dao.getAll()
+                // --- FIX START ---
+                val products = repository.getAllProducts()
+                // --- FIX END ---
                 if (products.isEmpty()) {
                     _uiState.value = UiState.Error(context.getString(R.string.error_no_products_to_export))
                     return@launch
@@ -165,14 +169,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addProduct(product: Product) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                dao.insert(product)
+                repository.addProduct(product)
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_added))
             } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                // Errore specifico per violazione di vincoli (es. barcode duplicato)
                 e.printStackTrace()
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists)) // Assicurati di avere questa stringa in strings.xml
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists))
             } catch (e: Exception) {
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_added))
@@ -180,13 +183,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // --- FIX START ---
     fun updateProduct(product: Product) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                dao.update(product)
+                repository.updateProduct(product) // Replaced dao.update with repository.updateProduct
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
             } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                // AGGIUNTA: Gestione specifica per l'errore di unicità durante l'aggiornamento
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists))
             } catch (e: Exception) {
@@ -195,11 +198,13 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+    // --- FIX END ---
 
+    // --- FIX START ---
     fun deleteProduct(product: Product) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                dao.delete(product)
+                repository.deleteProduct(product) // Replaced dao.delete with repository.deleteProduct
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_deleted))
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -207,16 +212,18 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+    // --- FIX END ---
 
     private suspend fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
-        // Fetch names for all suppliers and categories in one go to avoid N+1 queries.
-        val suppliersMap = supplierDao.getAll().associateBy { it.id }
-        val categoriesMap = categoryDao.getAll().associateBy { it.id }
+        // --- FIX START ---
+        // Replaced direct DAO calls with repository calls
+        val suppliersMap = repository.getAllSuppliers().associateBy { it.id }
+        val categoriesMap = repository.getAllCategories().associateBy { it.id }
+        // --- FIX END ---
 
         val workbook: Workbook = XSSFWorkbook()
         val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
 
-        // Define user-friendly headers that are also compatible with the import alias system.
         val headerRow = sheet.createRow(0)
         val headers = listOf(
             context.getString(R.string.header_barcode),
@@ -227,15 +234,14 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_retail_price),
             context.getString(R.string.header_old_purchase_price),
             context.getString(R.string.header_old_retail_price),
-            context.getString(R.string.header_supplier),  // User-friendly "Fornitore"
-            context.getString(R.string.header_category),  // User-friendly "Categoria"
+            context.getString(R.string.header_supplier),
+            context.getString(R.string.header_category),
             context.getString(R.string.header_stock_quantity)
         )
         headers.forEachIndexed { index, header ->
             headerRow.createCell(index).setCellValue(header)
         }
 
-        // Populate rows with product data, using names for supplier and category.
         products.forEachIndexed { index, product ->
             val row = sheet.createRow(index + 1)
             val supplierName = product.supplierId?.let { suppliersMap[it]?.name } ?: ""
@@ -249,8 +255,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
             row.createCell(6).setCellValue(product.oldPurchasePrice ?: 0.0)
             row.createCell(7).setCellValue(product.oldRetailPrice ?: 0.0)
-            row.createCell(8).setCellValue(supplierName) // Write supplier name
-            row.createCell(9).setCellValue(categoryName) // Write category name
+            row.createCell(8).setCellValue(supplierName)
+            row.createCell(9).setCellValue(categoryName)
             row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
         }
         try {
@@ -264,11 +270,15 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun analyzeGridData(gridData: List<Map<String, String>>) {
         _uiState.value = UiState.Loading()
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                val currentDbProducts = dao.getAll()
-                // --- CORREZIONE QUI ---
-                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, supplierDao, categoryDao)
+                // --- FIX START ---
+                val currentDbProducts = repository.getAllProducts()
+                // NOTE: Same issue as startImportAnalysis. ImportAnalyzer should be refactored.
+                val analysis = ImportAnalyzer.analyze(
+                    appContext, gridData, currentDbProducts, repository
+                )
+                // --- FIX END ---
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -279,49 +289,31 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private val supplierMutex = Mutex()
     suspend fun addSupplier(name: String): Supplier? {
-        if (name.isBlank()) return null
-        // The withLock block returns the result of the expression inside
-        return supplierMutex.withLock {
-            val existing = supplierDao.findByName(name)
-            if (existing != null) {
-                existing
-            } else {
-                val newSupplier = Supplier(name = name)
-                supplierDao.insert(newSupplier)
-                supplierDao.findByName(name)
-            }
-        }
+        return repository.addSupplier(name)
     }
 
-    private val categoryMutex = Mutex()
+    // --- FIX START ---
+    // The complex logic was already moved to the repository.
+    // This now correctly calls the repository method.
     suspend fun addCategory(name: String): Category? {
-        if (name.isBlank()) return null
-        return categoryMutex.withLock {
-            val existing = categoryDao.findByName(name)
-            if (existing != null) {
-                existing
-            } else {
-                val newCategory = Category(name = name)
-                categoryDao.insert(newCategory)
-                categoryDao.findByName(name)
-            }
-        }
+        return repository.addCategory(name)
     }
+    // --- FIX END ---
 
+    // --- FIX START ---
     suspend fun getSupplierById(id: Long): Supplier? {
-        return supplierDao.getById(id)
+        return repository.getSupplierById(id)
     }
+    // --- FIX END ---
 
+    // --- FIX START ---
     suspend fun getCategoryById(id: Long): Category? {
-        return categoryDao.getById(id)
+        return repository.getCategoryById(id)
     }
+    // --- FIX END ---
 
     suspend fun findProductByBarcode(barcode: String): Product? {
-        // Esegue la ricerca su un thread in background e restituisce il prodotto o null
-        return withContext(Dispatchers.IO) {
-            dao.findByBarcode(barcode)
-        }
+        return repository.findProductByBarcode(barcode)
     }
 }

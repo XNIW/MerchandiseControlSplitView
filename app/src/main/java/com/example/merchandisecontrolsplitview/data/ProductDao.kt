@@ -13,16 +13,20 @@ interface ProductDao {
      */
     // --- QUERY MODIFICATA E CORRETTA ---
     @Query("""
-        SELECT products.* FROM products
-        LEFT JOIN suppliers ON products.supplierId = suppliers.id
-        WHERE (:filter IS NULL OR 
-               products.barcode LIKE '%' || :filter || '%' OR 
-               products.productName LIKE '%' || :filter || '%' OR 
-               suppliers.name LIKE '%' || :filter || '%' OR
-               products.itemNumber LIKE '%' || :filter || '%')
-        ORDER BY products.id ASC
-    """)
+    SELECT p.* 
+    FROM products p
+    LEFT JOIN suppliers s ON p.supplierId = s.id
+    LEFT JOIN categories c ON p.categoryId = c.id         -- ⬅️ aggiunta
+    WHERE (:filter IS NULL OR 
+           p.barcode LIKE '%' || :filter || '%' OR 
+           p.productName LIKE '%' || :filter || '%' OR 
+           s.name LIKE '%' || :filter || '%' OR
+           p.itemNumber LIKE '%' || :filter || '%' OR
+           c.name LIKE '%' || :filter || '%')              -- ⬅️ aggiunta
+    ORDER BY p.id ASC
+""")
     fun getAllPaged(filter: String?): PagingSource<Int, Product>
+
 
     /**
      * Inserisce una lista di prodotti. Se un prodotto con lo stesso barcode esiste già,
@@ -103,6 +107,13 @@ interface ProductDao {
        OR p.productName LIKE '%' || :filter || '%'
        OR s.name LIKE '%' || :filter || '%'
        OR p.itemNumber LIKE '%' || :filter || '%'
+       OR c.name LIKE '%' || :filter || '%'          -- ⬅️ aggiunta
 """)
     fun getAllWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
+
+    @Transaction
+    suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>) {
+        if (newProducts.isNotEmpty()) insertAll(newProducts)
+        if (updatedProducts.isNotEmpty()) updateAll(updatedProducts)
+    }
 }

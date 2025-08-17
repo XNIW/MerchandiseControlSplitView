@@ -19,8 +19,7 @@ object ImportAnalyzer {
         context: Context,
         importedRows: List<Map<String, String>>,
         currentDbProducts: List<Product>,
-        supplierDao: SupplierDao,
-        categoryDao: CategoryDao
+        repository: InventoryRepository
     ): ImportAnalysis {
         val dbProductByBarcode = currentDbProducts.associateBy { it.barcode }
         val newProducts = mutableListOf<Product>()
@@ -28,8 +27,9 @@ object ImportAnalyzer {
         val errors = mutableListOf<RowImportError>()
         val warnings = mutableListOf<DuplicateWarning>()
 
-        val allSuppliers = supplierDao.getAll().associateBy { it.id }
-        val allCategories = categoryDao.getAll().associateBy { it.id }
+        val allSuppliers = repository.getAllSuppliers().associateBy { it.id }
+        val allCategories = repository.getAllCategories().associateBy { it.id }
+
         val supplierCacheByName = allSuppliers.values
             .associateBy { it.name.trim().lowercase() }
             .toMutableMap()
@@ -40,39 +40,28 @@ object ImportAnalyzer {
         suspend fun getOrCreateSupplierId(name: String): Long? {
             val key = name.trim().lowercase()
             if (key.isBlank()) return null
-
-            // 1) cache
             supplierCacheByName[key]?.let { return it.id }
-
-            // 2) già in DB?
-            supplierDao.findByName(name.trim())?.let {
-                supplierCacheByName[key] = it
-                return it.id
+            repository.findSupplierByName(name.trim())?.let {
+                supplierCacheByName[key] = it; return it.id
             }
-
-            // 3) crea e poi rileggi
-            supplierDao.insert(Supplier(name = name.trim())) // può tornare Unit o Long: ignoriamo
-            val created = supplierDao.findByName(name.trim()) ?: return null
+            val created = repository.addSupplier(name.trim()) ?: return null
             supplierCacheByName[key] = created
             return created.id
         }
 
+
         suspend fun getOrCreateCategoryId(name: String): Long? {
             val key = name.trim().lowercase()
             if (key.isBlank()) return null
-
             categoryCacheByName[key]?.let { return it.id }
-
-            categoryDao.findByName(name.trim())?.let {
-                categoryCacheByName[key] = it
-                return it.id
+            repository.findCategoryByName(name.trim())?.let {
+                categoryCacheByName[key] = it; return it.id
             }
-
-            categoryDao.insert(Category(name = name.trim()))
-            val created = categoryDao.findByName(name.trim()) ?: return null
+            val created = repository.addCategory(name.trim()) ?: return null
             categoryCacheByName[key] = created
             return created.id
         }
+
 
         val rowsWithIndex = importedRows.withIndex()
         val groupedByBarcode = rowsWithIndex.groupBy { (_, row) -> row["barcode"]?.trim() ?: "" }

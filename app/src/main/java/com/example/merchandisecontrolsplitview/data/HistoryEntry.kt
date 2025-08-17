@@ -3,7 +3,7 @@ package com.example.merchandisecontrolsplitview.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity // <-- Dice a Room che questa è una tabella
+@Entity(tableName = "history_entries") // <-- Dice a Room che questa è una tabella
 data class HistoryEntry(
     @PrimaryKey(autoGenerate = true)
     val uid: Long = 0, // <-- Chiave primaria unica, gestita dal database

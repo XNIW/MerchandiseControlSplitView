@@ -15,6 +15,8 @@ import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -25,7 +27,6 @@ import org.apache.poi.ss.usermodel.IndexedColors
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 
 /**
@@ -59,6 +60,10 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- NUOVA GESTIONE CRONOLOGIA REATTIVA ---
 
+    private val repository: InventoryRepository =
+        DefaultInventoryRepository(AppDatabase.getDatabase(application))
+
+
     // Stato privato che mantiene il filtro corrente. Inizia con "Mostra tutto".
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
 
@@ -67,21 +72,18 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     // e ne parte una nuova, prevenendo race conditions.
     val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
         .flatMapLatest { filter ->
-            getFilteredHistoryFlow(filter)
+            repository.getFilteredHistoryFlow(filter)
         }
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.Lazily, // Il flow si attiva solo se c'è almeno un osservatore (la UI)
-            initialValue = emptyList()      // Valore iniziale mentre si attende il primo dato dal DB
+            started = SharingStarted.Lazily,
+            initialValue = emptyList()
         )
 
     val currentEntryStatus = mutableStateOf(Triple(SyncStatus.NOT_ATTEMPTED, false, 0L))
     val headerTypes = mutableStateListOf<String>()
 
     // --- BLOCCO DATABASE ---
-    private val db = AppDatabase.getDatabase(application)
-    private val historyDao = db.historyEntryDao()
-    private val productDao = db.productDao()
 
     private var currentSupplierName: String = ""
     val supplierName: String
@@ -156,9 +158,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
      */
     suspend fun revertDatabaseToOriginalState() {
         _originalHistoryEntryState?.let { originalEntry ->
-            withContext(Dispatchers.IO) {
-                historyDao.update(originalEntry)
-            }
+            repository.updateHistoryEntry(originalEntry)
         }
     }
 
@@ -178,43 +178,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         _originalHistoryEntryState = null
     }
 
-    /**
-     * NUOVO: Funzione helper che sceglie la query DAO corretta in base al filtro.
-     * Converte i filtri (es. LastMonth) in date concrete (stringhe "AAAA-MM-GG HH:mm:ss").
-     */
-    private fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>> {
-        // Formattatore per le query SQLite, che può confrontare questo formato di stringa.
-        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-
-        return when (filter) {
-            is DateFilter.All -> historyDao.getAllFlow()
-
-            is DateFilter.LastMonth -> {
-                val today = LocalDate.now()
-                val startOfMonth = today.withDayOfMonth(1)
-                val endOfMonth = today.withDayOfMonth(today.lengthOfMonth())
-                val startDateString = startOfMonth.atStartOfDay().format(formatter)
-                val endDateString = endOfMonth.atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startDateString, endDateString)
-            }
-
-            is DateFilter.PreviousMonth -> {
-                val today = LocalDate.now()
-                val previousMonth = YearMonth.from(today).minusMonths(1)
-                val startOfPreviousMonth = previousMonth.atDay(1)
-                val endOfPreviousMonth = previousMonth.atEndOfMonth()
-                val startDateString = startOfPreviousMonth.atStartOfDay().format(formatter)
-                val endDateString = endOfPreviousMonth.atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startDateString, endDateString)
-            }
-
-            is DateFilter.CustomRange -> {
-                val startDateString = filter.startDate.atStartOfDay().format(formatter)
-                val endDateString = filter.endDate.atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startDateString, endDateString)
-            }
-        }
-    }
 
     /**
      * NUOVO: Metodo pubblico chiamato dalla UI per cambiare il filtro attivo.
@@ -324,7 +287,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         // Prima di qualsiasi modifica, salviamo lo stato attuale della griglia.
         _preGenerateStateBackup = excelData.map { it.toList() }
 
-        viewModelScope.launch(Dispatchers.IO) { // Esegui operazioni pesanti su un thread in background
+        viewModelScope.launch { // Esegui operazioni pesanti su un thread in background
             // 1. Filtra i dati in base alle colonne selezionate e aggiungi i prezzi vecchi
             val header = excelData.firstOrNull() ?: return@launch
             val barcodeIdx = header.indexOf("barcode")
@@ -338,7 +301,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
 
             // 2. Esegui UNA SOLA query e crea una mappa per un accesso istantaneo
             val productMap = if (allBarcodesInFile.isNotEmpty()) {
-                productDao.findByBarcodes(allBarcodesInFile).associateBy { it.barcode }
+                repository.findProductsByBarcodes(allBarcodesInFile).associateBy { it.barcode }
             } else {
                 emptyMap()
             }
@@ -400,7 +363,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             // 4. Inserisci nel DB e ottieni il nuovo 'uid'
-            val newUid = historyDao.insert(newEntry)
+            val newUid = repository.insertHistoryEntry(newEntry)
 
             // 5. Aggiorna la UI sul thread principale
             withContext(Dispatchers.Main) {
@@ -425,21 +388,18 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updatedEntry = entry.copy(id = newName)
-            historyDao.update(updatedEntry)
+        viewModelScope.launch {
+            repository.updateHistoryEntry(entry.copy(id = newName))
         }
     }
 
     fun deleteHistoryEntry(entry: HistoryEntry) {
-        viewModelScope.launch(Dispatchers.IO) {
-            historyDao.delete(entry)
-        }
+        viewModelScope.launch { repository.deleteHistoryEntry(entry) }
     }
 
-    fun updateHistoryEntry(entryUid: Long) { // <-- Cambia firma
-        viewModelScope.launch(Dispatchers.IO) {
-            historyDao.getByUid(entryUid)?.let { entryToUpdate -> // <-- Usa getByUid
+    fun updateHistoryEntry(entryUid: Long) {
+        viewModelScope.launch { // Rimuoviamo Dispatchers.IO
+            repository.getHistoryEntryByUid(entryUid)?.let { entryToUpdate ->
                 val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
                 val updatedEntry = entryToUpdate.copy(
                     data = excelData.map { it.toList() },
@@ -448,14 +408,14 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                     paymentTotal = finalPaymentTotal,
                     missingItems = finalMissingItems
                 )
-                historyDao.update(updatedEntry)
+                repository.updateHistoryEntry(updatedEntry)
             }
         }
     }
 
     // 3. AGGIUNGI: Nuova funzione `suspend` per il salvataggio garantito
     suspend fun saveCurrentStateToHistory(entryUid: Long) = withContext(Dispatchers.IO) { // <-- Cambia firma
-        historyDao.getByUid(entryUid)?.let { entryToUpdate -> // <-- Usa getByUid
+        repository.getHistoryEntryByUid(entryUid)?.let { entryToUpdate ->
             val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
             val updatedEntry = entryToUpdate.copy(
                 data = excelData.map { it.toList() },
@@ -464,7 +424,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 paymentTotal = finalPaymentTotal,
                 missingItems = finalMissingItems
             )
-            historyDao.update(updatedEntry)
+            repository.updateHistoryEntry(updatedEntry)
         }
     }
 
@@ -516,9 +476,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
             if (!entry.wasExported) {
                 val updatedEntry = entry.copy(wasExported = true)
-                viewModelScope.launch(Dispatchers.IO) {
-                    historyDao.update(updatedEntry)
-                }
+                viewModelScope.launch { repository.updateHistoryEntry(updatedEntry) }
                 if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
                     currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
                 }
@@ -538,9 +496,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
             if (entry.syncStatus != newStatus) {
                 val updatedEntry = entry.copy(syncStatus = newStatus)
-                viewModelScope.launch(Dispatchers.IO) {
-                    historyDao.update(updatedEntry)
-                }
+                viewModelScope.launch { repository.updateHistoryEntry(updatedEntry) }
                 if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
                     currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
                 }
@@ -657,9 +613,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             )
 
             // Inserisci e ottieni l'UID sul thread IO
-            val newUid = withContext(Dispatchers.IO) {
-                historyDao.insert(newEntry)
-            }
+            val newUid = repository.insertHistoryEntry(newEntry)
 
             // Torna al thread principale per aggiornare lo stato e navigare
             withContext(Dispatchers.Main) {

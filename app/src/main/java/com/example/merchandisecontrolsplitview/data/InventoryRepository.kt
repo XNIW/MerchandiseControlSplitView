@@ -1,0 +1,130 @@
+package com.example.merchandisecontrolsplitview.data
+
+import androidx.paging.PagingSource
+import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+
+interface InventoryRepository {
+    // Product methods
+    fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
+    suspend fun findProductByBarcode(barcode: String): Product?
+    suspend fun findProductsByBarcodes(barcodes: List<String>): List<Product>
+    suspend fun getAllProducts(): List<Product>
+    suspend fun addProduct(product: Product)
+    suspend fun updateProduct(product: Product)
+    suspend fun deleteProduct(product: Product)
+    suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>)
+
+    // Supplier methods
+    suspend fun getSupplierById(id: Long): Supplier?
+    suspend fun findSupplierByName(name: String): Supplier?
+    suspend fun getAllSuppliers(): List<Supplier>
+    suspend fun searchSuppliersByName(query: String): List<Supplier>
+    suspend fun addSupplier(name: String): Supplier?
+
+    // Category methods
+    suspend fun getCategoryById(id: Long): Category?
+    suspend fun findCategoryByName(name: String): Category?
+    suspend fun getAllCategories(): List<Category>
+    suspend fun searchCategoriesByName(query: String): List<Category>
+    suspend fun addCategory(name: String): Category?
+
+    // History methods
+    fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>>
+    suspend fun getHistoryEntryByUid(uid: Long): HistoryEntry?
+    suspend fun insertHistoryEntry(entry: HistoryEntry): Long
+    suspend fun updateHistoryEntry(entry: HistoryEntry)
+    suspend fun deleteHistoryEntry(entry: HistoryEntry)
+}
+
+class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
+    private val productDao: ProductDao = db.productDao()
+    private val supplierDao: SupplierDao = db.supplierDao()
+    private val categoryDao: CategoryDao = db.categoryDao()
+    private val historyDao: HistoryEntryDao = db.historyEntryDao()
+
+    // --- Product Implementations ---
+    override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
+    override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
+    override suspend fun findProductsByBarcodes(barcodes: List<String>) = withContext(Dispatchers.IO) { productDao.findByBarcodes(barcodes) }
+    override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
+    override suspend fun addProduct(product: Product) = withContext(Dispatchers.IO) { productDao.insert(product) }
+    override suspend fun updateProduct(product: Product) = withContext(Dispatchers.IO) { productDao.update(product) }
+    override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
+    override suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>) = withContext(Dispatchers.IO) {
+        productDao.applyImport(newProducts, updatedProducts)
+    }
+
+    // --- Supplier Implementations ---
+    override suspend fun getSupplierById(id: Long) = withContext(Dispatchers.IO) { supplierDao.getById(id) }
+    override suspend fun findSupplierByName(name: String): Supplier? = withContext(Dispatchers.IO) { supplierDao.findByName(name) }
+    override suspend fun getAllSuppliers(): List<Supplier> = withContext(Dispatchers.IO) { supplierDao.getAll() }
+    override suspend fun searchSuppliersByName(query: String) = withContext(Dispatchers.IO) { supplierDao.searchByName(query) }
+
+    private val supplierMutex = Mutex()
+    override suspend fun addSupplier(name: String): Supplier? = withContext(Dispatchers.IO) {
+        if (name.isBlank()) return@withContext null
+        supplierMutex.withLock {
+            supplierDao.findByName(name) ?: run {
+                val newSupplier = Supplier(name = name)
+                supplierDao.insert(newSupplier)
+                supplierDao.findByName(name)
+            }
+        }
+    }
+
+    // --- Category Implementations ---
+    override suspend fun getCategoryById(id: Long) = withContext(Dispatchers.IO) { categoryDao.getById(id) }
+    override suspend fun findCategoryByName(name: String): Category? = withContext(Dispatchers.IO) { categoryDao.findByName(name) }
+    override suspend fun getAllCategories(): List<Category> = withContext(Dispatchers.IO) { categoryDao.getAll() }
+    override suspend fun searchCategoriesByName(query: String) = withContext(Dispatchers.IO) { categoryDao.searchByName(query) }
+
+    private val categoryMutex = Mutex()
+    override suspend fun addCategory(name: String): Category? = withContext(Dispatchers.IO) {
+        if (name.isBlank()) return@withContext null
+        categoryMutex.withLock {
+            categoryDao.findByName(name) ?: run {
+                val newCategory = Category(name = name)
+                categoryDao.insert(newCategory)
+                categoryDao.findByName(name)
+            }
+        }
+    }
+
+    // --- History Implementations ---
+    override fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>> {
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        return when (filter) {
+            is DateFilter.All -> historyDao.getAllFlow()
+            is DateFilter.LastMonth -> {
+                val today = LocalDate.now()
+                val startOfMonth = today.withDayOfMonth(1).atStartOfDay().format(formatter)
+                val endOfMonth = today.withDayOfMonth(today.lengthOfMonth()).atTime(23, 59, 59).format(formatter)
+                historyDao.getEntriesBetweenDatesFlow(startOfMonth, endOfMonth)
+            }
+            is DateFilter.PreviousMonth -> {
+                val previousMonth = YearMonth.from(LocalDate.now()).minusMonths(1)
+                val startOfPreviousMonth = previousMonth.atDay(1).atStartOfDay().format(formatter)
+                val endOfPreviousMonth = previousMonth.atEndOfMonth().atTime(23, 59, 59).format(formatter)
+                historyDao.getEntriesBetweenDatesFlow(startOfPreviousMonth, endOfPreviousMonth)
+            }
+            is DateFilter.CustomRange -> {
+                val startDateString = filter.startDate.atStartOfDay().format(formatter)
+                val endDateString = filter.endDate.atTime(23, 59, 59).format(formatter)
+                historyDao.getEntriesBetweenDatesFlow(startDateString, endDateString)
+            }
+        }
+    }
+
+    override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
+    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
+    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.update(entry) }
+    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.delete(entry) }
+}
