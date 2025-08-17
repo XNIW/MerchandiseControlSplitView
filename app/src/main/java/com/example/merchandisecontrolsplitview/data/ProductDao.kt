@@ -91,4 +91,18 @@ interface ProductDao {
     */
     @Query("SELECT * FROM products WHERE barcode IN (:barcodes)")
     suspend fun findByBarcodes(barcodes: List<String>): List<Product>
+
+    @Transaction
+    @Query("""
+    SELECT p.*, s.name AS supplier_name, c.name AS category_name
+    FROM products p
+    LEFT JOIN suppliers s ON p.supplierId = s.id
+    LEFT JOIN categories c ON p.categoryId = c.id
+    WHERE :filter IS NULL 
+       OR p.barcode LIKE '%' || :filter || '%' 
+       OR p.productName LIKE '%' || :filter || '%'
+       OR s.name LIKE '%' || :filter || '%'
+       OR p.itemNumber LIKE '%' || :filter || '%'
+""")
+    fun getAllWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
 }

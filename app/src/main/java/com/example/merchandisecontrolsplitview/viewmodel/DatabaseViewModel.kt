@@ -23,7 +23,7 @@ import kotlinx.coroutines.withContext
 
 sealed class UiState {
     data object Idle : UiState()
-    data class Loading(val progress: Int? = null) : UiState()
+    data class Loading(val message: String? = null, val progress: Int? = null) : UiState()
     data class Success(val message: String) : UiState()
     data class Error(val message: String) : UiState()
 }
@@ -33,7 +33,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
     private val dao = db.productDao()
     private val supplierDao = db.supplierDao()
-    private val categoryDao = db.categoryDao()
+    private val categoryDao = db                        .categoryDao()
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -45,7 +45,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     val pager = filter.flatMapLatest { filterStr ->
         Pager(PagingConfig(pageSize = 20)) {
-            dao.getAllPaged(filterStr)
+            // Usa il nuovo metodo del DAO che fa la JOIN
+            dao.getAllWithDetailsPaged(filterStr)
         }.flow.cachedIn(viewModelScope)
     }
 
@@ -158,7 +159,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
                 val errorMessage = e.message ?: context.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
+                _uiState.value = UiState.Error(context.getString(R.string.export_error, errorMessage))
             }
         }
     }

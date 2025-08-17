@@ -16,7 +16,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.ui.unit.dp
@@ -29,7 +28,6 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +37,7 @@ import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.data.Category
+import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -172,59 +171,29 @@ fun DatabaseScreen(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(products.itemCount, key = { products[it]?.id ?: -1 }) { idx ->
-                                products[idx]?.let { product ->
-                                    var supplierName by remember { mutableStateOf<String?>(null) }
-                                    val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
-                                    var categoryName by remember { mutableStateOf<String?>(null) }
-                                    val categoryIdPrefix = stringResource(R.string.category_id_prefix)
+                            items(products.itemCount, key = { products[it]?.product?.id ?: -1 }) { idx ->
+                                products[idx]?.let { details -> // 'details' è il nostro oggetto ProductWithDetails
+                                    // SOLUZIONE: Nessuna LaunchedEffect. I nomi sono già pronti.
 
-                                    LaunchedEffect(product.supplierId) {
-                                        supplierName = if (product.supplierId != null) {
-                                            viewModel.getSupplierById(product.supplierId)?.name ?: "$supplierIdPrefix ${product.supplierId}"
-                                        } else {
-                                            "-"
-                                        }
-                                    }
-                                    LaunchedEffect(product.categoryId) {
-                                        categoryName = if (product.categoryId != null) {
-                                            viewModel.getCategoryById(product.categoryId)?.name ?: "$categoryIdPrefix ${product.categoryId}"
-                                        } else {
-                                            null
-                                        }
-                                    }
+                                    // Estraiamo l'oggetto 'Product' originale per il dialog
+                                    val product = details.product
 
                                     val dismissState = rememberSwipeToDismissBoxState(
                                         confirmValueChange = {
                                             if (it == SwipeToDismissBoxValue.EndToStart) {
-                                                itemToDelete = product
+                                                itemToDelete = product // Usiamo 'product' come prima
                                                 showDeleteDialog = true
                                             }
                                             false
                                         }
                                     )
-                                    SwipeToDismissBox(
-                                        state = dismissState,
-                                        backgroundContent = {
-                                            val color = when (dismissState.targetValue) {
-                                                SwipeToDismissBoxValue.EndToStart -> Color(0xFFB00020)
-                                                else -> Color.Transparent
-                                            }
-                                            Box(
-                                                Modifier
-                                                    .fillMaxSize()
-                                                    .background(color)
-                                                    .padding(horizontal = 20.dp),
-                                                contentAlignment = Alignment.CenterEnd
-                                            ) {
-                                                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.delete), tint = Color.White)
-                                            }
-                                        }
+                                    SwipeToDismissBox(state = dismissState, backgroundContent = { /* ... */ }
                                     ) {
                                         ProductRow(
-                                            product = product,
-                                            supplierName = supplierName, // Passa la variabile
-                                            categoryName = categoryName, // Passa la variabile
+                                            // Passiamo l'intero oggetto 'details' per la visualizzazione
+                                            productDetails = details,
+                                            // Al click, salviamo l'oggetto 'product' estratto.
+                                            // IL DIALOG RICEVE ESATTAMENTE GLI STESSI DATI DI PRIMA.
                                             onClick = { itemToEdit = product }
                                         )
                                     }
@@ -357,11 +326,10 @@ private fun PriceColumn(
 
 @Composable
 fun ProductRow(
-    product: Product,
-    supplierName: String?, // <-- 1. Aggiungi questo parametro
-    categoryName: String?, // <-- 2. Aggiungi questo parametro
+    productDetails: ProductWithDetails, // <-- Ora riceve l'oggetto completo
     onClick: () -> Unit
 ) {
+    val product = productDetails.product // Estraiamo il prodotto per comodità
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -411,17 +379,17 @@ fun ProductRow(
             }
             Spacer(Modifier.height(8.dp))
             Row {
-                Text(text = "${stringResource(R.string.product_supplier_full)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                // 3. Usa il parametro supplierName
-                Text(text = supplierName ?: "-", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Normal)
+                Text(text = "${stringResource(R.string.product_supplier_full)}: ")
+                // Usa il nome direttamente da 'productDetails'
+                Text(text = productDetails.supplierName ?: "-")
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                if (categoryName != null) {
+                if (productDetails.categoryName != null) {
                     Row {
-                        Text(text = "${stringResource(R.string.header_category)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        // 4. Usa il parametro categoryName
-                        Text(text = categoryName, style = MaterialTheme.typography.bodyMedium)
+                        Text(text = "${stringResource(R.string.header_category)}: ")
+                        // Usa il nome direttamente da 'productDetails'
+                        Text(text = productDetails.categoryName)
                     }
                 } else {
                     Spacer(modifier = Modifier)
@@ -705,7 +673,7 @@ private fun SupplierSelectionDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } }
+        confirmButton =         { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } }
     )
 }
 
