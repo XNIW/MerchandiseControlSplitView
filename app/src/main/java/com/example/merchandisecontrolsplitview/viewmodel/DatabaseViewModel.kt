@@ -232,8 +232,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_second_product_name),
             context.getString(R.string.header_purchase_price),
             context.getString(R.string.header_retail_price),
-            context.getString(R.string.header_old_purchase_price),
-            context.getString(R.string.header_old_retail_price),
             context.getString(R.string.header_supplier),
             context.getString(R.string.header_category),
             context.getString(R.string.header_stock_quantity)
@@ -253,11 +251,9 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             row.createCell(3).setCellValue(product.secondProductName ?: "")
             row.createCell(4).setCellValue(product.purchasePrice ?: 0.0)
             row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
-            row.createCell(6).setCellValue(product.oldPurchasePrice ?: 0.0)
-            row.createCell(7).setCellValue(product.oldRetailPrice ?: 0.0)
-            row.createCell(8).setCellValue(supplierName)
-            row.createCell(9).setCellValue(categoryName)
-            row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
+            row.createCell(6).setCellValue(supplierName)
+            row.createCell(7).setCellValue(categoryName)
+            row.createCell(8).setCellValue(product.stockQuantity ?: 0.0)
         }
         try {
             context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
@@ -272,13 +268,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading()
         viewModelScope.launch { // Removed Dispatchers.IO
             try {
-                // --- FIX START ---
                 val currentDbProducts = repository.getAllProducts()
-                // NOTE: Same issue as startImportAnalysis. ImportAnalyzer should be refactored.
-                val analysis = ImportAnalyzer.analyze(
-                    appContext, gridData, currentDbProducts, repository
-                )
-                // --- FIX END ---
+                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, repository)
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -293,27 +284,21 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         return repository.addSupplier(name)
     }
 
-    // --- FIX START ---
-    // The complex logic was already moved to the repository.
-    // This now correctly calls the repository method.
     suspend fun addCategory(name: String): Category? {
         return repository.addCategory(name)
     }
-    // --- FIX END ---
 
-    // --- FIX START ---
     suspend fun getSupplierById(id: Long): Supplier? {
         return repository.getSupplierById(id)
     }
-    // --- FIX END ---
 
-    // --- FIX START ---
     suspend fun getCategoryById(id: Long): Category? {
         return repository.getCategoryById(id)
     }
-    // --- FIX END ---
 
     suspend fun findProductByBarcode(barcode: String): Product? {
         return repository.findProductByBarcode(barcode)
     }
+    fun getPriceSeries(productId: Long, type: String) =
+        repository.getPriceSeries(productId, type)
 }

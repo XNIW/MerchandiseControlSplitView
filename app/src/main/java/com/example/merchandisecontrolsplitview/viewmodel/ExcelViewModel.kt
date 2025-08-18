@@ -288,23 +288,31 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         _preGenerateStateBackup = excelData.map { it.toList() }
 
         viewModelScope.launch { // Esegui operazioni pesanti su un thread in background
-            // 1. Filtra i dati in base alle colonne selezionate e aggiungi i prezzi vecchi
             val header = excelData.firstOrNull() ?: return@launch
             val barcodeIdx = header.indexOf("barcode")
 
-            // 1. Estrai tutti i barcode necessari in una sola passata
+            // --- MODIFICA INIZIA QUI ---
+
+            // 1. Estrai tutti i barcode unici dal file in una sola passata
             val allBarcodesInFile = if (barcodeIdx != -1) {
-                excelData.drop(1).mapNotNull { row -> row.getOrNull(barcodeIdx)?.takeIf { it.isNotBlank() } }
+                excelData.drop(1)
+                    .mapNotNull { row -> row.getOrNull(barcodeIdx)?.takeIf { it.isNotBlank() } }
+                    .distinct() // Assicurati che siano unici per ottimizzare la query
             } else {
                 emptyList()
             }
 
-            // 2. Esegui UNA SOLA query e crea una mappa per un accesso istantaneo
-            val productMap = if (allBarcodesInFile.isNotEmpty()) {
-                repository.findProductsByBarcodes(allBarcodesInFile).associateBy { it.barcode }
+            // 2. Definisci il timestamp "adesso" per la query
+            val nowForQuery = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+
+            // 3. ESEGUI UNA SOLA QUERY BATCH per ottenere tutti i prezzi precedenti necessari
+            val previousPricesMap = if (allBarcodesInFile.isNotEmpty()) {
+                repository.getPreviousPricesForBarcodes(allBarcodesInFile, nowForQuery)
             } else {
                 emptyMap()
             }
+
+            // --- MODIFICA FINISCE QUI ---
 
             val filteredData = excelData.mapIndexed { idx, row ->
                 if (idx == 0) {
@@ -313,20 +321,19 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
                     val barcode = if (barcodeIdx != -1) row.getOrNull(barcodeIdx) else null
-                    var oldPurchase = ""
-                    var oldRetail = ""
 
-                    // 3. Usa la mappa (accesso istantaneo) invece di una nuova query
-                    productMap[barcode]?.let { product ->
-                        oldPurchase = formatNumberAsRoundedStringForInput(product.purchasePrice)
-                        oldRetail = formatNumberAsRoundedStringForInput(product.retailPrice)
-                    }
+                    // --- MODIFICA INIZIA QUI ---
+                    // 4. Cerca i prezzi nella mappa locale invece di interrogare il DB
+                    val prices = barcode?.let { previousPricesMap[it] }
+                    val oldPurchase = formatNumberAsRoundedStringForInput(prices?.first)
+                    val oldRetail = formatNumberAsRoundedStringForInput(prices?.second)
+                    // --- MODIFICA FINISCE QUI ---
 
                     original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
                 }
             }.map { it.toList() } // Assicura che sia una copia immutabile
 
-            // 2. Prepara gli stati per la UI
+            // 2. Prepara gli stati per la UI (questa parte resta invariata)
             val newEditableValues = mutableStateListOf<MutableList<MutableState<String>>>().apply {
                 add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) // Per la riga header
                 filteredData.drop(1).forEach { row ->
@@ -339,7 +346,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 repeat(filteredData.size) { add(false) }
             }
 
-            // 3. Crea la voce di cronologia da salvare
+            // 3. Crea la voce di cronologia da salvare (questa parte resta invariata)
             val now = LocalDateTime.now()
             val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS")) + "_${supplierName.replace("\\W".toRegex(), "_")}.xlsx"
             val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
@@ -362,10 +369,10 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 wasExported = false
             )
 
-            // 4. Inserisci nel DB e ottieni il nuovo 'uid'
+            // 4. Inserisci nel DB e ottieni il nuovo 'uid' (questa parte resta invariata)
             val newUid = repository.insertHistoryEntry(newEntry)
 
-            // 5. Aggiorna la UI sul thread principale
+            // 5. Aggiorna la UI sul thread principale (questa parte resta invariata)
             withContext(Dispatchers.Main) {
                 excelData.clear()
                 excelData.addAll(filteredData)
@@ -381,7 +388,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 currentCategoryName = categoryName
                 currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
 
-                // 6. Esegui la callback per la navigazione
+                // 6. Esegui la callback per la navigazione (questa parte resta invariata)
                 onResult(newUid)
             }
         }

@@ -43,12 +43,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.ui.text.style.TextDecoration
 import kotlinx.coroutines.launch
 import androidx.paging.LoadState
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.runtime.mutableIntStateOf
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,11 +69,13 @@ fun DatabaseScreen(
     val products = viewModel.pager.collectAsLazyPagingItems()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     var itemToEdit by remember { mutableStateOf<Product?>(null) }
     var itemToDelete by remember { mutableStateOf<Product?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    var showHistoryFor by remember { mutableStateOf<Product?>(null) }
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -78,7 +88,22 @@ fun DatabaseScreen(
     )
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result?.contents?.let { code -> viewModel.setFilter(code) }
+        result?.contents?.let { code ->
+            scope.launch {
+                val existing = viewModel.findProductByBarcode(code)
+                if (existing != null) {
+                    // Prodotto trovato: applico il filtro per mostrarlo in lista
+                    viewModel.setFilter(code)
+                } else {
+                    // Non trovato: apro dialog Nuovo Prodotto con barcode già compilato
+                    itemToEdit = Product(
+                        id = 0L,
+                        barcode = code,
+                        productName = "" // resta il comportamento attuale del + (campo editabile)
+                    )
+                }
+            }
+        }
     }
 
     LaunchedEffect(uiState) {
@@ -194,7 +219,8 @@ fun DatabaseScreen(
                                             productDetails = details,
                                             // Al click, salviamo l'oggetto 'product' estratto.
                                             // IL DIALOG RICEVE ESATTAMENTE GLI STESSI DATI DI PRIMA.
-                                            onClick = { itemToEdit = product }
+                                            onClick = { itemToEdit = product },
+                                            onShowHistory = { showHistoryFor = product }
                                         )
                                     }
                                 }
@@ -293,6 +319,36 @@ fun DatabaseScreen(
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text(stringResource(R.string.cancel)) } }
         )
     }
+
+    if (showHistoryFor != null) {
+        val product = showHistoryFor!!
+        val purchase by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
+        val retail   by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
+        var tab by remember { mutableIntStateOf(0) }   // evita il warning
+
+        ModalBottomSheet(onDismissRequest = { showHistoryFor = null }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text(product.productName ?: "Prodotto", style = MaterialTheme.typography.titleMedium)
+                TabRow(selectedTabIndex = tab) {
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Acquisto") })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Vendita") })
+                }
+                val list = if (tab == 0) purchase else retail
+                LazyColumn {
+                    items(list) { pt ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(pt.effectiveAt)   // "yyyy-MM-dd HH:mm:ss"
+                            Text(formatNumberAsRoundedString(pt.price))
+                        }
+                        HorizontalDivider() // niente deprecazioni
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -326,8 +382,9 @@ private fun PriceColumn(
 
 @Composable
 fun ProductRow(
-    productDetails: ProductWithDetails, // <-- Ora riceve l'oggetto completo
-    onClick: () -> Unit
+    productDetails: ProductWithDetails,
+    onClick: () -> Unit,
+    onShowHistory: () -> Unit = {} // default → non rompe le call esistenti
 ) {
     val product = productDetails.product // Estraiamo il prodotto per comodità
     Card(
@@ -344,9 +401,9 @@ fun ProductRow(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-                if (!product.secondProductName.isNullOrBlank()) {
+                product.secondProductName?.takeIf { it.isNotBlank() }?.let { second ->
                     Text(
-                        text = product.secondProductName,
+                        text = second,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -364,18 +421,26 @@ fun ProductRow(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 PriceColumn(
                     labelNew = stringResource(R.string.product_purchase_price_new_short),
-                    priceNew = formatNumberAsRoundedString(product.purchasePrice),
+                    // se il campo corrente manca, ripiega sul lastPurchase della view
+                    priceNew = formatNumberAsRoundedString(product.purchasePrice ?: productDetails.lastPurchase),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
-                    priceOldValue = product.oldPurchasePrice,
+                    priceOldValue = productDetails.prevPurchase,
                     horizontalAlignment = Alignment.Start
                 )
                 PriceColumn(
                     labelNew = stringResource(R.string.product_retail_price_new_short),
-                    priceNew = formatNumberAsRoundedString(product.retailPrice),
+                    priceNew = formatNumberAsRoundedString(product.retailPrice ?: productDetails.lastRetail),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
-                    priceOldValue = product.oldRetailPrice,
+                    priceOldValue = productDetails.prevRetail,
                     horizontalAlignment = Alignment.End
                 )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onShowHistory) {
+                    Icon(Icons.Default.History, contentDescription = "Storico prezzi")
+                    Spacer(Modifier.width(6.dp))
+                    Text("Storico prezzi")
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row {
@@ -417,8 +482,6 @@ internal fun EditProductDialog(
     var itemNumber by remember { mutableStateOf(product.itemNumber ?: "") }
     var purchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.purchasePrice)) }
     var retailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.retailPrice)) }
-    var oldPurchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldPurchasePrice)) }
-    var oldRetailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.oldRetailPrice)) }
     var stockQuantity by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.stockQuantity)) }
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
@@ -431,6 +494,14 @@ internal fun EditProductDialog(
 
     var showSecondNameField by remember(product) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
     var showItemNumberField by remember(product) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
+
+    val purchaseSeries by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
+    val retailSeries   by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
+
+    val lastPurchase = purchaseSeries.getOrNull(0)?.price
+    val prevPurchase = purchaseSeries.getOrNull(1)?.price
+    val lastRetail   = retailSeries.getOrNull(0)?.price
+    val prevRetail   = retailSeries.getOrNull(1)?.price
 
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
@@ -449,11 +520,20 @@ internal fun EditProductDialog(
 
     val scope = rememberCoroutineScope()
 
+    val fieldScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val scanned = result?.contents
+        if (!scanned.isNullOrBlank()) {
+            barcode = scanned
+            validate() // richiama la tua validazione per mostrare eventuale duplicato
+        }
+    }
+
     var supplierId by remember { mutableStateOf(product.supplierId) }
     val noSupplierText = stringResource(R.string.no_supplier)
     var supplierName by remember { mutableStateOf(noSupplierText) }
     var showSupplierSelectionDialog by remember { mutableStateOf(false) }
     val supplierIdPrefix = stringResource(id = R.string.supplier_id_prefix)
+    val scanPromptText = stringResource(R.string.scan_prompt)
     LaunchedEffect(supplierId) {
         supplierName = if (supplierId != null) {
             viewModel.getSupplierById(supplierId!!)?.name ?: "$supplierIdPrefix $supplierId"
@@ -519,7 +599,31 @@ internal fun EditProductDialog(
             ) {
                 Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
-                OutlinedTextField(value = barcode, onValueChange = { barcode = it; validate() }, label = { Text(stringResource(R.string.barcode_label)) }, modifier = Modifier.fillMaxWidth(), isError = barcodeError != null, supportingText = { barcodeError?.let { Text(it) } })
+                OutlinedTextField(
+                    value = barcode,
+                    onValueChange = { barcode = it; validate() },
+                    label = { Text(stringResource(R.string.barcode_label)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = barcodeError != null,
+                    supportingText = { barcodeError?.let { Text(it) } },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            val options = ScanOptions().apply {
+                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                setPrompt(scanPromptText)
+                                setBeepEnabled(true)
+                                setBarcodeImageEnabled(false)
+                                setCaptureActivity(PortraitCaptureActivity::class.java) // già presente nel tuo progetto
+                            }
+                            fieldScanLauncher.launch(options)
+                        }) {
+                            Icon(
+                                imageVector = Icons.Filled.CameraAlt,
+                                contentDescription = stringResource(R.string.scan_barcode)
+                            )
+                        }
+                    }
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     OutlinedTextField(value = productName, onValueChange = { productName = it; validate() }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
                     if (showSecondNameField) {
@@ -529,30 +633,39 @@ internal fun EditProductDialog(
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = purchasePrice, onValueChange = { purchasePrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                    OutlinedTextField(
-                        value = retailPrice,
-                        // Aggiungiamo la chiamata a validate() per un feedback immediato durante la digitazione
-                        onValueChange = { retailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' }; validate() },
-                        label = { Text(stringResource(R.string.retail_price_label)) },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        // Parametri aggiunti per mostrare lo stato di errore
-                        isError = retailPriceError != null,
-                        supportingText = { retailPriceError?.let { Text(it) } }
-                    )
-                }
-
-                var showOldPrices by remember(product) { mutableStateOf(product.oldPurchasePrice != null || product.oldRetailPrice != null) }
-                if (showOldPrices) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = oldPurchasePrice, onValueChange = { oldPurchasePrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.old_purchase_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                        OutlinedTextField(value = oldRetailPrice, onValueChange = { oldRetailPrice = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.old_retail_price_label)) }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                OutlinedTextField(
+                    value = purchasePrice,
+                    onValueChange = { purchasePrice = it },
+                    label = { Text(stringResource(R.string.purchase_price_label)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = {
+                        if (lastPurchase != null || prevPurchase != null) {
+                            Text(
+                                listOfNotNull(
+                                    lastPurchase?.let { "Ultimo: ${formatNumberAsRoundedString(it)}" },
+                                    prevPurchase?.let { "Precedente: ${formatNumberAsRoundedString(it)}" }
+                                ).joinToString("  •  ")
+                            )
+                        }
                     }
-                } else {
-                    TextButton(onClick = { showOldPrices = true }) { Text(stringResource(R.string.add_previous_prices)) }
-                }
+                )
+
+                OutlinedTextField(
+                    value = retailPrice,
+                    onValueChange = { retailPrice = it },
+                    label = { Text(stringResource(R.string.retail_price_label)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = {
+                        if (lastRetail != null || prevRetail != null) {
+                            Text(
+                                listOfNotNull(
+                                    lastRetail?.let { "Ultimo: ${formatNumberAsRoundedString(it)}" },
+                                    prevRetail?.let { "Precedente: ${formatNumberAsRoundedString(it)}" }
+                                ).joinToString("  •  ")
+                            )
+                        }
+                    }
+                )
 
                 if (showItemNumberField) {
                     OutlinedTextField(value = itemNumber, onValueChange = { itemNumber = it }, label = { Text(stringResource(R.string.item_code_label)) }, modifier = Modifier.fillMaxWidth())
@@ -601,8 +714,6 @@ internal fun EditProductDialog(
                                 itemNumber = itemNumber.trim().takeIf { it.isNotBlank() },
                                 purchasePrice = purchasePrice.replace(',', '.').toDoubleOrNull(),
                                 retailPrice = retailPrice.replace(',', '.').toDoubleOrNull(),
-                                oldPurchasePrice = oldPurchasePrice.replace(',', '.').toDoubleOrNull(),
-                                oldRetailPrice = oldRetailPrice.replace(',', '.').toDoubleOrNull(),
                                 supplierId = supplierId,
                                 categoryId = categoryId,
                                 stockQuantity = stockQuantity.replace(',', '.').toDoubleOrNull()

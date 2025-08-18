@@ -166,17 +166,6 @@ object ImportAnalyzer {
                         secondProductName = secondProductName ?: existingProduct.secondProductName,
                         supplierId = supplierId ?: existingProduct.supplierId,
                         categoryId = categoryId ?: existingProduct.categoryId,
-
-                        oldPurchasePrice = if (finalPurchasePrice != null &&
-                            existingProduct.purchasePrice != null &&
-                            abs(finalPurchasePrice - existingProduct.purchasePrice) > PRICE_COMPARISON_TOLERANCE)
-                            existingProduct.purchasePrice else existingProduct.oldPurchasePrice,
-
-                        oldRetailPrice = if (retailPriceFromFile != null &&
-                            existingProduct.retailPrice != null &&
-                            abs(retailPriceFromFile - existingProduct.retailPrice) > PRICE_COMPARISON_TOLERANCE)
-                            existingProduct.retailPrice else existingProduct.oldRetailPrice,
-
                         purchasePrice = finalPurchasePrice ?: existingProduct.purchasePrice,
                         retailPrice = retailPriceFromFile ?: existingProduct.retailPrice,
                         stockQuantity = quantityToUse ?: existingProduct.stockQuantity

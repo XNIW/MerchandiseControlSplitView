@@ -25,4 +25,7 @@ interface HistoryEntryDao {
 
     @Query("SELECT * FROM history_entries WHERE uid = :uid LIMIT 1")
     suspend fun getByUid(uid: Long): HistoryEntry?
+
+    @Query("SELECT timestamp FROM history_entries ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestTimestamp(): String?
 }

@@ -33,10 +33,10 @@ interface ProductDao {
      * viene sostituito (logica "upsert").
      * @param products La lista di prodotti da inserire/aggiornare.
      */
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertAll(products: List<Product>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(product: Product)
 
     @Update
@@ -98,22 +98,56 @@ interface ProductDao {
 
     @Transaction
     @Query("""
-    SELECT p.*, s.name AS supplier_name, c.name AS category_name
-    FROM products p
-    LEFT JOIN suppliers s ON p.supplierId = s.id
-    LEFT JOIN categories c ON p.categoryId = c.id
-    WHERE :filter IS NULL 
-       OR p.barcode LIKE '%' || :filter || '%' 
-       OR p.productName LIKE '%' || :filter || '%'
-       OR s.name LIKE '%' || :filter || '%'
-       OR p.itemNumber LIKE '%' || :filter || '%'
-       OR c.name LIKE '%' || :filter || '%'          -- ⬅️ aggiunta
+SELECT 
+  p.*, 
+  s.name AS supplier_name, 
+  c.name AS category_name,
+  v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+FROM products p
+LEFT JOIN suppliers s ON p.supplierId = s.id
+LEFT JOIN categories c ON p.categoryId = c.id
+LEFT JOIN product_price_summary v ON v.productId = p.id
+WHERE (:filter IS NULL 
+   OR p.barcode LIKE '%' || :filter || '%' 
+   OR p.productName LIKE '%' || :filter || '%'
+   OR s.name LIKE '%' || :filter || '%'
+   OR p.itemNumber LIKE '%' || :filter || '%'
+   OR c.name LIKE '%' || :filter || '%')
+ORDER BY p.id ASC
 """)
     fun getAllWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
+
+
 
     @Transaction
     suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>) {
         if (newProducts.isNotEmpty()) insertAll(newProducts)
         if (updatedProducts.isNotEmpty()) updateAll(updatedProducts)
     }
+
+    data class PrevPricesRow(
+        val barcode: String,
+        val prevPurchase: Double?,
+        val prevRetail: Double?
+    )
+
+    // 2. La query SQL DEVE selezionare 'p.barcode'
+    @Query("""
+    SELECT 
+        p.barcode AS barcode,
+        (SELECT price FROM product_prices pr
+         WHERE pr.productId = p.id AND pr.type = 'PURCHASE' AND pr.effectiveAt < :at
+         ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevPurchase,
+        (SELECT price FROM product_prices pr
+         WHERE pr.productId = p.id AND pr.type = 'RETAIL' AND pr.effectiveAt < :at
+         ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevRetail
+    FROM products p
+    WHERE p.barcode IN (:barcodes)
+    ORDER BY p.id ASC
+""")
+    suspend fun getPreviousPricesForBarcodes(
+        barcodes: List<String>,
+        at: String
+    ): List<PrevPricesRow>
+
 }

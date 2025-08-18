@@ -10,6 +10,8 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
+
 
 interface InventoryRepository {
     // Product methods
@@ -42,6 +44,14 @@ interface InventoryRepository {
     suspend fun insertHistoryEntry(entry: HistoryEntry): Long
     suspend fun updateHistoryEntry(entry: HistoryEntry)
     suspend fun deleteHistoryEntry(entry: HistoryEntry)
+    suspend fun recordPriceIfChanged(productId: Long, type: String, price: Double, at: String, source: String?)
+    suspend fun getLastPrice(productId: Long, type: String): Double?
+    suspend fun getLastPriceBefore(productId: Long, type: String, before: String): Double?
+    fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>>
+    suspend fun getPreviousPricesForBarcodes(
+        barcodes: List<String>,
+        at: String
+    ): Map<String, Pair<Double?, Double?>>
 }
 
 class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
@@ -49,17 +59,65 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     private val supplierDao: SupplierDao = db.supplierDao()
     private val categoryDao: CategoryDao = db.categoryDao()
     private val historyDao: HistoryEntryDao = db.historyEntryDao()
-
+    private val priceDao: ProductPriceDao = db.productPriceDao()
+    private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
     override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
     override suspend fun findProductsByBarcodes(barcodes: List<String>) = withContext(Dispatchers.IO) { productDao.findByBarcodes(barcodes) }
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
-    override suspend fun addProduct(product: Product) = withContext(Dispatchers.IO) { productDao.insert(product) }
-    override suspend fun updateProduct(product: Product) = withContext(Dispatchers.IO) { productDao.update(product) }
+    override suspend fun addProduct(product: Product) {
+        withContext(Dispatchers.IO) {
+            productDao.insert(product)
+            val persisted = productDao.findByBarcode(product.barcode) ?: return@withContext
+
+            val now = LocalDateTime.now().format(tSFMT)
+
+            product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
+            product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
+            // niente valore di ritorno → il blocco finisce e la funzione resta Unit
+        }
+    }
+    override suspend fun updateProduct(product: Product) {
+        withContext(Dispatchers.IO) {
+            productDao.update(product)
+
+            val now = LocalDateTime.now().format(tSFMT)
+
+            product.purchasePrice?.let { priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL") }
+            product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
+        }
+    }
     override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
-    override suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>) = withContext(Dispatchers.IO) {
-        productDao.applyImport(newProducts, updatedProducts)
+    override suspend fun applyImport(
+        newProducts: List<Product>,
+        updatedProducts: List<Product>
+    ) = withContext(Dispatchers.IO) {
+        // 1) Salva dati come oggi
+        if (newProducts.isNotEmpty()) productDao.insertAll(newProducts)
+        if (updatedProducts.isNotEmpty()) productDao.updateAll(updatedProducts)
+
+        // 2) Timestamp comune all’import
+        val at = LocalDateTime.now().format(tSFMT)
+
+        // 3) Per i nuovi non hai l’id → recuperalo via barcode
+        if (newProducts.isNotEmpty()) {
+            val idsByBarcode = productDao
+                .findByBarcodes(newProducts.map { it.barcode }.distinct())
+                .associateBy({ it.barcode }, { it.id })
+            newProducts.forEach { p ->
+                val id = idsByBarcode[p.barcode] ?: return@forEach
+                p.purchasePrice?.let { priceDao.insertIfChanged(id, "PURCHASE", it, at, "IMPORT") }
+                p.retailPrice  ?.let { priceDao.insertIfChanged(id, "RETAIL",   it, at, "IMPORT") }
+            }
+        }
+
+
+        // 4) Per gli aggiornati l’id c’è già
+        updatedProducts.forEach { p ->
+            p.purchasePrice?.let { priceDao.insertIfChanged(p.id, "PURCHASE", it, at, "IMPORT") }
+            p.retailPrice  ?.let { priceDao.insertIfChanged(p.id, "RETAIL",   it, at, "IMPORT") }
+        }
     }
 
     // --- Supplier Implementations ---
@@ -78,6 +136,37 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
                 supplierDao.findByName(name)
             }
         }
+    }
+    override suspend fun recordPriceIfChanged(
+        productId: Long,
+        type: String,
+        price: Double,
+        at: String,
+        source: String?
+    ) = withContext(Dispatchers.IO) {
+        priceDao.insertIfChanged(productId, type, price, at, source)
+    }
+
+    override suspend fun getLastPrice(productId: Long, type: String): Double? =
+        withContext(Dispatchers.IO) { priceDao.getLast(productId, type)?.price }
+
+    override suspend fun getLastPriceBefore(productId: Long, type: String, before: String): Double? =
+        withContext(Dispatchers.IO) { priceDao.getLastBefore(productId, type, before)?.price }
+
+    override fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>> =
+        priceDao.getSeries(productId, type)
+
+    override suspend fun getPreviousPricesForBarcodes(
+        barcodes: List<String>,
+        at: String
+    ): Map<String, Pair<Double?, Double?>> = withContext(Dispatchers.IO) {
+        if (barcodes.isEmpty()) return@withContext emptyMap()
+
+        // Explicitly define the type here -> row: ProductDao.PrevPricesRow
+        productDao.getPreviousPricesForBarcodes(barcodes, at)
+            .associate { row: ProductDao.PrevPricesRow ->
+                row.barcode to (row.prevPurchase to row.prevRetail)
+            }
     }
 
     // --- Category Implementations ---
@@ -122,6 +211,7 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
             }
         }
     }
+
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
