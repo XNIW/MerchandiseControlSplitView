@@ -311,4 +311,9 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="error_negative_quantity">Quantity cannot be negative.</string>
     <string name="error_invalid_discount">The discount must be a value between 0 and 100.</string>
 
+    <string name="tab_purchase">Purchase</string>
+    <string name="tab_retail">Retail</string>
+    <string name="price_history">Price history</string>
+    <string name="price_last">Last: %1$s</string>
+    <string name="price_previous">Previous: %1$s</string>
 </resources>

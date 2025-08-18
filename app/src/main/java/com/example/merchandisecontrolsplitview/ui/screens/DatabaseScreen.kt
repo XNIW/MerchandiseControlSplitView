@@ -328,10 +328,10 @@ fun DatabaseScreen(
 
         ModalBottomSheet(onDismissRequest = { showHistoryFor = null }) {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Text(product.productName ?: "Prodotto", style = MaterialTheme.typography.titleMedium)
+                Text(product.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium)
                 TabRow(selectedTabIndex = tab) {
-                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Acquisto") })
-                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Vendita") })
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(stringResource(R.string.tab_purchase)) })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(stringResource(R.string.tab_retail)) })
                 }
                 val list = if (tab == 0) purchase else retail
                 LazyColumn {
@@ -437,9 +437,9 @@ fun ProductRow(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onShowHistory) {
-                    Icon(Icons.Default.History, contentDescription = "Storico prezzi")
+                    Icon(Icons.Default.History, contentDescription = stringResource(R.string.price_history))
                     Spacer(Modifier.width(6.dp))
-                    Text("Storico prezzi")
+                    Text(stringResource(R.string.price_history))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -642,8 +642,8 @@ internal fun EditProductDialog(
                         if (lastPurchase != null || prevPurchase != null) {
                             Text(
                                 listOfNotNull(
-                                    lastPurchase?.let { "Ultimo: ${formatNumberAsRoundedString(it)}" },
-                                    prevPurchase?.let { "Precedente: ${formatNumberAsRoundedString(it)}" }
+                                    lastPurchase?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
+                                    prevPurchase?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
                                 ).joinToString("  •  ")
                             )
                         }
@@ -659,8 +659,8 @@ internal fun EditProductDialog(
                         if (lastRetail != null || prevRetail != null) {
                             Text(
                                 listOfNotNull(
-                                    lastRetail?.let { "Ultimo: ${formatNumberAsRoundedString(it)}" },
-                                    prevRetail?.let { "Precedente: ${formatNumberAsRoundedString(it)}" }
+                                    lastRetail?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
+                                    prevRetail?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
                                 ).joinToString("  •  ")
                             )
                         }

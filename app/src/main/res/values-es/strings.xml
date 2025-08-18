@@ -309,4 +309,9 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="mark_as_incomplete">Marcar incompleto</string>
     <string name="error_negative_quantity">La cantidad no puede ser negativa.</string>
     <string name="error_invalid_discount">El descuento debe ser un valor entre 0 y 100.</string>
+    <string name="tab_purchase">Compra</string>
+    <string name="tab_retail">Venta</string>
+    <string name="price_history">Historial de precios</string>
+    <string name="price_last">Último: %1$s</string>
+    <string name="price_previous">Anterior: %1$s</string>
 </resources>
