@@ -150,4 +150,16 @@ ORDER BY p.id ASC
         at: String
     ): List<PrevPricesRow>
 
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON s.id = p.supplierId
+        LEFT JOIN categories c ON c.id = p.categoryId
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        ORDER BY p.id ASC
+    """)
+    suspend fun getAllWithDetailsOnce(): List<ProductWithDetails>
 }

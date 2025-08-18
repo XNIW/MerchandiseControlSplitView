@@ -48,10 +48,8 @@ interface InventoryRepository {
     suspend fun getLastPrice(productId: Long, type: String): Double?
     suspend fun getLastPriceBefore(productId: Long, type: String, before: String): Double?
     fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>>
-    suspend fun getPreviousPricesForBarcodes(
-        barcodes: List<String>,
-        at: String
-    ): Map<String, Pair<Double?, Double?>>
+    suspend fun getPreviousPricesForBarcodes(barcodes: List<String>, at: String): Map<String, Pair<Double?, Double?>>
+    suspend fun getAllProductsWithDetails(): List<ProductWithDetails>
 }
 
 class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
@@ -75,7 +73,6 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
 
             product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
             product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
-            // niente valore di ritorno → il blocco finisce e la funzione resta Unit
         }
     }
     override suspend fun updateProduct(product: Product) {
@@ -88,35 +85,40 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
             product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
         }
     }
+    override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
+        withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
     override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
     override suspend fun applyImport(
         newProducts: List<Product>,
         updatedProducts: List<Product>
     ) = withContext(Dispatchers.IO) {
-        // 1) Salva dati come oggi
+        val now = LocalDateTime.now()
+        val prevTs = now.minusSeconds(1).format(tSFMT)
+        val nowTs  = now.format(tSFMT)
+
         if (newProducts.isNotEmpty()) productDao.insertAll(newProducts)
         if (updatedProducts.isNotEmpty()) productDao.updateAll(updatedProducts)
 
-        // 2) Timestamp comune all’import
-        val at = LocalDateTime.now().format(tSFMT)
+        // ⬇️ deve essere 'suspend'
+        suspend fun recordPricesFor(productId: Long, p: Product) {
+            p.oldPurchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV") }
+            p.oldRetailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, prevTs, "IMPORT_PREV") }
+            p.purchasePrice   ?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs,  "IMPORT") }
+            p.retailPrice     ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, nowTs,  "IMPORT") }
+        }
 
-        // 3) Per i nuovi non hai l’id → recuperalo via barcode
         if (newProducts.isNotEmpty()) {
             val idsByBarcode = productDao
                 .findByBarcodes(newProducts.map { it.barcode }.distinct())
-                .associateBy({ it.barcode }, { it.id })
-            newProducts.forEach { p ->
-                val id = idsByBarcode[p.barcode] ?: return@forEach
-                p.purchasePrice?.let { priceDao.insertIfChanged(id, "PURCHASE", it, at, "IMPORT") }
-                p.retailPrice  ?.let { priceDao.insertIfChanged(id, "RETAIL",   it, at, "IMPORT") }
+                .associate { it.barcode to it.id }
+            for (p in newProducts) {
+                val id = idsByBarcode[p.barcode] ?: continue
+                recordPricesFor(id, p)
             }
         }
 
-
-        // 4) Per gli aggiornati l’id c’è già
-        updatedProducts.forEach { p ->
-            p.purchasePrice?.let { priceDao.insertIfChanged(p.id, "PURCHASE", it, at, "IMPORT") }
-            p.retailPrice  ?.let { priceDao.insertIfChanged(p.id, "RETAIL",   it, at, "IMPORT") }
+        for (p in updatedProducts) {
+            recordPricesFor(p.id, p)
         }
     }
 

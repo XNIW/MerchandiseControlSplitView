@@ -18,6 +18,8 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 sealed class UiState {
     data object Idle : UiState()
@@ -150,16 +152,17 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     fun exportToExcel(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading()
-        viewModelScope.launch { // Removed Dispatchers.IO
+        viewModelScope.launch {
             try {
-                // --- FIX START ---
-                val products = repository.getAllProducts()
-                // --- FIX END ---
+                val products = repository.getAllProductsWithDetails()
                 if (products.isEmpty()) {
                     _uiState.value = UiState.Error(context.getString(R.string.error_no_products_to_export))
                     return@launch
                 }
-                writeProductsToExcel(context, uri, products)
+                // Scrittura file su dispatcher I/O
+                withContext(Dispatchers.IO) {
+                    writeProductsToExcel(context, uri, products)
+                }
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
                 val errorMessage = e.message ?: context.getString(R.string.unknown_error)
@@ -214,13 +217,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     }
     // --- FIX END ---
 
-    private suspend fun writeProductsToExcel(context: Context, uri: Uri, products: List<Product>) {
-        // --- FIX START ---
-        // Replaced direct DAO calls with repository calls
-        val suppliersMap = repository.getAllSuppliers().associateBy { it.id }
-        val categoriesMap = repository.getAllCategories().associateBy { it.id }
-        // --- FIX END ---
-
+    private fun writeProductsToExcel(context: Context, uri: Uri, products: List<ProductWithDetails>) {
         val workbook: Workbook = XSSFWorkbook()
         val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
 
@@ -232,6 +229,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             context.getString(R.string.header_second_product_name),
             context.getString(R.string.header_purchase_price),
             context.getString(R.string.header_retail_price),
+            context.getString(R.string.product_purchase_price_old_short), // PrevPurchase
+            context.getString(R.string.product_retail_price_old_short),
             context.getString(R.string.header_supplier),
             context.getString(R.string.header_category),
             context.getString(R.string.header_stock_quantity)
@@ -240,20 +239,21 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             headerRow.createCell(index).setCellValue(header)
         }
 
-        products.forEachIndexed { index, product ->
+        products.forEachIndexed { index, details ->
+            val p = details.product
             val row = sheet.createRow(index + 1)
-            val supplierName = product.supplierId?.let { suppliersMap[it]?.name } ?: ""
-            val categoryName = product.categoryId?.let { categoriesMap[it]?.name } ?: ""
 
-            row.createCell(0).setCellValue(product.barcode)
-            row.createCell(1).setCellValue(product.itemNumber ?: "")
-            row.createCell(2).setCellValue(product.productName ?: "")
-            row.createCell(3).setCellValue(product.secondProductName ?: "")
-            row.createCell(4).setCellValue(product.purchasePrice ?: 0.0)
-            row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
-            row.createCell(6).setCellValue(supplierName)
-            row.createCell(7).setCellValue(categoryName)
-            row.createCell(8).setCellValue(product.stockQuantity ?: 0.0)
+            row.createCell(0).setCellValue(p.barcode)
+            row.createCell(1).setCellValue(p.itemNumber ?: "")
+            row.createCell(2).setCellValue(p.productName ?: "")
+            row.createCell(3).setCellValue(p.secondProductName ?: "")
+            row.createCell(4).setCellValue(p.purchasePrice ?: 0.0)          // prezzo corrente
+            row.createCell(5).setCellValue(p.retailPrice ?: 0.0)
+            row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
+            row.createCell(7).setCellValue(details.prevRetail ?: 0.0)// prezzo corrente
+            row.createCell(8).setCellValue(details.supplierName ?: "")
+            row.createCell(9).setCellValue(details.categoryName ?: "")
+            row.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
         }
         try {
             context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }

@@ -11,7 +11,7 @@ object ImportAnalyzer {
     private const val MAX_PRODUCT_NAME_LENGTH = 100
     private const val PRICE_COMPARISON_TOLERANCE = 0.001
 
-    private fun parseDouble(s: String?): Double? = s?.trim()?.replace(",", ".")?.toDoubleOrNull()
+    private fun parseDouble(s: String?): Double? = parseNumber(s)
 
     private fun round3(x: Double?) = x?.let { round(it * 1000.0) / 1000.0 }
 
@@ -119,6 +119,9 @@ object ImportAnalyzer {
                     else -> purchasePriceFromFile
                 })
 
+                val prevPurchaseFromFile = round3(parseDouble(finalRow["oldPurchasePrice"] ?: finalRow["prevPurchase"]))
+                val prevRetailFromFile   = round3(parseDouble(finalRow["oldRetailPrice"]  ?: finalRow["prevRetail"]))
+
                 val validationError = validateRow(originalRowIndex, finalRow, barcode, productName, secondProductName, finalPurchasePrice)
                 if (validationError != null) {
                     errors.add(validationError)
@@ -156,7 +159,9 @@ object ImportAnalyzer {
                         retailPrice = retailPriceFromFile,
                         supplierId = supplierId,
                         categoryId = categoryId,
-                        stockQuantity = quantityToUse ?: 0.0
+                        stockQuantity = quantityToUse ?: 0.0,
+                        oldPurchasePrice = prevPurchaseFromFile,
+                        oldRetailPrice   = prevRetailFromFile
                     )
                     newProducts.add(newProduct)
                 } else {
@@ -168,7 +173,9 @@ object ImportAnalyzer {
                         categoryId = categoryId ?: existingProduct.categoryId,
                         purchasePrice = finalPurchasePrice ?: existingProduct.purchasePrice,
                         retailPrice = retailPriceFromFile ?: existingProduct.retailPrice,
-                        stockQuantity = quantityToUse ?: existingProduct.stockQuantity
+                        stockQuantity = quantityToUse ?: existingProduct.stockQuantity,
+                        oldPurchasePrice = prevPurchaseFromFile ?: existingProduct.oldPurchasePrice,
+                        oldRetailPrice   = prevRetailFromFile   ?: existingProduct.oldRetailPrice
                     )
 
                     val changedFields = getChangedFields(existingProduct, updatedProduct, allSuppliers, allCategories)

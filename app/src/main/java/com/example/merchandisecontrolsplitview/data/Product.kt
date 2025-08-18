@@ -35,6 +35,8 @@ data class Product(
     val secondProductName: String? = null,
     val purchasePrice: Double? = null,
     val retailPrice: Double? = null,
+    val oldPurchasePrice: Double? = null,
+    val oldRetailPrice: Double? = null,
     val supplierId: Long? = null,
     val categoryId: Long? = null,
     val stockQuantity: Double? = 0.0
