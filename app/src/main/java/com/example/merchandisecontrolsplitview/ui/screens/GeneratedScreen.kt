@@ -109,6 +109,19 @@ fun GeneratedScreen(
     var titleText by remember { mutableStateOf("") }
     var renameText by remember { mutableStateOf("") }
 
+    var supplierNameForRename by remember { mutableStateOf(excelViewModel.supplierName) }
+    var categoryNameForRename by remember { mutableStateOf(excelViewModel.categoryName) }
+    var supplierExpanded by remember { mutableStateOf(false) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+
+    // Precarica le liste quando apro il dialog
+    LaunchedEffect(showRenameDialog) {
+        if (showRenameDialog) {
+            databaseViewModel.onSupplierSearchQueryChanged("")
+            databaseViewModel.onCategorySearchQueryChanged("")
+        }
+    }
+
     val historyEntries by excelViewModel.historyEntries.collectAsState()
 
     var showManualEntryDialog by remember { mutableStateOf(false) }
@@ -1224,29 +1237,99 @@ fun GeneratedScreen(
     // R.string.row_updated = "Riga aggiornata"
 
     if (showRenameDialog) {
+        val suppliers by databaseViewModel.suppliers.collectAsState()
+        val categories by databaseViewModel.categories.collectAsState()
+
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
             title = { Text(stringResource(R.string.rename_file)) },
             text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    label = { Text(stringResource(R.string.new_name)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        label = { Text(stringResource(R.string.new_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // FORNITORE
+                    ExposedDropdownMenuBox(
+                        expanded = supplierExpanded,
+                        onExpandedChange = { supplierExpanded = !supplierExpanded }
+                    ) {
+                        OutlinedTextField(
+                            readOnly = true,
+                            value = supplierNameForRename.ifBlank { stringResource(R.string.no_supplier) },
+                            onValueChange = {},
+                            label = { Text(stringResource(R.string.supplier_label)) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = supplierExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = supplierExpanded,
+                            onDismissRequest = { supplierExpanded = false }
+                        ) {
+                            suppliers.forEach { s ->
+                                DropdownMenuItem(
+                                    text = { Text(s.name) },
+                                    onClick = {
+                                        supplierNameForRename = s.name
+                                        supplierExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // CATEGORIA
+                    ExposedDropdownMenuBox(
+                        expanded = categoryExpanded,
+                        onExpandedChange = { categoryExpanded = !categoryExpanded }
+                    ) {
+                        OutlinedTextField(
+                            readOnly = true,
+                            value = categoryNameForRename.ifBlank { stringResource(R.string.no_category) },
+                            onValueChange = {},
+                            label = { Text(stringResource(R.string.category_label)) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                            modifier = Modifier
+                                .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = categoryExpanded,
+                            onDismissRequest = { categoryExpanded = false }
+                        ) {
+                            categories.forEach { c ->
+                                DropdownMenuItem(
+                                    text = { Text(c.name) },
+                                    onClick = {
+                                        categoryNameForRename = c.name
+                                        categoryExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val entry = excelViewModel.historyEntries.value.find { it.uid == entryUid }
                     if (entry != null && renameText.isNotBlank()) {
-                        excelViewModel.renameHistoryEntry(entry, renameText)
+                        excelViewModel.renameHistoryEntry(
+                            entry = entry,
+                            newName = renameText,
+                            newSupplier = supplierNameForRename,
+                            newCategory = categoryNameForRename
+                        )
                         titleText = renameText
                         showRenameDialog = false
                     }
-                }) {
-                    Text(stringResource(R.string.confirm))
-                }
+                }) { Text(stringResource(R.string.confirm)) }
             },
             dismissButton = {
                 TextButton(onClick = { showRenameDialog = false }) {

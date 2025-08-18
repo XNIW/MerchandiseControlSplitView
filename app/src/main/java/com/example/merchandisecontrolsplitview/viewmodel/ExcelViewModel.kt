@@ -394,9 +394,22 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun renameHistoryEntry(entry: HistoryEntry, newName: String) {
+    fun renameHistoryEntry(
+        entry: HistoryEntry,
+        newName: String,
+        newSupplier: String? = null,
+        newCategory: String? = null
+    ) {
         viewModelScope.launch {
-            repository.updateHistoryEntry(entry.copy(id = newName))
+            if (!newSupplier.isNullOrBlank()) currentSupplierName = newSupplier
+            if (!newCategory.isNullOrBlank()) currentCategoryName = newCategory
+
+            val updated = entry.copy(
+                id = newName,
+                supplier = currentSupplierName,
+                category = currentCategoryName
+            )
+            repository.updateHistoryEntry(updated)
         }
     }
 
