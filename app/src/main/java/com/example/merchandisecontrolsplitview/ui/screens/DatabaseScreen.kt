@@ -63,6 +63,14 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.window.DialogProperties
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.delay
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -585,6 +593,15 @@ internal fun EditProductDialog(
     val prevPurchase = purchaseSeries.getOrNull(1)?.price
     val lastRetail   = retailSeries.getOrNull(0)?.price
     val prevRetail   = retailSeries.getOrNull(1)?.price
+    val retailFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var askedKeyboard by remember { mutableStateOf(false) } // evita chiamate ripetute a show()
+
+// Stato visuale del TextField con il cursore posizionato in fondo
+    var retailPriceTf by remember(product) {
+        mutableStateOf(TextFieldValue(retailPrice, TextRange(retailPrice.length)))
+    }
+
 
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
@@ -635,6 +652,15 @@ internal fun EditProductDialog(
             viewModel.getCategoryById(categoryId!!)?.name ?: "$categoryIdPrefix $categoryId"
         } else {
             noCategoryText
+        }
+    }
+
+    LaunchedEffect(product.id) {
+        // Solo per "Modifica prodotto". Se vuoi anche per "Nuovo prodotto", rimuovi l'if.
+        if (product.id != 0L) {
+            // Aspetta che il TextField sia composto e misurato
+            delay(60)
+            retailFocusRequester.requestFocus()
         }
     }
 
@@ -734,18 +760,34 @@ internal fun EditProductDialog(
                 )
 
                 OutlinedTextField(
-                    value = retailPrice,
-                    onValueChange = { retailPrice = it },
+                    value = retailPriceTf,
+                    onValueChange = { tf ->
+                        retailPriceTf = tf
+                        retailPrice = tf.text
+                        validate()
+                    },
                     label = { Text(stringResource(R.string.retail_price_label)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(retailFocusRequester)
+                        .onFocusChanged { state ->
+                            if (state.isFocused && !askedKeyboard) {
+                                askedKeyboard = true
+                                keyboardController?.show()
+                            }
+                        },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    isError = retailPriceError != null,
                     supportingText = {
-                        if (lastRetail != null || prevRetail != null) {
-                            Text(
-                                listOfNotNull(
-                                    lastRetail?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
-                                    prevRetail?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
-                                ).joinToString("  •  ")
-                            )
+                        retailPriceError?.let { Text(it) } ?: run {
+                            if (lastRetail != null || prevRetail != null) {
+                                Text(
+                                    listOfNotNull(
+                                        lastRetail?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
+                                        prevRetail?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
+                                    ).joinToString("  •  ")
+                                )
+                            }
                         }
                     }
                 )
