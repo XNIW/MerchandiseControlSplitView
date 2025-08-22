@@ -97,28 +97,41 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     val importAnalysisResult: StateFlow<ImportAnalysis?> = _importAnalysisResult.asStateFlow()
 
     fun startImportAnalysis(context: Context, uri: Uri) {
-        _uiState.value = UiState.Loading()
-        viewModelScope.launch { // Removed Dispatchers.IO
+        _uiState.value = UiState.Loading(message = context.getString(R.string.import_loading_file), progress = 5)
+        viewModelScope.launch {
             try {
-                val (normalizedHeader, dataRows, _) = readAndAnalyzeExcel(context, uri)
+                // 1) Lettura/parsing file (I/O)
+                val (normalizedHeader, dataRows, _) = withContext(Dispatchers.IO) {
+                    readAndAnalyzeExcel(context, uri)
+                }
+
                 if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
                     _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
                     return@launch
                 }
-                val importedRowsAsMap = dataRows.map { row ->
-                    normalizedHeader.mapIndexed { index, headerKey ->
-                        headerKey to (row.getOrNull(index) ?: "")
-                    }.toMap()
+
+                // 2) Preparazione righe (CPU)
+                _uiState.value = UiState.Loading(message = context.getString(R.string.import_mapping_rows), progress = 30)
+                val importedRowsAsMap = withContext(Dispatchers.Default) {
+                    dataRows.map { row ->
+                        normalizedHeader.mapIndexed { index, headerKey ->
+                            headerKey to (row.getOrNull(index) ?: "")
+                        }.toMap()
+                    }
                 }
-                // --- FIX START ---
-                // Replaced dao.getAll() with repository.getAllProducts()
-                val currentDbProducts = repository.getAllProducts()
-                // NOTE: ImportAnalyzer dependency on DAOs breaks the repository pattern.
-                // This call is left as is, but ImportAnalyzer should ideally be refactored
-                // to use the repository instead of DAOs. I cannot edit that file.
-                val analysis = ImportAnalyzer.analyze(
-                    context, importedRowsAsMap, currentDbProducts, repository
-                )
+
+                // 3) Letture DB (I/O)
+                _uiState.value = UiState.Loading(message = context.getString(R.string.import_fetching_db), progress = 55)
+                val currentDbProducts = withContext(Dispatchers.IO) {
+                    repository.getAllProducts()
+                }
+
+                // 4) Analisi (I/O + un po’ di CPU)
+                _uiState.value = UiState.Loading(message = context.getString(R.string.import_analyzing), progress = 85)
+                val analysis = withContext(Dispatchers.IO) {
+                    ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, repository)
+                }
+
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -129,18 +142,22 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+
     fun clearImportAnalysis() {
         _importAnalysisResult.value = null
     }
 
     fun importProducts(newProducts: List<Product>, updatedProducts: List<ProductUpdate>, context: Context) {
-        _uiState.value = UiState.Loading()
-        viewModelScope.launch { // Removed Dispatchers.IO
+        _uiState.value = UiState.Loading(message = context.getString(R.string.import_applying_changes), progress = null)
+        viewModelScope.launch {
             try {
-                repository.applyImport(
-                    newProducts = newProducts,
-                    updatedProducts = updatedProducts.map { it.newProduct }
-                )
+                withContext(Dispatchers.IO) {
+                    // Converti ProductUpdate -> Product con l'ID corretto
+                    val updatesAsProducts: List<Product> = updatedProducts.map { pu ->
+                        pu.newProduct.copy(id = pu.oldProduct.id)
+                    }
+                    repository.applyImport(newProducts, updatesAsProducts)
+                }
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -265,17 +282,22 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun analyzeGridData(gridData: List<Map<String, String>>) {
-        _uiState.value = UiState.Loading()
-        viewModelScope.launch { // Removed Dispatchers.IO
+        _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_analyzing), progress = 10)
+        viewModelScope.launch {
             try {
-                val currentDbProducts = repository.getAllProducts()
-                val analysis = ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, repository)
+                val currentDbProducts = withContext(Dispatchers.IO) {
+                    _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_fetching_db), progress = 30)
+                    repository.getAllProducts()
+                }
+                _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_analyzing), progress = 70)
+                val analysis = withContext(Dispatchers.Default) {
+                    ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, repository)
+                }
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
-                e.printStackTrace()
-                val errorMessage = e.message ?: appContext.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_data_analysis, errorMessage))
+                val msg = e.message ?: appContext.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(appContext.getString(R.string.error_data_analysis, msg))
             }
         }
     }

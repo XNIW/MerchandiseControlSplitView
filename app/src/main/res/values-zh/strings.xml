@@ -315,4 +315,12 @@
     <string name="price_history">价格历史</string>
     <string name="price_last">最新：%1$s</string>
     <string name="price_previous">上一次：%1$s</string>
+    <string name="import_applying_changes">正在应用更改…</string>
+    <string name="import_loading_file">正在读取文件…</string>
+    <string name="import_mapping_rows">正在准备行…</string>
+    <string name="import_fetching_db">正在从数据库读取数据…</string>
+    <string name="import_analyzing">正在分析数据…</string>
+    <string name="operation_in_progress">操作进行中…</string>
+    <string name="export_in_progress">正在导出…</string>
+    <string name="open_database">打开数据库</string>
 </resources>

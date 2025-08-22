@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -57,6 +59,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.window.DialogProperties
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +85,7 @@ fun DatabaseScreen(
     ) { uri: Uri? ->
         uri?.let { viewModel.startImportAnalysis(context, it) }
     }
+    val isLoading = uiState is UiState.Loading
 
     val downloadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -141,6 +146,7 @@ fun DatabaseScreen(
             modifier = Modifier
                 .padding(paddingValues)
                 .fillMaxSize()
+                .blur(if (isLoading) 10.dp else 0.dp)
         ) {
             Column(Modifier.fillMaxSize()) {
                 OutlinedTextField(
@@ -265,28 +271,10 @@ fun DatabaseScreen(
                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.add_product))
                 }
             }
-            if (uiState is UiState.Loading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
-                        .clickable(enabled = false, onClick = {}),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(48.dp))
-                        Text(
-                            text = stringResource(R.string.import_analysis_in_progress),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                }
-            }
         }
+    }
+    if (uiState is UiState.Loading) {
+        LoadingDialog(uiState as UiState.Loading)
     }
 
     if (itemToEdit != null) {
@@ -344,6 +332,72 @@ fun DatabaseScreen(
                             Text(formatNumberAsRoundedString(pt.price))
                         }
                         HorizontalDivider() // niente deprecazioni
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LoadingDialog(loading: UiState.Loading) {
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false // consente full-screen
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.65f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                tonalElevation = 6.dp,
+                shadowElevation = 12.dp,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier
+                    .padding(24.dp)
+                    .widthIn(min = 280.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Spinner più grande e spesso
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(64.dp),
+                        strokeWidth = 6.dp
+                    )
+
+                    Text(
+                        text = loading.message ?: stringResource(R.string.operation_in_progress),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    val target = ((loading.progress ?: 0).coerceIn(0, 100)) / 100f
+                    val animated by animateFloatAsState(targetValue = target, label = "importProgress")
+
+                    if (loading.progress != null) {
+                        LinearProgressIndicator(
+                            progress = { animated },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp), // facoltativo: un po’ più sottile
+                            // opzionale: personalizza leggermente il track per più contrasto
+                             trackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        Text(
+                            text = "${(animated * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

@@ -316,4 +316,12 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="price_history">Price history</string>
     <string name="price_last">Last: %1$s</string>
     <string name="price_previous">Previous: %1$s</string>
+    <string name="import_applying_changes">Applying changes…</string>
+    <string name="import_loading_file">Loading file…</string>
+    <string name="import_mapping_rows">Preparing rows…</string>
+    <string name="import_fetching_db">Fetching data from database…</string>
+    <string name="import_analyzing">Analyzing data…</string>
+    <string name="operation_in_progress">Operation in progress…</string>
+    <string name="export_in_progress">Export in progress…</string>
+    <string name="open_database">Open database</string>
 </resources>

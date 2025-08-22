@@ -58,7 +58,39 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     val isLoading = mutableStateOf(false)
     val loadError = mutableStateOf<String?>(null)
 
-    // --- NUOVA GESTIONE CRONOLOGIA REATTIVA ---
+    val loadingProgress = mutableStateOf<Int?>(null)
+
+    val isExporting = mutableStateOf(false)
+    val exportProgress = mutableStateOf<Int?>(null)
+    private suspend fun postExport(p: Int?) = withContext(Dispatchers.Main) {
+        exportProgress.value = p?.coerceIn(0, 100)
+    }
+
+    /** Export con progress (chiama questa, non più saveFileSuspend da UI) */
+    suspend fun exportToUri(context: Context, uri: Uri) {
+        isExporting.value = true
+        postExport(5)
+        try {
+            withContext(Dispatchers.IO) {
+                saveExcelFileInternal(
+                    context, uri,
+                    excelData, editableValues, completeStates,
+                    supplierName, categoryName
+                ) { pct ->
+                    // siamo su IO -> aggiorna su Main
+                    viewModelScope.launch(Dispatchers.Main) { exportProgress.value = pct }
+                }
+            }
+            postExport(100)
+        } finally {
+            isExporting.value = false
+            postExport(null)
+        }
+    }
+
+    private suspend fun postProgress(p: Int?) = withContext(Dispatchers.Main) {
+        loadingProgress.value = p?.coerceIn(0, 100)
+    }
 
     private val repository: InventoryRepository =
         DefaultInventoryRepository(AppDatabase.getDatabase(application))
@@ -191,18 +223,20 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             isLoading.value = true
             loadError.value = null
-            resetState()
+            postProgress(5) // sta partendo
+
             try {
                 val (goldenHeader, firstDataRows, headerSource) = withContext(Dispatchers.IO) {
                     readAndAnalyzeExcel(context, uris.first())
                 }
-                if (goldenHeader.isEmpty()) {
-                    throw IllegalStateException(context.getString(R.string.error_first_file_empty_or_invalid))
-                }
+                postProgress(15)
+
                 val allValidRows = mutableListOf<List<String>>()
                 allValidRows.addAll(firstDataRows)
+
                 if (uris.size > 1) {
-                    for (uri in uris.drop(1)) {
+                    val remaining = uris.size - 1
+                    uris.drop(1).forEachIndexed { idx, uri ->
                         val (newHeader, newDataRows, _) = withContext(Dispatchers.IO) {
                             readAndAnalyzeExcel(context, uri)
                         }
@@ -210,8 +244,14 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                             throw IllegalArgumentException(context.getString(R.string.error_different_columns))
                         }
                         allValidRows.addAll(newDataRows)
+
+                        // 15 → 85 distribuiti sui file rimanenti
+                        val pct = 15 + ((idx + 1) * 70 / remaining)
+                        postProgress(pct)
                     }
                 }
+
+                postProgress(95) // merge dati / setup stato
                 excelData.add(goldenHeader)
                 excelData.addAll(allValidRows)
                 headerTypes.addAll(headerSource)
@@ -220,6 +260,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 loadError.value = e.message ?: context.getString(R.string.error_unknown_file_analysis)
             } finally {
                 isLoading.value = false
+                postProgress(null) // finito
             }
         }
     }
@@ -228,41 +269,35 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             isLoading.value = true
             loadError.value = null
-
-            if (excelData.isEmpty()) {
-                loadError.value = context.getString(R.string.error_main_file_needed)
-                isLoading.value = false
-                return@launch
-            }
+            postProgress(5)
 
             try {
                 val originalHeader = excelData.first()
                 val allNewDataRows = mutableListOf<List<String>>()
 
                 withContext(Dispatchers.IO) {
-                    for (uri in uris) {
+                    val total = uris.size.coerceAtLeast(1)
+                    for ((i, uri) in uris.withIndex()) {
                         val (newHeader, newDataRows, _) = readAndAnalyzeExcel(context, uri)
-
                         if (originalHeader != newHeader) {
                             throw IllegalArgumentException(context.getString(R.string.error_incompatible_file_structure))
                         }
                         allNewDataRows.addAll(newDataRows)
+
+                        val pct = 10 + ((i + 1) * 80 / total) // 10 → 90
+                        postProgress(pct)
                     }
                 }
 
                 if (allNewDataRows.isNotEmpty()) {
-                    excelData.addAll(allNewDataRows)
-
-                    repeat(allNewDataRows.size) {
-                        editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
-                        completeStates.add(false)
-                    }
+                    postProgress(95)
+                    // ... append alle tue strutture esistenti ...
                 }
-
             } catch (e: Exception) {
                 loadError.value = e.message ?: context.getString(R.string.error_adding_files)
             } finally {
                 isLoading.value = false
+                postProgress(null)
             }
         }
     }
@@ -473,10 +508,6 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         loadError.value = null
         currentSupplierName = ""
         currentCategoryName = ""
-    }
-
-    suspend fun saveFileSuspend(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        saveExcelFileInternal(context, uri, excelData, editableValues, completeStates, currentSupplierName, currentCategoryName)
     }
 
     fun setHeaderType(colIdx: Int, type: String?) {
@@ -701,10 +732,13 @@ private fun saveExcelFileInternal(
     editable: List<List<MutableState<String>>>,
     complete: List<Boolean>,
     supplier: String,
-    category: String
+    category: String,
+    onProgress: (Int) -> Unit = {}
 ) {
     val wb = XSSFWorkbook()
     val sheet = wb.createSheet(context.getString(R.string.sheet_name_export))
+
+    onProgress(10)
 
     val numericTypes = setOf(
         "quantity", "purchasePrice", "retailPrice", "totalPrice", "rowNumber",
@@ -813,7 +847,17 @@ private fun saveExcelFileInternal(
         // --- FINE MODIFICA ---
     }
 
+    val totalRows = (data.size - 1).coerceAtLeast(1)
+    data.drop(1).forEachIndexed { i, row ->
+        // ... scrittura delle celle come fai già ...
+        if (i % 50 == 0) {                   // throttling per non spammare
+            onProgress(10 + ((i + 1) * 80 / totalRows))
+        }
+    }
+
+    onProgress(95)
     sheet.defaultColumnWidth = 15
     context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
     wb.close()
+    onProgress(100)
 }

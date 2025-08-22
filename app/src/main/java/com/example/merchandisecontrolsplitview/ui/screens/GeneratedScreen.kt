@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.animation.AnimatedVisibility // <-- Per risolvere l'errore di riferimento non risolto
 import kotlinx.coroutines.delay // <-- Per il debounce nella ricerca
 import androidx.compose.ui.platform.LocalFocusManager
+import com.example.merchandisecontrolsplitview.viewmodel.UiState
 
 
 /**
@@ -75,6 +76,7 @@ fun GeneratedScreen(
     databaseViewModel: DatabaseViewModel,
     onBackToStart: () -> Unit,
     onNavigateToHome: () -> Unit,
+    onNavigateToDatabase: () -> Unit,   // <--- AGGIUNTO
     entryUid: Long,
     isNewEntry: Boolean,
     isManualEntry: Boolean
@@ -187,6 +189,10 @@ fun GeneratedScreen(
         }
     }
 
+    val dbUiState by databaseViewModel.uiState.collectAsState()
+    val isExporting by excelViewModel.isExporting
+    val exportProgress by excelViewModel.exportProgress
+
     BackHandler {
         handleBackPress()
     }
@@ -257,15 +263,14 @@ fun GeneratedScreen(
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ) { uri ->
-        uri?.let { targetUri ->
+        uri?.let {
             scope.launch {
-                excelViewModel.saveFileSuspend(context, uri)
+                excelViewModel.exportToUri(context, it)           // <--- nuovo
                 excelViewModel.markCurrentEntryAsExported(entryUid)
                 Toast.makeText(context, context.getString(R.string.file_exported_successfully), Toast.LENGTH_SHORT).show()
             }
         }
     }
-
     fun performSearch() {
         val matches = excelData.flatMapIndexed { r, row ->
             row.mapIndexedNotNull { c, v -> if (v == searchText) r to c else null }
@@ -283,7 +288,24 @@ fun GeneratedScreen(
         }
     }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(dbUiState) {
+        when (val s = dbUiState) {
+            is UiState.Success -> {
+                val res = snackbarHostState.showSnackbar(
+                    message = s.message,
+                    actionLabel = context.getString(R.string.open_database) // ✅
+                )
+                if (res == SnackbarResult.ActionPerformed) {
+                    onNavigateToDatabase() // <--- ora esiste
+                }
+            }
+            is UiState.Error -> snackbarHostState.showSnackbar(s.message)
+            else -> Unit
+        }
+    }
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -1229,6 +1251,14 @@ fun GeneratedScreen(
                 )
             }
         }
+    }
+
+    // in fondo allo screen (fuori dallo Scaffold)
+    if (isExporting) {
+        LoadingDialog(UiState.Loading(message = stringResource(R.string.export_in_progress), progress = exportProgress))
+    }
+    if (dbUiState is UiState.Loading) {
+        (dbUiState as? UiState.Loading)?.let { LoadingDialog(it) }
     }
 
     // Aggiungo alcune stringhe mancanti per completezza (da aggiungere in strings.xml)

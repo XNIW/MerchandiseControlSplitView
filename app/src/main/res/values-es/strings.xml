@@ -314,4 +314,12 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="price_history">Historial de precios</string>
     <string name="price_last">Último: %1$s</string>
     <string name="price_previous">Anterior: %1$s</string>
+    <string name="import_applying_changes">Aplicando cambios…</string>
+    <string name="import_loading_file">Leyendo archivo…</string>
+    <string name="import_mapping_rows">Preparando filas…</string>
+    <string name="import_fetching_db">Leyendo datos de la base de datos…</string>
+    <string name="import_analyzing">Analizando datos…</string>
+    <string name="operation_in_progress">Operación en curso…</string>
+    <string name="export_in_progress">Exportación en curso…</string>
+    <string name="open_database">Abrir base de datos</string>
 </resources>

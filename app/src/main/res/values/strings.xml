@@ -328,4 +328,12 @@
     <string name="price_history">Storico prezzi</string>
     <string name="price_last">Ultimo: %1$s</string>
     <string name="price_previous">Precedente: %1$s</string>
+    <string name="import_applying_changes">Applicazione modifiche…</string>
+    <string name="import_loading_file">Lettura del file…</string>
+    <string name="import_mapping_rows">Preparazione righe…</string>
+    <string name="import_fetching_db">Lettura dati dal database…</string>
+    <string name="import_analyzing">Analisi dei dati…</string>
+    <string name="operation_in_progress">Operazione in corso…</string>
+    <string name="export_in_progress">Esportazione in corso…</string>
+    <string name="open_database">Apri database</string>
 </resources>

@@ -110,6 +110,9 @@ fun AppNavGraph() {
                         launchSingleTop = true
                     }
                 },
+                onNavigateToDatabase = {                     // <--- AGGIUNTO
+                    navController.navigate(Screen.Database.route)
+                },
                 entryUid = entryUid,
                 isNewEntry = isNewEntry,
                 isManualEntry = isManualEntry
@@ -161,23 +164,39 @@ fun AppNavGraph() {
                     databaseViewModel = dbViewModel,
                     importAnalysis = analysis,
                     onConfirm = { newProducts, updatedProducts ->
-                        // 1. Il nome della variabile ora riflette correttamente il tipo di dato (Long uid)
                         val currentEntryUid = excelViewModel.currentEntryStatus.value.third
 
-                        // 2. La logica sottostante ora funziona come previsto perché le funzioni del ViewModel sono state aggiornate
+                        // Applica import
+                        dbViewModel.importProducts(newProducts, updatedProducts, context)
+
+                        // Aggiorna lo stato della voce corrente (se vuoi farlo dopo il successo, spostalo in UiState.Success observer)
                         if (importAnalysisResult?.errors?.isEmpty() == true) {
                             excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
                         } else {
                             excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
                         }
-                        dbViewModel.importProducts(newProducts, updatedProducts, context)
-                        navController.navigate(Screen.FilePicker.route) {
-                            popUpTo(navController.graph.startDestinationId) {
-                                inclusive = true
-                            }
-                            launchSingleTop = true
-                        }
+
+                        // Torna alla schermata precedente (Generated)
+                        navController.popBackStack()
                     },
+//                    onConfirm = { newProducts, updatedProducts ->
+//                        // 1. Il nome della variabile ora riflette correttamente il tipo di dato (Long uid)
+//                        val currentEntryUid = excelViewModel.currentEntryStatus.value.third
+//
+//                        // 2. La logica sottostante ora funziona come previsto perché le funzioni del ViewModel sono state aggiornate
+//                        if (importAnalysisResult?.errors?.isEmpty() == true) {
+//                            excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
+//                        } else {
+//                            excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
+//                        }
+//                        dbViewModel.importProducts(newProducts, updatedProducts, context)
+//                        navController.navigate(Screen.FilePicker.route) {
+//                            popUpTo(navController.graph.startDestinationId) {
+//                                inclusive = true
+//                            }
+//                            launchSingleTop = true
+//                        }
+//                    },
                     onCancel = {
                         navController.popBackStack()
                     }

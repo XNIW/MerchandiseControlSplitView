@@ -44,6 +44,7 @@ fun PreGenerateScreen(
     val editableValues = excelViewModel.editableValues
     val completeStates = excelViewModel.completeStates
     val isExcelLoading by excelViewModel.isLoading
+    val excelProgress by excelViewModel.loadingProgress
     val excelLoadError by excelViewModel.loadError
     val headerTypes = excelViewModel.headerTypes
 
@@ -133,7 +134,13 @@ fun PreGenerateScreen(
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        CircularProgressIndicator()
+                        when {
+                            isExcelLoading -> LoadingDialog(UiState.Loading(
+                                message = stringResource(R.string.loading_file),
+                                progress = excelProgress
+                            ))
+                            databaseUiState is UiState.Loading -> LoadingDialog(databaseUiState)
+                        }
                         Spacer(Modifier.height(8.dp))
                         val statusText = if(isAnalysisInProgress) stringResource(R.string.analysis_in_progress) else stringResource(R.string.loading_file)
                         Text(statusText)
