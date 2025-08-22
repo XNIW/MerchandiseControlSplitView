@@ -37,6 +37,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    fun consumeUiState() { _uiState.value = UiState.Idle }
     private val _filter = MutableStateFlow<String?>(null)
 
     private val appContext = getApplication<Application>().applicationContext
@@ -73,7 +74,6 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _categoryInputText.value = query
     }
 
-    // --- FIX START ---
     // Replaced categoryDao calls with repository calls
     val categories: StateFlow<List<Category>> = _categoryInputText
         .debounce(300L)

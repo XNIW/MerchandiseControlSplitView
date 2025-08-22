@@ -64,11 +64,6 @@ import kotlinx.coroutines.delay // <-- Per il debounce nella ricerca
 import androidx.compose.ui.platform.LocalFocusManager
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 
-
-/**
- * Schermata per visualizzare e modificare la griglia generata.
- * Ogni modifica viene salvata nella cronologia corrente.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneratedScreen(
@@ -289,21 +284,43 @@ fun GeneratedScreen(
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    DisposableEffect(Unit) {
+        onDispose { snackbarHostState.currentSnackbarData?.dismiss() }
+    }
+
     LaunchedEffect(dbUiState) {
         when (val s = dbUiState) {
             is UiState.Success -> {
+                val msg = s.message
+                // 1. MOSTRA la snackbar (operazione sospensiva)
                 val res = snackbarHostState.showSnackbar(
-                    message = s.message,
-                    actionLabel = context.getString(R.string.open_database) // ✅
+                    message = msg,
+                    actionLabel = context.getString(R.string.open_database),
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short
                 )
-                if (res == SnackbarResult.ActionPerformed) {
-                    onNavigateToDatabase() // <--- ora esiste
-                }
+                // 2. DOPO, consuma lo stato
+                databaseViewModel.consumeUiState()
+
+                // La logica successiva resta invariata
+                if (res == SnackbarResult.ActionPerformed) onNavigateToDatabase()
             }
-            is UiState.Error -> snackbarHostState.showSnackbar(s.message)
-            else -> Unit
+            is UiState.Error -> {
+                val msg = s.message
+                // 1. MOSTRA la snackbar
+                snackbarHostState.showSnackbar(
+                    message = msg,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short
+                )
+                // 2. DOPO, consuma lo stato
+                databaseViewModel.consumeUiState()
+            }
+            is UiState.Idle, is UiState.Loading -> Unit
         }
     }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {

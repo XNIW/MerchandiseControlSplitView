@@ -112,10 +112,30 @@ fun DatabaseScreen(
     }
 
     LaunchedEffect(uiState) {
-        when (val currentState = uiState) {
-            is UiState.Success -> snackbarHostState.showSnackbar(currentState.message)
-            is UiState.Error -> snackbarHostState.showSnackbar(currentState.message)
-            else -> {}
+        when (val s = uiState) {
+            is UiState.Success -> {
+                val msg = s.message
+                // 1. MOSTRA la snackbar (operazione sospensiva)
+                snackbarHostState.showSnackbar(
+                    message = msg,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short
+                )
+                // 2. DOPO che è apparsa, consuma lo stato
+                viewModel.consumeUiState()
+            }
+            is UiState.Error -> {
+                val msg = s.message
+                // 1. MOSTRA la snackbar
+                snackbarHostState.showSnackbar(
+                    message = msg,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short
+                )
+                // 2. DOPO, consuma lo stato
+                viewModel.consumeUiState()
+            }
+            is UiState.Idle, is UiState.Loading -> Unit
         }
     }
 
