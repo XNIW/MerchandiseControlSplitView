@@ -639,7 +639,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     fun createManualEntry(onResult: (Long) -> Unit) {
         viewModelScope.launch { // Non serve Dispatchers.IO per questa logica
             // Definisci l'intestazione standard
-            val manualHeader = listOf("barcode", "productName", "retailPrice", "quantity", "category")
+            val manualHeader = listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category")
             val dataGrid = listOf(manualHeader)
 
             val now = LocalDateTime.now()

@@ -63,6 +63,9 @@ import androidx.compose.animation.AnimatedVisibility // <-- Per risolvere l'erro
 import kotlinx.coroutines.delay // <-- Per il debounce nella ricerca
 import androidx.compose.ui.platform.LocalFocusManager
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.KeyboardCapitalization
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -266,10 +269,21 @@ fun GeneratedScreen(
             }
         }
     }
+
     fun performSearch() {
+        val query = searchText.trim()
+        if (query.isBlank()) {
+            Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val matches = excelData.flatMapIndexed { r, row ->
-            row.mapIndexedNotNull { c, v -> if (v == searchText) r to c else null }
+            row.mapIndexedNotNull { c, v ->
+                val cell = v.trim()
+                if (cell.contains(query, ignoreCase = true)) r to c else null
+            }
         }.toSet()
+
         if (matches.isNotEmpty()) {
             searchMatches = matches
             val (r, c) = matches.first()
@@ -693,8 +707,23 @@ fun GeneratedScreen(
             }
 
             if (showSearchDialog) {
+                // Focus + tastiera per il TextField "Inserisci numero"
+                val searchFocusRequester = remember { FocusRequester() }
+                val keyboardController = LocalSoftwareKeyboardController.current
+
+                LaunchedEffect(showSearchDialog) {
+                    if (showSearchDialog) {
+                        delay(50)                      // piccolo ritardo per far montare il dialogo
+                        searchFocusRequester.requestFocus()
+                        keyboardController?.show()
+                    }
+                }
+
                 AlertDialog(
-                    onDismissRequest = {},
+                    onDismissRequest = {
+                        keyboardController?.hide()
+                        showSearchDialog = false
+                    },
                     title = { Text(stringResource(R.string.search_number)) },
                     text = {
                         Column {
@@ -719,27 +748,32 @@ fun GeneratedScreen(
                                 label = { Text(stringResource(R.string.insert_number)) },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
-                                    imeAction = ImeAction.Search
+                                    keyboardType = KeyboardType.Ascii,           // lettere + numeri
+                                    imeAction = ImeAction.Search,
+                                    capitalization = KeyboardCapitalization.None,
+                                    autoCorrectEnabled = false                   // <-- nuovo parametro
                                 ),
-                                keyboardActions = KeyboardActions(onSearch = { performSearch() }),
-                                modifier = Modifier.fillMaxWidth()
+                                keyboardActions = KeyboardActions(onSearch = {
+                                    keyboardController?.hide()
+                                    performSearch()
+                                }),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(searchFocusRequester)
                             )
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { performSearch() }) {
-                            Text(
-                                stringResource(R.string.search_number)
-                            )
-                        }
+                        TextButton(onClick = {
+                            keyboardController?.hide()
+                            performSearch()
+                        }) { Text(stringResource(R.string.search_number)) }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showSearchDialog = false }) {
-                            Text(
-                                stringResource(R.string.clear)
-                            )
-                        }
+                        TextButton(onClick = {
+                            keyboardController?.hide()
+                            showSearchDialog = false
+                        }) { Text(stringResource(R.string.clear)) }
                     }
                 )
             }
@@ -1713,7 +1747,8 @@ fun ManualEntryDialog(
 
     var barcode by remember { mutableStateOf("") }
     var quantity by remember { mutableStateOf(TextFieldValue("1")) }
-    var retailPrice by remember { mutableStateOf("") }
+    var purchasePrice by remember { mutableStateOf("") }
+    var retailPrice by remember { mutableStateOf(TextFieldValue("")) }
     var productName by remember { mutableStateOf("") }
 
     var originalProductData by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
@@ -1727,6 +1762,7 @@ fun ManualEntryDialog(
 
     val isEditMode = rowIndexToEdit != null
     val header = viewModel.excelData.firstOrNull() ?: return
+    val catName = selectedCategory?.name ?: "variedades"
 
     val (barIdx, nameIdx, priceIdx, qtyIdx, catIdx) = remember(header) {
         listOf("barcode", "productName", "retailPrice", "quantity", "category").map { header.indexOf(it) }
@@ -1739,11 +1775,12 @@ fun ManualEntryDialog(
         } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
     }
 
+    val purchIdx = remember(header) { header.indexOf("purchasePrice") }
     val currentNormalized = remember(barcode, productName, retailPrice, quantity, selectedCategory) {
         toNormalizedProduct(
             barcode = barcode,
             name = productName,
-            retailPriceStr = retailPrice,
+            retailPriceStr = retailPrice.text,
             qtyStr = quantity.text,
             categoryId = selectedCategory?.id
         )
@@ -1756,13 +1793,22 @@ fun ManualEntryDialog(
         !equalProducts(currentNormalized, originalProductData)
     }
 
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        // Lascia assestare il dialog un attimo
+        delay(50)
+        priceFocusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     // ✅ *** CRITICAL FIX: This effect now correctly re-initializes the dialog's state
     // every time it's shown for a new item or in a new mode.
     // It's keyed to the inputs, so it re-runs when they change.
     LaunchedEffect(rowIndexToEdit, productToPrefill, initialBarcode) {
         // First, reset all fields to a clean state to prevent stale data
         productName = ""
-        retailPrice = ""
+        retailPrice = TextFieldValue("")
         quantity = TextFieldValue("1")
         selectedCategory = null
         databaseViewModel.onCategorySearchQueryChanged("")
@@ -1778,7 +1824,9 @@ fun ManualEntryDialog(
             barcode = if (barIdx != -1) rowData.getOrNull(barIdx) ?: "" else ""
             originalBarcodeForEdit = barcode
             productName = if (nameIdx != -1) rowData.getOrNull(nameIdx) ?: "" else ""
-            retailPrice = if (priceIdx != -1) rowData.getOrNull(priceIdx) ?: "" else ""
+            purchasePrice = if (purchIdx != -1) rowData.getOrNull(purchIdx) ?: "" else ""
+            val priceFromRow = if (priceIdx != -1) rowData.getOrNull(priceIdx) ?: "" else ""
+            retailPrice = TextFieldValue(priceFromRow, TextRange(priceFromRow.length))
             val qtyText = if (qtyIdx != -1) rowData.getOrNull(qtyIdx).takeIf { !it.isNullOrBlank() } ?: "1" else "1"
             quantity = TextFieldValue(qtyText)
 
@@ -1796,7 +1844,7 @@ fun ManualEntryDialog(
                         originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                             barcode = barcode,
                             productName = productName,
-                            retailPrice = retailPrice.replace(",", ".").toDoubleOrNull(),
+                            retailPrice = retailPrice.text.replace(",", ".").toDoubleOrNull(),
                             stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
                             categoryId = foundCategory.id // <-- Usa l'ID corretto
                         )
@@ -1808,7 +1856,7 @@ fun ManualEntryDialog(
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = barcode,
                     productName = productName,
-                    retailPrice = retailPrice.replace(",", ".").toDoubleOrNull(),
+                    retailPrice = retailPrice.text.replace(",", ".").toDoubleOrNull(),
                     stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
                     categoryId = null
                 )
@@ -1824,7 +1872,7 @@ fun ManualEntryDialog(
             // Popola la UI
             barcode = initialBarcode
             productName = initialProductName
-            retailPrice = initialRetailPrice
+            retailPrice = TextFieldValue(initialRetailPrice, TextRange(initialRetailPrice.length))
             quantity = TextFieldValue(initialQuantity)
 
             // Gestione asincrona della categoria
@@ -1872,7 +1920,9 @@ fun ManualEntryDialog(
     // This separate effect correctly handles moving focus after a scan
     LaunchedEffect(initialBarcode, productToPrefill) {
         if (initialBarcode != null || productToPrefill != null) {
+            delay(50)
             priceFocusRequester.requestFocus()
+            keyboardController?.show()
         }
     }
 
@@ -1930,8 +1980,7 @@ fun ManualEntryDialog(
 
     val basicValid = barcode.isNotBlank() &&
             barcodeError == null &&
-            (retailPrice.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0 &&
-            selectedCategory != null
+            (retailPrice.text.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0
 
     val passChangesGate = when {
         // Prodotto esiste in DB → consenti solo se diverso dal DB
@@ -1947,7 +1996,7 @@ fun ManualEntryDialog(
     fun resetFieldsForNext() {
         barcode = ""
         quantity = TextFieldValue("1")
-        retailPrice = ""
+        retailPrice = TextFieldValue("")
         productName = ""
         productFromDb = null
         // The category is kept for the next entry
@@ -2014,7 +2063,7 @@ fun ManualEntryDialog(
                             // --- INIZIO MODIFICA ---
                             // 1. Azzera tutti i campi del dialogo
                             productName = ""
-                            retailPrice = ""
+                            retailPrice = TextFieldValue("")
                             quantity = TextFieldValue("1") // Resetta la quantità al valore di default
                             productFromDb = null          // Rimuove i dati pre-compilati dal DB
                             barcodeError = null           // Rimuove eventuali messaggi di errore
@@ -2047,10 +2096,20 @@ fun ManualEntryDialog(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
+                        value = purchasePrice,
+                        onValueChange = { purchasePrice = it },
+                        label = { Text(stringResource(R.string.header_purchase_price)) },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+                    )
+                    OutlinedTextField(
                         value = retailPrice,
                         onValueChange = { retailPrice = it },
                         label = { Text(stringResource(R.string.header_retail_price) + "*") },
-                        modifier = Modifier.weight(1f).focusRequester(priceFocusRequester),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(priceFocusRequester),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
                     )
@@ -2081,7 +2140,7 @@ fun ManualEntryDialog(
                             val formattedPrice = formatNumberAsRoundedStringForInput(productFromDb?.retailPrice)
                             Text("${productFromDb?.productName} - Prezzo: $formattedPrice")
                             TextButton(onClick = {
-                                retailPrice = formattedPrice // Usa il prezzo già formattato
+                                retailPrice = TextFieldValue(formattedPrice, TextRange(formattedPrice.length))
                                 productName = productFromDb?.productName ?: ""
                             }) { Text(stringResource(R.string.copy_data)) }
                         }
@@ -2093,10 +2152,15 @@ fun ManualEntryDialog(
             val newRowData = header.map { key ->
                 when (key) {
                     "barcode" -> barcode
-                    "productName" -> productName.ifBlank { selectedCategory?.name ?: "" }
-                    "retailPrice" -> retailPrice
+                    "productName" -> productName.ifBlank { selectedCategory?.name ?: "variedades" }
+                    "purchasePrice" -> {
+                        val rp = retailPrice.text.replace(",", ".").toDoubleOrNull()
+                        val pp = purchasePrice.replace(",", ".").toDoubleOrNull() ?: (rp?.div(2.0))
+                        pp?.let { formatNumberAsRoundedStringForInput(it) }.orEmpty()
+                    }
+                    "retailPrice" -> retailPrice.text
                     "quantity" -> quantity.text
-                    "category" -> selectedCategory?.name ?: ""
+                    "category" -> selectedCategory?.name ?: "variedades"
                     else -> ""
                 }
             }
@@ -2120,7 +2184,7 @@ fun ManualEntryDialog(
                 if (!isEditMode) {
                     TextButton(
                         onClick = {
-                            viewModel.addManualRow(entryUid, newRowData, selectedCategory?.name.orEmpty())
+                            viewModel.addManualRow(entryUid, newRowData, catName)
                             focusManager.clearFocus(true)
                             resetFieldsForNext()
                             onScanNext()
@@ -2132,9 +2196,9 @@ fun ManualEntryDialog(
                 Button(
                     onClick = {
                         if (isEditMode) {
-                            viewModel.updateManualRow(entryUid, rowIndexToEdit, newRowData, selectedCategory!!.name)
+                            viewModel.updateManualRow(entryUid, rowIndexToEdit, newRowData, catName)
                         } else {
-                            viewModel.addManualRow(entryUid, newRowData, selectedCategory?.name.orEmpty())
+                            viewModel.addManualRow(entryUid, newRowData, catName)
                         }
                         onDismiss()
                     },
