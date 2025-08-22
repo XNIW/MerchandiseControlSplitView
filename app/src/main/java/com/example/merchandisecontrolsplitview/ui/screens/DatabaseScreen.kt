@@ -61,6 +61,8 @@ import androidx.compose.material3.TabRow
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.window.DialogProperties
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -154,7 +156,14 @@ fun DatabaseScreen(
                     }) {
                         Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.import_file))
                     }
-                    IconButton(onClick = { downloadLauncher.launch(context.getString(R.string.default_export_filename)) }) {
+                    IconButton(onClick = {
+                        val timestamp = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH-mm-ss")
+                            .format(LocalDateTime.now())
+                        val base = context.getString(R.string.sheet_name_products) // es. "Prodotti/Products/Productos/产品"
+                        val safeBase = base.replace(Regex("""[\\/:*?"<>|]"""), "_")
+                        val fileName = "${safeBase}_${timestamp}.xlsx"
+                        downloadLauncher.launch(fileName)
+                    }) {
                         Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
                     }
                 }
