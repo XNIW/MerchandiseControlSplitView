@@ -7,6 +7,8 @@ import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import java.text.Normalizer
 import kotlin.math.roundToLong
+import org.jsoup.Jsoup
+import java.io.ByteArrayInputStream
 
 fun readAndAnalyzeExcel(
     context: Context,
@@ -22,50 +24,43 @@ fun readAndAnalyzeExcel(
         .lowercase()
 
     val rows = mutableListOf<List<String>>()
-    context.contentResolver.openInputStream(uri)?.use { stream ->
-        val wb = WorkbookFactory.create(stream)
-        val sheet = wb.getSheetAt(0)
-        sheet.forEach { row ->
-            val temp = mutableListOf<String>()
-            val last = row.lastCellNum.toInt()
-            for (i in 0 until last) {
-                val cell = row.getCell(i)
-                val txt = when {
-                    cell == null -> ""
-                    cell.cellType == CellType.STRING -> {
-                        val rawValue = cell.stringCellValue ?: ""
-                        // Controlla se il valore inizia con '$'
-                        if (rawValue.trim().startsWith("$")) {
-                            // Pulisce il valore da '$' e ','
-                            val cleanedValue = rawValue.trim().replace("$", "").replace(",", "")
-                            try {
-                                // Converte in numero, arrotonda e restituisce come stringa
-                                cleanedValue.toDouble().roundToLong().toString()
-                            } catch (_: NumberFormatException) {
-                                rawValue // In caso di errore, mantiene il valore originale
+    context.contentResolver.openInputStream(uri)?.use { inStream ->
+        val bytes = inStream.readBytes()
+
+        if (looksLikeExcelHtml(bytes)) {
+            // Fallback HTML → righe
+            rows += parseExcelHtmlToRows(bytes)
+        } else {
+            // Flusso “buono”: BIFF8/XLSX con Apache POI
+            ByteArrayInputStream(bytes).use { stream ->
+                val wb = WorkbookFactory.create(stream)
+                val sheet = wb.getSheetAt(0)
+                sheet.forEach { row ->
+                    val temp = mutableListOf<String>()
+                    val last = row.lastCellNum.toInt()
+                    for (i in 0 until last) {
+                        val cell = row.getCell(i)
+                        val txt = when {
+                            cell == null -> ""
+                            cell.cellType == CellType.STRING -> {
+                                val rawValue = cell.stringCellValue ?: ""
+                                if (rawValue.trim().startsWith("$")) {
+                                    val cleanedValue = rawValue.trim().replace("$", "").replace(",", "")
+                                    cleanedValue.toDoubleOrNull()?.roundToLong()?.toString() ?: rawValue
+                                } else rawValue
                             }
-                        } else {
-                            rawValue // Altrimenti, restituisce il valore originale
+                            cell.cellType == CellType.NUMERIC -> {
+                                val n = cell.numericCellValue
+                                if (n == n.toLong().toDouble()) n.toLong().toString() else n.toString()
+                            }
+                            else -> cell.toString()
                         }
+                        temp.add(txt.trim())
                     }
-                    cell.cellType == CellType.NUMERIC -> {
-                        val n = cell.numericCellValue
-                        if (n == n.toLong().toDouble())
-                            n.toLong().toString()
-                        else
-                            n.toBigDecimal().toPlainString()
-                    }
-                    cell.cellType == CellType.BOOLEAN -> cell.booleanCellValue.toString()
-                    else -> ""
-                }.trim()
-                temp.add(txt)
-            }
-            val trimmed = temp.dropLastWhile { it.isEmpty() }
-            if (!trimmed.all { it.isEmpty() }) {
-                rows.add(trimmed)
+                    rows.add(temp)
+                }
             }
         }
-        wb.close()
     }
 
     // Trova la prima riga "intestazione dati"
@@ -317,20 +312,88 @@ fun readAndAnalyzeExcel(
         }
     }
 
-    // --- Enforce colonne obbligatorie: crea 'barcode' se assente ---
-    if (!header.contains("barcode")) {
-        // Posiziona 'barcode' subito dopo 'itemNumber' se c'è, altrimenti in prima posizione
-        val insertAt = header.indexOf("itemNumber").let { if (it >= 0) it + 1 else 0 }
-
-        header.add(insertAt, "barcode")
-        headerSource.add(insertAt, "generated")
-
-        dataRows = dataRows.map { row ->
-            val m = row.toMutableList()
-            m.add(insertAt, "")
-            m
+    fun ensureColumn(
+        key: String,
+        insertAt: Int,
+        header: MutableList<String>,
+        headerSource: MutableList<String>,
+        dataRows: List<List<String>>
+    ): Triple<MutableList<String>, List<List<String>>, MutableList<String>> {
+        if (!header.contains(key)) {
+            header.add(insertAt, key)
+            headerSource.add(insertAt, "generated")
+            val newRows = dataRows.map { row ->
+                val m = row.toMutableList()
+                m.add(insertAt, "")
+                m
+            }
+            return Triple(header, newRows, headerSource)
         }
+        return Triple(header, dataRows, headerSource)
     }
+
+    // --- Enforce colonne obbligatorie: crea 'barcode', 'productName', 'purchasePrice' se assenti ---
+// 1) barcode: dopo itemNumber se c'è, altrimenti in prima posizione
+    run {
+        val pos = header.indexOf("itemNumber").let { if (it >= 0) it + 1 else 0 }
+        val triple = ensureColumn("barcode", pos, header, headerSource, dataRows)
+        header = triple.first
+        dataRows = triple.second
+        headerSource = triple.third
+    }
+
+// 2) productName: dopo barcode se c'è, altrimenti dopo itemNumber, altrimenti in coda
+    run {
+        val afterBarcode = header.indexOf("barcode").let { if (it >= 0) it + 1 else -1 }
+        val pos = when {
+            afterBarcode >= 0 -> afterBarcode
+            header.contains("itemNumber") -> header.indexOf("itemNumber") + 1
+            else -> header.size
+        }
+        val triple = ensureColumn("productName", pos, header, headerSource, dataRows)
+        header = triple.first
+        dataRows = triple.second
+        headerSource = triple.third
+    }
+
+// 3) purchasePrice: dopo quantity se c'è; altrimenti dopo productName; altrimenti in coda
+    run {
+        val afterQty = header.indexOf("quantity").let { if (it >= 0) it + 1 else -1 }
+        val pos = when {
+            afterQty >= 0 -> afterQty
+            header.contains("productName") -> header.indexOf("productName") + 1
+            else -> header.size
+        }
+        val triple = ensureColumn("purchasePrice", pos, header, headerSource, dataRows)
+        header = triple.first
+        dataRows = triple.second
+        headerSource = triple.third
+    }
+
+    val summaryTokens = listOf(
+        "合计","总计","小计","汇总","合計","總計","小計","總結","总额",
+        "subtotal","total","totale","tot.","sommario","resumen","sum"
+    ).map { it.lowercase() }
+
+    fun isSummaryRow(row: List<String>): Boolean {
+        fun valAt(key: String) = row.getOrNull(headerMap[key] ?: -1)?.trim().orEmpty()
+        val name = valAt("productName")
+        val item = valAt("itemNumber")
+        val code = valAt("barcode")
+
+        // primo testo non numerico della riga
+        val firstText = row.firstOrNull { it.isNotBlank() && it.replace(",", ".").toDoubleOrNull() == null }
+            ?.trim()?.lowercase().orEmpty()
+
+        val looksLikeToken = summaryTokens.any { tok -> firstText.startsWith(tok) || name.lowercase().startsWith(tok) }
+
+        val manyNumbers = row.count { it.replace(",", ".").toDoubleOrNull() != null } >= 2
+        val lacksIdentity = code.isBlank() && item.isBlank() && name.length < 3
+
+        return looksLikeToken && manyNumbers && lacksIdentity
+    }
+
+    dataRows = dataRows.filterNot { isSummaryRow(it) }
 
     return Triple(header, dataRows, headerSource)
 }
@@ -348,7 +411,6 @@ fun getLocalizedHeader(context: Context, key: String): String {
         "supplier"     -> context.getString(R.string.header_supplier)
         "oldPurchasePrice" -> context.getString(R.string.header_old_purchase_price)
         "oldRetailPrice" -> context.getString(R.string.header_old_retail_price)
-        "RetailPrice" -> context.getString(R.string.header_retail_price)
         "complete" -> context.getString(R.string.header_complete)
         "secondProductName" -> context.getString(R.string.header_second_product_name)
         "rowNumber" -> context.getString(R.string.header_row_number)
@@ -391,4 +453,82 @@ fun formatNumberAsRoundedString(number: Double?): String {
 fun formatNumberAsRoundedStringForInput(number: Double?): String {
     if (number == null) return ""
     return number.roundToLong().toString()
+}
+
+private fun looksLikeExcelHtml(bytes: ByteArray): Boolean {
+    // Ispezione “leggera” dell’header
+    val head = bytes.copyOfRange(0, minOf(4096, bytes.size))
+        .toString(Charsets.ISO_8859_1) // non forzare UTF-8, qui basta il pattern
+        .lowercase()
+    return head.contains("<html") ||
+            head.contains("mso-application") ||
+            head.contains("office:excel") ||
+            head.contains("<table")
+}
+
+/** Converte la tabella principale dell’HTML di Excel in List<List<String>>.
+ *  Gestisce colspan/rowspan e rimuove NBSP/br. */
+private fun parseExcelHtmlToRows(bytes: ByteArray): List<List<String>> {
+    // Lascia fare a Jsoup il rilevamento charset dal <meta>
+    val doc = Jsoup.parse(ByteArrayInputStream(bytes), null, "")
+    val table = doc.select("table")
+        .maxByOrNull { t -> t.select("tr").size * t.select("th,td").size }
+        ?: return emptyList()
+
+    val grid = mutableListOf<MutableList<String>>()
+    // colonne “occupate” da rowspan provenienti da righe precedenti:
+    // colIndex -> (righe residue, testo)
+    val carry = mutableMapOf<Int, Pair<Int, String>>()
+
+    for (tr in table.select("tr")) {
+        val row = mutableListOf<String>()
+        var col = 0
+
+        // Pre-riempi con i valori riportati dai rowspan
+        while (carry[col] != null) {
+            val (rest, text) = carry[col]!!
+            row.add(text)
+            if (rest <= 1) carry.remove(col) else carry[col] = (rest - 1) to text
+            col++
+        }
+
+        for (cell in tr.select("th,td")) {
+            // Salta eventuali colonne già occupate da rowspan
+            while (carry[col] != null) {
+                val (rest, text) = carry[col]!!
+                row.add(text)
+                if (rest <= 1) carry.remove(col) else carry[col] = (rest - 1) to text
+                col++
+            }
+
+            val raw = cell.text().replace('\u00A0', ' ').trim() // NBSP→spazio
+            val text = raw.replace(Regex("\\s*\\n\\s*"), " ")
+            val colspan = cell.attr("colspan").toIntOrNull() ?: 1
+            val rowspan = cell.attr("rowspan").toIntOrNull() ?: 1
+
+            repeat(colspan) { k ->
+                row.add(text)
+                if (rowspan > 1) {
+                    carry[col + k] = (rowspan - 1) to text
+                }
+            }
+            col += colspan
+        }
+
+        // Completa con eventuali carry rimasti immediatamente dopo
+        while (carry[col] != null) {
+            val (rest, text) = carry[col]!!
+            row.add(text)
+            if (rest <= 1) carry.remove(col) else carry[col] = (rest - 1) to text
+            col++
+        }
+
+        grid.add(row)
+    }
+
+    // Normalizza larghezze righe (rettangolo)
+    val maxCols = grid.maxOfOrNull { it.size } ?: 0
+    return grid.map { r ->
+        if (r.size < maxCols) (r + MutableList(maxCols - r.size) { "" }) else r
+    }
 }

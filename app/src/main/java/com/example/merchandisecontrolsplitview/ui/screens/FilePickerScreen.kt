@@ -66,7 +66,9 @@ fun FilePickerScreen(
                 onClick = {
                     launcher.launch(arrayOf(
                         "application/vnd.ms-excel",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "text/html",
+                        "application/octet-stream"
                     ))
                 },
                 modifier = Modifier

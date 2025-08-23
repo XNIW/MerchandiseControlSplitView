@@ -45,7 +45,7 @@ sealed class DateFilter {
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExcelViewModel(application: Application) : AndroidViewModel(application) {
-    private val essentialColumns = setOf("barcode", "productName")
+    private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
     // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
     val selectedColumns = mutableStateListOf<Boolean>()
@@ -508,6 +508,8 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         loadError.value = null
         currentSupplierName = ""
         currentCategoryName = ""
+        headerTypes.clear()
+        currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, 0L)
     }
 
     fun setHeaderType(colIdx: Int, type: String?) {

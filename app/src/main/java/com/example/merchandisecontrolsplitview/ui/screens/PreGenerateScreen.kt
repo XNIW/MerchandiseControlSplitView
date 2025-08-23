@@ -75,6 +75,7 @@ fun PreGenerateScreen(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
+            excelViewModel.resetState()
             excelViewModel.loadFromMultipleUris(context, uris)
         }
     }
@@ -106,12 +107,22 @@ fun PreGenerateScreen(
                 },
                 actions = {
                     IconButton(onClick = {
-                        appendLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                        appendLauncher.launch(arrayOf(
+                            "application/vnd.ms-excel",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "text/html",
+                            "application/octet-stream"
+                        ))
                     }) {
                         Icon(Icons.Default.Add, contentDescription = stringResource(R.string.append_file))
                     }
                     IconButton(onClick = {
-                        reloadLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                        reloadLauncher.launch(arrayOf(
+                            "application/vnd.ms-excel",
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            "text/html",
+                            "application/octet-stream"
+                        ))
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.reload_file))
                     }
@@ -217,7 +228,7 @@ fun PreGenerateScreen(
             if (showSelectionDialog) {
                 // --- NUOVO: Logica di validazione ---
                 val headers = excelViewModel.excelData.firstOrNull() ?: emptyList()
-                val missingEssentialColumns = setOf("barcode", "productName")
+                val missingEssentialColumns = setOf("barcode", "productName", "purchasePrice")
                     .filterNot { headers.contains(it) }
 
                 AlertDialog(
