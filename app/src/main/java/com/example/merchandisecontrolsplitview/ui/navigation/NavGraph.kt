@@ -16,11 +16,15 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import androidx.navigation.NavType // <-- AGGIUNGI QUESTO IMPORT
 import androidx.navigation.navArgument // <-- AGGIUNGI QUESTO IMPORT
 import com.example.merchandisecontrolsplitview.MainActivity
+import kotlinx.coroutines.flow.first
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
 
 @Composable
 fun AppNavGraph() {
     val context = LocalContext.current
     val navController = rememberNavController()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     val excelViewModel: ExcelViewModel = viewModel()
     val dbViewModel: DatabaseViewModel = viewModel()
@@ -34,17 +38,20 @@ fun AppNavGraph() {
         }
     }
 
-    LaunchedEffect(Unit) {
-        MainActivity.ShareBus.uris.collect { uris ->
-            if (uris.isNotEmpty()) {
-                excelViewModel.resetState()
-                // (opzionale) naviga subito per mostrare lo spinner prima del parsing
-                if (navController.currentDestination?.route != Screen.PreGenerate.route) {
-                    navController.navigate(Screen.PreGenerate.route) { launchSingleTop = true }
+    LaunchedEffect(navController, lifecycleOwner) {
+        // aspetta che il grafo sia attaccato
+        navController.currentBackStackEntryFlow.first()
+
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            MainActivity.ShareBus.uris.collect { uris ->
+                if (uris.isNotEmpty()) {
+                    if (navController.currentDestination?.route != Screen.PreGenerate.route) {
+                        navController.navigate(Screen.PreGenerate.route) { launchSingleTop = true }
+                    }
+                    excelViewModel.resetState()
+                    excelViewModel.loadFromMultipleUris(context, uris)
+                    MainActivity.ShareBus.uris.tryEmit(emptyList()) // ok svuotare ora
                 }
-                excelViewModel.loadFromMultipleUris(context, uris)
-                // ✅ consuma l’evento per evitare re-trigger a ricomposizioni future
-                MainActivity.ShareBus.uris.tryEmit(emptyList())
             }
         }
     }
