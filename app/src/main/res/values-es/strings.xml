@@ -322,4 +322,6 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="operation_in_progress">Operación en curso…</string>
     <string name="export_in_progress">Exportación en curso…</string>
     <string name="open_database">Abrir base de datos</string>
+    <string name="share_xlsx">Compartir</string>
+    <string name="more_actions">Más acciones</string>
 </resources>

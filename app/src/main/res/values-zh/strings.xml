@@ -323,4 +323,6 @@
     <string name="operation_in_progress">操作进行中…</string>
     <string name="export_in_progress">正在导出…</string>
     <string name="open_database">打开数据库</string>
+    <string name="share_xlsx">分享</string>
+    <string name="more_actions">更多操作</string>
 </resources>

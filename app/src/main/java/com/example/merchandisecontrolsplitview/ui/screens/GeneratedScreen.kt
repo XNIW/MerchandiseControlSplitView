@@ -65,6 +65,13 @@ import androidx.compose.ui.platform.LocalFocusManager
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import android.content.Intent
+import androidx.core.content.FileProvider
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.MoreVert
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -270,6 +277,25 @@ fun GeneratedScreen(
         }
     }
 
+    fun shareXlsx() {
+        scope.launch {
+            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+            val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
+            val file = File(dir, "Database_${ts}.xlsx")
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            excelViewModel.exportToUri(context, uri)
+            val share = Intent(Intent.ACTION_SEND).apply {
+                type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_SUBJECT, "Inventario")
+                putExtra(Intent.EXTRA_TEXT, "File generato dall’app 对货")
+            }
+            context.startActivity(Intent.createChooser(share, context.getString(R.string.share_xlsx)))
+            excelViewModel.markCurrentEntryAsExported(entryUid)
+        }
+    }
+
     fun performSearch() {
         val query = searchText.trim()
         if (query.isBlank()) {
@@ -427,12 +453,50 @@ fun GeneratedScreen(
                             )
                         }
 
-                        IconButton(onClick = { saveLauncher.launch(titleText) }) {
-                            StatusIcon(
-                                baseIcon = Icons.Default.FileDownload,
-                                badgeType = if (wasExported) BadgeType.SUCCESS else BadgeType.NONE,
-                                contentDescription = stringResource(R.string.export_file)
-                            )
+                        // overflow menu (kebab)
+                        var menuOpen by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_actions))
+                            }
+                            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.export_file)) },
+                                    leadingIcon = {
+                                        MenuIconWithTick(
+                                            base = Icons.Default.FileDownload,
+                                            showTick = wasExported // <-- il tuo flag già presente
+                                        )
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        saveLauncher.launch(titleText)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.share_xlsx)) },
+                                    leadingIcon = { Icon(Icons.Default.Share, null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        shareXlsx()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.rename_file)) },
+                                    leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                    onClick = {
+                                        menuOpen = false
+                                        renameText = titleText
+                                        showRenameDialog = true
+                                    }
+                                )
+                                // opzionale: sposta anche "Vai al database" qui, se vuoi alleggerire ancora
+                                // DropdownMenuItem(
+                                //   text = { Text(stringResource(R.string.open_database)) },
+                                //   leadingIcon = { Icon(Icons.Default.Storage, null) },
+                                //   onClick = { menuOpen = false; onNavigateToDatabase() }
+                                // )
+                            }
                         }
                     }
                 }
@@ -2263,3 +2327,24 @@ fun formatDecimal(num: Double, digits: Int = 2): String =
 
 fun formatDecimal(num: String, digits: Int = 2): String =
     num.toDoubleOrNull()?.let { formatDecimal(it, digits) } ?: num
+
+@Composable
+private fun MenuIconWithTick(
+    base: ImageVector,
+    showTick: Boolean
+) {
+    Box(Modifier.size(24.dp)) {
+        Icon(base, contentDescription = null)
+        if (showTick) {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = Color(0xFF00C853),
+                modifier = Modifier
+                    .size(12.dp)
+                    .align(Alignment.TopEnd)
+                    .offset(x = 2.dp, y = (-2).dp)
+            )
+        }
+    }
+}

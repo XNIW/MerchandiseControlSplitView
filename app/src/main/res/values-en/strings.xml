@@ -324,4 +324,6 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="operation_in_progress">Operation in progress…</string>
     <string name="export_in_progress">Export in progress…</string>
     <string name="open_database">Open database</string>
+    <string name="share_xlsx">Share</string>
+    <string name="more_actions">More actions</string>
 </resources>
