@@ -326,4 +326,6 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="open_database">Open database</string>
     <string name="share_xlsx">Share</string>
     <string name="more_actions">More actions</string>
+    <string name="untitled">Senza titolo</string>
+    <string name="exported_short">Esportato</string>
 </resources>

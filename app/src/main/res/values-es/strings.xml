@@ -324,4 +324,6 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="open_database">Abrir base de datos</string>
     <string name="share_xlsx">Compartir</string>
     <string name="more_actions">Más acciones</string>
+    <string name="untitled">Sin título</string>
+    <string name="exported_short">Exportado</string>
 </resources>
