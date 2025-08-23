@@ -5,13 +5,16 @@ import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
 import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.ss.usermodel.WorkbookFactory
+import java.text.Normalizer
 import kotlin.math.roundToLong
 
 fun readAndAnalyzeExcel(
     context: Context,
     uri: Uri
 ): Triple<List<String>, List<List<String>>, List<String>> {
-    fun normalizeHeader(s: String) = s
+    fun normalizeHeader(s: String) = Normalizer
+        .normalize(s, Normalizer.Form.NFD)
+        .replace("\\p{M}+".toRegex(), "") // rimuove accenti
         .trim()
         .replace(" ", "")
         .replace("_", "")
@@ -144,7 +147,7 @@ fun readAndAnalyzeExcel(
 
         // Filtro colonne completamente vuote DOPO alias
         val nonEmptyCols = header.indices.filter { col ->
-            dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true } || header[col].isNotBlank()
+            dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
         }
         val emptyCols = header.indices.filter { col -> !nonEmptyCols.contains(col) }
         val colToHeader = headerMap.entries.associate { it.value to it.key }
@@ -311,6 +314,21 @@ fun readAndAnalyzeExcel(
                     }
                 }
             }
+        }
+    }
+
+    // --- Enforce colonne obbligatorie: crea 'barcode' se assente ---
+    if (!header.contains("barcode")) {
+        // Posiziona 'barcode' subito dopo 'itemNumber' se c'è, altrimenti in prima posizione
+        val insertAt = header.indexOf("itemNumber").let { if (it >= 0) it + 1 else 0 }
+
+        header.add(insertAt, "barcode")
+        headerSource.add(insertAt, "generated")
+
+        dataRows = dataRows.map { row ->
+            val m = row.toMutableList()
+            m.add(insertAt, "")
+            m
         }
     }
 
