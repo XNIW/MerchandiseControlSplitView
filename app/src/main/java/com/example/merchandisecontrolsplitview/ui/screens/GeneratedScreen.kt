@@ -75,7 +75,6 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.TopAppBarDefaults
@@ -373,14 +372,10 @@ fun GeneratedScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
-                val titleFocus = remember { FocusRequester() }
-                val focusManager = LocalFocusManager.current
-                val titleInteraction = remember { MutableInteractionSource() }
-                val isTitleFocused by titleInteraction.collectIsFocusedAsState()
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp)
+                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
                     ),
                     navigationIcon = {
                         IconButton(onClick = { handleBackPress() }) {
@@ -391,22 +386,20 @@ fun GeneratedScreen(
                         }
                     },
                     title = {
-                        var scroll by remember { mutableStateOf(false) }
-                        // forzo il “restart” dell’animazione ad ogni tap
-                        key(if (scroll) 1 else 0) {
+                        // ogni tap incrementa la chiave e riavvia l'animazione
+                        var tapKey by remember { mutableIntStateOf(0) }
+
+                        key(tapKey) {
                             Text(
                                 text = titleText.ifBlank { stringResource(R.string.untitled) },
                                 maxLines = 1,
                                 overflow = TextOverflow.Clip,
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier
-                                    .clickable { scroll = !scroll } // tap per avviare/fermare
+                                    .clickable { tapKey++ } // ← tap: fai ripartire la marquee
                                     .basicMarquee(
-                                        animationMode = if (scroll)
-                                            MarqueeAnimationMode.Immediately   // parte subito senza focus
-                                        else
-                                            MarqueeAnimationMode.WhileFocused, // “spento” quando scroll=false
-                                        iterations = if (scroll) 2 else 1    // quante volte scorre al tap (2 giri)
+                                        animationMode = MarqueeAnimationMode.Immediately, // parte senza focus
+                                        iterations = 1                                     // una sola volta
                                     )
                             )
                         }
@@ -540,16 +533,16 @@ fun GeneratedScreen(
                     category = excelViewModel.categoryName.ifBlank { null },
                     completed = completeStates.count { it },
                     total = (excelData.size - 1).coerceAtLeast(0),
-                    exported = wasExported
+                    exported = wasExported,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
                 )
 
-                //HorizontalDivider()
+                HorizontalDivider()
             }
         }
     ) { paddingValues ->
-        val totalRows = (excelData.size - 1).coerceAtLeast(0)
-        val completedRows = completeStates.count { it }
-
         Column(
             Modifier
                 .fillMaxSize()
@@ -2444,13 +2437,14 @@ private fun TopInfoChipsBar(
     completed: Int,
     total: Int,
     exported: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 2.dp) // ↓ da 6dp a 2dp
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 6.dp), // vicino al titolo
+            .padding(contentPadding),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
