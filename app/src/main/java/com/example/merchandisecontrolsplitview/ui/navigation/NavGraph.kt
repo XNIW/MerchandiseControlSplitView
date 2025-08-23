@@ -15,6 +15,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import androidx.navigation.NavType // <-- AGGIUNGI QUESTO IMPORT
 import androidx.navigation.navArgument // <-- AGGIUNGI QUESTO IMPORT
+import com.example.merchandisecontrolsplitview.MainActivity
 
 @Composable
 fun AppNavGraph() {
@@ -29,6 +30,21 @@ fun AppNavGraph() {
         if (importAnalysisResult != null) {
             if (navController.currentDestination?.route != Screen.ImportAnalysis.route) {
                 navController.navigate(Screen.ImportAnalysis.route)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        MainActivity.ShareBus.uris.collect { uris ->
+            if (uris.isNotEmpty()) {
+                excelViewModel.resetState()
+                // (opzionale) naviga subito per mostrare lo spinner prima del parsing
+                if (navController.currentDestination?.route != Screen.PreGenerate.route) {
+                    navController.navigate(Screen.PreGenerate.route) { launchSingleTop = true }
+                }
+                excelViewModel.loadFromMultipleUris(context, uris)
+                // ✅ consuma l’evento per evitare re-trigger a ricomposizioni future
+                MainActivity.ShareBus.uris.tryEmit(emptyList())
             }
         }
     }
