@@ -326,4 +326,28 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="more_actions">Más acciones</string>
     <string name="untitled">Sin título</string>
     <string name="exported_short">Exportado</string>
+
+    <!-- Menú / acciones -->
+    <string name="import_products_single_sheet">Importar productos (hoja única)</string>
+    <string name="import_database_full">Importar base de datos (completa)</string>
+    <string name="export_products">Exportar productos</string>
+    <string name="export_database_full">Exportar base de datos (completa)</string>
+
+    <!-- Prefijo de nombre de archivo para exportación completa -->
+    <string name="export_database_filename_prefix">BaseDeDatos_</string>
+
+    <!-- Nombres de hojas -->
+    <string name="sheet_name_suppliers">Proveedores</string>
+    <string name="sheet_name_categories">Categorías</string>
+    <string name="sheet_name_price_history">HistorialPrecios</string>
+
+    <!-- Encabezados de columnas de hojas extra (canónicos para compatibilidad de importación) -->
+    <string name="excel_header_id">id</string>
+    <string name="excel_header_name">name</string>
+    <string name="excel_header_product_barcode">productBarcode</string>
+    <string name="excel_header_timestamp">timestamp</string>
+    <string name="excel_header_type">type</string>
+    <string name="excel_header_old_price">oldPrice</string>
+    <string name="excel_header_new_price">newPrice</string>
+    <string name="excel_header_source">source</string>
 </resources>

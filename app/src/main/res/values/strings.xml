@@ -340,4 +340,28 @@
     <string name="more_actions">Altre azioni</string>
     <string name="untitled">Senza titolo</string>
     <string name="exported_short">Esportato</string>
+
+    <!-- Menu / azioni -->
+    <string name="import_products_single_sheet">Importa prodotti (foglio singolo)</string>
+    <string name="import_database_full">Importa database (completo)</string>
+    <string name="export_products">Esporta prodotti</string>
+    <string name="export_database_full">Esporta database (completo)</string>
+
+    <!-- Prefisso nome file export completo -->
+    <string name="export_database_filename_prefix">Database_</string>
+
+    <!-- Nomi fogli -->
+    <string name="sheet_name_suppliers">Fornitori</string>
+    <string name="sheet_name_categories">Categorie</string>
+    <string name="sheet_name_price_history">StoricoPrezzi</string>
+
+    <!-- Intestazioni colonne fogli extra (canoniche per compatibilità import) -->
+    <string name="excel_header_id">id</string>
+    <string name="excel_header_name">name</string>
+    <string name="excel_header_product_barcode">productBarcode</string>
+    <string name="excel_header_timestamp">timestamp</string>
+    <string name="excel_header_type">type</string>
+    <string name="excel_header_old_price">oldPrice</string>
+    <string name="excel_header_new_price">newPrice</string>
+    <string name="excel_header_source">source</string>
 </resources>

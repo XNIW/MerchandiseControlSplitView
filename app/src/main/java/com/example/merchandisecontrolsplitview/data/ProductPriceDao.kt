@@ -3,6 +3,14 @@ package com.example.merchandisecontrolsplitview.data
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+data class PriceHistoryExportRowDb(
+    val barcode: String,
+    val effectiveAt: String,
+    val type: String,
+    val price: Double,
+    val source: String?
+)
+
 @Dao
 interface ProductPriceDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -45,4 +53,16 @@ interface ProductPriceDao {
 
     @Query("SELECT DISTINCT productId FROM product_prices")
     suspend fun getProductIdsWithAnyPrice(): List<Long>
+
+    @Query("""
+  SELECT p.barcode    AS barcode,
+         pr.effectiveAt AS effectiveAt,
+         pr.type         AS type,
+         pr.price        AS price,
+         pr.source       AS source
+  FROM product_prices pr
+  JOIN products p ON p.id = pr.productId
+  ORDER BY p.barcode ASC, pr.type ASC, pr.effectiveAt ASC
+""")
+    suspend fun getAllWithBarcode(): List<PriceHistoryExportRowDb>
 }

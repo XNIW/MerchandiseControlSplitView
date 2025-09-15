@@ -328,4 +328,28 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="more_actions">More actions</string>
     <string name="untitled">Senza titolo</string>
     <string name="exported_short">Esportato</string>
+
+    <!-- Menu / actions -->
+    <string name="import_products_single_sheet">Import products (single sheet)</string>
+    <string name="import_database_full">Import database (full)</string>
+    <string name="export_products">Export products</string>
+    <string name="export_database_full">Export database (full)</string>
+
+    <!-- File name prefix for full DB export -->
+    <string name="export_database_filename_prefix">Database_</string>
+
+    <!-- Sheet names -->
+    <string name="sheet_name_suppliers">Suppliers</string>
+    <string name="sheet_name_categories">Categories</string>
+    <string name="sheet_name_price_history">PriceHistory</string>
+
+    <!-- Column headers for extra sheets (kept canonical for import compatibility) -->
+    <string name="excel_header_id">id</string>
+    <string name="excel_header_name">name</string>
+    <string name="excel_header_product_barcode">productBarcode</string>
+    <string name="excel_header_timestamp">timestamp</string>
+    <string name="excel_header_type">type</string>
+    <string name="excel_header_old_price">oldPrice</string>
+    <string name="excel_header_new_price">newPrice</string>
+    <string name="excel_header_source">source</string>
 </resources>

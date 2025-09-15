@@ -12,7 +12,14 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
 
-
+// ⬇️ aggiungi subito sotto gli import esistenti (prima dell'interfaccia)
+data class PriceHistoryExportRow(
+    val barcode: String,
+    val timestamp: String, // "yyyy-MM-dd HH:mm:ss"
+    val type: String,      // "PURCHASE" | "RETAIL"
+    val price: Double,
+    val source: String?
+)
 interface InventoryRepository {
     // Product methods
     fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
@@ -50,6 +57,9 @@ interface InventoryRepository {
     fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>>
     suspend fun getPreviousPricesForBarcodes(barcodes: List<String>, at: String): Map<String, Pair<Double?, Double?>>
     suspend fun getAllProductsWithDetails(): List<ProductWithDetails>
+    // ⬇️ nell'interfaccia InventoryRepository, aggiungi:
+    // PriceHistory export
+    suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow>
 }
 
 class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
@@ -219,4 +229,19 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
     override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.update(entry) }
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.delete(entry) }
+    // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
+    override suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow> =
+        withContext(Dispatchers.IO) {
+            // Richiede nel ProductPriceDao un metodo che ritorni (barcode, effectiveAt, type, price, source)
+            // Esempio: data class ExportRow(val barcode:String, val effectiveAt:String, val type:String, val price:Double, val source:String?)
+            // @Query("""
+            //   SELECT p.barcode AS barcode, pp.effectiveAt AS effectiveAt, pp.type AS type, pp.price AS price, pp.source AS source
+            //   FROM ProductPrice pp
+            //   JOIN Product p ON p.id = pp.productId
+            //   ORDER BY p.barcode ASC, pp.type ASC, pp.effectiveAt ASC
+            // """)
+            // fun getAllWithBarcode(): List<ExportRow>
+            val rows = priceDao.getAllWithBarcode() // <- aggiungere nel DAO come sopra
+            rows.map { PriceHistoryExportRow(it.barcode, it.effectiveAt, it.type, it.price, it.source) }
+        }
 }

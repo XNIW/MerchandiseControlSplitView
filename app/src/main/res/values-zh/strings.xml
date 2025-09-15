@@ -327,4 +327,28 @@
     <string name="more_actions">更多操作</string>
     <string name="untitled">未命名</string>
     <string name="exported_short">已导出</string>
+
+    <!-- 菜单 / 操作 -->
+    <string name="import_products_single_sheet">导入商品（单个工作表）</string>
+    <string name="import_database_full">导入数据库（完整）</string>
+    <string name="export_products">导出商品</string>
+    <string name="export_database_full">导出数据库（完整）</string>
+
+    <!-- 完整数据库导出文件名前缀 -->
+    <string name="export_database_filename_prefix">数据库_</string>
+
+    <!-- 工作表名称 -->
+    <string name="sheet_name_suppliers">供应商</string>
+    <string name="sheet_name_categories">分类</string>
+    <string name="sheet_name_price_history">价格历史</string>
+
+    <!-- 额外工作表的列标题（为保持导入兼容性，这里保持英文规范） -->
+    <string name="excel_header_id">id</string>
+    <string name="excel_header_name">name</string>
+    <string name="excel_header_product_barcode">productBarcode</string>
+    <string name="excel_header_timestamp">timestamp</string>
+    <string name="excel_header_type">type</string>
+    <string name="excel_header_old_price">oldPrice</string>
+    <string name="excel_header_new_price">newPrice</string>
+    <string name="excel_header_source">source</string>
 </resources>
