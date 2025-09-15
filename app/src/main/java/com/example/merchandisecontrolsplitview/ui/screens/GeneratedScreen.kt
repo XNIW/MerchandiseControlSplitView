@@ -421,6 +421,7 @@ fun GeneratedScreen(
                                 val quantityIdx = header.indexOf("quantity")
                                 val retailPriceIdx = header.indexOf("retailPrice")
                                 val categoryIdx = header.indexOf("category")
+                                val purchaseIdx = header.indexOf("purchasePrice")
 
                                 val dataRows = excelData.drop(1)
                                 val gridDataForAnalysis = if (isManualEntry) {
@@ -429,6 +430,7 @@ fun GeneratedScreen(
                                             "barcode" to (rowData.getOrNull(barcodeIdx) ?: ""),
                                             "productName" to (rowData.getOrNull(productNameIdx) ?: ""),
                                             "quantity" to (rowData.getOrNull(quantityIdx) ?: ""),
+                                            "purchasePrice" to (rowData.getOrNull(purchaseIdx) ?: ""),
                                             "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
                                             "category" to (rowData.getOrNull(categoryIdx) ?: ""),
                                             "supplier" to "Manuale"
