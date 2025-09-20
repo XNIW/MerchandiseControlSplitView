@@ -364,4 +364,7 @@
     <string name="excel_header_old_price">oldPrice</string>
     <string name="excel_header_new_price">newPrice</string>
     <string name="excel_header_source">source</string>
+
+    <string name="manual_add_suffix">Aggiunta_Manuale</string>
+    <string name="supplier_manual">Manuale</string>
 </resources>

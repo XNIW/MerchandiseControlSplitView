@@ -350,4 +350,7 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="excel_header_old_price">oldPrice</string>
     <string name="excel_header_new_price">newPrice</string>
     <string name="excel_header_source">source</string>
+
+    <string name="manual_add_suffix">Añadido_Manual</string>
+    <string name="supplier_manual">Manual</string>
 </resources>

@@ -638,14 +638,16 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // --- 1. AGGIUNGI UNA FUNZIONE PER CREARE L'ENTRY MANUALE ---
-    fun createManualEntry(onResult: (Long) -> Unit) {
+    fun createManualEntry(context: Context, onResult: (Long) -> Unit){
         viewModelScope.launch { // Non serve Dispatchers.IO per questa logica
             // Definisci l'intestazione standard
             val manualHeader = listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category")
             val dataGrid = listOf(manualHeader)
 
             val now = LocalDateTime.now()
-            val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")) + "_Aggiunta_Manuale.xlsx"
+            val suffixRaw = context.getString(R.string.manual_add_suffix)
+            val suffixFileSafe = suffixRaw.replace("[^\\p{L}\\p{N}_-]".toRegex(), "_")
+            val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")) + "_${suffixFileSafe}.xlsx"
             val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
             val newEntry = HistoryEntry(
@@ -655,7 +657,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 data = dataGrid,
                 editable = listOf(listOf("","")), // Aggiungi uno stato per l'header
                 complete = listOf(false),          // Aggiungi uno stato per l'header
-                supplier = "Manuale",
+                supplier = context.getString(R.string.supplier_manual),
                 category = "",
                 totalItems = 0,
                 orderTotal = 0.0,

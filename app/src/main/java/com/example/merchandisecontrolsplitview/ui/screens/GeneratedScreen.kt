@@ -433,7 +433,7 @@ fun GeneratedScreen(
                                             "purchasePrice" to (rowData.getOrNull(purchaseIdx) ?: ""),
                                             "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
                                             "category" to (rowData.getOrNull(categoryIdx) ?: ""),
-                                            "supplier" to "Manuale"
+                                            "supplier" to context.getString(R.string.supplier_manual)
                                         )
                                     }
                                 } else {

@@ -74,7 +74,7 @@ fun AppNavGraph() {
                 onManualAdd = {
                     excelViewModel.resetState()
 
-                    excelViewModel.createManualEntry { newUid ->
+                    excelViewModel.createManualEntry(context) { newUid ->
                         // Naviga alla GeneratedScreen con i nuovi flag
                         navController.navigate(Screen.Generated.createRoute(
                             entryUid = newUid,
