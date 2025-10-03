@@ -28,4 +28,6 @@ interface SupplierDao {
     @Query("SELECT * FROM suppliers ORDER BY name ASC")
     fun getAllFlow(): Flow<List<Supplier>>
 
+    @Query("DELETE FROM suppliers WHERE name = :name")
+    suspend fun deleteByName(name: String)
 }

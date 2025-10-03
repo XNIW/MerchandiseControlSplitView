@@ -367,4 +367,16 @@
 
     <string name="manual_add_suffix">Aggiunta_Manuale</string>
     <string name="supplier_manual">Manuale</string>
+
+    <string name="account">Account</string>
+    <string name="sync_active">Sincronizzazione attiva</string>
+    <string name="offline_mode">Modalità offline</string>
+    <string name="sign_in_to_sync">Accedi per sincronizzare i dati</string>
+    <string name="sign_in_with_google">Accedi con Google</string>
+    <string name="google_sign_in_unavailable">Google Play Services non disponibile</string>
+
+    <string name="quick_actions">Azioni rapide</string>
+    <string name="recent_files">Recenti</string>
+    <string name="recent_empty_hint">Carica un file Excel per vedere qui gli ultimi usati.</string>
+
 </resources>

@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "694216046607",
+    "project_id": "merchandise-control-system",
+    "storage_bucket": "merchandise-control-system.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:694216046607:android:7bfe697379dacad49f0b7a",
+        "android_client_info": {
+          "package_name": "com.example.merchandisecontrolsplitview"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "694216046607-15pddllh207gesrnq4h1fpcg2c6ic3vs.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.merchandisecontrolsplitview",
+            "certificate_hash": "2ac16268548ff756683335bb76d21977c08215b7"
+          }
+        },
+        {
+          "client_id": "694216046607-vrk50q7h8326teebr2kv44tk47pq0tdh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAdb1BFlgkuLI5RFqsKpjtA29P3j76k2NE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "694216046607-vrk50q7h8326teebr2kv44tk47pq0tdh.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

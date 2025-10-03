@@ -355,4 +355,15 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
 
     <string name="manual_add_suffix">Manual_Add</string>
     <string name="supplier_manual">Manual</string>
+
+    <string name="account">Account</string>
+    <string name="sync_active">Sync active</string>
+    <string name="offline_mode">Offline mode</string>
+    <string name="sign_in_to_sync">Sign in to sync your data</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="google_sign_in_unavailable">Google Play Services unavailable</string>
+
+    <string name="quick_actions">Quick actions</string>
+    <string name="recent_files">Recent</string>
+    <string name="recent_empty_hint">Upload an Excel file to see your recently used files here.</string>
 </resources>

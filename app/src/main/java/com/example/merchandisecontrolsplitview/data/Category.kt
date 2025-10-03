@@ -7,12 +7,11 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "categories",
-    indices = [Index(value = ["name"], unique = true)] // Indice per ricerche veloci e per evitare nomi duplicati
+    indices = [Index(value = ["name"], unique = true)]
 )
 data class Category(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0L,
-
-    @ColumnInfo(name = "name", collate = ColumnInfo.NOCASE)
-    val name: String
-)
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    @ColumnInfo(name = "name", collate = ColumnInfo.NOCASE) val name: String = ""
+) {
+    constructor() : this(0L, "")
+}

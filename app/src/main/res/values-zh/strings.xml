@@ -354,4 +354,15 @@
 
     <string name="manual_add_suffix">手动添加</string>
     <string name="supplier_manual">手动</string>
+
+    <string name="account">帐户</string>
+    <string name="sync_active">同步已启用</string>
+    <string name="offline_mode">离线模式</string>
+    <string name="sign_in_to_sync">登录以同步数据</string>
+    <string name="sign_in_with_google">使用 Google 登录</string>
+    <string name="google_sign_in_unavailable">无法使用 Google Play 服务</string>
+
+    <string name="quick_actions">快捷操作</string>
+    <string name="recent_files">最近</string>
+    <string name="recent_empty_hint">上传 Excel 文件后，可在此查看最近使用的文件。</string>
 </resources>

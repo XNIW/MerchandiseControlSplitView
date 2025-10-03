@@ -24,8 +24,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.BufferOverflow
 import java.io.File
 import androidx.core.net.toUri
+import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.data.auth.AuthManager
+import com.example.merchandisecontrolsplitview.data.remote.SyncManager
+import com.example.merchandisecontrolsplitview.data.remote.runInitialSync
 
 class MainActivity : ComponentActivity() {
+    private var sync: SyncManager? = null
 
     // ⬇️ “bus” per recapitare gli Uri alla UI
     object ShareBus {
@@ -157,6 +162,18 @@ class MainActivity : ComponentActivity() {
                 AppNavGraph()
             }
         }
+        lifecycleScope.launch {
+            val db = AppDatabase.getDatabase(this@MainActivity)
+            AuthManager.uid.collect { uid ->
+                // stop eventuale sync precedente
+                sync?.stop(); sync = null
+                if (uid != null) {
+                    runInitialSync(db, uid)
+                    sync = SyncManager(db, uid, lifecycleScope).also { it.start() }
+                }
+                // se uid == null → offline-only, nessuna sync
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -165,4 +182,5 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
     }
 
+    override fun onDestroy() { sync?.stop(); super.onDestroy() }
 }

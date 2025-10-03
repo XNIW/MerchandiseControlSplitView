@@ -1,134 +1,336 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import com.example.merchandisecontrolsplitview.R
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.auth.AuthManager
+import com.example.merchandisecontrolsplitview.util.isGooglePlayServicesAvailable
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.firebase.auth.FirebaseAuth
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilePickerScreen(
     onFilesPicked: (List<Uri>) -> Unit,
     onViewHistory: () -> Unit,
     onDatabase: () -> Unit,
     onOptions: () -> Unit,
-    onManualAdd: () -> Unit
+    onManualAdd: () -> Unit,
+    recentFiles: List<String> = emptyList() // file recenti da mostrare nella Home
 ) {
+    val context = LocalContext.current
+    val hasGms = remember(context) { isGooglePlayServicesAvailable(context) }
+    val uid by AuthManager.uid.collectAsState()
+
+    // Foto profilo aggiornata su cambio uid
+    val photoUrl = remember(uid) { FirebaseAuth.getInstance().currentUser?.photoUrl?.toString() }
+
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
-        // Se l'utente ha scelto almeno un file, invoca la callback
-        if (uris.isNotEmpty()) {
-            onFilesPicked(uris)
-        }
+        if (uris.isNotEmpty()) onFilesPicked(uris)
     }
 
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
+    var accountSheetOpen by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.app_name)) },
+                actions = {
+                    IconButton(onClick = { accountSheetOpen = true }) {
+                        if (uid != null && !photoUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = photoUrl,
+                                contentDescription = stringResource(R.string.account),
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.AccountCircle,
+                                contentDescription = stringResource(R.string.account)
+                            )
+                        }
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+
+        if (accountSheetOpen) {
+            AccountBottomSheet(
+                sheetState = sheetState,
+                hasGms = hasGms,
+                uid = uid,
+                onSignIn = { doGoogleSignIn(context) },
+                onSignOut = { AuthManager.signOut() },
+                onOptions = onOptions,
+                onDismiss = { accountSheetOpen = false }
+            )
+        }
+
+        // ------------ NUOVO LAYOUT: griglia azioni + lista Recenti ------------
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.Center
+                .padding(innerPadding)
         ) {
-            // --- Pulsante Cronologia con Icona ---
-            Button(
-                onClick = onViewHistory,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp) // MODIFICA: Assicurati che tutti abbiano padding sotto
-            ) {
-                Icon(
-                    imageVector = Icons.Default.History,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize)
+            item {
+                Text(
+                    text = stringResource(R.string.quick_actions),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
                 )
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(id = R.string.file_history))
             }
 
-            // --- Pulsante Carica Excel con Icona ---
+            item {
+                ActionsGrid(
+                    onHistory = onViewHistory,
+                    onLoadExcel = {
+                        launcher.launch(
+                            arrayOf(
+                                "application/vnd.ms-excel",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "text/html",
+                                "application/octet-stream"
+                            )
+                        )
+                    },
+                    onManualAdd = onManualAdd,
+                    onDatabase = onDatabase
+                )
+            }
+
+            if (recentFiles.isNotEmpty()) {
+                item {
+                    Text(
+                        text = stringResource(R.string.recent_files),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
+                }
+                items(recentFiles) { name ->
+                    ListItem(
+                        leadingContent = { Icon(Icons.Filled.History, contentDescription = null) },
+                        headlineContent = { Text(name) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    HorizontalDivider()
+                }
+                item { Spacer(Modifier.height(24.dp)) }
+            } else {
+                item {
+                    Text(
+                        text = stringResource(R.string.recent_empty_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionsGrid(
+    onHistory: () -> Unit,
+    onLoadExcel: () -> Unit,
+    onManualAdd: () -> Unit,
+    onDatabase: () -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(204.dp)                 // <-- IMPORTANTE: altezza vincolata
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        userScrollEnabled = false
+    ) {
+        item {
+            ActionCard(
+                label = stringResource(R.string.file_history),
+                icon = Icons.Filled.History,
+                onClick = onHistory
+            )
+        }
+        item {
+            ActionCard(
+                label = stringResource(R.string.load_excel_file),
+                icon = Icons.Filled.UploadFile,
+                onClick = onLoadExcel
+            )
+        }
+        item {
+            ActionCard(
+                label = stringResource(R.string.add_products_manually),
+                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
+                onClick = onManualAdd
+            )
+        }
+        item {
+            ActionCard(
+                label = stringResource(R.string.database),
+                icon = Icons.Filled.Storage,
+                onClick = onDatabase
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActionCard(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .height(96.dp)
+            .fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        ),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null)
+            Spacer(Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AccountBottomSheet(
+    sheetState: SheetState,
+    hasGms: Boolean,
+    uid: String?,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onOptions: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(text = stringResource(R.string.account), style = MaterialTheme.typography.titleLarge)
+
+            val status = if (uid == null)
+                stringResource(R.string.sign_in_to_sync)
+            else
+                stringResource(R.string.sync_active)
+
+            Text(status, style = MaterialTheme.typography.bodyMedium)
+
+            if (!hasGms) {
+                OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.google_sign_in_unavailable))
+                }
+            } else if (uid == null) {
+                Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.sign_in_with_google))
+                }
+            } else {
+                OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.exit))
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(top = 8.dp))
+
             Button(
                 onClick = {
-                    launcher.launch(arrayOf(
-                        "application/vnd.ms-excel",
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "text/html",
-                        "application/octet-stream"
-                    ))
+                    onDismiss()
+                    onOptions()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp) // MODIFICA: Aggiunto padding sotto per uniformità
+                    .padding(bottom = 16.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.UploadFile,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize)
-                )
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(id = R.string.load_excel_file))
+                Text(stringResource(R.string.options))
             }
+        }
+    }
+}
 
-            // --- Pulsante Aggiungi Manualmente ---
-            Button(
-                onClick = { onManualAdd() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp) // MODIFICA: Già corretto
+/** Avvia il flusso di Sign-In Google con Credential Manager. */
+private fun doGoogleSignIn(context: Context) {
+    if (!isGooglePlayServicesAvailable(context)) return
+    CoroutineScope(Dispatchers.Main).launch {
+        try {
+            val cm = CredentialManager.create(context)
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setServerClientId(context.getString(R.string.default_web_client_id))
+                .setFilterByAuthorizedAccounts(false)
+                .build()
+            val request = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+            val result = cm.getCredential(context, request)
+            val cred = result.credential
+            if (cred is CustomCredential &&
+                cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize)
-                )
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(id = R.string.add_products_manually))
+                val google = GoogleIdTokenCredential.createFrom(cred.data)
+                AuthManager.signInWithGoogle(google.idToken)
             }
-
-            // --- Pulsante Database con Icona ---
-            Button(
-                onClick = { onDatabase() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp) // MODIFICA: Cambiato da top a bottom
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Storage,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize)
-                )
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(id = R.string.database))
-            }
-
-            // --- Pulsante Opzioni con Icona (l'ultimo non ha bisogno di padding bottom) ---
-            Button(
-                onClick = onOptions,
-                modifier = Modifier.fillMaxWidth() // MODIFICA: Rimosso padding per l'ultimo elemento
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize)
-                )
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(stringResource(id = R.string.options))
-            }
+        } catch (_: GetCredentialException) {
+            // utente ha annullato o nessun account disponibile
+        } catch (_: Exception) {
+            // mantieni la UI consistente
         }
     }
 }

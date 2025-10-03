@@ -162,4 +162,7 @@ ORDER BY p.id ASC
         ORDER BY p.id ASC
     """)
     suspend fun getAllWithDetailsOnce(): List<ProductWithDetails>
+
+    @Query("DELETE FROM products WHERE barcode = :barcode")
+    suspend fun deleteByBarcode(barcode: String)
 }

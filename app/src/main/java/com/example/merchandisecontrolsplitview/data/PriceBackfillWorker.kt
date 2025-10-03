@@ -6,6 +6,8 @@ import androidx.work.WorkerParameters
 import androidx.work.Data
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import com.example.merchandisecontrolsplitview.data.auth.AuthManager
+import com.example.merchandisecontrolsplitview.data.remote.CloudStore
 
 class PriceBackfillWorker(
     appContext: Context,
@@ -19,22 +21,51 @@ class PriceBackfillWorker(
         val productDao = db.productDao()
         val priceDao = db.productPriceDao()
 
-        // se lo storico c'è già per un prodotto, salta
-        val already: Set<Long> = priceDao.getProductIdsWithAnyPrice().toSet()
-
         val nowStr = LocalDateTime.now().format(fmt)
 
+        // Se l'utente è loggato, specchia anche su Firestore
+        val cloud: CloudStore? = AuthManager.currentUid()?.let { uid -> CloudStore(uid) }
+
+        // Se il prodotto ha già QUALCHE prezzo in locale, lo saltiamo (idempotente)
+        val already = priceDao.getProductIdsWithAnyPrice().toSet()
         val products = productDao.getAll()
+
         for (p in products) {
             if (p.id in already) continue
 
-            p.purchasePrice?.let {
-                priceDao.insertIfChanged(p.id, "PURCHASE", it, nowStr, "BACKFILL_CURR")
+            p.purchasePrice?.let { price ->
+                // Locale
+                priceDao.insertIfChanged(p.id, "PURCHASE", price, nowStr, "BACKFILL_CURR")
+                // Cloud (idempotente: usa barcode+type+effectiveAt come docId)
+                cloud?.upsertPriceRow(
+                    barcode = p.barcode,
+                    type = "PURCHASE",
+                    effectiveAt = nowStr,
+                    price = price,
+                    source = "BACKFILL_CURR",
+                    createdAt = nowStr
+                )
             }
-            p.retailPrice?.let {
-                priceDao.insertIfChanged(p.id, "RETAIL", it, nowStr, "BACKFILL_CURR")
+
+            p.retailPrice?.let { price ->
+                // Locale
+                priceDao.insertIfChanged(p.id, "RETAIL", price, nowStr, "BACKFILL_CURR")
+                // Cloud
+                cloud?.upsertPriceRow(
+                    barcode = p.barcode,
+                    type = "RETAIL",
+                    effectiveAt = nowStr,
+                    price = price,
+                    source = "BACKFILL_CURR",
+                    createdAt = nowStr
+                )
             }
         }
-        return Result.success(Data.Builder().putInt("backfilled_products", products.size).build())
+
+        return Result.success(
+            Data.Builder()
+                .putInt("backfilled_products", products.size)
+                .build()
+        )
     }
 }

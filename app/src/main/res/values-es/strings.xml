@@ -353,4 +353,15 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
 
     <string name="manual_add_suffix">Añadido_Manual</string>
     <string name="supplier_manual">Manual</string>
+
+    <string name="account">Cuenta</string>
+    <string name="sync_active">Sincronización activa</string>
+    <string name="offline_mode">Modo sin conexión</string>
+    <string name="sign_in_to_sync">Inicia sesión para sincronizar</string>
+    <string name="sign_in_with_google">Acceder con Google</string>
+    <string name="google_sign_in_unavailable">Servicios de Google Play no disponibles</string>
+
+    <string name="quick_actions">Acciones rápidas</string>
+    <string name="recent_files">Recientes</string>
+    <string name="recent_empty_hint">Carga un archivo de Excel para ver aquí los últimos usados.</string>
 </resources>

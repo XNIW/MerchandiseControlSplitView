@@ -6,10 +6,12 @@ import androidx.room.PrimaryKey
 
 @Entity(
     tableName = "suppliers",
-    indices = [Index(value = ["name"], unique = true)] // Il nome di ogni fornitore deve essere unico
+    indices = [Index(value = ["name"], unique = true)]
 )
 data class Supplier(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0L,
-    val name: String
-)
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String = ""
+) {
+    // per Firestore
+    constructor() : this(0L, "")
+}

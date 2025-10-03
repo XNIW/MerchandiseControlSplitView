@@ -11,6 +11,8 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
+import com.example.merchandisecontrolsplitview.data.remote.CloudStore
+import com.example.merchandisecontrolsplitview.data.auth.AuthManager
 
 // ⬇️ aggiungi subito sotto gli import esistenti (prima dell'interfaccia)
 data class PriceHistoryExportRow(
@@ -74,6 +76,10 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
     override suspend fun findProductsByBarcodes(barcodes: List<String>) = withContext(Dispatchers.IO) { productDao.findByBarcodes(barcodes) }
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
+
+    private fun cloudOrNull(): CloudStore? =
+        AuthManager.currentUid()?.let { CloudStore(it) }
+
     override suspend fun addProduct(product: Product) {
         withContext(Dispatchers.IO) {
             productDao.insert(product)
@@ -81,23 +87,46 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
 
             val now = LocalDateTime.now().format(tSFMT)
 
-            product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
-            product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
+            product.purchasePrice?.let {
+                priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL")
+                cloudOrNull()?.upsertPriceRow(product.barcode, "PURCHASE", now, it, "MANUAL", now)
+            }
+            product.retailPrice?.let {
+                priceDao.insertIfChanged(persisted.id, "RETAIL", it, now, "MANUAL")
+                cloudOrNull()?.upsertPriceRow(product.barcode, "RETAIL", now, it, "MANUAL", now)
+            }
+
+            cloudOrNull()?.upsertProduct(persisted)
         }
     }
     override suspend fun updateProduct(product: Product) {
         withContext(Dispatchers.IO) {
             productDao.update(product)
-
             val now = LocalDateTime.now().format(tSFMT)
 
-            product.purchasePrice?.let { priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL") }
-            product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
+            product.purchasePrice?.let {
+                priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL")
+                cloudOrNull()?.upsertPriceRow(product.barcode, "PURCHASE", now, it, "MANUAL", now)
+            }
+            product.retailPrice?.let {
+                priceDao.insertIfChanged(product.id, "RETAIL", it, now, "MANUAL")
+                cloudOrNull()?.upsertPriceRow(product.barcode, "RETAIL", now, it, "MANUAL", now)
+            }
+
+            cloudOrNull()?.upsertProduct(product)
         }
     }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
-    override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
+
+    override suspend fun deleteProduct(product: Product) {
+        withContext(Dispatchers.IO) {
+            productDao.delete(product)
+            cloudOrNull()?.deleteProduct(product)
+            cloudOrNull()?.deletePricesOfProduct(product.barcode)
+        }
+    }
+
     override suspend fun applyImport(
         newProducts: List<Product>,
         updatedProducts: List<Product>
@@ -111,10 +140,24 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
 
         // ⬇️ deve essere 'suspend'
         suspend fun recordPricesFor(productId: Long, p: Product) {
-            p.oldPurchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV") }
-            p.oldRetailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, prevTs, "IMPORT_PREV") }
-            p.purchasePrice   ?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs,  "IMPORT") }
-            p.retailPrice     ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, nowTs,  "IMPORT") }
+            // prezzi precedenti (snapshot pre-import)
+            p.oldPurchasePrice?.let {
+                priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV")
+                cloudOrNull()?.upsertPriceRow(p.barcode, "PURCHASE", prevTs, it, "IMPORT_PREV", prevTs)
+            }
+            p.oldRetailPrice?.let {
+                priceDao.insertIfChanged(productId, "RETAIL", it, prevTs, "IMPORT_PREV")
+                cloudOrNull()?.upsertPriceRow(p.barcode, "RETAIL", prevTs, it, "IMPORT_PREV", prevTs)
+            }
+            // prezzi attuali (post-import)
+            p.purchasePrice?.let {
+                priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs, "IMPORT")
+                cloudOrNull()?.upsertPriceRow(p.barcode, "PURCHASE", nowTs, it, "IMPORT", nowTs)
+            }
+            p.retailPrice?.let {
+                priceDao.insertIfChanged(productId, "RETAIL", it, nowTs, "IMPORT")
+                cloudOrNull()?.upsertPriceRow(p.barcode, "RETAIL", nowTs, it, "IMPORT", nowTs)
+            }
         }
 
         if (newProducts.isNotEmpty()) {
@@ -137,18 +180,6 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     override suspend fun findSupplierByName(name: String): Supplier? = withContext(Dispatchers.IO) { supplierDao.findByName(name) }
     override suspend fun getAllSuppliers(): List<Supplier> = withContext(Dispatchers.IO) { supplierDao.getAll() }
     override suspend fun searchSuppliersByName(query: String) = withContext(Dispatchers.IO) { supplierDao.searchByName(query) }
-
-    private val supplierMutex = Mutex()
-    override suspend fun addSupplier(name: String): Supplier? = withContext(Dispatchers.IO) {
-        if (name.isBlank()) return@withContext null
-        supplierMutex.withLock {
-            supplierDao.findByName(name) ?: run {
-                val newSupplier = Supplier(name = name)
-                supplierDao.insert(newSupplier)
-                supplierDao.findByName(name)
-            }
-        }
-    }
     override suspend fun recordPriceIfChanged(
         productId: Long,
         type: String,
@@ -187,6 +218,20 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     override suspend fun getAllCategories(): List<Category> = withContext(Dispatchers.IO) { categoryDao.getAll() }
     override suspend fun searchCategoriesByName(query: String) = withContext(Dispatchers.IO) { categoryDao.searchByName(query) }
 
+    private val supplierMutex = Mutex()
+    override suspend fun addSupplier(name: String): Supplier? = withContext(Dispatchers.IO) {
+        if (name.isBlank()) return@withContext null
+        supplierMutex.withLock {
+            supplierDao.findByName(name) ?: run {
+                val newSupplier = Supplier(name = name)
+                supplierDao.insert(newSupplier)
+                val saved = supplierDao.findByName(name)
+                saved?.let { cloudOrNull()?.upsertSupplier(it) }
+                saved
+            }
+        }
+    }
+
     private val categoryMutex = Mutex()
     override suspend fun addCategory(name: String): Category? = withContext(Dispatchers.IO) {
         if (name.isBlank()) return@withContext null
@@ -194,7 +239,9 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
             categoryDao.findByName(name) ?: run {
                 val newCategory = Category(name = name)
                 categoryDao.insert(newCategory)
-                categoryDao.findByName(name)
+                val saved = categoryDao.findByName(name)
+                saved?.let { cloudOrNull()?.upsertCategory(it) }
+                saved
             }
         }
     }
@@ -226,9 +273,26 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
 
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
-    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
-    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.update(entry) }
-    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.delete(entry) }
+    override suspend fun insertHistoryEntry(entry: HistoryEntry): Long =
+        withContext(Dispatchers.IO) {
+            val rowId = historyDao.insert(entry)
+            try { cloudOrNull()?.upsertHistoryEntry(entry.copy(uid = 0)) } catch (_: Exception) {}
+            rowId
+        }
+
+    override suspend fun updateHistoryEntry(entry: HistoryEntry) {
+        withContext(Dispatchers.IO) {
+            historyDao.update(entry)
+            try { cloudOrNull()?.upsertHistoryEntry(entry.copy(uid = 0)) } catch (_: Exception) {}
+        }
+    }
+
+    override suspend fun deleteHistoryEntry(entry: HistoryEntry) {
+        withContext(Dispatchers.IO) {
+            historyDao.delete(entry)
+            cloudOrNull()?.deleteHistoryEntryById(entry.id)
+        }
+    }
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
     override suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow> =
         withContext(Dispatchers.IO) {

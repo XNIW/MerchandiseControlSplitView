@@ -28,4 +28,7 @@ interface HistoryEntryDao {
 
     @Query("SELECT timestamp FROM history_entries ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestTimestamp(): String?
+
+    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC")
+    suspend fun getAll(): List<HistoryEntry>
 }

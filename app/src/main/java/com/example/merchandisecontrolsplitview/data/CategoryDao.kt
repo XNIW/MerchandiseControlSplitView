@@ -45,4 +45,7 @@ interface CategoryDao {
      */
     @Query("SELECT * FROM categories WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Category?
+
+    @Query("DELETE FROM categories WHERE name = :name")
+    suspend fun deleteByName(name: String)
 }
