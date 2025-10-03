@@ -37,7 +37,7 @@ fun OptionsScreen(
         navController.popBackStack()
     }
 
-    val savedTheme = prefs.getString("theme", "auto") ?: "auto"
+    val savedTheme = prefs.getString("theme", "light") ?: "light"
     var themePref by remember { mutableStateOf(savedTheme) }
     val themeOptions = listOf(
         "auto" to stringResource(R.string.theme_auto),
@@ -45,7 +45,7 @@ fun OptionsScreen(
         "dark" to stringResource(R.string.theme_dark)
     )
 
-    val savedLang = prefs.getString("lang", "it") ?: "it"
+    val savedLang = prefs.getString("lang", "en") ?: "en"
     var langPref by remember { mutableStateOf(savedLang) }
     val languages = listOf(
         "zh" to stringResource(id = R.string.chinese),

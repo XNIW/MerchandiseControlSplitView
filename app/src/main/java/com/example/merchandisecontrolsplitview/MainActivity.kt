@@ -24,6 +24,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.BufferOverflow
 import java.io.File
 import androidx.core.net.toUri
+import androidx.core.content.edit
+import androidx.appcompat.app.AppCompatDelegate
 
 class MainActivity : ComponentActivity() {
 
@@ -39,8 +41,25 @@ class MainActivity : ComponentActivity() {
 
     override fun attachBaseContext(newBase: Context) {
         val prefs = newBase.getSharedPreferences("settings", MODE_PRIVATE)
-        val lang = prefs.getString("lang", "it") ?: "it" // default italiano
-        val context = setLocale(newBase, lang)
+
+        val saved = prefs.getString("lang", null)
+        val langToUse = saved ?: run {
+            // minSdk 31 → puoi usare sempre locales[0]
+            val sysLang = newBase.resources.configuration.locales[0].language
+
+            val normalized = when {
+                sysLang.startsWith("zh", true) -> "zh"
+                sysLang.startsWith("it", true) -> "it"
+                sysLang.startsWith("es", true) -> "es"
+                sysLang.startsWith("en", true) -> "en"
+                else -> "en"
+            }
+            // KTX edit
+            prefs.edit { putString("lang", normalized) }
+            normalized
+        }
+
+        val context = setLocale(newBase, langToUse)
         super.attachBaseContext(context)
     }
 
@@ -131,6 +150,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Imposta il tema predefinito "light" SOLO al primo avvio
+        val prefsBoot = getSharedPreferences("settings", MODE_PRIVATE)
+        if (!prefsBoot.contains("theme")) {
+            prefsBoot.edit { putString("theme", "light") } // KTX
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+        }
+
         // Avvia il backfill idempotente
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
             "price-backfill-v1",                 // cambia il suffisso v* se in futuro modifichi la logica
@@ -141,9 +167,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
-            val themePref = remember {
-                prefs.getString("theme", "auto") ?: "auto"
-            }
+
+            // 🔁 default "light" (non più "auto")
+            val themePref = remember { prefs.getString("theme", "light") ?: "light" }
 
             val darkTheme = when (themePref) {
                 "dark" -> true
@@ -152,8 +178,6 @@ class MainActivity : ComponentActivity() {
             }
 
             MerchandiseControlTheme(darkTheme = darkTheme) {
-                // La chiamata ora è pulita, senza parametri.
-                // Lo stato di navigazione è gestito internamente da AppNavGraph.
                 AppNavGraph()
             }
         }
