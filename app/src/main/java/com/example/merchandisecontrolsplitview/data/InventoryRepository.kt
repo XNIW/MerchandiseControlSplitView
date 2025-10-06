@@ -20,6 +20,12 @@ data class PriceHistoryExportRow(
     val price: Double,
     val source: String?
 )
+data class CurrentPriceRow(
+    val productId: Long,
+    val barcode: String,
+    val purchasePrice: Double?,
+    val retailPrice: Double?
+)
 interface InventoryRepository {
     // Product methods
     fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
@@ -60,6 +66,16 @@ interface InventoryRepository {
     // ⬇️ nell'interfaccia InventoryRepository, aggiungi:
     // PriceHistory export
     suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow>
+    suspend fun getAllProductsLite(): List<ProductDao.ProductLite>
+    suspend fun recordPriceHistoryByBarcodeBatch(
+        rows: List<Triple<String /*barcode*/, String /*type*/, Pair<String /*ts*/, Double /*price*/>>>,
+        source: String = "IMPORT_SHEET"
+    )
+    /** Mappa “barcode → (purchase?, retail?)” con i prezzi correnti (1 sola query) */
+    suspend fun getCurrentPricesForBarcodes(barcodes: List<String>): Map<String, Pair<Double?, Double?>>
+
+    /** Snapshot “tutto il listino attuale” (utile per export/listino) */
+    suspend fun getCurrentPriceSnapshot(): List<CurrentPriceRow>
 }
 
 class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
@@ -106,36 +122,47 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
         val prevTs = now.minusSeconds(1).format(tSFMT)
         val nowTs  = now.format(tSFMT)
 
+        // 1) Persistenza prodotti
         if (newProducts.isNotEmpty()) productDao.insertAll(newProducts)
         if (updatedProducts.isNotEmpty()) productDao.updateAll(updatedProducts)
 
-        // ⬇️ deve essere 'suspend'
-        suspend fun recordPricesFor(productId: Long, p: Product) {
+        // 2) Mappa barcode -> id (per TUTTI quelli interessati)
+        val allBarcodes = (newProducts.map { it.barcode } + updatedProducts.map { it.barcode })
+            .distinct()
+        val persisted = if (allBarcodes.isEmpty()) emptyList()
+        else productDao.findByBarcodes(allBarcodes)
+        val idByBarcode = persisted.associateBy({ it.barcode }, { it.id })
+
+        // 3) Funzione helper (suspend)
+        suspend fun recordBothStates(productId: Long, p: Product) {
+            // Stato "precedente" (se presente nei campi old*)
             p.oldPurchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV") }
             p.oldRetailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, prevTs, "IMPORT_PREV") }
-            p.purchasePrice   ?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs,  "IMPORT") }
-            p.retailPrice     ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, nowTs,  "IMPORT") }
+
+            // Stato "attuale"
+            p.purchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs, "IMPORT") }
+            p.retailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, nowTs, "IMPORT") }
         }
 
-        if (newProducts.isNotEmpty()) {
-            val idsByBarcode = productDao
-                .findByBarcodes(newProducts.map { it.barcode }.distinct())
-                .associate { it.barcode to it.id }
-            for (p in newProducts) {
-                val id = idsByBarcode[p.barcode] ?: continue
-                recordPricesFor(id, p)
-            }
+        // 4) Applica per i nuovi
+        for (p in newProducts) {
+            val id = idByBarcode[p.barcode] ?: continue
+            recordBothStates(id, p)
         }
 
+        // 5) Applica per gli aggiornati (gli updated hanno già id)
         for (p in updatedProducts) {
-            recordPricesFor(p.id, p)
+            recordBothStates(p.id, p)
         }
     }
 
     // --- Supplier Implementations ---
-    override suspend fun getSupplierById(id: Long) = withContext(Dispatchers.IO) { supplierDao.getById(id) }
-    override suspend fun findSupplierByName(name: String): Supplier? = withContext(Dispatchers.IO) { supplierDao.findByName(name) }
-    override suspend fun getAllSuppliers(): List<Supplier> = withContext(Dispatchers.IO) { supplierDao.getAll() }
+    override suspend fun getSupplierById(id: Long) =
+        withContext(Dispatchers.IO) { supplierDao.getById(id) }
+    override suspend fun findSupplierByName(name: String): Supplier? =
+        withContext(Dispatchers.IO) { supplierDao.findByName(name) }
+    override suspend fun getAllSuppliers(): List<Supplier> =
+        withContext(Dispatchers.IO) { supplierDao.getAll() }
     override suspend fun searchSuppliersByName(query: String) = withContext(Dispatchers.IO) { supplierDao.searchByName(query) }
 
     private val supplierMutex = Mutex()
@@ -232,16 +259,88 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
     override suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow> =
         withContext(Dispatchers.IO) {
-            // Richiede nel ProductPriceDao un metodo che ritorni (barcode, effectiveAt, type, price, source)
-            // Esempio: data class ExportRow(val barcode:String, val effectiveAt:String, val type:String, val price:Double, val source:String?)
-            // @Query("""
-            //   SELECT p.barcode AS barcode, pp.effectiveAt AS effectiveAt, pp.type AS type, pp.price AS price, pp.source AS source
-            //   FROM ProductPrice pp
-            //   JOIN Product p ON p.id = pp.productId
-            //   ORDER BY p.barcode ASC, pp.type ASC, pp.effectiveAt ASC
-            // """)
-            // fun getAllWithBarcode(): List<ExportRow>
-            val rows = priceDao.getAllWithBarcode() // <- aggiungere nel DAO come sopra
-            rows.map { PriceHistoryExportRow(it.barcode, it.effectiveAt, it.type, it.price, it.source) }
+            val rows = priceDao.getAllWithBarcode()  // vedi DAO al punto 3
+            rows.map { r ->
+                PriceHistoryExportRow(
+                    barcode = r.barcode,
+                    timestamp = r.effectiveAt,
+                    type = r.type,
+                    price = r.price,
+                    source = r.source
+                )
+            }
         }
+
+    override suspend fun getAllProductsLite(): List<ProductDao.ProductLite> =
+        withContext(Dispatchers.IO) { productDao.getAllLite() }
+    override suspend fun recordPriceHistoryByBarcodeBatch(
+        rows: List<Triple<String, String, Pair<String, Double>>>,
+        source: String
+    ) = withContext(Dispatchers.IO) {
+        if (rows.isEmpty()) return@withContext
+        val barcodes = rows.map { it.first }.distinct()
+        val products = productDao.findByBarcodes(barcodes).associateBy { it.barcode }
+        val points = rows.mapNotNull { (barcode, type, tsPrice) ->
+            val p = products[barcode] ?: return@mapNotNull null
+            ProductPrice(
+                productId = p.id,
+                type = type,
+                price = tsPrice.second,
+                effectiveAt = tsPrice.first,
+                source = source
+            )
+        }
+        if (points.isNotEmpty()) priceDao.insertAll(points)
+    }
+    override suspend fun getCurrentPricesForBarcodes(
+        barcodes: List<String>
+    ): Map<String, Pair<Double?, Double?>> = withContext(Dispatchers.IO) {
+        if (barcodes.isEmpty()) return@withContext emptyMap()
+
+        // 1) Prendo i prodotti e mappo id↔barcode
+        val products = productDao.findByBarcodes(barcodes)
+        if (products.isEmpty()) return@withContext emptyMap()
+
+        val barcodeById = products.associate { it.id to it.barcode }
+
+        // 2) UNA SOLA QUERY per tutti gli ID toccati
+        val latest = priceDao.getLatestForProducts(products.map { it.id })
+
+        // 3) Compongo la mappa barcode → (purchase?, retail?)
+        val out = mutableMapOf<String, Pair<Double?, Double?>>()
+        latest.forEach { row ->
+            val bc = barcodeById[row.productId] ?: return@forEach
+            val cur = out[bc] ?: (null to null)
+            out[bc] = when (row.type) {
+                "PURCHASE" -> row.price to cur.second
+                "RETAIL"   -> cur.first to row.price
+                else       -> cur
+            }
+        }
+        // Garantisco key per tutti i barcodes richiesti
+        barcodes.forEach { bc -> out.putIfAbsent(bc, null to null) }
+        out
+    }
+
+    override suspend fun getCurrentPriceSnapshot(): List<CurrentPriceRow> = withContext(Dispatchers.IO) {
+        // 1) Ultimi prezzi per tutti i prodotti (una query)
+        val latest = priceDao.getLatestPerProductAndType(listOf("PURCHASE", "RETAIL"))
+
+        // 2) Per barcode serve una sola lettura dei prodotti (no N+1)
+        val allProducts = productDao.getAll()
+        val bcById = allProducts.associate { it.id to it.barcode }
+
+        // 3) Aggrego per prodotto
+        val grouped = latest.groupBy { it.productId }
+        grouped.map { (pid, rows) ->
+            val purchase = rows.find { it.type == "PURCHASE" }?.price
+            val retail   = rows.find { it.type == "RETAIL" }?.price
+            CurrentPriceRow(
+                productId = pid,
+                barcode = bcById[pid].orEmpty(),
+                purchasePrice = purchase,
+                retailPrice = retail
+            )
+        }
+    }
 }

@@ -212,6 +212,201 @@ object ImportAnalyzer {
         }
     }
 
+    /** Analisi "streaming" a chunk: non materializza tutte le righe in RAM. */
+    suspend fun analyzeStreaming(
+        context: Context,
+        chunks: Sequence<List<Map<String, String>>>,
+        currentDbProducts: List<Product>,
+        repository: InventoryRepository
+    ): ImportAnalysis {
+        // Cache DB esistente
+        val dbProductByBarcode = currentDbProducts.associateBy { it.barcode }
+
+        // Cache fornitori/categorie: per nome (lowercase) -> entity
+        val allSuppliers = repository.getAllSuppliers().associateBy { it.id }
+        val allCategories = repository.getAllCategories().associateBy { it.id }
+        val supplierCacheByName = allSuppliers.values.associateBy { it.name.trim().lowercase() }.toMutableMap()
+        val categoryCacheByName = allCategories.values.associateBy { it.name.trim().lowercase() }.toMutableMap()
+
+        suspend fun getOrCreateSupplierId(name: String): Long? {
+            val key = name.trim().lowercase()
+            if (key.isBlank()) return null
+            supplierCacheByName[key]?.let { return it.id }
+            repository.findSupplierByName(name.trim())?.let { supplierCacheByName[key] = it; return it.id }
+            val created = repository.addSupplier(name.trim()) ?: return null
+            supplierCacheByName[key] = created
+            return created.id
+        }
+
+        suspend fun getOrCreateCategoryId(name: String): Long? {
+            val key = name.trim().lowercase()
+            if (key.isBlank()) return null
+            categoryCacheByName[key]?.let { return it.id }
+            repository.findCategoryByName(name.trim())?.let { categoryCacheByName[key] = it; return it.id }
+            val created = repository.addCategory(name.trim()) ?: return null
+            categoryCacheByName[key] = created
+            return created.id
+        }
+
+        // Accumulatori risultato
+        val newProducts = mutableListOf<Product>()
+        val updatedProducts = mutableListOf<ProductUpdate>()
+        val errors = mutableListOf<RowImportError>()
+        val warnings = mutableListOf<DuplicateWarning>()
+
+        // Per gestire duplicati come nella versione "groupBy":
+        // conserviamo SOLO l'ultima riga vista per barcode + somma delle quantità
+        data class Pending(
+            val lastRow: MutableMap<String, String>,
+            val rowNumbers: MutableList<Int>,
+            var qtySum: Double
+        )
+        val pendingByBarcode = LinkedHashMap<String, Pending>()
+
+        var rowIndex = 0
+        for (chunk in chunks) {
+            for (row in chunk) {
+                rowIndex++
+                val barcode = row["barcode"]?.trim().orEmpty()
+                if (barcode.isBlank()) {
+                    errors += RowImportError(rowIndex, row, R.string.error_barcode_required)
+                    continue
+                }
+
+                val supplierQty = parseDouble(row["quantity"]) ?: 0.0
+                val realQty = parseDouble(row["realQuantity"]) ?: 0.0
+                val qtyForRow = if (realQty > 0) realQty else supplierQty
+
+                val p = pendingByBarcode[barcode]
+                if (p == null) {
+                    pendingByBarcode[barcode] = Pending(row.toMutableMap(), mutableListOf(rowIndex), qtyForRow)
+                } else {
+                    p.lastRow.clear()
+                    p.lastRow.putAll(row)          // mantieni l'ULTIMA riga come base
+                    p.rowNumbers.add(rowIndex)     // traccia duplicati per warning
+                    p.qtySum += qtyForRow          // somma quantità
+                }
+            }
+        }
+
+        // Ora processiamo ogni barcode con la sua riga finale + quantità totale
+        for ((barcode, p) in pendingByBarcode) {
+            val finalRow = p.lastRow
+            finalRow["quantity"] = p.qtySum.toString()
+            if (p.rowNumbers.size > 1) {
+                warnings += DuplicateWarning(barcode, p.rowNumbers)
+            }
+
+            try {
+                val itemNumber        = finalRow["itemNumber"]?.trim()?.takeIf { it.isNotBlank() }
+                val productName       = finalRow["productName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val secondProductName = finalRow["secondProductName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val supplierName      = finalRow["supplier"]?.trim()?.takeIf { it.isNotBlank() }
+                val categoryName      = finalRow["category"]?.trim()?.takeIf { it.isNotBlank() }
+
+                val quantityToUse           = parseDouble(finalRow["quantity"])
+                val purchasePriceFromFile   = parseDouble(finalRow["purchasePrice"])
+                val retailPriceFromFile     = round3(parseDouble(finalRow["retailPrice"]))
+                val discountFromFile        = parseDouble(finalRow["discount"])
+                val discountedPriceFromFile = parseDouble(finalRow["discountedPrice"])
+
+                if (discountFromFile != null && (discountFromFile < 0 || discountFromFile > 100)) {
+                    errors += RowImportError(p.rowNumbers.last(), finalRow, R.string.error_invalid_discount)
+                    continue
+                }
+
+                val finalPurchasePrice = round3(
+                    when {
+                        discountedPriceFromFile != null -> discountedPriceFromFile
+                        purchasePriceFromFile != null && discountFromFile != null ->
+                            purchasePriceFromFile * (1 - (discountFromFile / 100))
+                        else -> purchasePriceFromFile
+                    }
+                )
+
+                val prevPurchaseFromFile = round3(parseDouble(finalRow["oldPurchasePrice"] ?: finalRow["prevPurchase"]))
+                val prevRetailFromFile   = round3(parseDouble(finalRow["oldRetailPrice"]  ?: finalRow["prevRetail"]))
+
+                // Validazione di base (riusa la tua funzione privata)
+                val validationError = validateRow(
+                    p.rowNumbers.last() - 1, finalRow, barcode, productName, secondProductName, finalPurchasePrice
+                )
+                if (validationError != null) {
+                    errors += validationError
+                    continue
+                }
+
+                val existing = dbProductByBarcode[barcode]
+
+                // Prezzo vendita richiesto (come nella tua analyze)
+                if (existing != null && retailPriceFromFile != null && retailPriceFromFile <= 0.0) {
+                    errors += RowImportError(p.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    continue
+                }
+                if (existing == null && (retailPriceFromFile == null || retailPriceFromFile <= 0.0)) {
+                    errors += RowImportError(p.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    continue
+                }
+
+                if (quantityToUse != null && quantityToUse < 0) {
+                    errors += RowImportError(p.rowNumbers.last(), finalRow, R.string.error_negative_quantity)
+                    continue
+                }
+
+                val supplierId = supplierName?.let { getOrCreateSupplierId(it) }
+                val categoryId = categoryName?.let { getOrCreateCategoryId(it) }
+
+                if (existing == null) {
+                    newProducts += Product(
+                        barcode = barcode,
+                        itemNumber = itemNumber,
+                        productName = productName ?: secondProductName!!,
+                        secondProductName = secondProductName,
+                        purchasePrice = finalPurchasePrice,
+                        retailPrice = retailPriceFromFile,
+                        supplierId = supplierId,
+                        categoryId = categoryId,
+                        stockQuantity = quantityToUse ?: 0.0,
+                        oldPurchasePrice = prevPurchaseFromFile,
+                        oldRetailPrice   = prevRetailFromFile
+                    )
+                } else {
+                    val updated = existing.copy(
+                        itemNumber        = itemNumber        ?: existing.itemNumber,
+                        productName       = productName       ?: existing.productName,
+                        secondProductName = secondProductName ?: existing.secondProductName,
+                        supplierId        = supplierId        ?: existing.supplierId,
+                        categoryId        = categoryId        ?: existing.categoryId,
+                        purchasePrice     = finalPurchasePrice ?: existing.purchasePrice,
+                        retailPrice       = retailPriceFromFile ?: existing.retailPrice,
+                        stockQuantity     = quantityToUse     ?: existing.stockQuantity,
+                        oldPurchasePrice  = prevPurchaseFromFile ?: existing.oldPurchasePrice,
+                        oldRetailPrice    = prevRetailFromFile   ?: existing.oldRetailPrice
+                    )
+
+                    val changed = getChangedFields(
+                        old = existing,
+                        new = updated,
+                        suppliersById = allSuppliers,
+                        categoriesById = allCategories
+                    )
+                    if (changed.isNotEmpty()) {
+                        updatedProducts += ProductUpdate(existing, updated, changed)
+                    }
+                }
+            } catch (ex: Exception) {
+                errors += RowImportError(
+                    rowNumber = p.rowNumbers.last(),
+                    rowContent = p.lastRow,
+                    errorReasonResId = R.string.error_unexpected_parsing,
+                    formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
+                )
+            }
+        }
+
+        return ImportAnalysis(newProducts, updatedProducts, errors, warnings)
+    }
+
     private fun getChangedFields(
         old: Product,
         new: Product,

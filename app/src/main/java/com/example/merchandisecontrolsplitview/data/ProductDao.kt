@@ -162,4 +162,8 @@ ORDER BY p.id ASC
         ORDER BY p.id ASC
     """)
     suspend fun getAllWithDetailsOnce(): List<ProductWithDetails>
+
+    data class ProductLite(val id: Long, val barcode: String, val purchasePrice: Double?, val retailPrice: Double?)
+    @Query("SELECT id, barcode, purchasePrice, retailPrice FROM products")
+    suspend fun getAllLite(): List<ProductLite>
 }
