@@ -15,26 +15,33 @@ class PriceBackfillWorker(
     private val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
     override suspend fun doWork(): Result {
+        // ✳️ QUI: usa AppDatabase.getDatabase(..), non "getInstance"
         val db = AppDatabase.getDatabase(applicationContext)
         val productDao = db.productDao()
         val priceDao = db.productPriceDao()
 
-        // se lo storico c'è già per un prodotto, salta
-        val already: Set<Long> = priceDao.getProductIdsWithAnyPrice().toSet()
+        val now = LocalDateTime.now()
+        val nowStr = fmt.format(now)
 
-        val nowStr = LocalDateTime.now().format(fmt)
+        // Evita di backfillare prodotti che hanno già almeno un prezzo in history
+        val already = priceDao.getProductIdsWithAnyPrice().toSet()
 
         val products = productDao.getAll()
         for (p in products) {
             if (p.id in already) continue
 
-            p.purchasePrice?.let {
-                priceDao.insertIfChanged(p.id, "PURCHASE", it, nowStr, "BACKFILL_CURR")
+            p.purchasePrice?.let { price ->
+                priceDao.insertIfChanged(p.id, "PURCHASE", price, nowStr, "BACKFILL_CURR")
             }
-            p.retailPrice?.let {
-                priceDao.insertIfChanged(p.id, "RETAIL", it, nowStr, "BACKFILL_CURR")
+            p.retailPrice?.let { price ->
+                priceDao.insertIfChanged(p.id, "RETAIL", price, nowStr, "BACKFILL_CURR")
             }
         }
-        return Result.success(Data.Builder().putInt("backfilled_products", products.size).build())
+
+        return Result.success(
+            Data.Builder()
+                .putInt("backfilled_products", products.size)
+                .build()
+        )
     }
 }

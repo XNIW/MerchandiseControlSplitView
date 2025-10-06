@@ -1,5 +1,6 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.ui.text.style.TextDecoration
@@ -52,12 +54,8 @@ import kotlinx.coroutines.launch
 import androidx.paging.LoadState
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.window.DialogProperties
@@ -70,9 +68,13 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.focus.onFocusChanged
 import kotlinx.coroutines.delay
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material.ExperimentalMaterialApi
 
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
 @Composable
 fun DatabaseScreen(
     navController: NavHostController,
@@ -93,8 +95,14 @@ fun DatabaseScreen(
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let { viewModel.startImportAnalysis(context, it) }
+        uri?.let {
+            // ✅ SOLO READ (o READ|WRITE se ti serve scrivere)
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+            try { context.contentResolver.takePersistableUriPermission(it, flags) } catch (_: SecurityException) {}
+            viewModel.startImportAnalysis(context, it)
+        }
     }
+
     val isLoading = uiState is UiState.Loading
 
     val downloadLauncher = rememberLauncherForActivityResult(
@@ -124,7 +132,14 @@ fun DatabaseScreen(
     // ⬇️ in top-level composable DatabaseScreen(...) aggiungi gli ActivityResult launcher nuovi:
     val uploadFullDbLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? -> uri?.let { viewModel.startFullDbImport(context, it) } }
+    ) { uri: Uri? ->
+        uri?.let {
+            // ✅ SOLO READ
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+            try { context.contentResolver.takePersistableUriPermission(it, flags) } catch (_: SecurityException) {}
+            viewModel.startFullDbImport(context, it)
+        }
+    }
 
     val downloadFullDbLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -287,32 +302,36 @@ fun DatabaseScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(products.itemCount, key = { products[it]?.product?.id ?: -1 }) { idx ->
-                                products[idx]?.let { details -> // 'details' è il nostro oggetto ProductWithDetails
-                                    // SOLUZIONE: Nessuna LaunchedEffect. I nomi sono già pronti.
-
-                                    // Estraiamo l'oggetto 'Product' originale per il dialog
+                                products[idx]?.let { details ->
                                     val product = details.product
 
                                     val dismissState = rememberSwipeToDismissBoxState(
-                                        confirmValueChange = {
-                                            if (it == SwipeToDismissBoxValue.EndToStart) {
-                                                itemToDelete = product // Usiamo 'product' come prima
+                                        confirmValueChange = { value ->
+                                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                                                itemToDelete = product
                                                 showDeleteDialog = true
+                                                // Evita la rimozione automatica: confermi via dialog
+                                                false
+                                            } else {
+                                                // Non abilitiamo lo swipe StartToEnd
+                                                false
                                             }
-                                            false
                                         }
                                     )
-                                    SwipeToDismissBox(state = dismissState, backgroundContent = { /* ... */ }
-                                    ) {
-                                        ProductRow(
-                                            // Passiamo l'intero oggetto 'details' per la visualizzazione
-                                            productDetails = details,
-                                            // Al click, salviamo l'oggetto 'product' estratto.
-                                            // IL DIALOG RICEVE ESATTAMENTE GLI STESSI DATI DI PRIMA.
-                                            onClick = { itemToEdit = product },
-                                            onShowHistory = { showHistoryFor = product }
-                                        )
-                                    }
+
+                                    SwipeToDismissBox(
+                                        state = dismissState,
+                                        enableDismissFromStartToEnd = false,
+                                        enableDismissFromEndToStart = true,
+                                        backgroundContent = { DismissBackground(dismissState) },
+                                        content = {
+                                            ProductRow(
+                                                productDetails = details,
+                                                onClick = { itemToEdit = product },
+                                                onShowHistory = { showHistoryFor = product }
+                                            )
+                                        }
+                                    )
                                 }
                             }
 
@@ -401,7 +420,7 @@ fun DatabaseScreen(
         ModalBottomSheet(onDismissRequest = { showHistoryFor = null }) {
             Column(Modifier.fillMaxWidth().padding(16.dp)) {
                 Text(product.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium)
-                TabRow(selectedTabIndex = tab) {
+                SecondaryTabRow(selectedTabIndex = tab) {
                     Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(stringResource(R.string.tab_purchase)) })
                     Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(stringResource(R.string.tab_retail)) })
                 }
@@ -1038,3 +1057,28 @@ private fun CategorySelectionDialog(
         }
     )
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DismissBackground(state: SwipeToDismissBoxState) {
+    val color =
+        if (state.targetValue == SwipeToDismissBoxValue.EndToStart)
+            MaterialTheme.colorScheme.errorContainer
+        else
+            androidx.compose.ui.graphics.Color.Transparent
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(color)
+            .padding(horizontal = 20.dp),
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Icon(
+            imageVector = Icons.Default.Delete,
+            contentDescription = stringResource(R.string.delete),
+            tint = MaterialTheme.colorScheme.onErrorContainer
+        )
+    }
+}
+

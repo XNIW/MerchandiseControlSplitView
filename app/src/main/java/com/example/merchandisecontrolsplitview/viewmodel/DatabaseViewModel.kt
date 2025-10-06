@@ -13,7 +13,6 @@ import kotlinx.coroutines.launch
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
-import org.apache.poi.ss.usermodel.Workbook
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
@@ -21,6 +20,10 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.util.analyzePoiSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.util.Log
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.sync.Mutex
 
 sealed class UiState {
     data object Idle : UiState()
@@ -42,6 +45,47 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     private val repository: InventoryRepository =
         DefaultInventoryRepository(AppDatabase.getDatabase(app))
 
+    private val tsFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+    // Uid dell'entry di log per il "full import" (analisi file)
+    private var currentImportLogUid: Long? = null
+    private val importMutex = Mutex()
+// --- Helper per creare/aggiornare i log nella tabella history_entries ---
+
+    private suspend fun startHistoryLog(kind: String, message: String): Long =
+        withContext(Dispatchers.IO) {
+            repository.insertHistoryEntry(
+                HistoryEntry(
+                    id = "${kind}_${System.currentTimeMillis()}", // etichetta generica, la chiave reale è 'uid' autogenerato
+                    timestamp = LocalDateTime.now().format(tsFmt),
+                    data = listOf(
+                        listOf("status", "message"),
+                        listOf("STARTED", message)
+                    ),
+                    editable = listOf(listOf("", "")),
+                    complete = listOf(false),
+                    supplier = "—",
+                    category = "—",
+                    totalItems = 0,
+                    orderTotal = 0.0,
+                    paymentTotal = 0.0,
+                    missingItems = 0,
+                    syncStatus = SyncStatus.NOT_ATTEMPTED,
+                    wasExported = false
+                )
+            )
+        }
+
+    private suspend fun appendHistoryLog(uid: Long, status: String, message: String) =
+        withContext(Dispatchers.IO) {
+            val cur = repository.getHistoryEntryByUid(uid) ?: return@withContext
+            repository.updateHistoryEntry(
+                cur.copy(
+                    data = cur.data + listOf(listOf(status, message)),
+                    complete = cur.complete + listOf(status == "SUCCESS" || status == "FAILED")
+                )
+            )
+        }
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -127,24 +171,29 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
                 // 2) Preparazione righe (CPU)
                 _uiState.value = UiState.Loading(message = context.getString(R.string.import_mapping_rows), progress = 30)
-                val importedRowsAsMap = withContext(Dispatchers.Default) {
-                    dataRows.map { row ->
-                        normalizedHeader.mapIndexed { index, headerKey ->
-                            headerKey to (row.getOrNull(index) ?: "")
-                        }.toMap()
-                    }
-                }
 
                 // 3) Letture DB (I/O)
                 _uiState.value = UiState.Loading(message = context.getString(R.string.import_fetching_db), progress = 55)
                 val currentDbProducts = withContext(Dispatchers.IO) {
+                    // tieni i prodotti completi perché ti servono per i diff su nome/fornitore/categoria
                     repository.getAllProducts()
                 }
 
-                // 4) Analisi (I/O + un po’ di CPU)
+// 4) Analisi (streaming, non materializza tutte le righe)
                 _uiState.value = UiState.Loading(message = context.getString(R.string.import_analyzing), progress = 85)
-                val analysis = withContext(Dispatchers.IO) {
-                    ImportAnalyzer.analyze(context, importedRowsAsMap, currentDbProducts, repository)
+
+// costruiamo “chunks” pigri da 1000 righe evitando una lista gigante in RAM
+                val chunks: Sequence<List<Map<String, String>>> = sequence {
+                    val seq = dataRows.asSequence().map { row ->
+                        normalizedHeader.mapIndexed { index, headerKey ->
+                            headerKey to (row.getOrNull(index) ?: "")
+                        }.toMap()
+                    }
+                    for (block in seq.chunked(1000)) yield(block)
+                }
+
+                val analysis = withContext(Dispatchers.Default) {
+                    ImportAnalyzer.analyzeStreaming(context, chunks, currentDbProducts, repository)
                 }
 
                 _importAnalysisResult.value = analysis
@@ -161,28 +210,56 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _importAnalysisResult.value = null
     }
 
-    fun importProducts(newProducts: List<Product>, updatedProducts: List<ProductUpdate>, context: Context) {
-        _uiState.value = UiState.Loading(message = context.getString(R.string.import_applying_changes), progress = null)
+    fun importProducts(
+        newProducts: List<Product>,
+        updatedProducts: List<ProductUpdate>,
+        context: Context
+    ) {
+        // prima era progress = null
+        _uiState.value = UiState.Loading(
+            message = context.getString(R.string.import_applying_changes),
+            progress = 90
+        )
+
         viewModelScope.launch {
+            val applyLogUid = startHistoryLog(
+                "APPLY_IMPORT",
+                "Applico import: new=${newProducts.size}, updated=${updatedProducts.size}"
+            )
+            Log.d("DB_IMPORT", "APPLY_IMPORT START uid=$applyLogUid")
+
             try {
                 withContext(Dispatchers.IO) {
-                    val updatesAsProducts: List<Product> = updatedProducts.map { pu -> pu.newProduct.copy(id = pu.oldProduct.id) }
+                    // Applica prodotti
+                    val updatesAsProducts = updatedProducts.map { pu ->
+                        pu.newProduct.copy(id = pu.oldProduct.id)
+                    }
                     repository.applyImport(newProducts, updatesAsProducts)
 
-                    // APPEND-ONLY PriceHistory (se presente)
+                    // Eventuale storico prezzi
                     if (pendingPriceHistory.isNotEmpty()) {
-                        for (e in pendingPriceHistory) {
-                            val product = repository.findProductByBarcode(e.barcode) ?: continue
-                            repository.recordPriceIfChanged(product.id, e.type, e.newPrice, e.timestamp, e.source)
+                        val rows = pendingPriceHistory.map { e ->
+                            Triple(e.barcode, e.type, e.timestamp to e.newPrice)
                         }
+                        repository.recordPriceHistoryByBarcodeBatch(rows)
                         pendingPriceHistory = emptyList()
                     }
                 }
+
+                // mini feedback finale prima del SUCCESS
+                _uiState.value = UiState.Loading(
+                    message = context.getString(R.string.import_applying_changes),
+                    progress = 98
+                )
+
+                appendHistoryLog(applyLogUid, "SUCCESS", "Import applicato correttamente.")
+                Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS uid=$applyLogUid")
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
-                e.printStackTrace()
                 val errorMessage = e.message ?: context.getString(R.string.unknown_error)
                 _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
+                appendHistoryLog(applyLogUid, "FAILED", "Errore durante apply: ${e.message}")
+                Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
             }
         }
     }
@@ -255,49 +332,49 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     // --- FIX END ---
 
     private fun writeProductsToExcel(context: Context, uri: Uri, products: List<ProductWithDetails>) {
-        val workbook: Workbook = XSSFWorkbook()
-        val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
+        XSSFWorkbook().use { workbook ->
+            val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
 
-        val headerRow = sheet.createRow(0)
-        val headers = listOf(
-            context.getString(R.string.header_barcode),
-            context.getString(R.string.header_item_number),
-            context.getString(R.string.header_product_name),
-            context.getString(R.string.header_second_product_name),
-            context.getString(R.string.header_purchase_price),
-            context.getString(R.string.header_retail_price),
-            context.getString(R.string.product_purchase_price_old_short), // PrevPurchase
-            context.getString(R.string.product_retail_price_old_short),
-            context.getString(R.string.header_supplier),
-            context.getString(R.string.header_category),
-            context.getString(R.string.header_stock_quantity)
-        )
-        headers.forEachIndexed { index, header ->
-            headerRow.createCell(index).setCellValue(header)
-        }
+            val headerRow = sheet.createRow(0)
+            val headers = listOf(
+                context.getString(R.string.header_barcode),
+                context.getString(R.string.header_item_number),
+                context.getString(R.string.header_product_name),
+                context.getString(R.string.header_second_product_name),
+                context.getString(R.string.header_purchase_price),
+                context.getString(R.string.header_retail_price),
+                context.getString(R.string.product_purchase_price_old_short), // PrevPurchase
+                context.getString(R.string.product_retail_price_old_short),
+                context.getString(R.string.header_supplier),
+                context.getString(R.string.header_category),
+                context.getString(R.string.header_stock_quantity)
+            )
+            headers.forEachIndexed { index, header ->
+                headerRow.createCell(index).setCellValue(header)
+            }
 
-        products.forEachIndexed { index, details ->
-            val p = details.product
-            val row = sheet.createRow(index + 1)
+            products.forEachIndexed { index, details ->
+                val p = details.product
+                val row = sheet.createRow(index + 1)
 
-            row.createCell(0).setCellValue(p.barcode)
-            row.createCell(1).setCellValue(p.itemNumber ?: "")
-            row.createCell(2).setCellValue(p.productName ?: "")
-            row.createCell(3).setCellValue(p.secondProductName ?: "")
-            row.createCell(4).setCellValue(p.purchasePrice ?: 0.0)          // prezzo corrente
-            row.createCell(5).setCellValue(p.retailPrice ?: 0.0)
-            row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
-            row.createCell(7).setCellValue(details.prevRetail ?: 0.0)// prezzo corrente
-            row.createCell(8).setCellValue(details.supplierName ?: "")
-            row.createCell(9).setCellValue(details.categoryName ?: "")
-            row.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
-        }
-        try {
-            context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
-            workbook.close()
-        } catch (e: IOException) {
-            e.printStackTrace()
-            throw e
+                row.createCell(0).setCellValue(p.barcode)
+                row.createCell(1).setCellValue(p.itemNumber ?: "")
+                row.createCell(2).setCellValue(p.productName ?: "")
+                row.createCell(3).setCellValue(p.secondProductName ?: "")
+                row.createCell(4).setCellValue(p.purchasePrice ?: 0.0)          // prezzo corrente
+                row.createCell(5).setCellValue(p.retailPrice ?: 0.0)
+                row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
+                row.createCell(7).setCellValue(details.prevRetail ?: 0.0)// prezzo corrente
+                row.createCell(8).setCellValue(details.supplierName ?: "")
+                row.createCell(9).setCellValue(details.categoryName ?: "")
+                row.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
+            }
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
+            } catch (e: IOException) {
+                e.printStackTrace()
+                throw e
+            }
         }
     }
 
@@ -355,97 +432,107 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 val priceRows = repository.getAllPriceHistoryRows()
 
                 withContext(Dispatchers.IO) {
-                    val wb = XSSFWorkbook()
+                    XSSFWorkbook().use { wb ->
 
-                    // 1) Products (stesso schema dell'export attuale)
-                    run {
-                        val sheet = wb.createSheet(sheetProducts)
-                        val header = listOf(
-                            context.getString(R.string.header_barcode),
-                            context.getString(R.string.header_item_number),
-                            context.getString(R.string.header_product_name),
-                            context.getString(R.string.header_second_product_name),
-                            context.getString(R.string.header_purchase_price),
-                            context.getString(R.string.header_retail_price),
-                            context.getString(R.string.product_purchase_price_old_short),
-                            context.getString(R.string.product_retail_price_old_short),
-                            context.getString(R.string.header_supplier),
-                            context.getString(R.string.header_category),
-                            context.getString(R.string.header_stock_quantity)
-                        )
-                        val h = sheet.createRow(0)
-                        header.forEachIndexed { i, t -> h.createCell(i).setCellValue(t) }
+                        // 1) Products (stesso schema dell'export attuale)
+                        run {
+                            val sheet = wb.createSheet(sheetProducts)
+                            val header = listOf(
+                                context.getString(R.string.header_barcode),
+                                context.getString(R.string.header_item_number),
+                                context.getString(R.string.header_product_name),
+                                context.getString(R.string.header_second_product_name),
+                                context.getString(R.string.header_purchase_price),
+                                context.getString(R.string.header_retail_price),
+                                context.getString(R.string.product_purchase_price_old_short),
+                                context.getString(R.string.product_retail_price_old_short),
+                                context.getString(R.string.header_supplier),
+                                context.getString(R.string.header_category),
+                                context.getString(R.string.header_stock_quantity)
+                            )
+                            val h = sheet.createRow(0)
+                            header.forEachIndexed { i, t -> h.createCell(i).setCellValue(t) }
 
-                        products.forEachIndexed { idx, d ->
-                            val p = d.product
-                            val r = sheet.createRow(idx + 1)
-                            r.createCell(0).setCellValue(p.barcode)
-                            r.createCell(1).setCellValue(p.itemNumber ?: "")
-                            r.createCell(2).setCellValue(p.productName ?: "")
-                            r.createCell(3).setCellValue(p.secondProductName ?: "")
-                            r.createCell(4).setCellValue(p.purchasePrice ?: 0.0)
-                            r.createCell(5).setCellValue(p.retailPrice ?: 0.0)
-                            r.createCell(6).setCellValue(d.prevPurchase ?: 0.0)
-                            r.createCell(7).setCellValue(d.prevRetail ?: 0.0)
-                            r.createCell(8).setCellValue(d.supplierName ?: "")
-                            r.createCell(9).setCellValue(d.categoryName ?: "")
-                            r.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
-                        }
-                    }
-
-                    // 2) Suppliers
-                    run {
-                        val sheet = wb.createSheet(sheetSuppliers)
-                        val h = sheet.createRow(0)
-                        h.createCell(0).setCellValue("id")
-                        h.createCell(1).setCellValue("name")
-                        suppliers.forEachIndexed { idx, s ->
-                            val r = sheet.createRow(idx + 1)
-                            r.createCell(0).setCellValue(s.id.toDouble())
-                            r.createCell(1).setCellValue(s.name)
-                        }
-                    }
-
-                    // 3) Categories
-                    run {
-                        val sheet = wb.createSheet(sheetCategories)
-                        val h = sheet.createRow(0)
-                        h.createCell(0).setCellValue("id")
-                        h.createCell(1).setCellValue("name")
-                        categories.forEachIndexed { idx, c ->
-                            val r = sheet.createRow(idx + 1)
-                            r.createCell(0).setCellValue(c.id.toDouble())
-                            r.createCell(1).setCellValue(c.name)
-                        }
-                    }
-
-                    // 4) PriceHistory (compute oldPrice accodando gli eventi ordinati)
-                    run {
-                        val sheet = wb.createSheet(sheetPriceHistory)
-                        val h = sheet.createRow(0)
-                        listOf("productBarcode","timestamp","type","oldPrice","newPrice","source").forEachIndexed { i,t -> h.createCell(i).setCellValue(t) }
-
-                        // group per (barcode,type) e ordina per timestamp
-                        val grouped = priceRows.groupBy { it.barcode + "|" + it.type.uppercase() }
-                        var rowIdx = 1
-                        for ((_, events) in grouped) {
-                            var prev: Double? = null
-                            for (e in events.sortedBy { it.timestamp }) {
-                                val r = sheet.createRow(rowIdx++)
-                                r.createCell(0).setCellValue(e.barcode)
-                                r.createCell(1).setCellValue(e.timestamp)
-                                val t = e.type.uppercase()
-                                r.createCell(2).setCellValue(if (t.startsWith("PUR")) "purchase" else "retail")
-                                prev?.let { r.createCell(3).setCellValue(it) } ?: r.createCell(3).setBlank()
-                                r.createCell(4).setCellValue(e.price)
-                                r.createCell(5).setCellValue(e.source ?: "")
-                                prev = e.price
+                            products.forEachIndexed { idx, d ->
+                                val p = d.product
+                                val r = sheet.createRow(idx + 1)
+                                r.createCell(0).setCellValue(p.barcode)
+                                r.createCell(1).setCellValue(p.itemNumber ?: "")
+                                r.createCell(2).setCellValue(p.productName ?: "")
+                                r.createCell(3).setCellValue(p.secondProductName ?: "")
+                                r.createCell(4).setCellValue(p.purchasePrice ?: 0.0)
+                                r.createCell(5).setCellValue(p.retailPrice ?: 0.0)
+                                r.createCell(6).setCellValue(d.prevPurchase ?: 0.0)
+                                r.createCell(7).setCellValue(d.prevRetail ?: 0.0)
+                                r.createCell(8).setCellValue(d.supplierName ?: "")
+                                r.createCell(9).setCellValue(d.categoryName ?: "")
+                                r.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
                             }
                         }
-                    }
 
-                    context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
-                    wb.close()
+                        // 2) Suppliers
+                        run {
+                            val sheet = wb.createSheet(sheetSuppliers)
+                            val h = sheet.createRow(0)
+                            h.createCell(0).setCellValue("id")
+                            h.createCell(1).setCellValue("name")
+                            suppliers.forEachIndexed { idx, s ->
+                                val r = sheet.createRow(idx + 1)
+                                r.createCell(0).setCellValue(s.id.toDouble())
+                                r.createCell(1).setCellValue(s.name)
+                            }
+                        }
+
+                        // 3) Categories
+                        run {
+                            val sheet = wb.createSheet(sheetCategories)
+                            val h = sheet.createRow(0)
+                            h.createCell(0).setCellValue("id")
+                            h.createCell(1).setCellValue("name")
+                            categories.forEachIndexed { idx, c ->
+                                val r = sheet.createRow(idx + 1)
+                                r.createCell(0).setCellValue(c.id.toDouble())
+                                r.createCell(1).setCellValue(c.name)
+                            }
+                        }
+
+                        // 4) PriceHistory (compute oldPrice accodando gli eventi ordinati)
+                        run {
+                            val sheet = wb.createSheet(sheetPriceHistory)
+                            val h = sheet.createRow(0)
+                            listOf(
+                                "productBarcode",
+                                "timestamp",
+                                "type",
+                                "oldPrice",
+                                "newPrice",
+                                "source"
+                            ).forEachIndexed { i, t -> h.createCell(i).setCellValue(t) }
+
+                            // group per (barcode,type) e ordina per timestamp
+                            val grouped =
+                                priceRows.groupBy { it.barcode + "|" + it.type.uppercase() }
+                            var rowIdx = 1
+                            for ((_, events) in grouped) {
+                                var prev: Double? = null
+                                for (e in events.sortedBy { it.timestamp }) {
+                                    val r = sheet.createRow(rowIdx++)
+                                    r.createCell(0).setCellValue(e.barcode)
+                                    r.createCell(1).setCellValue(e.timestamp)
+                                    val t = e.type.uppercase()
+                                    r.createCell(2)
+                                        .setCellValue(if (t.startsWith("PUR")) "purchase" else "retail")
+                                    prev?.let { r.createCell(3).setCellValue(it) }
+                                        ?: r.createCell(3).setBlank()
+                                    r.createCell(4).setCellValue(e.price)
+                                    r.createCell(5).setCellValue(e.source ?: "")
+                                    prev = e.price
+                                }
+                            }
+                        }
+
+                        context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
+                    }
                 }
 
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
@@ -457,100 +544,131 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     // ⬇️ IMPORT COMPLETO: nuovo metodo pubblico
     fun startFullDbImport(context: Context, uri: Uri) {
-        _uiState.value = UiState.Loading(message = context.getString(R.string.import_loading_file), progress = 5)
+        // blocca se c'è già un import in corso
+        if (!importMutex.tryLock()) return
+        _uiState.value = UiState.Loading(message = context.getString(R.string.operation_in_progress))
+
         viewModelScope.launch {
             try {
-                // 1) Apri workbook su IO
-                val wb = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri).use { XSSFWorkbook(it) }
-                }
+                // 1) log di avvio
+                currentImportLogUid = startHistoryLog("FULL_IMPORT", "Analisi file avviata: $uri")
+                Log.d("DB_IMPORT", "FULL_IMPORT START uri=$uri")
 
-                fun getSheetByName(name: String) = (0 until wb.numberOfSheets)
-                    .firstOrNull { i -> wb.getSheetName(i).equals(name, true) }
-                    ?.let { wb.getSheetAt(it) }
+                // 2) lettura/analisi su IO
+                _uiState.value = UiState.Loading(
+                    message = context.getString(R.string.import_loading_file),
+                    progress = 5
+                )
 
-                val suppliersSheet  = getSheetByName("Suppliers")
-                val categoriesSheet = getSheetByName("Categories")
-                val productsSheet   = getSheetByName("Products")
-                val priceHistorySheet = getSheetByName("PriceHistory")
-
-                // 2) Suppliers / Categories su IO (idempotenti)
                 withContext(Dispatchers.IO) {
-                    suppliersSheet?.let { s ->
-                        val (h, rows, _) = analyzePoiSheet(context, s)   // parsing robusto
-                        val nameIdx = h.indexOfFirst { it.equals("name", true) }
-                        if (nameIdx >= 0) {
-                            rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
-                                .filter { it.isNotBlank() }
-                                .forEach { repository.addSupplier(it) }
-                        }
-                    }
-                    categoriesSheet?.let { s ->
-                        val (h, rows, _) = analyzePoiSheet(context, s)
-                        val nameIdx = h.indexOfFirst { it.equals("name", true) }
-                        if (nameIdx >= 0) {
-                            rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
-                                .filter { it.isNotBlank() }
-                                .forEach { repository.addCategory(it) }
-                        }
-                    }
-                }
+                    context.contentResolver.openInputStream(uri).use { inStream ->
+                        XSSFWorkbook(inStream).use { wb ->
+                            fun getSheetByName(name: String) =
+                                (0 until wb.numberOfSheets)
+                                    .firstOrNull { i -> wb.getSheetName(i).equals(name, true) }
+                                    ?.let { wb.getSheetAt(it) }
 
-                // 3) Products → usa ExcelUtils per alias/normalizzazione
-                if (productsSheet == null) {
-                    _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
-                    return@launch
-                }
-                _uiState.value = UiState.Loading(message = context.getString(R.string.import_mapping_rows), progress = 45)
+                            val suppliersSheet   = getSheetByName("Suppliers")
+                            val categoriesSheet  = getSheetByName("Categories")
+                            val productsSheet    = getSheetByName("Products")
+                            val priceHistorySheet= getSheetByName("PriceHistory")
 
-                val (header, rows, _) = withContext(Dispatchers.IO) { analyzePoiSheet(context, productsSheet) }
+                            // Suppliers (opzionale)
+                            suppliersSheet?.let { s ->
+                                val (h, rows, _) = analyzePoiSheet(context, s)
+                                val nameIdx = h.indexOfFirst { it.equals("name", true) }
+                                if (nameIdx >= 0) {
+                                    rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
+                                        .filter { it.isNotBlank() }
+                                        .forEach { repository.addSupplier(it) }
+                                }
+                            }
 
-                // Trasforma in List<Map<key,value>> su Default (CPU bound)
-                val rowsCanon: List<Map<String, String>> = withContext(Dispatchers.Default) {
-                    rows.map { row ->
-                        header.mapIndexed { i, key -> key to (row.getOrNull(i) ?: "") }.toMap()
-                    }
-                }
+                            // Categories (opzionale)
+                            categoriesSheet?.let { s ->
+                                val (h, rows, _) = analyzePoiSheet(context, s)
+                                val nameIdx = h.indexOfFirst { it.equals("name", true) }
+                                if (nameIdx >= 0) {
+                                    rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
+                                        .filter { it.isNotBlank() }
+                                        .forEach { repository.addCategory(it) }
+                                }
+                            }
 
-                _uiState.value = UiState.Loading(message = context.getString(R.string.import_fetching_db), progress = 60)
-                val currentDbProducts = withContext(Dispatchers.IO) { repository.getAllProducts() }
+                            // Products (obbligatorio)
+                            if (productsSheet == null) {
+                                throw IllegalArgumentException(context.getString(R.string.error_file_empty_or_invalid))
+                            }
 
-                _uiState.value = UiState.Loading(message = context.getString(R.string.import_analyzing), progress = 85)
-                val analysis = withContext(Dispatchers.IO) {
-                    ImportAnalyzer.analyze(context, rowsCanon, currentDbProducts, repository)
-                }
-                _importAnalysisResult.value = analysis
+                            val (header, rows, _) = analyzePoiSheet(context, productsSheet)
 
-                // 4) PriceHistory in sospeso (append dopo conferma)
-                pendingPriceHistory = withContext(Dispatchers.IO) {
-                    priceHistorySheet?.let { s ->
-                        val (h, rowsPH, _) = analyzePoiSheet(context, s)
-                        val idxB  = h.indexOfFirst { it.equals("productBarcode", true) || it.equals("barcode", true) }
-                        val idxTs = h.indexOfFirst { it.equals("timestamp", true) }
-                        val idxTy = h.indexOfFirst { it.equals("type", true) }
-                        val idxNp = h.indexOfFirst { it.equals("newPrice", true) }
-                        val idxSrc= h.indexOfFirst { it.equals("source", true) }
-                        rowsPH.mapNotNull { r ->
-                            val bc = r.getOrNull(idxB)?.trim().orEmpty()
-                            val ts = r.getOrNull(idxTs)?.trim().orEmpty()
-                            val ty = r.getOrNull(idxTy)?.trim()?.lowercase().orEmpty()
-                            val np = r.getOrNull(idxNp)?.replace(",", ".")?.toDoubleOrNull()
-                            val src= r.getOrNull(idxSrc)?.trim()
-                            if (bc.isBlank() || ts.isBlank() || ty.isBlank() || np == null) null
-                            else PendingPriceEvent(
-                                barcode   = bc,
-                                timestamp = ts,
-                                type      = if (ty.startsWith("pur")) "PURCHASE" else "RETAIL",
-                                newPrice  = np,
-                                source    = src
+                            // sequence + chunking per non caricare tutto in RAM
+                            val rowMapsSeq: Sequence<Map<String, String>> = sequence {
+                                for (row in rows) {
+                                    val m = HashMap<String, String>(header.size)
+                                    header.forEachIndexed { i, key -> m[key] = row.getOrNull(i) ?: "" }
+                                    yield(m)
+                                }
+                            }
+
+                            val currentDbProducts = repository.getAllProducts()
+                            val analysis = ImportAnalyzer.analyzeStreaming(
+                                context,
+                                rowMapsSeq.chunked(1_000),
+                                currentDbProducts,
+                                repository
                             )
-                        }
-                    } ?: emptyList()
-                }
+
+                            _importAnalysisResult.value = analysis
+
+                            // PriceHistory (opzionale)
+                            pendingPriceHistory = priceHistorySheet?.let { s ->
+                                val (h, rowsPH, _) = analyzePoiSheet(context, s)
+                                val idxB   = h.indexOfFirst { it.equals("productBarcode", true) || it.equals("barcode", true) }
+                                val idxTs  = h.indexOfFirst { it.equals("timestamp", true) }
+                                val idxTy  = h.indexOfFirst { it.equals("type", true) }
+                                val idxNp  = h.indexOfFirst { it.equals("newPrice", true) }
+                                val idxSrc = h.indexOfFirst { it.equals("source", true) }
+
+                                rowsPH.mapNotNull { r ->
+                                    val bc  = r.getOrNull(idxB)?.trim().orEmpty()
+                                    val ts  = r.getOrNull(idxTs)?.trim().orEmpty()
+                                    val ty  = r.getOrNull(idxTy)?.trim()?.lowercase().orEmpty()
+                                    val np  = r.getOrNull(idxNp)?.replace(",", ".")?.toDoubleOrNull()
+                                    val src = r.getOrNull(idxSrc)?.trim()
+                                    if (bc.isBlank() || ts.isBlank() || ty.isBlank() || np == null) null
+                                    else PendingPriceEvent(
+                                        barcode   = bc,
+                                        timestamp = ts,
+                                        type      = if (ty.startsWith("pur")) "PURCHASE" else "RETAIL",
+                                        newPrice  = np,
+                                        source    = src
+                                    )
+                                }
+                            } ?: emptyList()
+                        } // wb.use
+                    }     // stream.use
+                }         // withContext(IO)
 
                 _uiState.value = UiState.Idle
+                currentImportLogUid?.let { uid ->
+                    appendHistoryLog(uid, "SUCCESS", "Analisi completata. Pronto ad applicare le modifiche.")
+                    Log.d("DB_IMPORT", "FULL_IMPORT SUCCESS uid=$uid")
+                }
+                currentImportLogUid = null
+
             } catch (e: Exception) {
-                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, e.message ?: context.getString(R.string.unknown_error)))
+                _uiState.value = UiState.Error(
+                    context.getString(R.string.error_data_analysis, e.message ?: context.getString(R.string.unknown_error))
+                )
+                currentImportLogUid?.let { uid ->
+                    appendHistoryLog(uid, "FAILED", "Analisi fallita: ${e.message}")
+                    Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", e)
+                }
+                currentImportLogUid = null
+
+            } finally {
+                importMutex.unlock()
             }
         }
     }
