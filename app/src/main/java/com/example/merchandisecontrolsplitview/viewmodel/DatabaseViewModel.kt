@@ -32,22 +32,6 @@ sealed class UiState {
     data class Error(val message: String) : UiState()
 }
 
-private suspend fun InventoryRepository.recordPriceHistoryByBarcodeBatch(
-    rows: List<Triple<String, String, Pair<String, Double>>>
-) {
-    if (rows.isEmpty()) return
-
-    val barcodes = rows.map { it.first }.distinct()
-    val products = findProductsByBarcodes(barcodes)
-    val idByBarcode = products.associate { it.barcode to it.id }
-
-    for ((barcode, type, tsAndPrice) in rows) {
-        val productId = idByBarcode[barcode] ?: continue
-        val (timestamp, price) = tsAndPrice
-        recordPriceIfChanged(productId, type, price, timestamp, source = null)
-    }
-}
-
 private data class PendingPriceEvent(
     val barcode: String,
     val timestamp: String,
@@ -285,13 +269,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     repository.applyImport(newProducts, updatesAsProducts)
 
                     // Eventuale storico prezzi
-                    if (pendingPriceHistory.isNotEmpty()) {
-                        val rows = pendingPriceHistory.map { e ->
-                            Triple(e.barcode, e.type, e.timestamp to e.newPrice)
-                        }
-                        repository.recordPriceHistoryByBarcodeBatch(rows)
-                        pendingPriceHistory = emptyList()
-                    }
+                    applyPendingPriceHistory()
                 }
 
                 // mini feedback finale prima del SUCCESS
@@ -310,6 +288,21 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
             }
         }
+    }
+
+    private suspend fun applyPendingPriceHistory() {
+        if (pendingPriceHistory.isEmpty()) return
+
+        pendingPriceHistory
+            .groupBy { it.source ?: "IMPORT_SHEET" }
+            .forEach { (src, events) ->
+                val rows = events.map { e ->
+                    Triple(e.barcode, e.type, e.timestamp to e.newPrice)
+                }
+                repository.recordPriceHistoryByBarcodeBatch(rows, src)
+            }
+
+        pendingPriceHistory = emptyList()
     }
 
     fun exportToExcel(context: Context, uri: Uri) {

@@ -306,7 +306,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
     private fun initPreGenerateState() {
         selectedColumns.clear()
         excelData.firstOrNull()?.size?.let { cols ->
-            repeat(cols) { colIdx ->
+            repeat(cols) { _ ->
                 // MODIFICA: Semplifica l'espressione. L'obiettivo è che tutte le
                 // colonne partano come selezionate. La logica di blocco è gestita
                 // altrove (in toggleColumnSelection).
@@ -899,7 +899,7 @@ private fun saveExcelFileInternal(
     }
 
     val totalRows = (data.size - 1).coerceAtLeast(1)
-    data.drop(1).forEachIndexed { i, row ->
+    data.drop(1).forEachIndexed { i, _ ->
         // ... scrittura delle celle come fai già ...
         if (i % 50 == 0) {                   // throttling per non spammare
             onProgress(10 + ((i + 1) * 80 / totalRows))
