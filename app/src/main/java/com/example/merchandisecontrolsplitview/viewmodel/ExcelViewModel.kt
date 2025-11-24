@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.R
@@ -326,106 +327,152 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
             val header = excelData.firstOrNull() ?: return@launch
             val barcodeIdx = header.indexOf("barcode")
 
-            // --- MODIFICA INIZIA QUI ---
+            val previousPricesMap = fetchPreviousPrices(barcodeIdx)
+            val filteredData = buildFilteredDataWithOldPrices(barcodeIdx, previousPricesMap)
+            val newEditableValues = createEditableValuesForFilteredData(filteredData)
+            val newCompleteStates = createCompleteStatesForFilteredData(filteredData)
 
-            // 1. Estrai tutti i barcode unici dal file in una sola passata
-            val allBarcodesInFile = if (barcodeIdx != -1) {
-                excelData.drop(1)
-                    .mapNotNull { row -> row.getOrNull(barcodeIdx)?.takeIf { it.isNotBlank() } }
-                    .distinct() // Assicurati che siano unici per ottimizzare la query
-            } else {
-                emptyList()
-            }
-
-            // 2. Definisci il timestamp "adesso" per la query
-            val nowForQuery = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-
-            // 3. ESEGUI UNA SOLA QUERY BATCH per ottenere tutti i prezzi precedenti necessari
-            val previousPricesMap = if (allBarcodesInFile.isNotEmpty()) {
-                repository.getPreviousPricesForBarcodes(allBarcodesInFile, nowForQuery)
-            } else {
-                emptyMap()
-            }
-
-            // --- MODIFICA FINISCE QUI ---
-
-            val filteredData = excelData.mapIndexed { idx, row ->
-                if (idx == 0) {
-                    row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
-                            listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
-                } else {
-                    val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
-                    val barcode = if (barcodeIdx != -1) row.getOrNull(barcodeIdx) else null
-
-                    // --- MODIFICA INIZIA QUI ---
-                    // 4. Cerca i prezzi nella mappa locale invece di interrogare il DB
-                    val prices = barcode?.let { previousPricesMap[it] }
-                    val oldPurchase = formatNumberAsRoundedStringForInput(prices?.first)
-                    val oldRetail = formatNumberAsRoundedStringForInput(prices?.second)
-                    // --- MODIFICA FINISCE QUI ---
-
-                    original + listOf(oldPurchase, oldRetail, editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(), editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(), "")
-                }
-            }.map { it.toList() } // Assicura che sia una copia immutabile
-
-            // 2. Prepara gli stati per la UI (questa parte resta invariata)
-            val newEditableValues = mutableStateListOf<MutableList<MutableState<String>>>().apply {
-                add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) // Per la riga header
-                filteredData.drop(1).forEach { row ->
-                    val q = row.getOrNull(row.size - 3) ?: ""
-                    val p = row.getOrNull(row.size - 2) ?: ""
-                    add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
-                }
-            }
-            val newCompleteStates = mutableStateListOf<Boolean>().apply {
-                repeat(filteredData.size) { add(false) }
-            }
-
-            // 3. Crea la voce di cronologia da salvare (questa parte resta invariata)
             val now = LocalDateTime.now()
-            val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS")) + "_${supplierName.replace("\\W".toRegex(), "_")}.xlsx"
-            val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-            val (initialTotalItems, initialOrderTotal) = calculateInitialSummary(filteredData)
-
-            val newEntry = HistoryEntry(
-                id = fileNameId,
-                timestamp = timestampForDb,
-                isManualEntry = false,
-                data = filteredData,
-                editable = newEditableValues.map { r -> r.map { it.value } },
-                complete = newCompleteStates.toList(),
-                supplier = supplierName,
-                category = categoryName,
-                totalItems = initialTotalItems,
-                orderTotal = initialOrderTotal,
-                paymentTotal = initialOrderTotal,
-                missingItems = initialTotalItems,
-                syncStatus = SyncStatus.NOT_ATTEMPTED,
-                wasExported = false
+            val newEntry = buildHistoryEntry(
+                supplierName,
+                categoryName,
+                filteredData,
+                newEditableValues,
+                newCompleteStates,
+                now
             )
 
-            // 4. Inserisci nel DB e ottieni il nuovo 'uid' (questa parte resta invariata)
             val newUid = repository.insertHistoryEntry(newEntry)
 
-            // 5. Aggiorna la UI sul thread principale (questa parte resta invariata)
-            withContext(Dispatchers.Main) {
-                excelData.clear()
-                excelData.addAll(filteredData)
-                editableValues.clear()
-                editableValues.addAll(newEditableValues)
-                completeStates.clear()
-                completeStates.addAll(newCompleteStates)
-                selectedColumns.clear()
-                filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+            applyGeneratedState(
+                filteredData,
+                newEditableValues,
+                newCompleteStates,
+                supplierName,
+                categoryName,
+                newUid,
+                onResult
+            )
+        }
+    }
 
-                generated.value = true
-                currentSupplierName = supplierName
-                currentCategoryName = categoryName
-                currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
+    private suspend fun fetchPreviousPrices(barcodeIdx: Int): Map<String, Pair<Double?, Double?>> {
+        val allBarcodesInFile = collectUniqueBarcodes(barcodeIdx)
+        val nowForQuery = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+        return if (allBarcodesInFile.isNotEmpty()) {
+            repository.getPreviousPricesForBarcodes(allBarcodesInFile, nowForQuery)
+        } else {
+            emptyMap()
+        }
+    }
 
-                // 6. Esegui la callback per la navigazione (questa parte resta invariata)
-                onResult(newUid)
+    private fun collectUniqueBarcodes(barcodeIdx: Int): List<String> {
+        if (barcodeIdx == -1) return emptyList()
+        return excelData.drop(1)
+            .mapNotNull { row -> row.getOrNull(barcodeIdx)?.takeIf { it.isNotBlank() } }
+            .distinct()
+    }
+
+    private fun buildFilteredDataWithOldPrices(
+        barcodeIdx: Int,
+        previousPricesMap: Map<String, Pair<Double?, Double?>>
+    ): List<List<String>> {
+        return excelData.mapIndexed { idx, row ->
+            if (idx == 0) {
+                row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true } +
+                        listOf("oldPurchasePrice", "oldRetailPrice", "realQuantity", "RetailPrice", "complete")
+            } else {
+                val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
+                val barcode = if (barcodeIdx != -1) row.getOrNull(barcodeIdx) else null
+                val prices = barcode?.let { previousPricesMap[it] }
+                val oldPurchase = formatNumberAsRoundedStringForInput(prices?.first)
+                val oldRetail = formatNumberAsRoundedStringForInput(prices?.second)
+
+                original + listOf(
+                    oldPurchase,
+                    oldRetail,
+                    editableValues.getOrNull(idx)?.getOrNull(0)?.value.orEmpty(),
+                    editableValues.getOrNull(idx)?.getOrNull(1)?.value.orEmpty(),
+                    ""
+                )
             }
+        }.map { it.toList() }
+    }
+
+    private fun createEditableValuesForFilteredData(
+        filteredData: List<List<String>>
+    ): SnapshotStateList<MutableList<MutableState<String>>> {
+        return mutableStateListOf<MutableList<MutableState<String>>>().apply {
+            add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            filteredData.drop(1).forEach { row ->
+                val q = row.getOrNull(row.size - 3) ?: ""
+                val p = row.getOrNull(row.size - 2) ?: ""
+                add(mutableListOf(mutableStateOf(q), mutableStateOf(p)))
+            }
+        }
+    }
+
+    private fun createCompleteStatesForFilteredData(filteredData: List<List<String>>): SnapshotStateList<Boolean> {
+        return mutableStateListOf<Boolean>().apply {
+            repeat(filteredData.size) { add(false) }
+        }
+    }
+
+    private fun buildHistoryEntry(
+        supplierName: String,
+        categoryName: String,
+        filteredData: List<List<String>>,
+        newEditableValues: List<List<MutableState<String>>>,
+        newCompleteStates: List<Boolean>,
+        now: LocalDateTime
+    ): HistoryEntry {
+        val fileNameId = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS")) + "_${supplierName.replace("\\W".toRegex(), "_")}.xlsx"
+        val timestampForDb = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+        val (initialTotalItems, initialOrderTotal) = calculateInitialSummary(filteredData)
+
+        return HistoryEntry(
+            id = fileNameId,
+            timestamp = timestampForDb,
+            isManualEntry = false,
+            data = filteredData,
+            editable = newEditableValues.map { r -> r.map { it.value } },
+            complete = newCompleteStates.toList(),
+            supplier = supplierName,
+            category = categoryName,
+            totalItems = initialTotalItems,
+            orderTotal = initialOrderTotal,
+            paymentTotal = initialOrderTotal,
+            missingItems = initialTotalItems,
+            syncStatus = SyncStatus.NOT_ATTEMPTED,
+            wasExported = false
+        )
+    }
+
+    private suspend fun applyGeneratedState(
+        filteredData: List<List<String>>,
+        newEditableValues: SnapshotStateList<MutableList<MutableState<String>>>,
+        newCompleteStates: SnapshotStateList<Boolean>,
+        supplierName: String,
+        categoryName: String,
+        newUid: Long,
+        onResult: (Long) -> Unit
+    ) {
+        withContext(Dispatchers.Main) {
+            excelData.clear()
+            excelData.addAll(filteredData)
+            editableValues.clear()
+            editableValues.addAll(newEditableValues)
+            completeStates.clear()
+            completeStates.addAll(newCompleteStates)
+            selectedColumns.clear()
+            filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
+
+            generated.value = true
+            currentSupplierName = supplierName
+            currentCategoryName = categoryName
+            currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
+
+            onResult(newUid)
         }
     }
 

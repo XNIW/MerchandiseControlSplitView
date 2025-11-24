@@ -32,6 +32,22 @@ sealed class UiState {
     data class Error(val message: String) : UiState()
 }
 
+private suspend fun InventoryRepository.recordPriceHistoryByBarcodeBatch(
+    rows: List<Triple<String, String, Pair<String, Double>>>
+) {
+    if (rows.isEmpty()) return
+
+    val barcodes = rows.map { it.first }.distinct()
+    val products = findProductsByBarcodes(barcodes)
+    val idByBarcode = products.associate { it.barcode to it.id }
+
+    for ((barcode, type, tsAndPrice) in rows) {
+        val productId = idByBarcode[barcode] ?: continue
+        val (timestamp, price) = tsAndPrice
+        recordPriceIfChanged(productId, type, price, timestamp, source = null)
+    }
+}
+
 private data class PendingPriceEvent(
     val barcode: String,
     val timestamp: String,
@@ -159,51 +175,83 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.value = UiState.Loading(message = context.getString(R.string.import_loading_file), progress = 5)
         viewModelScope.launch {
             try {
-                // 1) Lettura/parsing file (I/O)
-                val (normalizedHeader, dataRows, _) = withContext(Dispatchers.IO) {
-                    readAndAnalyzeExcel(context, uri)
-                }
+                val (normalizedHeader, dataRows) = parseImportFile(context, uri)
+                if (!validateImportFile(context, normalizedHeader, dataRows)) return@launch
 
-                if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
-                    _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
-                    return@launch
-                }
-
-                // 2) Preparazione righe (CPU)
                 _uiState.value = UiState.Loading(message = context.getString(R.string.import_mapping_rows), progress = 30)
 
-                // 3) Letture DB (I/O)
-                _uiState.value = UiState.Loading(message = context.getString(R.string.import_fetching_db), progress = 55)
-                val currentDbProducts = withContext(Dispatchers.IO) {
-                    // tieni i prodotti completi perché ti servono per i diff su nome/fornitore/categoria
-                    repository.getAllProducts()
-                }
+                val currentDbProducts = fetchCurrentDatabaseProducts()
 
-// 4) Analisi (streaming, non materializza tutte le righe)
                 _uiState.value = UiState.Loading(message = context.getString(R.string.import_analyzing), progress = 85)
 
-// costruiamo “chunks” pigri da 1000 righe evitando una lista gigante in RAM
-                val chunks: Sequence<List<Map<String, String>>> = sequence {
-                    val seq = dataRows.asSequence().map { row ->
-                        normalizedHeader.mapIndexed { index, headerKey ->
-                            headerKey to (row.getOrNull(index) ?: "")
-                        }.toMap()
-                    }
-                    for (block in seq.chunked(1000)) yield(block)
-                }
-
-                val analysis = withContext(Dispatchers.Default) {
-                    ImportAnalyzer.analyzeStreaming(context, chunks, currentDbProducts, repository)
-                }
+                val chunks = buildChunkedRows(normalizedHeader, dataRows)
+                val analysis = analyzeImportStreaming(context, chunks, currentDbProducts)
 
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
-                e.printStackTrace()
-                val errorMessage = e.message ?: context.getString(R.string.unknown)
-                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
+                handleImportAnalysisError(context, e)
             }
         }
+    }
+
+    private suspend fun parseImportFile(
+        context: Context,
+        uri: Uri
+    ): Pair<List<String>, List<List<String>>> {
+        val (normalizedHeader, dataRows, _) = withContext(Dispatchers.IO) {
+            readAndAnalyzeExcel(context, uri)
+        }
+        return normalizedHeader to dataRows
+    }
+
+    private fun validateImportFile(
+        context: Context,
+        normalizedHeader: List<String>,
+        dataRows: List<List<String>>
+    ): Boolean {
+        if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
+            _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
+            return false
+        }
+        return true
+    }
+
+    private suspend fun fetchCurrentDatabaseProducts(): List<Product> {
+        _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_fetching_db), progress = 55)
+        return withContext(Dispatchers.IO) {
+            repository.getAllProducts()
+        }
+    }
+
+    private fun buildChunkedRows(
+        normalizedHeader: List<String>,
+        dataRows: List<List<String>>
+    ): Sequence<List<Map<String, String>>> {
+        return sequence {
+            val seq = dataRows.asSequence().map { row ->
+                normalizedHeader.mapIndexed { index, headerKey ->
+                    headerKey to (row.getOrNull(index) ?: "")
+                }.toMap()
+            }
+            for (block in seq.chunked(1000)) yield(block)
+        }
+    }
+
+    private suspend fun analyzeImportStreaming(
+        context: Context,
+        chunks: Sequence<List<Map<String, String>>>,
+        currentDbProducts: List<Product>
+    ): ImportAnalysis {
+        return withContext(Dispatchers.Default) {
+            ImportAnalyzer.analyzeStreaming(context, chunks, currentDbProducts, repository)
+        }
+    }
+
+    private fun handleImportAnalysisError(context: Context, e: Exception) {
+        e.printStackTrace()
+        val errorMessage = e.message ?: context.getString(R.string.unknown)
+        _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
     }
 
     fun clearImportAnalysis() {
