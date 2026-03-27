@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-Migliorare progressivamente la UX/UI Android preservando logica, feature e integrazioni esistenti. La governance è operativa (TASK-001 chiuso). Il focus prodotto corrente è TASK-013 (UX polish FilePicker + PreGenerate).
+Migliorare progressivamente la UX/UI Android preservando logica, feature e integrazioni esistenti. La governance è operativa (TASK-001 chiuso). Il focus prodotto corrente è **TASK-013** (UX polish FilePicker + PreGenerate): **planning approvato e chiuso**; **esecuzione autorizzata** per Codex secondo `docs/TASKS/TASK-013-ux-polish-filepicker-pregenerate.md`, `AGENTS.md` e `docs/CODEX-EXECUTION-PROTOCOL.md`.
 
 ---
 
@@ -25,7 +25,9 @@ Migliorare progressivamente la UX/UI Android preservando logica, feature e integ
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
 | Task attivo          | TASK-013 (UX polish FilePicker + PreGenerate)    |
-| Fase task attivo     | PLANNING                                         |
+| Fase task attivo     | **EXECUTION** (kickoff esecutore / Codex)        |
+| Milestone planning   | **Chiuso** — criteri di accettazione definiti (24), decisioni e ordine implementazione consolidati nel file task |
+| Prossimo passo operativo | Esecutore: leggere TASK-013 → implementare → log in **Execution** → check BUILD/LINT → segnare **REVIEW** |
 | Ultimo aggiornamento | 2026-03-27                                       |
 
 ---
@@ -36,7 +38,9 @@ Migliorare progressivamente la UX/UI Android preservando logica, feature e integ
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente.
+Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (`docs/TASKS/TASK-013-ux-polish-filepicker-pregenerate.md`).
+
+**TASK-013 — tracking pre-esecuzione:** fase globale impostata su **EXECUTION** perché planning e approvazione utente sono completati (transizione `PLANNING → EXECUTION` ai sensi di questa sezione). Nessun codice applicativo è ancora richiesto dal master plan; l’esecutore inizia il lavoro seguendo il file task.
 
 ---
 
@@ -293,11 +297,12 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Stato       | `ACTIVE`                                                |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / UI                                                 |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Migliorare gerarchia visiva, spacing, affordance e feedback degli stati (empty/loading/error) in FilePickerScreen e PreGenerateScreen. Nessun cambio alla logica business né rimozione di feature esistenti. |
-| File Android | `FilePickerScreen.kt`, `PreGenerateScreen.kt`, `ExcelViewModel.kt` (sola lettura per capire lo stato) |
-| Rif. iOS    | Schermate Home / PreGenerate iOS come guida visiva (se presenti) |
-| Obiettivo UX | Card/bottoni con affordance chiara, feedback empty/loading/error, spacing Material3 |
+| Dipendenze  | TASK-001 (DONE)                                         |
+| Descrizione | Hero full-width “Carica Excel” + secondarie 2×2 non-lazy (ordine fisso); PreGenerate: `LoadingDialog`, error “Scegli di nuovo”, FAB gerarchici, inset preview + system/nav, polish dialog supplier/category. **Perimetro:** nessuna modifica a ViewModel, DAO, repository, entity, `NavGraph` / navigation, `ZoomableExcelGrid.kt`; wiring/MIME/launcher e semantica reload invariati. Dettaglio: file task. |
+| File Android | `FilePickerScreen.kt`, `PreGenerateScreen.kt`, `app/src/main/res/values*/strings.xml` |
+| Rif. iOS    | Solo riferimento visivo/UX (se presenti); non porting 1:1 |
+| Obiettivo UX | Gerarchia Material3, stati loading/error coerenti, primary action evidente, nessuna regressione funzionale |
+| Note tracking | Planning **chiuso**; **ready for execution** (Codex). Verifiche: 24 criteri nel file task + protocollo esecuzione. |
 
 ### TASK-014 — UX modernization GeneratedScreen
 | Campo       | Valore                                                  |
@@ -341,9 +346,9 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-Il focus corrente del progetto è il miglioramento UX/UI Android. Task suggeriti come prossimi:
+Il focus corrente del progetto è il miglioramento UX/UI Android. **TASK-013** è **ACTIVE** e in **EXECUTION** (esecuzione autorizzata). Task suggeriti come successivi:
 
-1. **TASK-013 (MEDIA):** UX polish FilePicker + PreGenerate — primo impatto visivo.
+1. **TASK-013 (MEDIA):** UX polish FilePicker + PreGenerate — **da eseguire dall’esecutore (Codex)**; primo impatto visivo.
 2. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — schermata più complessa.
 3. **TASK-015 (MEDIA):** UX modernization DatabaseScreen — CRUD e scanner.
 4. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — leggibilità incrementale.

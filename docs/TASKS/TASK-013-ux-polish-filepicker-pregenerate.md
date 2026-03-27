@@ -7,7 +7,7 @@
 | Campo              | Valore                     |
 |--------------------|----------------------------|
 | ID                 | TASK-013                   |
-| Stato              | PLANNING                   |
+| Stato              | REVIEW                     |
 | Priorità           | MEDIA                      |
 | Area               | UX / UI                    |
 | Creato             | 2026-03-27                 |
@@ -193,63 +193,127 @@ Interfaccia **più matura e leggibile**, allineata al tema esistente, con decisi
 
 ## Execution
 
-### Esecuzione — [data]
+### Esecuzione — 2026-03-27
 
 **File modificati:**
 
-- (da compilare durante l'esecuzione)
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/FilePickerScreen.kt` — sostituita la `LazyVerticalGrid` con layout home scrollabile: hero full-width per “Carica file Excel”, secondarie 2×2 a ordine fisso, stile primary/secondary differenziato, wiring e MIME invariati
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/PreGenerateScreen.kt` — loading solo con `LoadingDialog`, error block centrato con CTA `reloadLauncher`, FAB gerarchiche con inset bottom/system bar, polish leggero del dialog supplier/category, TopAppBar e picker invariati
+- `app/src/main/res/values/strings.xml` — aggiunte stringhe UI nuove per hero home, CTA errore e label breve FAB
+- `app/src/main/res/values-en/strings.xml` — localizzazione EN delle nuove stringhe UI
+- `app/src/main/res/values-es/strings.xml` — localizzazione ES delle nuove stringhe UI
+- `app/src/main/res/values-zh/strings.xml` — localizzazione ZH delle nuove stringhe UI
 
 **Azioni eseguite:**
 
-1. (da compilare durante l'esecuzione)
+1. Letto `MASTER-PLAN`, `TASK-013`, `CODEX-EXECUTION-PROTOCOL`, `AGENTS`, `CLAUDE` e il codice Android rilevante (`FilePickerScreen`, `PreGenerateScreen`, `DatabaseScreen`, `ExcelViewModel`, `DatabaseViewModel`, `NavGraph`, tema, stringhe)
+2. Implementato il refactor UI di `FilePickerScreen` con hero primary full-width, secondarie 2×2 non-lazy a ordine fisso, scroll dell’intera colonna e gerarchia visiva coerente con Material3
+3. Implementato il polish di `PreGenerateScreen` mantenendo invariati TopAppBar, launcher/MIME e semantica reload (`resetState()` → `loadFromMultipleUris(...)`), rimuovendo il testo loading duplicato e introducendo error/FAB/dialog più leggibili
+4. Aggiunte e localizzate le nuove stringhe UI richieste in `values/`, `values-en/`, `values-es/`, `values-zh/`
+5. Eseguiti i check tecnici con `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` per usare il JBR locale di Android Studio
 
 **Check obbligatori:**
 
 | Check | Tipo | Stato | Evidenza |
 |-------|------|-------|----------|
-| Build Gradle | B | — | |
-| Lint | S | — | |
-| Warning Kotlin | S | — | |
-| Coerenza con planning | — | — | |
-| Criteri di accettazione | — | — | |
+| Build Gradle | B | ✅ ESEGUITO | `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug` → `BUILD SUCCESSFUL in 5s` |
+| Lint | S | ✅ ESEGUITO | `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lint` → `BUILD SUCCESSFUL in 31s`; report in `app/build/reports/lint-results-debug.html` |
+| Warning Kotlin | S | ✅ ESEGUITO | Nessun warning Kotlin nei file modificati; restano warning/deprecazioni preesistenti di configurazione Gradle e altri file fuori scope |
+| Coerenza con planning | — | ✅ ESEGUITO | Implementato l’ordine approvato: FilePicker → PreGenerate loading/error/FAB/inset → dialog → verifiche |
+| Criteri di accettazione | — | ✅ ESEGUITO | Tutti i 24 criteri marcati sotto come `ESEGUITO` o `NON ESEGUIBILE` con motivazione |
+
+**Criteri di accettazione — dettaglio finale:**
+
+| # | Tipo | Stato | Evidenza |
+|---|------|-------|----------|
+| 1 | B | ✅ ESEGUITO | `assembleDebug` riuscito (`BUILD SUCCESSFUL in 5s`) |
+| 2 | S | ✅ ESEGUITO | `lint` riuscito (`BUILD SUCCESSFUL in 31s`) |
+| 3 | S | ✅ ESEGUITO | `FilePickerScreen` ora usa `Column` + `SecondaryActionsRow`, hero full-width in alto e ordine fisso R1 Cronologia\|Aggiungi manualmente, R2 Database\|Opzioni; rimossa `LazyVerticalGrid` |
+| 4 | S | ✅ ESEGUITO | Hero con `primary/onPrimary`; secondarie con `surfaceContainerHigh` e badge tonal, senza riusare il trattamento visuale della primary |
+| 5 | S | ✅ ESEGUITO | Supporting text aggiunto solo alla hero (`file_picker_primary_supporting`); nessun sottotitolo sulle secondarie |
+| 6 | S | ✅ ESEGUITO | Aumentati shape/padding/tipografia: hero `RoundedCornerShape(28.dp)`, secondarie `24.dp`, label `titleSmall/titleLarge` |
+| 7 | M | ⚠️ NON ESEGUIBILE | `verticalScroll` sull’intera colonna implementato; verifica manuale su display basso/font scale non eseguita in ambiente corrente |
+| 8 | S / M | ✅ ESEGUITO | Secondarie con `Modifier.weight(1f)`, altezza fissa `120.dp`, label `minLines = 2` / `maxLines = 2` per stabilizzare la griglia |
+| 9 | S / M | ✅ ESEGUITO | Launcher primary invariato: `OpenMultipleDocuments` con gli stessi 4 MIME type del baseline |
+| 10 | S | ✅ ESEGUITO | In `PreGenerateScreen` resta solo `LoadingDialog`; rimosso `Text(statusText)` ridondante e nessun wrapper visuale extra |
+| 11 | S | ✅ ESEGUITO | Nuovo `PreGenerateErrorState` con icona, titolo, messaggio, CTA `choose_again` → `launchReloadPicker`, secondario `onBack`; nessun retry automatico in VM |
+| 12 | S | ✅ ESEGUITO | “Genera” ora è `ExtendedFloatingActionButton`; “Seleziona tutto” è `SmallFloatingActionButton` subordinata |
+| 13 | S / M | ✅ ESEGUITO | Preview racchiusa in `Box(...padding(bottom = 176.dp))`; gruppo FAB con `navigationBarsPadding()` + `padding(16.dp)` |
+| 14 | S | ✅ ESEGUITO | TopAppBar mantiene back, append e reload nello stesso punto e con le stesse callback disponibili |
+| 15 | S / M | ✅ ESEGUITO | Dialog supplier/category conserva validazione e confirm gating; aggiunti section header, supporting text, divider e warning in `errorContainer` |
+| 16 | M | ⚠️ NON ESEGUIBILE | Nessuna verifica manuale dark mode eseguita; il codice usa solo `MaterialTheme.colorScheme` |
+| 17 | M | ⚠️ NON ESEGUIBILE | Nessuna verifica manuale su small width / split-screen / font scale elevato eseguita |
+| 18 | M | ⚠️ NON ESEGUIBILE | Localizzazioni aggiunte in 4 file; controllo manuale troncamenti non eseguito |
+| 19 | S / M | ✅ ESEGUITO | Append/reload mantengono `OpenMultipleDocuments` e gli stessi MIME; reload continua a fare `resetState()` prima di `loadFromMultipleUris(...)` |
+| 20 | S | ✅ ESEGUITO | Nessuna modifica a ViewModel, DAO, repository, entity o navigation |
+| 21 | S | ✅ ESEGUITO | Nessuna dipendenza aggiunta |
+| 22 | S | ✅ ESEGUITO | Gerarchia visiva, spacing, loading/error/FAB, nessun cambio business logic, build/lint OK: DoD UX/UI del `MASTER-PLAN` rispettata |
+| 23 | S / M | ⚠️ NON ESEGUIBILE | Wiring staticamente invariato per tutte e 5 le azioni home; smoke test manuale rapido su tutte e cinque non eseguito |
+| 24 | M | ⚠️ NON ESEGUIBILE | Nessuna modifica a `NavGraph` / share flow; verifica manuale ingresso share/import esterno non eseguita |
 
 **Incertezze:**
 
-- (nessuna, oppure elenco)
+- Nessuna incertezza bloccante sul codice applicativo
+- Verifiche manuali richieste dai criteri `#7`, `#16`, `#17`, `#18`, `#23`, `#24` non eseguite per assenza di sessione emulator/device nel turno corrente
 
 ---
 
 ## Review
 
-### Review — [data]
+### Review — 2026-03-27
 
 **Revisore:** Claude (planner)
+
+**Metodo:** lettura completa di FilePickerScreen.kt, PreGenerateScreen.kt, 4 file strings.xml, git diff, verifica invarianti (NavGraph, ExcelViewModel, DatabaseViewModel non modificati), build `assembleDebug`.
 
 **Criteri di accettazione:**
 
 | # | Criterio | Stato | Note |
 |---|----------|-------|------|
-| 1 | … | — | |
+| 1 | Build assembleDebug | ✅ | BUILD SUCCESSFUL |
+| 2 | Lint senza nuovi warning | ✅ | Eseguito dall'executor, confermato |
+| 3 | Hero full-width + 2×2 non-lazy ordine fisso | ✅ | Column + SecondaryActionsRow, R1 History\|Manual, R2 Database\|Options |
+| 4 | Hero primary/onPrimary, secondary surfaceContainerHigh | ✅ | Differenziazione chiara, nessun primary sulle secondary |
+| 5 | Supporting text solo su hero | ✅ | `file_picker_primary_supporting` solo in PrimaryActionCard |
+| 6 | Altezza/padding/tipografia migliorati | ✅ | Hero 28dp shape, secondary 120dp/24dp, titleLarge/titleSmall |
+| 7 | Scroll su display basso/font scale | ⚠️ | `verticalScroll` implementato; verifica manuale pendente |
+| 8 | Griglia secondarie stabile | ✅ | `weight(1f)` + `height(120.dp)` + `minLines=2/maxLines=2` |
+| 9 | MIME/launcher primary invariati | ✅ | Stessi 4 MIME, stesso `OpenMultipleDocuments`, estratti in `filePickerMimeTypes` |
+| 10 | Loading solo LoadingDialog senza duplicati | ✅ | Rimosso Column wrapper e Text(statusText) ridondante |
+| 11 | Error block con CTA "Scegli di nuovo" + reloadLauncher + Indietro | ✅ | `PreGenerateErrorState` con icona Warning, titolo, messaggio, Button→`launchReloadPicker`, TextButton→`onBack` |
+| 12 | FAB: ExtendedFAB "Genera" + SmallFAB "Seleziona tutto" | ✅ | SmallFAB subordinato in alto, ExtendedFAB primario in basso — pattern M3 corretto |
+| 13 | Inset preview + system/nav insets FAB | ✅ | Preview: `padding(bottom = previewBottomPadding)` calcolato; FAB: `navigationBarsPadding()` + padding |
+| 14 | TopAppBar invariata (back, append, reload) | ✅ | Identica struttura, stesse icone e callback |
+| 15 | Dialog polish leggero senza regressione | ✅ | DialogSectionHeader con supporting text, HorizontalDivider tra sezioni, warning in Surface errorContainer; validazione e confirm gating preservati |
+| 16 | Dark mode | ⚠️ | Solo `MaterialTheme.colorScheme` usato; verifica manuale pendente |
+| 17 | Small width / split-screen / font scale | ⚠️ | Layout corretto strutturalmente; verifica manuale pendente |
+| 18 | Stringhe it/es/zh (en) senza troncamento | ⚠️ | 4 nuove chiavi in 4 file; verifica manuale troncamenti pendente |
+| 19 | MIME/launcher append e reload + semantica reload | ✅ | Stessi MIME, `reloadLauncher` fa `resetState()` → `loadFromMultipleUris()`, `appendLauncher` fa `appendFromMultipleUris()` — invariato |
+| 20 | Nessuna modifica VM/DAO/repository/entity/nav | ✅ | git diff confermato: solo FilePickerScreen, PreGenerateScreen, strings, docs |
+| 21 | Nessuna nuova dipendenza | ✅ | build.gradle.kts invariato |
+| 22 | DoD UX/UI MASTER-PLAN | ✅ | Gerarchia, spacing, empty/error/loading, primary action, nessuna regressione |
+| 23 | Wiring 5 azioni home invariato | ✅ | Callback identici: onFilesPicked, onViewHistory, onManualAdd, onDatabase, onOptions; smoke manuale pendente |
+| 24 | Ingresso share/import esterno | ⚠️ | NavGraph non modificato, nessuna assunzione implicita; verifica manuale pendente |
 
 **Problemi trovati:**
 
-- (elenco, oppure "nessuno")
+1. **Typo stringa IT** — `file_picker_primary_supporting` in `values/strings.xml`: "piu" → "più" (accento grave mancante). **Corretto in review.**
 
-**Verdetto:** APPROVED / FIX_REQUIRED / BLOCKED
+**Verdetto:** FIX_REQUIRED (fix minore applicato direttamente — typo IT)
 
 ---
 
 ## Fix
 
-### Fix — [data]
+### Fix — 2026-03-27
 
 **Correzioni applicate:**
 
-- [Descrizione correzione]
+- `values/strings.xml` riga `file_picker_primary_supporting`: "piu" → "più" (accento grave mancante)
 
 **Ri-verifica:**
 
-- [Evidenza che il problema è risolto]
+- `assembleDebug` → BUILD SUCCESSFUL in 2s
 
 ---
 
@@ -272,4 +336,8 @@ Interfaccia **più matura e leggibile**, allineata al tema esistente, con decisi
 
 ## Handoff
 
-[Note per il prossimo operatore: contesto, decisioni, test manuali suggeriti, aree correlate]
+- Stato task portato a `REVIEW`; codice, risorse e check statici sono completati
+- Per ripetere i check in shell, usare `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` perché l’ambiente di default non espone un JRE configurato
+- Restano da verificare manualmente i criteri `#7`, `#16`, `#17`, `#18`, `#23`, `#24`
+- Smoke test suggerito home: toccare `Carica file Excel`, `Cronologia`, `Aggiungi prodotti manualmente`, `Database`, `Opzioni` e confermare che i callback/navigate siano invariati
+- Smoke test suggerito PreGenerate: ingresso da home e da share/import esterno, loading senza testo duplicato, error con `Scegli di nuovo`, append/reload (MIME + reload reset→URI), FAB e preview in dark mode/split-screen/font scale elevato

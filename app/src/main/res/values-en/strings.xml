@@ -26,6 +26,7 @@
     <!-- FilePickerScreen -->
     <string name="file_history">File history</string>
     <string name="load_excel_file">Load Excel file</string>
+    <string name="file_picker_primary_supporting">Import one or more Excel files to get started.</string>
     <string name="database">Database</string>
 
     <!-- HistoryScreen -->
@@ -36,6 +37,9 @@
 
     <!-- PreGenerateScreen -->
     <string name="select_all">Select all</string>
+    <string name="generate_action">Generate</string>
+    <string name="choose_again">Choose again</string>
+    <string name="pre_generate_error_title">Couldn\'t open the file</string>
     <string name="edit">Edit</string>
     <string name="exit_edit">Exit edit</string>
     <string name="generate_filtered_sheet">Generate filtered sheet</string>

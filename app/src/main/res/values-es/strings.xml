@@ -25,6 +25,7 @@
     <!-- Pantalla FilePickerScreen -->
     <string name="file_history">Historial de archivos</string>
     <string name="load_excel_file">Cargar archivo Excel</string>
+    <string name="file_picker_primary_supporting">Importa uno o varios archivos Excel para empezar.</string>
     <string name="database">Base de datos</string>
 
     <!-- Pantalla HistoryScreen -->
@@ -35,6 +36,9 @@
 
     <!-- Pantalla PreGenerateScreen -->
     <string name="select_all">Seleccionar todo</string>
+    <string name="generate_action">Generar</string>
+    <string name="choose_again">Elegir de nuevo</string>
+    <string name="pre_generate_error_title">No se pudo abrir el archivo</string>
     <string name="edit">Editar</string>
     <string name="exit_edit">Salir de edición</string>
     <string name="generate_filtered_sheet">Generar hoja filtrada</string>

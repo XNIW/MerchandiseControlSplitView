@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
@@ -12,15 +13,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.data.Category // <-- IMPORT AGGIUNTO
+import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
@@ -28,6 +31,18 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.launch
+
+private val preGenerateMimeTypes = arrayOf(
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/html",
+    "application/octet-stream"
+)
+private val preGenerateFabEdgePadding = 16.dp
+private val preGenerateFabSpacing = 12.dp
+private val preGeneratePrimaryFabHeight = 56.dp
+private val preGenerateSecondaryFabHeight = 40.dp
+private val preGenerateErrorMaxWidth = 480.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,7 +53,6 @@ fun PreGenerateScreen(
     onGenerate: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
-    // State from ExcelViewModel
     val excelData = excelViewModel.excelData
     val selectedColumns = excelViewModel.selectedColumns
     val editableValues = excelViewModel.editableValues
@@ -48,23 +62,18 @@ fun PreGenerateScreen(
     val excelLoadError by excelViewModel.loadError
     val headerTypes = excelViewModel.headerTypes
 
-    // Local UI state
     val context = LocalContext.current
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-
-    // --- STATO PER DIALOGO UNIFICATO ---
     var showSelectionDialog by remember { mutableStateOf(false) }
 
-    // Stato Fornitore
     val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
     var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
     var isSupplierDropdownExpanded by remember { mutableStateOf(false) }
     val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
 
-    // Stato Categoria
     val categoryInputText by databaseViewModel.categoryInputText.collectAsState()
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
     var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
@@ -87,6 +96,16 @@ fun PreGenerateScreen(
             excelViewModel.appendFromMultipleUris(context, uris)
         }
     }
+    val launchAppendPicker = { appendLauncher.launch(preGenerateMimeTypes) }
+    val launchReloadPicker = { reloadLauncher.launch(preGenerateMimeTypes) }
+    val navigationBarBottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // Keep the preview clear of the full FAB stack and the current navigation bar inset.
+    val previewBottomPadding =
+        navigationBarBottomInset +
+            (preGenerateFabEdgePadding * 2) +
+            preGeneratePrimaryFabHeight +
+            preGenerateSecondaryFabHeight +
+            preGenerateFabSpacing
 
     val possibleKeys = listOf(
         "barcode", "quantity", "purchasePrice", "retailPrice", "totalPrice",
@@ -106,24 +125,10 @@ fun PreGenerateScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        appendLauncher.launch(arrayOf(
-                            "application/vnd.ms-excel",
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            "text/html",
-                            "application/octet-stream"
-                        ))
-                    }) {
+                    IconButton(onClick = launchAppendPicker) {
                         Icon(Icons.Default.Add, contentDescription = stringResource(R.string.append_file))
                     }
-                    IconButton(onClick = {
-                        reloadLauncher.launch(arrayOf(
-                            "application/vnd.ms-excel",
-                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            "text/html",
-                            "application/octet-stream"
-                        ))
-                    }) {
+                    IconButton(onClick = launchReloadPicker) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.reload_file))
                     }
                 }
@@ -140,93 +145,99 @@ fun PreGenerateScreen(
 
             when {
                 isExcelLoading || isAnalysisInProgress -> {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        when {
-                            isExcelLoading -> LoadingDialog(UiState.Loading(
+                    when {
+                        isExcelLoading -> LoadingDialog(
+                            UiState.Loading(
                                 message = stringResource(R.string.loading_file),
                                 progress = excelProgress
-                            ))
-                            databaseUiState is UiState.Loading -> LoadingDialog(databaseUiState)
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        val statusText = if(isAnalysisInProgress) stringResource(R.string.analysis_in_progress) else stringResource(R.string.loading_file)
-                        Text(statusText)
+                            )
+                        )
+                        databaseUiState is UiState.Loading -> LoadingDialog(databaseUiState)
                     }
                 }
                 excelLoadError != null || analysisError != null -> {
-                    Text(
-                        text = excelLoadError ?: analysisError ?: stringResource(R.string.unknown_error),
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(16.dp).align(Alignment.Center)
+                    PreGenerateErrorState(
+                        message = excelLoadError ?: analysisError ?: stringResource(R.string.unknown_error),
+                        onChooseAgain = launchReloadPicker,
+                        onBack = onBack,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp)
                     )
                 }
                 excelData.isNotEmpty() -> {
                     val localizedData = listOf(excelData[0].map { getLocalizedHeader(context, it) }) + excelData.drop(1)
-                    ZoomableExcelGrid(
-                        data = localizedData,
-                        cellWidth = 120.dp,
-                        cellHeight = 48.dp,
-                        selectedColumns = selectedColumns,
-                        editableValues = editableValues,
-                        completeStates = completeStates,
-                        searchMatches = emptySet(),
-                        errorRowIndexes = emptySet(),
-                        generated = false,
-                        editMode = false,
-                        onCompleteToggle = {},
-                        onCellEditRequest = { _, _ -> },
-                        onQuantityCellClick = {},
-                        onPriceCellClick = {},
-                        onRowCellClick = { },
-                        headerTypes = headerTypes,
-                        // --- MODIFICHE E AGGIUNTE ---
-                        // Passa la funzione per controllare se una colonna è essenziale
-                        isColumnEssential = { colIdx -> excelViewModel.isColumnEssential(colIdx) },
-                        // Il click sulla cella ora gestisce la selezione/deselezione protetta
-                        onHeaderClick = { colIdx -> excelViewModel.toggleColumnSelection(colIdx) },
-                        // Il click sull'icona di modifica apre il dialogo per cambiare tipo
-                        onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx },
-                        isManualEntry = false
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = previewBottomPadding)
+                    ) {
+                        ZoomableExcelGrid(
+                            data = localizedData,
+                            cellWidth = 120.dp,
+                            cellHeight = 48.dp,
+                            selectedColumns = selectedColumns,
+                            editableValues = editableValues,
+                            completeStates = completeStates,
+                            searchMatches = emptySet(),
+                            errorRowIndexes = emptySet(),
+                            generated = false,
+                            editMode = false,
+                            onCompleteToggle = {},
+                            onCellEditRequest = { _, _ -> },
+                            onQuantityCellClick = {},
+                            onPriceCellClick = {},
+                            onRowCellClick = { },
+                            headerTypes = headerTypes,
+                            isColumnEssential = { colIdx -> excelViewModel.isColumnEssential(colIdx) },
+                            onHeaderClick = { colIdx -> excelViewModel.toggleColumnSelection(colIdx) },
+                            onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx },
+                            isManualEntry = false
+                        )
+                    }
+                }
+            }
+
+            if (excelData.isNotEmpty() && !isExcelLoading && !isAnalysisInProgress) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(preGenerateFabSpacing),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .navigationBarsPadding()
+                        .padding(preGenerateFabEdgePadding)
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            excelViewModel.toggleSelectAll()
+                        },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    ) {
+                        Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
+                    }
+                    ExtendedFloatingActionButton(
+                        onClick = {
+                            databaseViewModel.onSupplierSearchQueryChanged("")
+                            databaseViewModel.onCategorySearchQueryChanged("")
+                            selectedSupplier = null
+                            selectedCategory = null
+                            isSupplierDropdownExpanded = false
+                            isCategoryDropdownExpanded = false
+                            showSelectionDialog = true
+                        },
+                        text = { Text(stringResource(R.string.generate_action)) },
+                        icon = {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = stringResource(R.string.generate_filtered_sheet)
+                            )
+                        }
                     )
                 }
             }
 
-            if (excelData.isNotEmpty() && !isAnalysisInProgress) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                ) {
-                    FloatingActionButton(onClick = {
-                        // MODIFICA: Chiama la nuova funzione protetta del ViewModel
-                        excelViewModel.toggleSelectAll()
-                    }) {
-                        Icon(Icons.Default.DoneAll, contentDescription = stringResource(R.string.select_all))
-                    }
-                    FloatingActionButton(onClick = {
-                        // Resetta lo stato nel ViewModel prima di aprire il dialogo
-                        databaseViewModel.onSupplierSearchQueryChanged("")
-                        databaseViewModel.onCategorySearchQueryChanged("")
-                        selectedSupplier = null
-                        selectedCategory = null
-                        isSupplierDropdownExpanded = false
-                        isCategoryDropdownExpanded = false
-                        showSelectionDialog = true
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.generate_filtered_sheet))
-                    }
-                }
-            }
-
-            // --- DIALOGO UNICO PER FORNITORE E CATEGORIA ---
             if (showSelectionDialog) {
-                // --- NUOVO: Logica di validazione ---
                 val headers = excelViewModel.excelData.firstOrNull() ?: emptyList()
                 val missingEssentialColumns = setOf("barcode", "productName", "purchasePrice")
                     .filterNot { headers.contains(it) }
@@ -235,22 +246,39 @@ fun PreGenerateScreen(
                     onDismissRequest = { showSelectionDialog = false },
                     title = { Text(stringResource(R.string.supplier_and_category_dialog_title)) },
                     text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-
-                            // --- NUOVO: Messaggio di errore se mancano colonne essenziali ---
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             if (missingEssentialColumns.isNotEmpty()) {
-                                Text(
-                                    text = stringResource(
-                                        R.string.error_missing_essential_columns_prompt,
-                                        missingEssentialColumns.joinToString { getLocalizedHeader(context, it) }
-                                    ),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                                    shape = RoundedCornerShape(20.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = stringResource(R.string.error_label),
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = stringResource(
+                                                R.string.error_missing_essential_columns_prompt,
+                                                missingEssentialColumns.joinToString { getLocalizedHeader(context, it) }
+                                            ),
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                }
                             }
-                            // Menu a discesa per il Fornitore
+
+                            DialogSectionHeader(
+                                title = stringResource(R.string.supplier_label),
+                                supportingText = stringResource(R.string.search_or_add_supplier)
+                            )
                             ExposedDropdownMenuBox(
                                 expanded = isSupplierDropdownExpanded,
                                 onExpandedChange = { isSupplierDropdownExpanded = !isSupplierDropdownExpanded }
@@ -264,7 +292,7 @@ fun PreGenerateScreen(
                                     label = { Text(stringResource(R.string.supplier_label)) },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
+                                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                                 )
                                 ExposedDropdownMenu(
                                     expanded = isSupplierDropdownExpanded,
@@ -297,7 +325,12 @@ fun PreGenerateScreen(
                                 }
                             }
 
-                            // Menu a discesa per la Categoria
+                            HorizontalDivider()
+
+                            DialogSectionHeader(
+                                title = stringResource(R.string.category_label),
+                                supportingText = stringResource(R.string.search_or_add_category)
+                            )
                             ExposedDropdownMenuBox(
                                 expanded = isCategoryDropdownExpanded,
                                 onExpandedChange = { isCategoryDropdownExpanded = !isCategoryDropdownExpanded }
@@ -311,7 +344,7 @@ fun PreGenerateScreen(
                                     label = { Text(stringResource(R.string.category_label)) },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
+                                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                                 )
                                 ExposedDropdownMenu(
                                     expanded = isCategoryDropdownExpanded,
@@ -355,10 +388,9 @@ fun PreGenerateScreen(
                                     }
                                 }
                             },
-                            // --- MODIFICA: Il pulsante è abilitato solo se tutti i requisiti sono soddisfatti ---
                             enabled = selectedSupplier != null && selectedSupplier?.name == supplierInputText &&
-                                    selectedCategory != null && selectedCategory?.name == categoryInputText &&
-                                    missingEssentialColumns.isEmpty() // <-- CONTROLLO FONDAMENTALE
+                                selectedCategory != null && selectedCategory?.name == categoryInputText &&
+                                missingEssentialColumns.isEmpty()
                         ) {
                             Text(stringResource(R.string.confirm))
                         }
@@ -412,5 +444,82 @@ fun PreGenerateScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PreGenerateErrorState(
+    message: String,
+    onChooseAgain: () -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier.widthIn(max = preGenerateErrorMaxWidth),
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 28.dp, vertical = 30.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.pre_generate_error_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Button(onClick = onChooseAgain) {
+                    Text(stringResource(R.string.choose_again))
+                }
+                TextButton(onClick = onBack) {
+                    Text(stringResource(R.string.back))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialogSectionHeader(
+    title: String,
+    supportingText: String
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = supportingText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

@@ -25,6 +25,7 @@
     <!-- 文件选择页面 -->
     <string name="file_history">文件历史</string>
     <string name="load_excel_file">加载Excel文件</string>
+    <string name="file_picker_primary_supporting">导入一个或多个 Excel 文件即可开始。</string>
     <string name="database">数据库</string>
 
     <!-- 历史页面 -->
@@ -35,6 +36,9 @@
 
     <!-- 生成前页面 -->
     <string name="select_all">全选</string>
+    <string name="generate_action">生成</string>
+    <string name="choose_again">重新选择</string>
+    <string name="pre_generate_error_title">无法打开文件</string>
     <string name="edit">编辑</string>
     <string name="exit_edit">退出编辑</string>
     <string name="generate_filtered_sheet">生成筛选表</string>

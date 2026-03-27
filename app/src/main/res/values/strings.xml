@@ -25,6 +25,7 @@
     <!-- Schermata FilePickerScreen -->
     <string name="file_history">File storico</string>
     <string name="load_excel_file">Carica file Excel</string>
+    <string name="file_picker_primary_supporting">Importa uno o più file Excel per iniziare.</string>
     <string name="database">Database</string>
 
     <!-- Schermata HistoryScreen -->
@@ -35,6 +36,9 @@
 
     <!-- Schermata PreGenerateScreen -->
     <string name="select_all">Seleziona tutto</string>
+    <string name="generate_action">Genera</string>
+    <string name="choose_again">Scegli di nuovo</string>
+    <string name="pre_generate_error_title">Impossibile aprire il file</string>
     <string name="edit">Modifica</string>
     <string name="exit_edit">Esci da modifica</string>
     <string name="generate_filtered_sheet">Genera foglio filtrato</string>
