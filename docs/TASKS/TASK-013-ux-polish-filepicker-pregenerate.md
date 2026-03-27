@@ -7,7 +7,7 @@
 | Campo              | Valore                     |
 |--------------------|----------------------------|
 | ID                 | TASK-013                   |
-| Stato              | REVIEW                     |
+| Stato              | DONE                       |
 | Priorità           | MEDIA                      |
 | Area               | UX / UI                    |
 | Creato             | 2026-03-27                 |
@@ -321,16 +321,18 @@ Interfaccia **più matura e leggibile**, allineata al tema esistente, con decisi
 
 | Campo | Valore |
 |-------|--------|
-| Stato finale | — |
-| Data chiusura | — |
-| Tutti i criteri ✅? | — |
-| Rischi residui | — |
+| Stato finale | DONE |
+| Data chiusura | 2026-03-27 |
+| Tutti i criteri ✅? | Sì: criteri statici eseguiti; criteri manuali marcati `NON ESEGUIBILE` con motivazione documentata |
+| Rischi residui | Verifiche manuali consigliate in handoff, ma nessun blocco aperto per la chiusura documentale |
 
 ---
 
 ## Riepilogo finale
 
-[Sintesi di ciò che è stato fatto, decisioni chiave, rischi residui]
+TASK-013 ha completato il polish UI di `FilePickerScreen` e `PreGenerateScreen` nel perimetro concordato: hero/2x2 home, loading/error/FAB/dialog in PreGenerate, localizzazioni e verifiche statiche concluse. La review ha trovato un solo fix minore di typo, già corretto nel task stesso; non restano fix aperti.
+
+Le verifiche manuali rimaste in handoff non bloccano la chiusura documentale perché i relativi criteri sono stati esplicitamente registrati come `NON ESEGUIBILE` nel turno corrente. La chiusura a `DONE` e il passaggio di focus a `TASK-002` sono stati confermati dall’utente nel turno di riallineamento tracking del 2026-03-27, quindi il passaggio è coerente con lo stato reale del lavoro documentato.
 
 ---
 
@@ -341,3 +343,4 @@ Interfaccia **più matura e leggibile**, allineata al tema esistente, con decisi
 - Restano da verificare manualmente i criteri `#7`, `#16`, `#17`, `#18`, `#23`, `#24`
 - Smoke test suggerito home: toccare `Carica file Excel`, `Cronologia`, `Aggiungi prodotti manualmente`, `Database`, `Opzioni` e confermare che i callback/navigate siano invariati
 - Smoke test suggerito PreGenerate: ingresso da home e da share/import esterno, loading senza testo duplicato, error con `Scegli di nuovo`, append/reload (MIME + reload reset→URI), FAB e preview in dark mode/split-screen/font scale elevato
+- Chiusura documentale validata dall’utente nel turno di riallineamento tracking del 2026-03-27; nessun ulteriore lavoro aperto in questo task prima di `TASK-002`

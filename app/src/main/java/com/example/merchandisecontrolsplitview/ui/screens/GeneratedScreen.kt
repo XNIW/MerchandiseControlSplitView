@@ -59,8 +59,8 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.animation.AnimatedVisibility // <-- Per risolvere l'errore di riferimento non risolto
-import kotlinx.coroutines.delay // <-- Per il debounce nella ricerca
+import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.LocalFocusManager
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -88,7 +88,7 @@ fun GeneratedScreen(
     databaseViewModel: DatabaseViewModel,
     onBackToStart: () -> Unit,
     onNavigateToHome: () -> Unit,
-    onNavigateToDatabase: () -> Unit,   // <--- AGGIUNTO
+    onNavigateToDatabase: () -> Unit,
     entryUid: Long,
     isNewEntry: Boolean,
     isManualEntry: Boolean
@@ -142,8 +142,7 @@ fun GeneratedScreen(
     var productToEditIndex by remember { mutableStateOf<Int?>(null) }
 
     var productDataToPrefill by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
-// Modifica il LaunchedEffect per dipendere anche da 'historyEntries'
-    LaunchedEffect(entryUid, historyEntries) { // <-- AGGIUNGI historyEntries QUI
+    LaunchedEffect(entryUid, historyEntries) {
         val entry = historyEntries.find { it.uid == entryUid }
         if (entry != null) {
             titleText = entry.id
@@ -161,7 +160,6 @@ fun GeneratedScreen(
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
 
-    // --- NUOVO STATO PER LA MODALITÀ EDIT DEL DIALOGO ---
     var isInfoDialogInEditMode by remember { mutableStateOf(false) }
 
     var showExitToHomeDialog by remember { mutableStateOf(false) }
@@ -277,7 +275,7 @@ fun GeneratedScreen(
     ) { uri ->
         uri?.let {
             scope.launch {
-                excelViewModel.exportToUri(context, it)           // <--- nuovo
+                excelViewModel.exportToUri(context, it)
                 excelViewModel.markCurrentEntryAsExported(entryUid)
                 Toast.makeText(context, context.getString(R.string.file_exported_successfully), Toast.LENGTH_SHORT).show()
             }
@@ -300,6 +298,85 @@ fun GeneratedScreen(
             }
             context.startActivity(Intent.createChooser(share, context.getString(R.string.share_xlsx)))
             excelViewModel.markCurrentEntryAsExported(entryUid)
+        }
+    }
+
+    fun launchMainScanner() {
+        scanLauncher.launch(
+            ScanOptions().apply {
+                setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                setCaptureActivity(PortraitCaptureActivity::class.java)
+                setOrientationLocked(true)
+                setBeepEnabled(true)
+                setPrompt(context.getString(R.string.scan_prompt))
+            }
+        )
+    }
+
+    fun openRenameDialog() {
+        renameText = titleText
+        supplierNameForRename = excelViewModel.supplierName
+        categoryNameForRename = excelViewModel.categoryName
+        supplierExpanded = false
+        categoryExpanded = false
+        showRenameDialog = true
+    }
+
+    fun analyzeCurrentGrid() {
+        excelViewModel.errorRowIndexes.value = emptySet()
+        val header = excelData.firstOrNull() ?: return
+        val barcodeIdx = header.indexOf("barcode")
+        val productNameIdx = header.indexOf("productName")
+        val quantityIdx = header.indexOf("quantity")
+        val retailPriceIdx = header.indexOf("retailPrice")
+        val categoryIdx = header.indexOf("category")
+        val purchaseIdx = header.indexOf("purchasePrice")
+
+        val dataRows = excelData.drop(1)
+        val gridDataForAnalysis = if (isManualEntry) {
+            dataRows.map { rowData ->
+                mapOf(
+                    "barcode" to (rowData.getOrNull(barcodeIdx) ?: ""),
+                    "productName" to (rowData.getOrNull(productNameIdx) ?: ""),
+                    "quantity" to (rowData.getOrNull(quantityIdx) ?: ""),
+                    "purchasePrice" to (rowData.getOrNull(purchaseIdx) ?: ""),
+                    "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
+                    "category" to (rowData.getOrNull(categoryIdx) ?: ""),
+                    "supplier" to context.getString(R.string.supplier_manual)
+                )
+            }
+        } else {
+            dataRows.mapIndexed { rowIndex, rowData ->
+                val actualRowIndex = rowIndex + 1
+                val finalQuantityStr = editableValues.getOrNull(actualRowIndex)
+                    ?.getOrNull(0)?.value ?: ""
+                val finalPriceStr = editableValues.getOrNull(actualRowIndex)
+                    ?.getOrNull(1)?.value ?: ""
+                val map = header.mapIndexed { colIndex, headerKey ->
+                    headerKey to (rowData.getOrNull(colIndex) ?: "")
+                }.toMap().toMutableMap()
+
+                map["realQuantity"] = finalQuantityStr
+                map["retailPrice"] = finalPriceStr
+                map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
+                map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
+                map.toMap()
+            }
+        }
+
+        if (gridDataForAnalysis.isNotEmpty()) {
+            databaseViewModel.analyzeGridData(gridDataForAnalysis)
+            Toast.makeText(
+                context,
+                context.getString(R.string.sync_analysis_started),
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(
+                context,
+                context.getString(R.string.no_valid_rows_to_sync),
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -371,178 +448,23 @@ fun GeneratedScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            Column {
-                TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
-                    ),
-                    navigationIcon = {
-                        IconButton(onClick = { handleBackPress() }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = stringResource(R.string.back)
-                            )
-                        }
-                    },
-                    title = {
-                        // ogni tap incrementa la chiave e riavvia l'animazione
-                        var tapKey by remember { mutableIntStateOf(0) }
-
-                        key(tapKey) {
-                            Text(
-                                text = titleText.ifBlank { stringResource(R.string.untitled) },
-                                maxLines = 1,
-                                overflow = TextOverflow.Clip,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier
-                                    .clickable { tapKey++ } // ← tap: fai ripartire la marquee
-                                    .basicMarquee(
-                                        animationMode = MarqueeAnimationMode.Immediately, // parte senza focus
-                                        iterations = 1                                     // una sola volta
-                                    )
-                            )
-                        }
-                    },
-                    actions = {
-                        if (excelData.isNotEmpty() && generated) {
-                            IconButton(onClick = { showExitToHomeDialog = true }) {
-                                Icon(
-                                    Icons.Default.Home,
-                                    contentDescription = stringResource(R.string.go_to_home)
-                                )
-                            }
-                            IconButton(onClick = {
-                                // (tua logica sync/analisi invariata)
-                                excelViewModel.errorRowIndexes.value = emptySet()
-                                val header = excelData.firstOrNull() ?: return@IconButton
-                                val barcodeIdx = header.indexOf("barcode")
-                                val productNameIdx = header.indexOf("productName")
-                                val quantityIdx = header.indexOf("quantity")
-                                val retailPriceIdx = header.indexOf("retailPrice")
-                                val categoryIdx = header.indexOf("category")
-                                val purchaseIdx = header.indexOf("purchasePrice")
-
-                                val dataRows = excelData.drop(1)
-                                val gridDataForAnalysis = if (isManualEntry) {
-                                    dataRows.map { rowData ->
-                                        mapOf(
-                                            "barcode" to (rowData.getOrNull(barcodeIdx) ?: ""),
-                                            "productName" to (rowData.getOrNull(productNameIdx) ?: ""),
-                                            "quantity" to (rowData.getOrNull(quantityIdx) ?: ""),
-                                            "purchasePrice" to (rowData.getOrNull(purchaseIdx) ?: ""),
-                                            "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
-                                            "category" to (rowData.getOrNull(categoryIdx) ?: ""),
-                                            "supplier" to context.getString(R.string.supplier_manual)
-                                        )
-                                    }
-                                } else {
-                                    dataRows.mapIndexed { rowIndex, rowData ->
-                                        val actualRowIndex = rowIndex + 1
-                                        val finalQuantityStr = editableValues.getOrNull(actualRowIndex)
-                                            ?.getOrNull(0)?.value ?: ""
-                                        val finalPriceStr = editableValues.getOrNull(actualRowIndex)
-                                            ?.getOrNull(1)?.value ?: ""
-                                        val map = header.mapIndexed { colIndex, headerKey ->
-                                            headerKey to (rowData.getOrNull(colIndex) ?: "")
-                                        }.toMap().toMutableMap()
-
-                                        map["realQuantity"] = finalQuantityStr
-                                        map["retailPrice"] = finalPriceStr
-                                        map["supplier"] =
-                                            excelViewModel.supplierName.ifBlank { "unknown" }
-                                        map["category"] =
-                                            excelViewModel.categoryName.ifBlank { "unknown" }
-                                        map.toMap()
-                                    }
-                                }
-
-                                if (gridDataForAnalysis.isNotEmpty()) {
-                                    databaseViewModel.analyzeGridData(gridDataForAnalysis)
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.sync_analysis_started),
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                } else {
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.no_valid_rows_to_sync),
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            }) {
-                                StatusIcon(
-                                    baseIcon = Icons.Default.Sync,
-                                    badgeType = when (syncStatus) {
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
-                                    },
-                                    contentDescription = stringResource(R.string.sync_with_database)
-                                )
-                            }
-
-                            // Menu overflow (include "Rinomina" qui)
-                            var menuOpen by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(onClick = { menuOpen = true }) {
-                                    Icon(
-                                        Icons.Default.MoreVert,
-                                        contentDescription = stringResource(R.string.more_actions)
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = menuOpen,
-                                    onDismissRequest = { menuOpen = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.export_file)) },
-                                        leadingIcon = {
-                                            MenuIconWithTick(
-                                                base = Icons.Default.FileDownload,
-                                                showTick = wasExported
-                                            )
-                                        },
-                                        onClick = {
-                                            menuOpen = false
-                                            saveLauncher.launch(titleText)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.share_xlsx)) },
-                                        leadingIcon = { Icon(Icons.Default.Share, null) },
-                                        onClick = {
-                                            menuOpen = false
-                                            shareXlsx()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.rename_file)) },
-                                        leadingIcon = { Icon(Icons.Default.Edit, null) },
-                                        onClick = {
-                                            menuOpen = false
-                                            renameText = titleText
-                                            showRenameDialog = true
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                )
-                TopInfoChipsBar(
-                    supplier = excelViewModel.supplierName.ifBlank { null },
-                    category = excelViewModel.categoryName.ifBlank { null },
-                    completed = completeStates.count { it },
-                    total = (excelData.size - 1).coerceAtLeast(0),
-                    exported = wasExported,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp)
-                )
-
-                HorizontalDivider()
-            }
+            GeneratedScreenTopBar(
+                titleText = titleText,
+                excelData = excelData,
+                generated = generated,
+                supplierName = excelViewModel.supplierName.ifBlank { null },
+                categoryName = excelViewModel.categoryName.ifBlank { null },
+                completedCount = completeStates.count { it },
+                totalCount = (excelData.size - 1).coerceAtLeast(0),
+                wasExported = wasExported,
+                syncStatus = syncStatus,
+                onNavigateBack = handleBackPress,
+                onNavigateHome = { showExitToHomeDialog = true },
+                onAnalyzeSync = { analyzeCurrentGrid() },
+                onExport = { saveLauncher.launch(titleText) },
+                onShare = { shareXlsx() },
+                onRename = { openRenameDialog() }
+            )
         }
     ) { paddingValues ->
         Column(
@@ -554,257 +476,105 @@ fun GeneratedScreen(
                 Modifier
                     .fillMaxSize()
             ) {
-                Column(Modifier.fillMaxSize()) {
-                    if (isManualEntry && excelData.size <= 1) {
-                        // Mostra "Empty State" se siamo in modalità manuale e non ci sono dati
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
-                                contentDescription = null,
-                                modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                            )
-                            Text(
-                                text = stringResource(R.string.no_products_add_new), // Aggiungi in strings.xml
-                                style = MaterialTheme.typography.titleMedium
-                            )
+                GeneratedScreenGridHost(
+                    excelData = excelData,
+                    selectedColumns = excelViewModel.selectedColumns,
+                    editableValues = editableValues,
+                    completeStates = completeStates,
+                    searchMatches = searchMatches,
+                    errorIndexes = errorIndexes,
+                    isManualEntry = isManualEntry,
+                    onCompleteToggle = { row ->
+                        completeStates[row] = !completeStates[row]
+                        excelViewModel.updateHistoryEntry(entryUid)
+                    },
+                    onQuantityClick = { row ->
+                        infoRowIndex = row
+                        infoDialogFocusField = 0
+                        showInfoDialog = true
+                    },
+                    onPriceClick = { row ->
+                        infoRowIndex = row
+                        infoDialogFocusField = 1
+                        showInfoDialog = true
+                    },
+                    onGeneratedRowClick = { row ->
+                        infoRowIndex = row
+                        infoDialogFocusField = 0
+                        showInfoDialog = true
+                    },
+                    onManualRowClick = { row ->
+                        productToEditIndex = row - 1
+                        showManualEntryDialog = true
+                    },
+                    onHeaderDialogRequest = { colIdx -> headerDialogIndex = colIdx },
+                )
+
+                GeneratedScreenDiscardDraftDialog(
+                    visible = showExitDialog,
+                    isSavingOrReverting = isSavingOrReverting,
+                    onDismissRequest = { if (!isSavingOrReverting) showExitDialog = false },
+                    onConfirmDiscard = {
+                        showExitDialog = false
+                        scope.launch {
+                            isSavingOrReverting = true
+                            excelViewModel.historyEntries.value.find { it.uid == entryUid }
+                                ?.let { entryToDelete ->
+                                    excelViewModel.deleteHistoryEntry(entryToDelete)
+                                }
+                            excelViewModel.revertToPreGenerateState()
+                            isSavingOrReverting = false
+                            onBackToStart()
                         }
-                    } else if (excelData.isNotEmpty()) {
-                        val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
-                        val localizedData = listOf(localizedHeader) + excelData.drop(1)
-                        ZoomableExcelGrid(
-                            data = localizedData,
-                            cellWidth = 120.dp,
-                            cellHeight = 48.dp,
-                            selectedColumns = excelViewModel.selectedColumns,
-                            editableValues = editableValues,
-                            completeStates = completeStates,
-                            searchMatches = searchMatches,
-                            errorRowIndexes = errorIndexes,
-                            generated = true,
-                            editMode = false,
-                            onCompleteToggle = { row ->
-                                completeStates[row] = !completeStates[row]
-                                excelViewModel.updateHistoryEntry(entryUid)
-                            },
-                            onCellEditRequest = { _, _ -> },
-                            onQuantityCellClick = { r ->
-                                // 👇 Solo se NON è un'entry manuale
-                                if (!isManualEntry) {
-                                    infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog =
-                                        true
+                    },
+                    onCancel = { if (!isSavingOrReverting) showExitDialog = false }
+                )
+
+                GeneratedScreenExitFromHistoryDialog(
+                    visible = showExitFromHistoryDialog,
+                    isSavingOrReverting = isSavingOrReverting,
+                    onDismissRequest = {
+                        if (!isSavingOrReverting) showExitFromHistoryDialog = false
+                    },
+                    onExitWithoutSaving = {
+                        showExitFromHistoryDialog = false
+                        scope.launch {
+                            isSavingOrReverting = true
+                            excelViewModel.revertDatabaseToOriginalState()
+                            excelViewModel.historyEntries.value.find { it.uid == entryUid }
+                                ?.let {
+                                    excelViewModel.loadHistoryEntry(it)
                                 }
-                            },
-                            onPriceCellClick = { r ->
-                                // 👇 Solo se NON è un'entry manuale
-                                if (!isManualEntry) {
-                                    infoRowIndex = r; infoDialogFocusField = 1; showInfoDialog =
-                                        true
-                                }
-                            },
-                            onRowCellClick = { r ->
-                                // 👇 Solo se NON è un'entry manuale
-                                if (!isManualEntry) {
-                                    infoRowIndex = r; infoDialogFocusField = 0; showInfoDialog =
-                                        true
-                                } else {
-                                    // Per le entry manuali, apriamo il dialog di modifica specifico
-                                    productToEditIndex =
-                                        r - 1 // r è basato su 1, l'indice è basato su 0
-                                    showManualEntryDialog = true
-                                }
-                            },
-                            onHeaderClick = { colIdx -> headerDialogIndex = colIdx },
-                            // --- RIGHE AGGIUNTE PER RISOLVERE L'ERRORE ---
-                            isColumnEssential = { false }, // In questa schermata nessuna colonna ha la logica "essenziale".
-                            onHeaderEditClick = { colIdx ->
-                                headerDialogIndex = colIdx
-                            }, // Il click sull'icona apre lo stesso dialogo di prima.
-                            isManualEntry = isManualEntry
-                        )
+                            isSavingOrReverting = false
+                            onBackToStart()
+                        }
+                    },
+                    onSaveAndExit = {
+                        showExitFromHistoryDialog = false
+                        scope.launch {
+                            isSavingOrReverting = true
+                            excelViewModel.saveCurrentStateToHistory(entryUid)
+                            isSavingOrReverting = false
+                            onBackToStart()
+                        }
+                    },
+                    onCancel = {
+                        if (!isSavingOrReverting) showExitFromHistoryDialog = false
                     }
-                }
+                )
 
-                // 1. Dialogo per le NUOVE voci (quando isNewEntry = true)
-                if (showExitDialog) {
-                    AlertDialog(
-                        onDismissRequest = { if (!isSavingOrReverting) showExitDialog = false },
-                        title = { Text(stringResource(R.string.discard_and_exit_title)) },
-                        text = { Text(stringResource(R.string.discard_and_exit_message)) },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    // 1. Nascondi subito il dialogo
-                                    showExitDialog = false
-                                    // 2. Avvia l'azione completa
-                                    scope.launch {
-                                        isSavingOrReverting = true
-                                        excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                                            ?.let { entryToDelete ->
-                                                excelViewModel.deleteHistoryEntry(entryToDelete)
-                                            }
-                                        // L'AGGIUNTA FONDAMENTALE: ripristina lo stato di PreGenerate
-                                        excelViewModel.revertToPreGenerateState()
-                                        isSavingOrReverting = false
-                                        onBackToStart() // Torna indietro
-                                    }
-                                },
-                                enabled = !isSavingOrReverting
-                            ) {
-                                Text(
-                                    stringResource(R.string.discard),
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!isSavingOrReverting) showExitDialog = false },
-                                enabled = !isSavingOrReverting
-                            ) {
-                                Text(stringResource(R.string.cancel))
-                            }
-                        }
-                    )
-                }
-
-                // 2. NUOVO Dialogo per le voci dalla CRONOLOGIA (quando isNewEntry = false)
-                if (showExitFromHistoryDialog) {
-                    AlertDialog(
-                        onDismissRequest = {
-                            if (!isSavingOrReverting) showExitFromHistoryDialog = false
-                        },
-                        title = { Text(stringResource(R.string.exit_confirmation_title)) },
-                        text = {
-                            if (isSavingOrReverting) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    CircularProgressIndicator()
-                                    Text(stringResource(R.string.saving_changes))
-                                }
-                            } else {
-                                Text(stringResource(R.string.exit_changes_question))
-                            }
-                        },
-                        // --- FIX COMPLETO PER LAYOUT E LOGICA ---
-                        confirmButton = {
-                            Row(
-                                horizontalArrangement = Arrangement.End,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                // Bottone "Esci senza Salvare"
-                                TextButton(
-                                    onClick = {
-                                        showExitFromHistoryDialog = false
-                                        scope.launch {
-                                            isSavingOrReverting = true
-                                            // 1. Ripristina il DB allo stato originale
-                                            excelViewModel.revertDatabaseToOriginalState()
-
-                                            // 2. RICARICA lo stato nel ViewModel per coerenza immediata
-                                            excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                                                ?.let {
-                                                    excelViewModel.loadHistoryEntry(it)
-                                                }
-
-                                            isSavingOrReverting = false
-                                            onBackToStart()
-                                        }
-                                    },
-                                    enabled = !isSavingOrReverting
-                                ) {
-                                    Text(
-                                        stringResource(R.string.exit_without_saving),
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                // Bottone "Salva ed Esci"
-                                Button(
-                                    onClick = {
-                                        showExitFromHistoryDialog = false
-                                        scope.launch {
-                                            isSavingOrReverting = true
-                                            // La funzione di salvataggio è già corretta
-                                            excelViewModel.saveCurrentStateToHistory(entryUid)
-                                            isSavingOrReverting = false
-                                            onBackToStart()
-                                        }
-                                    },
-                                    enabled = !isSavingOrReverting
-                                ) {
-                                    Text(stringResource(R.string.save_and_exit))
-                                }
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    if (!isSavingOrReverting) showExitFromHistoryDialog = false
-                                },
-                                enabled = !isSavingOrReverting
-                            ) {
-                                Text(stringResource(R.string.cancel))
-                            }
-                        }
-                    )
-                }
-
-                if (excelData.isNotEmpty() && generated) {
-                    Column(
-                        Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 88.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalAlignment = Alignment.End
-                    ) {
-                        if (isManualEntry) {
-                            // FAB per la modalità manuale
-                            FloatingActionButton(onClick = {
-                                val opts = ScanOptions().apply {
-                                    setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                    setCaptureActivity(PortraitCaptureActivity::class.java)
-                                    setOrientationLocked(true)
-                                    setBeepEnabled(true)
-                                    setPrompt(context.getString(R.string.scan_prompt))
-                                }
-                                scanLauncher.launch(opts)
-                            }) {
-                                Icon(Icons.Filled.CameraAlt, contentDescription = "Scan Barcode")
-                            }
-                        } else {
-                            FloatingActionButton(onClick = {
-                                val opts = ScanOptions().apply {
-                                    setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                    setCaptureActivity(PortraitCaptureActivity::class.java)
-                                    setOrientationLocked(true)
-                                    setBeepEnabled(true)
-                                    setPrompt(context.getString(R.string.scan_prompt))
-                                }
-                                scanLauncher.launch(opts)
-                            }) {
-                                Icon(
-                                    Icons.Filled.CameraAlt,
-                                    contentDescription = stringResource(R.string.scan_icon_desc)
-                                )
-                            }
-
-                            FloatingActionButton(onClick = {
-                                searchText = ""; showSearchDialog = true
-                            }) {
-                                Icon(
-                                    Icons.Filled.Search,
-                                    contentDescription = stringResource(R.string.search_icon_desc)
-                                )
-                            }
-                        }
-                    }
-                }
+                GeneratedScreenFabArea(
+                    visible = excelData.isNotEmpty() && generated,
+                    isManualEntry = isManualEntry,
+                    onLaunchScanner = { launchMainScanner() },
+                    onOpenSearch = {
+                        searchText = ""
+                        showSearchDialog = true
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 88.dp)
+                )
 
                 if (showManualEntryDialog) {
                     ManualEntryDialog(
@@ -821,8 +591,6 @@ fun GeneratedScreen(
                         },
                         onScanNext = {
                             showManualEntryDialog = false
-                            // **3. OPZIONI SCANNER CORRETTE.** Anche "Aggiungi e Successivo"
-                            // ora lancia lo scanner in modalità verticale.
                             val portraitScanOptions = ScanOptions().apply {
                                 setDesiredBarcodeFormats(ALL_CODE_TYPES)
                                 setBeepEnabled(true)
@@ -835,594 +603,74 @@ fun GeneratedScreen(
                     )
                 }
 
-                if (showSearchDialog) {
-                    // Focus + tastiera per il TextField "Inserisci numero"
-                    val searchFocusRequester = remember { FocusRequester() }
-                    val keyboardController = LocalSoftwareKeyboardController.current
+                GeneratedScreenSearchDialog(
+                    visible = showSearchDialog,
+                    searchText = searchText,
+                    onSearchTextChange = { searchText = it },
+                    onDismiss = { showSearchDialog = false },
+                    onPerformSearch = { performSearch() },
+                    onLaunchScanner = { launchMainScanner() }
+                )
 
-                    LaunchedEffect(showSearchDialog) {
-                        if (showSearchDialog) {
-                            delay(50)                      // piccolo ritardo per far montare il dialogo
-                            searchFocusRequester.requestFocus()
-                            keyboardController?.show()
+                GeneratedScreenExitToHomeDialog(
+                    visible = showExitToHomeDialog,
+                    isSavingOrReverting = isSavingOrReverting,
+                    onDismissRequest = {
+                        if (!isSavingOrReverting) showExitToHomeDialog = false
+                    },
+                    onSaveAndExitToHome = {
+                        showExitToHomeDialog = false
+                        scope.launch {
+                            isSavingOrReverting = true
+                            excelViewModel.saveCurrentStateToHistory(entryUid)
+                            isSavingOrReverting = false
+                            onNavigateToHome()
                         }
+                    },
+                    onCancel = {
+                        if (!isSavingOrReverting) showExitToHomeDialog = false
                     }
-
-                    AlertDialog(
-                        onDismissRequest = {
-                            keyboardController?.hide()
-                            showSearchDialog = false
-                        },
-                        title = { Text(stringResource(R.string.search_number)) },
-                        text = {
-                            Column {
-                                Button(onClick = {
-                                    scanLauncher.launch(
-                                        ScanOptions().apply {
-                                            setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                            setCaptureActivity(PortraitCaptureActivity::class.java)
-                                            setOrientationLocked(true)
-                                            setBeepEnabled(true)
-                                            setPrompt(context.getString(R.string.scan_prompt))
-                                        }
-                                    )
-                                }, Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                                    Icon(Icons.Filled.CameraAlt, contentDescription = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(stringResource(R.string.scanner))
-                                }
-                                TextField(
-                                    value = searchText,
-                                    onValueChange = { searchText = it },
-                                    label = { Text(stringResource(R.string.insert_number)) },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Ascii,           // lettere + numeri
-                                        imeAction = ImeAction.Search,
-                                        capitalization = KeyboardCapitalization.None,
-                                        autoCorrectEnabled = false                   // <-- nuovo parametro
-                                    ),
-                                    keyboardActions = KeyboardActions(onSearch = {
-                                        keyboardController?.hide()
-                                        performSearch()
-                                    }),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .focusRequester(searchFocusRequester)
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = {
-                                keyboardController?.hide()
-                                performSearch()
-                            }) { Text(stringResource(R.string.search_number)) }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = {
-                                keyboardController?.hide()
-                                showSearchDialog = false
-                            }) { Text(stringResource(R.string.clear)) }
-                        }
-                    )
-                }
-
-                if (showExitToHomeDialog) {
-                    AlertDialog(
-                        onDismissRequest = {
-                            if (!isSavingOrReverting) showExitToHomeDialog = false
-                        },
-                        title = { Text(stringResource(R.string.dialog_title_return_home)) },
-                        text = { Text(stringResource(R.string.dialog_message_save_and_return_home)) },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    showExitToHomeDialog = false
-                                    scope.launch {
-                                        isSavingOrReverting = true
-                                        // Salva sempre lo stato attuale prima di uscire
-                                        excelViewModel.saveCurrentStateToHistory(entryUid)
-                                        isSavingOrReverting = false
-                                        // Esegui la navigazione verso la Home (FilePicker)
-                                        // La logica di popUpTo va gestita nel NavGraph
-                                        onNavigateToHome()
-                                    }
-                                },
-                                enabled = !isSavingOrReverting
-                            ) {
-                                Text(stringResource(R.string.save_and_exit))
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    if (!isSavingOrReverting) showExitToHomeDialog = false
-                                },
-                                enabled = !isSavingOrReverting
-                            ) {
-                                Text(stringResource(R.string.cancel))
-                            }
-                        }
-                    )
-                }
+                )
 
                 if (showInfoDialog && infoRowIndex in excelData.indices) {
-
-                    val header = excelData.first()
-                    val row = excelData[infoRowIndex]
-
-
-                    // Inizializza gli stati quando il dialogo viene mostrato
-                    LaunchedEffect(infoRowIndex) {
-                        fun getValue(key: String): String = row.getOrNull(header.indexOf(key)) ?: ""
-                        productNameState.value = TextFieldValue(getValue("productName"))
-                        secondProductNameState.value = TextFieldValue(getValue("secondProductName"))
-                        barcodeState.value = TextFieldValue(getValue("barcode"))
-                        itemNumberState.value = TextFieldValue(getValue("itemNumber"))
-                        quantityState.value = TextFieldValue(getValue("quantity"))
-                        totalPriceState.value = TextFieldValue(getValue("totalPrice"))
-                        purchasePriceState.value = TextFieldValue(getValue("purchasePrice"))
-                        oldPurchasePriceState.value = TextFieldValue(getValue("oldPurchasePrice"))
-                        oldRetailPriceState.value = TextFieldValue(getValue("oldRetailPrice"))
-                    }
-
-
-                    val qtyReq = remember { FocusRequester() }
-                    val priceReq = remember { FocusRequester() }
-                    val backgroundFocusRequester = remember { FocusRequester() }
-
-                    LaunchedEffect(showInfoDialog, infoDialogFocusField) {
-                        if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
-                    }
-
-                    AlertDialog(
-                        onDismissRequest = {
+                    GeneratedScreenInfoDialog(
+                        excelViewModel = excelViewModel,
+                        entryUid = entryUid,
+                        infoRowIndex = infoRowIndex,
+                        infoDialogFocusField = infoDialogFocusField,
+                        editableValues = editableValues,
+                        completeStates = completeStates,
+                        productNameState = productNameState,
+                        secondProductNameState = secondProductNameState,
+                        barcodeState = barcodeState,
+                        itemNumberState = itemNumberState,
+                        quantityState = quantityState,
+                        totalPriceState = totalPriceState,
+                        purchasePriceState = purchasePriceState,
+                        oldPurchasePriceState = oldPurchasePriceState,
+                        oldRetailPriceState = oldRetailPriceState,
+                        isInfoDialogInEditMode = isInfoDialogInEditMode,
+                        onInfoDialogEditModeChange = { isInfoDialogInEditMode = it },
+                        onDismiss = {
                             showInfoDialog = false
-                            isInfoDialogInEditMode = false // Resetta lo stato in uscita
+                            isInfoDialogInEditMode = false
                         },
-                        // --- TITOLO MODIFICATO CON PULSANTE EDIT/SAVE ---
-                        title = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(stringResource(R.string.row_info))
-                                IconButton(onClick = {
-                                    // Se stiamo salvando (da modalità edit a view)
-                                    if (isInfoDialogInEditMode) {
-                                        val updatedRow = excelData[infoRowIndex].toMutableList()
-                                        fun setValue(key: String, value: String) {
-                                            val idx = header.indexOf(key)
-                                            if (idx != -1) updatedRow[idx] = value
-                                        }
-                                        setValue(
-                                            "secondProductName",
-                                            secondProductNameState.value.text
-                                        )
-                                        setValue("barcode", barcodeState.value.text)
-                                        setValue("itemNumber", itemNumberState.value.text)
-                                        setValue("quantity", quantityState.value.text)
-                                        setValue("totalPrice", totalPriceState.value.text)
-                                        setValue("purchasePrice", purchasePriceState.value.text)
-                                        // Non rendiamo i prezzi vecchi editabili di solito, ma è possibile se necessario
-
-                                        excelViewModel.excelData[infoRowIndex] = updatedRow
-                                        excelViewModel.updateHistoryEntry(entryUid)
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.row_updated),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                    isInfoDialogInEditMode = !isInfoDialogInEditMode
-                                }) {
-                                    if (isInfoDialogInEditMode) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = stringResource(R.string.save_changes),
-                                            tint = Color.White,
-                                            modifier = Modifier
-                                                .size(28.dp) // <-- Aumenta la dimensione totale
-                                                .background(
-                                                    MaterialTheme.colorScheme.primary,
-                                                    shape = CircleShape
-                                                )
-                                                .padding(2.dp) // <-- Riduci il padding per ingrandire il tick
-                                        )
-                                    } else {
-                                        // Altrimenti, mostra la normale icona "Modifica"
-                                        Icon(
-                                            imageVector = Icons.Default.Edit,
-                                            contentDescription = stringResource(R.string.edit_row),
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
+                        onLaunchBarcodeScanner = {
+                            dialogScanLauncher.launch(
+                                ScanOptions().apply {
+                                    setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                    setCaptureActivity(PortraitCaptureActivity::class.java)
+                                    setOrientationLocked(true)
+                                    setBeepEnabled(true)
+                                    setPrompt(context.getString(R.string.scan_prompt))
                                 }
-                            }
+                            )
                         },
-                        text = {
-                            Column(
-                                modifier = Modifier
-                                    .verticalScroll(rememberScrollState())
-                                    .fillMaxWidth()
-                                    // --- INIZIO MODIFICA ---
-                                    .focusRequester(backgroundFocusRequester) // 1. Associa il requester
-                                    .focusable() // 2. Rendi il componente "focalizzabile"
-                                    .clickable( // 3. Al click, richiedi il focus
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null // Per non mostrare l'effetto ripple
-                                    ) {
-                                        backgroundFocusRequester.requestFocus() // Nasconde la tastiera togliendo il focus ai TextField
-                                    },
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                // --- COMPOSABLE LOCALE PER RIGA EDITABILE ---
-                                @Composable
-                                fun EditableInfoRow(
-                                    label: String,
-                                    state: MutableState<TextFieldValue>,
-                                    kType: KeyboardType = KeyboardType.Text
-                                ) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            "$label:",
-                                            Modifier.weight(0.8f), // Più spazio per il label
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        if (isInfoDialogInEditMode) {
-                                            OutlinedTextField(
-                                                value = state.value,
-                                                onValueChange = { state.value = it },
-                                                modifier = Modifier.weight(1.2f)
-                                                    .heightIn(min = 48.dp),
-                                                textStyle = MaterialTheme.typography.bodyMedium,
-                                                singleLine = true,
-                                                keyboardOptions = KeyboardOptions(keyboardType = kType)
-                                            )
-                                        } else {
-                                            Text(
-                                                state.value.text,
-                                                Modifier.weight(1.2f),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                        }
-                                    }
-                                }
-
-                                if (header.contains("productName")) {
-                                    EditableInfoRow(
-                                        stringResource(R.string.header_product_name),
-                                        productNameState
-                                    )
-                                }
-
-                                if (header.contains("secondProductName")) {
-                                    EditableInfoRow(
-                                        stringResource(R.string.header_second_product_name),
-                                        secondProductNameState
-                                    )
-                                }
-                                //                            EditableInfoRow(
-                                //                                stringResource(R.string.header_barcode),
-                                //                                barcodeState,
-                                //                                kType = KeyboardType.Number
-                                //                            )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Etichetta "Codice a barre:" (sempre visibile)
-                                    Text(
-                                        text = "${stringResource(R.string.header_barcode)}:",
-                                        modifier = Modifier.weight(0.8f),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-
-                                    // Contenuto a destra: cambia in base alla modalità
-                                    if (isInfoDialogInEditMode) {
-                                        // Modalità di modifica: Campo di testo con bottone
-                                        OutlinedTextField(
-                                            value = barcodeState.value,
-                                            onValueChange = { barcodeState.value = it },
-                                            modifier = Modifier.weight(1.2f),
-                                            textStyle = MaterialTheme.typography.bodyMedium,
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            trailingIcon = {
-                                                IconButton(onClick = {
-                                                    val opts = ScanOptions().apply {
-                                                        setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                                        setCaptureActivity(PortraitCaptureActivity::class.java)
-                                                        setOrientationLocked(true)
-                                                        setBeepEnabled(true)
-                                                        setPrompt(context.getString(R.string.scan_prompt))
-                                                    }
-                                                    dialogScanLauncher.launch(opts)
-                                                }) {
-                                                    Icon(
-                                                        imageVector = Icons.Filled.CameraAlt,
-                                                        contentDescription = stringResource(R.string.scan_barcode_for_editing),
-                                                        tint = MaterialTheme.colorScheme.primary // <-- RIGA AGGIUNTA
-                                                    )
-                                                }
-                                            }
-                                        )
-                                    } else {
-                                        // Modalità di sola visualizzazione: Testo semplice
-                                        Text(
-                                            text = barcodeState.value.text,
-                                            modifier = Modifier.weight(1.2f),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                                if (header.contains("itemNumber")) {
-                                    EditableInfoRow(
-                                        stringResource(R.string.header_item_number),
-                                        itemNumberState,
-                                        kType = KeyboardType.Number
-                                    )
-                                }
-                                EditableInfoRow(
-                                    stringResource(R.string.header_quantity),
-                                    quantityState,
-                                    kType = KeyboardType.Number
-                                )
-                                EditableInfoRow(
-                                    stringResource(R.string.header_total_price),
-                                    totalPriceState,
-                                    kType = KeyboardType.Number
-                                )
-
-                                HorizontalDivider()
-
-                                // --- LAYOUT PREZZI ---
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.Top
-                                ) {
-                                    if (oldPurchasePriceState.value.text.isNotBlank()) {
-                                        Column(
-                                            modifier = Modifier.weight(1f),
-                                            horizontalAlignment = Alignment.Start
-                                        ) {
-                                            Text(
-                                                stringResource(R.string.header_old_purchase_price_short),
-                                                style = MaterialTheme.typography.labelMedium
-                                            )
-                                            Text(
-                                                text = oldPurchasePriceState.value.text,
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                textDecoration = TextDecoration.LineThrough,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    } else {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
-
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        horizontalAlignment = Alignment.Start
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.header_purchase_price),
-                                            style = MaterialTheme.typography.labelMedium
-                                        )
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            if (isInfoDialogInEditMode) {
-                                                OutlinedTextField(
-                                                    value = purchasePriceState.value,
-                                                    onValueChange = {
-                                                        purchasePriceState.value = it
-                                                    },
-                                                    modifier = Modifier.weight(1f),
-                                                    textStyle = MaterialTheme.typography.bodyLarge,
-                                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                    singleLine = true
-                                                )
-                                            } else {
-                                                Text(
-                                                    text = purchasePriceState.value.text,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.background(MaterialTheme.colorScheme.secondaryContainer)
-                                                        .padding(4.dp)
-                                                )
-                                            }
-                                            // Calcolatrice
-                                            IconButton(
-                                                onClick = {
-                                                    calcInput = purchasePriceState.value.text
-                                                    calcRowIndex = infoRowIndex
-                                                    showCalcDialog = true
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Filled.Calculate,
-                                                    contentDescription = stringResource(R.string.calculate_new_value),
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (oldRetailPriceState.value.text.isNotBlank()) {
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            "${stringResource(R.string.header_old_retail_price)}:",
-                                            Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Text(
-                                            oldRetailPriceState.value.text,
-                                            Modifier.weight(1f),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-
-                                HorizontalDivider()
-
-                                // Campi editabili (Quantità contata e Prezzo vendita) rimangono invariati
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "${getLocalizedHeader(context, "realQuantity")}:",
-                                        Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    var qtyTf by remember {
-                                        mutableStateOf(
-                                            TextFieldValue(
-                                                editableValues[infoRowIndex][0].value,
-                                                TextRange(editableValues[infoRowIndex][0].value.length)
-                                            )
-                                        )
-                                    }
-                                    TextField(
-                                        value = qtyTf,
-                                        onValueChange = { nv ->
-                                            qtyTf = nv; editableValues[infoRowIndex][0].value =
-                                            nv.text; excelViewModel.updateHistoryEntry(entryUid)
-                                        },
-                                        singleLine = true,
-                                        keyboardOptions = KeyboardOptions(
-                                            keyboardType = KeyboardType.Number,
-                                            imeAction = ImeAction.Next
-                                        ),
-                                        keyboardActions = KeyboardActions(onNext = { priceReq.requestFocus() }),
-                                        modifier = Modifier.weight(1f).height(48.dp)
-                                            .focusRequester(qtyReq)
-                                    )
-                                }
-
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "${getLocalizedHeader(context, "retailPrice")}:",
-                                        Modifier.weight(1f),
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    var priceTf by remember {
-                                        mutableStateOf(
-                                            TextFieldValue(
-                                                editableValues[infoRowIndex][1].value,
-                                                TextRange(editableValues[infoRowIndex][1].value.length)
-                                            )
-                                        )
-                                    }
-                                    TextField(
-                                        value = priceTf,
-                                        onValueChange = { nv ->
-                                            priceTf = nv; editableValues[infoRowIndex][1].value =
-                                            nv.text; excelViewModel.updateHistoryEntry(entryUid)
-                                        },
-                                        singleLine = true,
-                                        keyboardOptions = KeyboardOptions(
-                                            keyboardType = KeyboardType.Number,
-                                            imeAction = ImeAction.Done
-                                        ),
-                                        keyboardActions = KeyboardActions(onDone = {
-                                            // 1. Recupera i valori delle quantità come stringhe
-                                            val countedQtyString =
-                                                editableValues[infoRowIndex][0].value
-                                            val originalQtyString = quantityState.value.text
-
-                                            // 2. Converti in numeri in modo sicuro (restituisce null se non è un numero)
-                                            val countedQty = countedQtyString.toDoubleOrNull()
-                                            val originalQty = originalQtyString.toDoubleOrNull()
-
-                                            // 3. Controlla se i valori sono validi e uguali
-                                            if (countedQty != null && countedQty == originalQty) {
-                                                // 4. Se sono uguali, esegui l'azione "Completo"
-                                                completeStates[infoRowIndex] = true
-                                                excelViewModel.updateHistoryEntry(entryUid)
-                                            }
-                                            // 5. In ogni caso (sia che siano uguali o diversi), chiudi il dialogo
-                                            showInfoDialog = false
-                                            isInfoDialogInEditMode = false
-                                        }),
-                                        modifier = Modifier.weight(1f).height(48.dp)
-                                            .focusRequester(priceReq)
-                                    )
-                                }
-                            }
-                        },
-                        dismissButton = {},
-                        confirmButton = {
-                            if (!isInfoDialogInEditMode) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    IconButton(onClick = { showGenericCalcDialog = true }) {
-                                        Icon(
-                                            imageVector = Icons.Filled.Calculate,
-                                            contentDescription = stringResource(R.string.fast_calculator_desc)
-                                        )
-                                    }
-                                    Spacer(Modifier.weight(1f))
-                                    TextButton(onClick = { showInfoDialog = false }) {
-                                        Text(stringResource(R.string.confirm))
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    // 1. Determina lo stato attuale della riga
-                                    val isCurrentlyComplete =
-                                        completeStates.getOrNull(infoRowIndex) == true
-
-                                    // 2. Scegli il testo e i colori del pulsante in base allo stato
-                                    val buttonText = if (isCurrentlyComplete) {
-                                        stringResource(R.string.mark_as_incomplete) // Testo per annullare: "Annulla Completo"
-                                    } else {
-                                        stringResource(R.string.mark_as_complete)   // Testo per confermare: "Segna Completo"
-                                    }
-
-                                    val buttonColors = if (isCurrentlyComplete) {
-                                        // Usa colori meno evidenti per l'azione di "annullamento" per una migliore UX
-                                        ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                        )
-                                    } else {
-                                        // Colori primari standard per l'azione principale
-                                        ButtonDefaults.buttonColors()
-                                    }
-
-                                    // 3. Crea il pulsante dinamico
-                                    Button(
-                                        onClick = {
-                                            // La logica di toggle rimane la stessa
-                                            completeStates[infoRowIndex] =
-                                                !completeStates[infoRowIndex]
-                                            excelViewModel.updateHistoryEntry(entryUid)
-                                            showInfoDialog = false
-                                        },
-                                        colors = buttonColors // Applica i colori dinamici
-                                    ) {
-                                        Text(buttonText) // Applica il testo dinamico
-                                    }
-                                }
-                            }
+                        onOpenGenericCalculator = { showGenericCalcDialog = true },
+                        onOpenPurchaseCalculator = { value ->
+                            calcInput = value
+                            calcRowIndex = infoRowIndex
+                            showCalcDialog = true
                         }
                     )
                 }
@@ -1459,110 +707,42 @@ fun GeneratedScreen(
         (dbUiState as? UiState.Loading)?.let { LoadingDialog(it) }
     }
 
-    // Aggiungo alcune stringhe mancanti per completezza (da aggiungere in strings.xml)
-    // R.string.edit_row = "Modifica riga"
-    // R.string.save_changes = "Salva modifiche"
-    // R.string.row_updated = "Riga aggiornata"
-
     if (showRenameDialog) {
         val suppliers by databaseViewModel.suppliers.collectAsState()
         val categories by databaseViewModel.categories.collectAsState()
 
-        AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
-            title = { Text(stringResource(R.string.rename_file)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = renameText,
-                        onValueChange = { renameText = it },
-                        label = { Text(stringResource(R.string.new_name)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+        GeneratedScreenRenameDialog(
+            renameText = renameText,
+            onRenameTextChange = { renameText = it },
+            supplierName = supplierNameForRename,
+            onSupplierNameChange = { supplierNameForRename = it },
+            categoryName = categoryNameForRename,
+            onCategoryNameChange = { categoryNameForRename = it },
+            supplierExpanded = supplierExpanded,
+            onSupplierExpandedChange = { supplierExpanded = it },
+            categoryExpanded = categoryExpanded,
+            onCategoryExpandedChange = { categoryExpanded = it },
+            suppliers = suppliers,
+            categories = categories,
+            onConfirm = {
+                supplierExpanded = false
+                categoryExpanded = false
+                val entry = excelViewModel.historyEntries.value.find { it.uid == entryUid }
+                if (entry != null && renameText.isNotBlank()) {
+                    excelViewModel.renameHistoryEntry(
+                        entry = entry,
+                        newName = renameText,
+                        newSupplier = supplierNameForRename,
+                        newCategory = categoryNameForRename
                     )
-
-                    // FORNITORE
-                    ExposedDropdownMenuBox(
-                        expanded = supplierExpanded,
-                        onExpandedChange = { supplierExpanded = !supplierExpanded }
-                    ) {
-                        OutlinedTextField(
-                            readOnly = true,
-                            value = supplierNameForRename.ifBlank { stringResource(R.string.no_supplier) },
-                            onValueChange = {},
-                            label = { Text(stringResource(R.string.supplier_label)) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = supplierExpanded) },
-                            modifier = Modifier
-                                .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
-                                .fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = supplierExpanded,
-                            onDismissRequest = { supplierExpanded = false }
-                        ) {
-                            suppliers.forEach { s ->
-                                DropdownMenuItem(
-                                    text = { Text(s.name) },
-                                    onClick = {
-                                        supplierNameForRename = s.name
-                                        supplierExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    // CATEGORIA
-                    ExposedDropdownMenuBox(
-                        expanded = categoryExpanded,
-                        onExpandedChange = { categoryExpanded = !categoryExpanded }
-                    ) {
-                        OutlinedTextField(
-                            readOnly = true,
-                            value = categoryNameForRename.ifBlank { stringResource(R.string.no_category) },
-                            onValueChange = {},
-                            label = { Text(stringResource(R.string.category_label)) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
-                            modifier = Modifier
-                                .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
-                                .fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
-                            expanded = categoryExpanded,
-                            onDismissRequest = { categoryExpanded = false }
-                        ) {
-                            categories.forEach { c ->
-                                DropdownMenuItem(
-                                    text = { Text(c.name) },
-                                    onClick = {
-                                        categoryNameForRename = c.name
-                                        categoryExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
+                    titleText = renameText
+                    showRenameDialog = false
                 }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    val entry = excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                    if (entry != null && renameText.isNotBlank()) {
-                        excelViewModel.renameHistoryEntry(
-                            entry = entry,
-                            newName = renameText,
-                            newSupplier = supplierNameForRename,
-                            newCategory = categoryNameForRename
-                        )
-                        titleText = renameText
-                        showRenameDialog = false
-                    }
-                }) { Text(stringResource(R.string.confirm)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
+            onDismiss = {
+                supplierExpanded = false
+                categoryExpanded = false
+                showRenameDialog = false
             }
         )
     }
@@ -1580,46 +760,920 @@ fun GeneratedScreen(
 
     // Dialog per la selezione del tipo di colonna
     if (showCustomHeaderDialog && headerDialogIndex != null) {
-        AlertDialog(
-            onDismissRequest = { showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null },
-            title = { Text(stringResource(R.string.custom_header_dialog_title)) },
-            text = {
-                OutlinedTextField(
-                    value = customHeader, onValueChange = { customHeader = it },
-                    label = { Text(stringResource(R.string.custom_header_label)) },
-                    singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
+        GeneratedScreenCustomHeaderDialog(
+            customHeader = customHeader,
+            onCustomHeaderChange = { customHeader = it },
+            onDismissRequest = {
+                showCustomHeaderDialog = false
+                customHeader = ""
+                headerDialogIndex = null
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    val idx = headerDialogIndex!!
+            onConfirm = {
+                headerDialogIndex?.let { idx ->
                     if (customHeader.isNotBlank()) {
                         excelViewModel.setHeaderType(idx, customHeader.trim())
-                        showCustomHeaderDialog = false; customHeader = ""; headerDialogIndex = null
+                        showCustomHeaderDialog = false
+                        customHeader = ""
+                        headerDialogIndex = null
                     }
-                }) { Text(stringResource(R.string.confirm)) }
-            },
-            dismissButton = { TextButton(onClick = { showCustomHeaderDialog = false; customHeader = "" }) { Text(stringResource(R.string.cancel)) } }
-        )
-    }
-
-    headerDialogIndex?.let { colIdx ->
-        AlertDialog(
-            onDismissRequest = { headerDialogIndex = null },
-            title = { Text(stringResource(R.string.select_column_type)) },
-            text = {
-                Column {
-                    possibleKeys.forEach { key ->
-                        TextButton(onClick = { excelViewModel.setHeaderType(colIdx, key); headerDialogIndex = null }) { Text(getLocalizedHeader(context, key)) }
-                    }
-                    TextButton(onClick = { showCustomHeaderDialog = true; headerDialogIndex = colIdx }) { Text(stringResource(R.string.custom_column_type)) }
                 }
             },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { headerDialogIndex = null }) { Text(stringResource(R.string.close)) } }
+            onCancel = {
+                showCustomHeaderDialog = false
+                customHeader = ""
+            }
         )
     }
 
+    if (!showCustomHeaderDialog) {
+        headerDialogIndex?.let { colIdx ->
+            GeneratedScreenHeaderTypeDialog(
+                possibleKeys = possibleKeys,
+                onSelectHeaderType = { key ->
+                    excelViewModel.setHeaderType(colIdx, key)
+                    headerDialogIndex = null
+                },
+                onOpenCustomHeader = {
+                    showCustomHeaderDialog = true
+                    headerDialogIndex = colIdx
+                },
+                onDismiss = { headerDialogIndex = null }
+            )
+        }
+    }
+
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GeneratedScreenTopBar(
+    titleText: String,
+    excelData: List<List<String>>,
+    generated: Boolean,
+    supplierName: String?,
+    categoryName: String?,
+    completedCount: Int,
+    totalCount: Int,
+    wasExported: Boolean,
+    syncStatus: com.example.merchandisecontrolsplitview.data.SyncStatus,
+    onNavigateBack: () -> Unit,
+    onNavigateHome: () -> Unit,
+    onAnalyzeSync: () -> Unit,
+    onExport: () -> Unit,
+    onShare: () -> Unit,
+    onRename: () -> Unit,
+) {
+    Column {
+        TopAppBar(
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
+            ),
+            navigationIcon = {
+                IconButton(onClick = onNavigateBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.back)
+                    )
+                }
+            },
+            title = {
+                var tapKey by remember { mutableIntStateOf(0) }
+                key(tapKey) {
+                    Text(
+                        text = titleText.ifBlank { stringResource(R.string.untitled) },
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .clickable { tapKey++ }
+                            .basicMarquee(
+                                animationMode = MarqueeAnimationMode.Immediately,
+                                iterations = 1
+                            )
+                    )
+                }
+            },
+            actions = {
+                if (excelData.isNotEmpty() && generated) {
+                    IconButton(onClick = onNavigateHome) {
+                        Icon(
+                            Icons.Default.Home,
+                            contentDescription = stringResource(R.string.go_to_home)
+                        )
+                    }
+                    IconButton(onClick = onAnalyzeSync) {
+                        StatusIcon(
+                            baseIcon = Icons.Default.Sync,
+                            badgeType = when (syncStatus) {
+                                com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
+                                com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
+                                com.example.merchandisecontrolsplitview.data.SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                            },
+                            contentDescription = stringResource(R.string.sync_with_database)
+                        )
+                    }
+
+                    var menuOpen by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = stringResource(R.string.more_actions)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.export_file)) },
+                                leadingIcon = {
+                                    MenuIconWithTick(
+                                        base = Icons.Default.FileDownload,
+                                        showTick = wasExported
+                                    )
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    onExport()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.share_xlsx)) },
+                                leadingIcon = { Icon(Icons.Default.Share, null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onShare()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.rename_file)) },
+                                leadingIcon = { Icon(Icons.Default.Edit, null) },
+                                onClick = {
+                                    menuOpen = false
+                                    onRename()
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        )
+        TopInfoChipsBar(
+            supplier = supplierName,
+            category = categoryName,
+            completed = completedCount,
+            total = totalCount,
+            exported = wasExported,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 2.dp)
+        )
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun GeneratedScreenGridHost(
+    excelData: List<List<String>>,
+    selectedColumns: androidx.compose.runtime.snapshots.SnapshotStateList<Boolean>,
+    editableValues: List<List<MutableState<String>>>,
+    completeStates: androidx.compose.runtime.snapshots.SnapshotStateList<Boolean>,
+    searchMatches: Set<Pair<Int, Int>>,
+    errorIndexes: Set<Int>,
+    isManualEntry: Boolean,
+    onCompleteToggle: (Int) -> Unit,
+    onQuantityClick: (Int) -> Unit,
+    onPriceClick: (Int) -> Unit,
+    onGeneratedRowClick: (Int) -> Unit,
+    onManualRowClick: (Int) -> Unit,
+    onHeaderDialogRequest: (Int) -> Unit,
+) {
+    val context = LocalContext.current
+
+    Column(Modifier.fillMaxSize()) {
+        if (isManualEntry && excelData.size <= 1) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.PlaylistAdd,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+                Text(
+                    text = stringResource(R.string.no_products_add_new),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        } else if (excelData.isNotEmpty()) {
+            val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
+            val localizedData = listOf(localizedHeader) + excelData.drop(1)
+            ZoomableExcelGrid(
+                data = localizedData,
+                cellWidth = 120.dp,
+                cellHeight = 48.dp,
+                selectedColumns = selectedColumns,
+                editableValues = editableValues,
+                completeStates = completeStates,
+                searchMatches = searchMatches,
+                errorRowIndexes = errorIndexes,
+                generated = true,
+                editMode = false,
+                onCompleteToggle = onCompleteToggle,
+                onCellEditRequest = { _, _ -> },
+                onQuantityCellClick = onQuantityClick,
+                onPriceCellClick = onPriceClick,
+                onRowCellClick = { row ->
+                    if (isManualEntry) onManualRowClick(row) else onGeneratedRowClick(row)
+                },
+                onHeaderClick = onHeaderDialogRequest,
+                isColumnEssential = { false },
+                onHeaderEditClick = onHeaderDialogRequest,
+                isManualEntry = isManualEntry
+            )
+        }
+    }
+}
+
+@Composable
+private fun GeneratedScreenFabArea(
+    visible: Boolean,
+    isManualEntry: Boolean,
+    onLaunchScanner: () -> Unit,
+    onOpenSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible) return
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalAlignment = Alignment.End
+    ) {
+        FloatingActionButton(onClick = onLaunchScanner) {
+            Icon(
+                Icons.Filled.CameraAlt,
+                contentDescription = stringResource(
+                    if (isManualEntry) R.string.scanner else R.string.scan_icon_desc
+                )
+            )
+        }
+
+        if (!isManualEntry) {
+            FloatingActionButton(onClick = onOpenSearch) {
+                Icon(
+                    Icons.Filled.Search,
+                    contentDescription = stringResource(R.string.search_icon_desc)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeneratedScreenInfoDialog(
+    excelViewModel: ExcelViewModel,
+    entryUid: Long,
+    infoRowIndex: Int,
+    infoDialogFocusField: Int,
+    editableValues: List<List<MutableState<String>>>,
+    completeStates: androidx.compose.runtime.snapshots.SnapshotStateList<Boolean>,
+    productNameState: MutableState<TextFieldValue>,
+    secondProductNameState: MutableState<TextFieldValue>,
+    barcodeState: MutableState<TextFieldValue>,
+    itemNumberState: MutableState<TextFieldValue>,
+    quantityState: MutableState<TextFieldValue>,
+    totalPriceState: MutableState<TextFieldValue>,
+    purchasePriceState: MutableState<TextFieldValue>,
+    oldPurchasePriceState: MutableState<TextFieldValue>,
+    oldRetailPriceState: MutableState<TextFieldValue>,
+    isInfoDialogInEditMode: Boolean,
+    onInfoDialogEditModeChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onLaunchBarcodeScanner: () -> Unit,
+    onOpenGenericCalculator: () -> Unit,
+    onOpenPurchaseCalculator: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val header = excelViewModel.excelData.firstOrNull() ?: return
+    val row = excelViewModel.excelData.getOrNull(infoRowIndex) ?: return
+
+    LaunchedEffect(infoRowIndex) {
+        fun getValue(key: String): String = row.getOrNull(header.indexOf(key)) ?: ""
+        productNameState.value = TextFieldValue(getValue("productName"))
+        secondProductNameState.value = TextFieldValue(getValue("secondProductName"))
+        barcodeState.value = TextFieldValue(getValue("barcode"))
+        itemNumberState.value = TextFieldValue(getValue("itemNumber"))
+        quantityState.value = TextFieldValue(getValue("quantity"))
+        totalPriceState.value = TextFieldValue(getValue("totalPrice"))
+        purchasePriceState.value = TextFieldValue(getValue("purchasePrice"))
+        oldPurchasePriceState.value = TextFieldValue(getValue("oldPurchasePrice"))
+        oldRetailPriceState.value = TextFieldValue(getValue("oldRetailPrice"))
+    }
+
+    val qtyReq = remember { FocusRequester() }
+    val priceReq = remember { FocusRequester() }
+    val backgroundFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(infoRowIndex, infoDialogFocusField) {
+        if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(stringResource(R.string.row_info))
+                IconButton(
+                    onClick = {
+                        if (isInfoDialogInEditMode) {
+                            val updatedRow = excelViewModel.excelData[infoRowIndex].toMutableList()
+                            fun setValue(key: String, value: String) {
+                                val idx = header.indexOf(key)
+                                if (idx != -1) updatedRow[idx] = value
+                            }
+
+                            setValue("secondProductName", secondProductNameState.value.text)
+                            setValue("barcode", barcodeState.value.text)
+                            setValue("itemNumber", itemNumberState.value.text)
+                            setValue("quantity", quantityState.value.text)
+                            setValue("totalPrice", totalPriceState.value.text)
+                            setValue("purchasePrice", purchasePriceState.value.text)
+
+                            excelViewModel.excelData[infoRowIndex] = updatedRow
+                            excelViewModel.updateHistoryEntry(entryUid)
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.row_updated),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        onInfoDialogEditModeChange(!isInfoDialogInEditMode)
+                    }
+                ) {
+                    if (isInfoDialogInEditMode) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = stringResource(R.string.save_changes),
+                            tint = Color.White,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.primary,
+                                    shape = CircleShape
+                                )
+                                .padding(2.dp)
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = stringResource(R.string.edit_row),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .fillMaxWidth()
+                    .focusRequester(backgroundFocusRequester)
+                    .focusable()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        backgroundFocusRequester.requestFocus()
+                    },
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (header.contains("productName")) {
+                    GeneratedScreenEditableInfoRow(
+                        label = stringResource(R.string.header_product_name),
+                        state = productNameState,
+                        isEditMode = isInfoDialogInEditMode
+                    )
+                }
+
+                if (header.contains("secondProductName")) {
+                    GeneratedScreenEditableInfoRow(
+                        label = stringResource(R.string.header_second_product_name),
+                        state = secondProductNameState,
+                        isEditMode = isInfoDialogInEditMode
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${stringResource(R.string.header_barcode)}:",
+                        modifier = Modifier.weight(0.8f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (isInfoDialogInEditMode) {
+                        OutlinedTextField(
+                            value = barcodeState.value,
+                            onValueChange = { barcodeState.value = it },
+                            modifier = Modifier.weight(1.2f),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            trailingIcon = {
+                                IconButton(onClick = onLaunchBarcodeScanner) {
+                                    Icon(
+                                        imageVector = Icons.Filled.CameraAlt,
+                                        contentDescription = stringResource(R.string.scan_barcode_for_editing),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        )
+                    } else {
+                        Text(
+                            text = barcodeState.value.text,
+                            modifier = Modifier.weight(1.2f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                if (header.contains("itemNumber")) {
+                    GeneratedScreenEditableInfoRow(
+                        label = stringResource(R.string.header_item_number),
+                        state = itemNumberState,
+                        isEditMode = isInfoDialogInEditMode,
+                        keyboardType = KeyboardType.Number
+                    )
+                }
+
+                GeneratedScreenEditableInfoRow(
+                    label = stringResource(R.string.header_quantity),
+                    state = quantityState,
+                    isEditMode = isInfoDialogInEditMode,
+                    keyboardType = KeyboardType.Number
+                )
+                GeneratedScreenEditableInfoRow(
+                    label = stringResource(R.string.header_total_price),
+                    state = totalPriceState,
+                    isEditMode = isInfoDialogInEditMode,
+                    keyboardType = KeyboardType.Number
+                )
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    if (oldPurchasePriceState.value.text.isNotBlank()) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            Text(
+                                stringResource(R.string.header_old_purchase_price_short),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            Text(
+                                text = oldPurchasePriceState.value.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                textDecoration = TextDecoration.LineThrough,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(
+                            stringResource(R.string.header_purchase_price),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (isInfoDialogInEditMode) {
+                                OutlinedTextField(
+                                    value = purchasePriceState.value,
+                                    onValueChange = { purchasePriceState.value = it },
+                                    modifier = Modifier.weight(1f),
+                                    textStyle = MaterialTheme.typography.bodyLarge,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true
+                                )
+                            } else {
+                                Text(
+                                    text = purchasePriceState.value.text,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                                        .padding(4.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { onOpenPurchaseCalculator(purchasePriceState.value.text) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Calculate,
+                                    contentDescription = stringResource(R.string.calculate_new_value),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (oldRetailPriceState.value.text.isNotBlank()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${stringResource(R.string.header_old_retail_price)}:",
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            oldRetailPriceState.value.text,
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${getLocalizedHeader(context, "realQuantity")}:",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    var qtyTf by remember {
+                        mutableStateOf(
+                            TextFieldValue(
+                                editableValues[infoRowIndex][0].value,
+                                TextRange(editableValues[infoRowIndex][0].value.length)
+                            )
+                        )
+                    }
+                    TextField(
+                        value = qtyTf,
+                        onValueChange = { newValue ->
+                            qtyTf = newValue
+                            editableValues[infoRowIndex][0].value = newValue.text
+                            excelViewModel.updateHistoryEntry(entryUid)
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next
+                        ),
+                        keyboardActions = KeyboardActions(onNext = { priceReq.requestFocus() }),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .focusRequester(qtyReq)
+                    )
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "${getLocalizedHeader(context, "retailPrice")}:",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    var priceTf by remember {
+                        mutableStateOf(
+                            TextFieldValue(
+                                editableValues[infoRowIndex][1].value,
+                                TextRange(editableValues[infoRowIndex][1].value.length)
+                            )
+                        )
+                    }
+                    TextField(
+                        value = priceTf,
+                        onValueChange = { newValue ->
+                            priceTf = newValue
+                            editableValues[infoRowIndex][1].value = newValue.text
+                            excelViewModel.updateHistoryEntry(entryUid)
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                val countedQtyString = editableValues[infoRowIndex][0].value
+                                val originalQtyString = quantityState.value.text
+                                val countedQty = countedQtyString.toDoubleOrNull()
+                                val originalQty = originalQtyString.toDoubleOrNull()
+
+                                if (countedQty != null && countedQty == originalQty) {
+                                    completeStates[infoRowIndex] = true
+                                    excelViewModel.updateHistoryEntry(entryUid)
+                                }
+                                onDismiss()
+                            }
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .focusRequester(priceReq)
+                    )
+                }
+            }
+        },
+        dismissButton = {},
+        confirmButton = {
+            if (!isInfoDialogInEditMode) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onOpenGenericCalculator) {
+                        Icon(
+                            imageVector = Icons.Filled.Calculate,
+                            contentDescription = stringResource(R.string.fast_calculator_desc)
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.confirm))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    val isCurrentlyComplete = completeStates.getOrNull(infoRowIndex) == true
+                    val buttonText = if (isCurrentlyComplete) {
+                        stringResource(R.string.mark_as_incomplete)
+                    } else {
+                        stringResource(R.string.mark_as_complete)
+                    }
+                    val buttonColors = if (isCurrentlyComplete) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    }
+
+                    Button(
+                        onClick = {
+                            completeStates[infoRowIndex] = !completeStates[infoRowIndex]
+                            excelViewModel.updateHistoryEntry(entryUid)
+                            onDismiss()
+                        },
+                        colors = buttonColors
+                    ) {
+                        Text(buttonText)
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun GeneratedScreenEditableInfoRow(
+    label: String,
+    state: MutableState<TextFieldValue>,
+    isEditMode: Boolean,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "$label:",
+            Modifier.weight(0.8f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (isEditMode) {
+            OutlinedTextField(
+                value = state.value,
+                onValueChange = { state.value = it },
+                modifier = Modifier
+                    .weight(1.2f)
+                    .heightIn(min = 48.dp),
+                textStyle = MaterialTheme.typography.bodyMedium,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType)
+            )
+        } else {
+            Text(
+                state.value.text,
+                Modifier.weight(1.2f),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GeneratedScreenRenameDialog(
+    renameText: String,
+    onRenameTextChange: (String) -> Unit,
+    supplierName: String,
+    onSupplierNameChange: (String) -> Unit,
+    categoryName: String,
+    onCategoryNameChange: (String) -> Unit,
+    supplierExpanded: Boolean,
+    onSupplierExpandedChange: (Boolean) -> Unit,
+    categoryExpanded: Boolean,
+    onCategoryExpandedChange: (Boolean) -> Unit,
+    suppliers: List<com.example.merchandisecontrolsplitview.data.Supplier>,
+    categories: List<com.example.merchandisecontrolsplitview.data.Category>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.rename_file)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = onRenameTextChange,
+                    label = { Text(stringResource(R.string.new_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                ExposedDropdownMenuBox(
+                    expanded = supplierExpanded,
+                    onExpandedChange = { onSupplierExpandedChange(!supplierExpanded) }
+                ) {
+                    OutlinedTextField(
+                        readOnly = true,
+                        value = supplierName.ifBlank { stringResource(R.string.no_supplier) },
+                        onValueChange = {},
+                        label = { Text(stringResource(R.string.supplier_label)) },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = supplierExpanded)
+                        },
+                        modifier = Modifier
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = supplierExpanded,
+                        onDismissRequest = { onSupplierExpandedChange(false) }
+                    ) {
+                        suppliers.forEach { supplier ->
+                            DropdownMenuItem(
+                                text = { Text(supplier.name) },
+                                onClick = {
+                                    onSupplierNameChange(supplier.name)
+                                    onSupplierExpandedChange(false)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = categoryExpanded,
+                    onExpandedChange = { onCategoryExpandedChange(!categoryExpanded) }
+                ) {
+                    OutlinedTextField(
+                        readOnly = true,
+                        value = categoryName.ifBlank { stringResource(R.string.no_category) },
+                        onValueChange = {},
+                        label = { Text(stringResource(R.string.category_label)) },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded)
+                        },
+                        modifier = Modifier
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { onCategoryExpandedChange(false) }
+                    ) {
+                        categories.forEach { category ->
+                            DropdownMenuItem(
+                                text = { Text(category.name) },
+                                onClick = {
+                                    onCategoryNameChange(category.name)
+                                    onCategoryExpandedChange(false)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun GeneratedScreenCustomHeaderDialog(
+    customHeader: String,
+    onCustomHeaderChange: (String) -> Unit,
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text(stringResource(R.string.custom_header_dialog_title)) },
+        text = {
+            OutlinedTextField(
+                value = customHeader,
+                onValueChange = onCustomHeaderChange,
+                label = { Text(stringResource(R.string.custom_header_label)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun GeneratedScreenHeaderTypeDialog(
+    possibleKeys: List<String>,
+    onSelectHeaderType: (String) -> Unit,
+    onOpenCustomHeader: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.select_column_type)) },
+        text = {
+            Column {
+                possibleKeys.forEach { key ->
+                    TextButton(onClick = { onSelectHeaderType(key) }) {
+                        Text(getLocalizedHeader(context, key))
+                    }
+                }
+                TextButton(onClick = onOpenCustomHeader) {
+                    Text(stringResource(R.string.custom_column_type))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.close))
+            }
+        }
+    )
 }
 
 fun evalSimpleExpr(expr: String): Double {
@@ -1718,7 +1772,6 @@ fun CalculatorDialog(
                         .fillMaxWidth()
                         .padding(bottom = 6.dp)
                 )
-                // --- RISULTATO appena sotto il campo input ---
                 val errorText = stringResource(R.string.error_label)
                 Text(
                     text = if (result.isNotBlank() && result != errorText) {
@@ -1734,9 +1787,7 @@ fun CalculatorDialog(
                         )
                         .padding(8.dp)
                 )
-                // --- PIÙ SPAZIO SOPRA LA TASTIERA ---
                 Spacer(Modifier.height(8.dp))
-                // --- TASTIERA con tasti più GRANDI e distanziati ---
                 CalculatorKeyboard(
                     onKey = { key ->
                         when (key) {
@@ -1763,7 +1814,7 @@ fun CalculatorDialog(
                             }
                         }
                     },
-                    buttonSize = 68.dp,    // <--- PIÙ GRANDE!
+                    buttonSize = 68.dp,
                     buttonFontSize = MaterialTheme.typography.headlineSmall.fontSize
                 )
             }
@@ -1830,7 +1881,7 @@ fun CalculatorKeyboard(
 @Composable
 private fun StatusIcon(
     baseIcon: ImageVector,
-    badgeType: BadgeType, // <-- Usa il nuovo enum invece di un Boolean
+    badgeType: BadgeType,
     contentDescription: String
 ) {
     Box {
@@ -1934,7 +1985,7 @@ fun ManualEntryDialog(
     }
 
     val hasChangesAgainstDb = remember(currentNormalized, productFromDb) {
-        !equalProductsForDb(currentNormalized, productFromDb)   // vedi funzione al punto 2
+        !equalProductsForDb(currentNormalized, productFromDb)
     }
     val hasChangesAgainstOriginal = remember(currentNormalized, originalProductData) {
         !equalProducts(currentNormalized, originalProductData)
@@ -1949,11 +2000,7 @@ fun ManualEntryDialog(
         keyboardController?.show()
     }
 
-    // ✅ *** CRITICAL FIX: This effect now correctly re-initializes the dialog's state
-    // every time it's shown for a new item or in a new mode.
-    // It's keyed to the inputs, so it re-runs when they change.
     LaunchedEffect(rowIndexToEdit, productToPrefill, initialBarcode) {
-        // First, reset all fields to a clean state to prevent stale data
         productName = ""
         retailPrice = TextFieldValue("")
         quantity = TextFieldValue("1")
@@ -1962,10 +2009,9 @@ fun ManualEntryDialog(
 
         barcodeError = null
         originalBarcodeForEdit = null
-        originalProductData = null // --- Aggiunto: Resetta lo stato originale
+        originalProductData = null
 
         if (isEditMode) {
-            // --- 1. EDIT MODE ---
             val rowData = viewModel.excelData[rowIndexToEdit + 1]
             val catName = if (catIdx != -1) rowData.getOrNull(catIdx) ?: "" else ""
             barcode = if (barIdx != -1) rowData.getOrNull(barIdx) ?: "" else ""
@@ -1979,27 +2025,23 @@ fun ManualEntryDialog(
 
             databaseViewModel.onCategorySearchQueryChanged(catName)
 
-            // --- Logica di selezione robusta ---
             scope.launch {
-                // Prova a cercare fino a 5 volte (1 secondo totale) se la lista non è pronta
                 repeat(5) {
                     val foundCategory = databaseViewModel.categories.value.find { it.name.equals(catName, true) }
                     if (foundCategory != null) {
-                        selectedCategory = foundCategory // Imposta la categoria trovata
+                        selectedCategory = foundCategory
 
-                        // Costruisci e salva lo stato originale CON l'ID della categoria corretto
                         originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                             barcode = barcode,
                             productName = productName,
                             retailPrice = retailPrice.text.replace(",", ".").toDoubleOrNull(),
                             stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
-                            categoryId = foundCategory.id // <-- Usa l'ID corretto
+                            categoryId = foundCategory.id
                         )
-                        return@launch // Esci dalla coroutine
+                        return@launch
                     }
-                    delay(200) // Aspetta un po' prima di riprovare
+                    delay(200)
                 }
-                // Se anche dopo i tentativi non trova nulla, costruisci lo stato originale senza ID
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = barcode,
                     productName = productName,
@@ -2010,38 +2052,33 @@ fun ManualEntryDialog(
             }
 
         } else if (productToPrefill != null) {
-            // --- 2. ADD MODE with DB PRE-FILL ---
             val initialBarcode = productToPrefill.barcode
             val initialProductName = productToPrefill.productName ?: ""
-            val initialRetailPrice = formatNumberAsRoundedStringForInput(productToPrefill.retailPrice)
-            val initialQuantity = "1" // Default per una nuova riga
+            val initialRetailPrice =
+                formatNumberAsRoundedStringForInput(productToPrefill.retailPrice)
+            val initialQuantity = "1"
 
-            // Popola la UI
             barcode = initialBarcode
             productName = initialProductName
             retailPrice = TextFieldValue(initialRetailPrice, TextRange(initialRetailPrice.length))
             quantity = TextFieldValue(initialQuantity)
 
-            // Gestione asincrona della categoria
             productToPrefill.categoryId?.let { catId ->
                 scope.launch {
                     val category = databaseViewModel.getCategoryById(catId)
                     selectedCategory = category
                     databaseViewModel.onCategorySearchQueryChanged(category?.name ?: "")
 
-                    // --- Logica Corretta: Costruisci lo stato originale in modo che corrisponda alla UI iniziale ---
                     originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                         barcode = initialBarcode,
                         productName = initialProductName,
                         retailPrice = initialRetailPrice.replace(",", ".").toDoubleOrNull(),
                         stockQuantity = initialQuantity.replace(",", ".").toDoubleOrNull(),
                         categoryId = category?.id,
-                        // Copia l'ID originale per coerenza nel confronto
                         id = productToPrefill.id
                     )
                 }
             } ?: run {
-                // Se non c'è categoryId, costruisci subito lo stato originale
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = initialBarcode,
                     productName = initialProductName,
@@ -2053,13 +2090,11 @@ fun ManualEntryDialog(
             }
 
         } else {
-            // --- 3. ADD MODE (from new scan or '+' button) ---
             barcode = initialBarcode ?: ""
             viewModel.lastUsedCategory.value?.let {
                 databaseViewModel.onCategorySearchQueryChanged(it)
                 selectedCategory = databaseViewModel.categories.value.find { c -> c.name.equals(it, true) }
             }
-            // --- Aggiunto: Lo stato originale è null perché è una nuova entry ---
             originalProductData = null
         }
     }
@@ -2171,7 +2206,7 @@ fun ManualEntryDialog(
                         label = { Text(stringResource(R.string.category_label)) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true)
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                     )
                     ExposedDropdownMenu(
                         expanded = isCategoryDropdownExpanded,
@@ -2207,17 +2242,12 @@ fun ManualEntryDialog(
                     label = { Text(stringResource(R.string.header_barcode) + "*") },
                     trailingIcon = {
                         IconButton(onClick = {
-                            // --- INIZIO MODIFICA ---
-                            // 1. Azzera tutti i campi del dialogo
                             productName = ""
                             retailPrice = TextFieldValue("")
-                            quantity = TextFieldValue("1") // Resetta la quantità al valore di default
-                            productFromDb = null          // Rimuove i dati pre-compilati dal DB
-                            barcodeError = null           // Rimuove eventuali messaggi di errore
-                            // Lasciamo 'barcode' così com'è, perché verrà sovrascritto dalla nuova scansione.
-                            // --- FINE MODIFICA ---
+                            quantity = TextFieldValue("1")
+                            productFromDb = null
+                            barcodeError = null
 
-                            // 2. Lancia lo scanner
                             val options = ScanOptions().apply {
                                 setDesiredBarcodeFormats(ALL_CODE_TYPES)
                                 setBeepEnabled(true)
@@ -2283,7 +2313,6 @@ fun ManualEntryDialog(
                     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
-                            // Usa la funzione di formattazione per il prezzo
                             val formattedPrice = formatNumberAsRoundedStringForInput(productFromDb?.retailPrice)
                             Text("${productFromDb?.productName} - Prezzo: $formattedPrice")
                             TextButton(onClick = {
@@ -2440,7 +2469,7 @@ private fun TopInfoChipsBar(
     total: Int,
     exported: Boolean,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 2.dp) // ↓ da 6dp a 2dp
+    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
 ) {
     Row(
         modifier = modifier

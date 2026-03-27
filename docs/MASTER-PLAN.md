@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-Migliorare progressivamente la UX/UI Android preservando logica, feature e integrazioni esistenti. La governance è operativa (TASK-001 chiuso). Il focus prodotto corrente è **TASK-013** (UX polish FilePicker + PreGenerate): **planning approvato e chiuso**; **esecuzione autorizzata** per Codex secondo `docs/TASKS/TASK-013-ux-polish-filepicker-pregenerate.md`, `AGENTS.md` e `docs/CODEX-EXECUTION-PROTOCOL.md`.
+Ripristinare la **stabilità** dell’import completo del database da XLSX (**DatabaseScreen** / `DatabaseViewModel.startFullDbImport`): eliminare il **crash OOM** segnalato sul workbook POI (`XSSFWorkbook`), preservando i quattro fogli (Suppliers, Categories, Products, PriceHistory). **TASK-002** (decomposizione `GeneratedScreen`) resta **`BLOCKED`** in attesa di smoke manuale futuro — **non** è il contenitore di questo bugfix.
 
 ---
 
@@ -24,10 +24,10 @@ Migliorare progressivamente la UX/UI Android preservando logica, feature e integ
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | TASK-013 (UX polish FilePicker + PreGenerate)    |
-| Fase task attivo     | **EXECUTION** (kickoff esecutore / Codex)        |
-| Milestone planning   | **Chiuso** — criteri di accettazione definiti (24), decisioni e ordine implementazione consolidati nel file task |
-| Prossimo passo operativo | Esecutore: leggere TASK-013 → implementare → log in **Execution** → check BUILD/LINT → segnare **REVIEW** |
+| Task attivo          | **TASK-017** (Crash full DB import — OOM)        |
+| Fase task attivo     | **PLANNING** (bugfix import DB; file task `TASK-017`; passare a **EXECUTION** dopo lettura piano/criteri) |
+| Milestone            | TASK-002: lavoro tecnico UI **completato** a livello statico; chiusura **`DONE` non effettuata** — stato **`BLOCKED`** per smoke rimandati |
+| Prossimo passo operativo | Pianificare ed eseguire **TASK-017** (analisi OOM, fix mirato, build/lint, test con file XLSX problema); **TASK-002**: ripresa solo dopo smoke/decisione utente |
 | Ultimo aggiornamento | 2026-03-27                                       |
 
 ---
@@ -38,9 +38,21 @@ Migliorare progressivamente la UX/UI Android preservando logica, feature e integ
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (`docs/TASKS/TASK-013-ux-polish-filepicker-pregenerate.md`).
+Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`).
 
-**TASK-013 — tracking pre-esecuzione:** fase globale impostata su **EXECUTION** perché planning e approvazione utente sono completati (transizione `PLANNING → EXECUTION` ai sensi di questa sezione). Nessun codice applicativo è ancora richiesto dal master plan; l’esecutore inizia il lavoro seguendo il file task.
+**TASK-017 — tracking:** unico task **`ACTIVE`** nel backlog. Prima di modificare Kotlin per il bugfix, verificare nel **file reale** di questo piano che **TASK-017** = `ACTIVE` e che **TASK-002** = `BLOCKED` (non `DONE`).
+
+**Verifica governance reale (obbligatoria pre-codice):**
+
+1. Sezione **Backlog**: **TASK-013** → **`DONE`**.
+2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
+3. **TASK-017** → **`ACTIVE`** (unico attivo).
+4. Nessun altro task con stato **`ACTIVE`** oltre **TASK-017**.
+5. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+
+**Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **Non** mescolare con crash import DB (**TASK-017**).
+
+**Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
 ---
 
@@ -133,7 +145,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | **File Picker / Caricamento** | `FilePickerScreen.kt`                              | Funzionante |
 | **Excel parsing**             | `ExcelUtils.kt`, `ExcelViewModel.kt`               | Funzionante |
 | **PreGenerate / Anteprima**   | `PreGenerateScreen.kt`                             | Funzionante |
-| **Generated / Editing**       | `GeneratedScreen.kt` (2471 righe)                  | Funzionante, complesso |
+| **Generated / Editing**       | `GeneratedScreen.kt` (~2471 righe; helper/composable già presenti nello stesso file) | Funzionante, complesso |
 | **Database / CRUD**           | `DatabaseScreen.kt`, `DatabaseViewModel.kt`        | Funzionante |
 | **Repository / Room**         | `InventoryRepository.kt`, `AppDatabase.kt`         | Funzionante |
 | **Entities / Schema**         | `Product.kt`, `Supplier.kt`, `Category.kt`, `HistoryEntry.kt`, `ProductPrice.kt` | v6, stabile |
@@ -162,7 +174,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Osservazioni architetturali
 
-- **GeneratedScreen.kt** (2471 righe) è il file più complesso del progetto. Potenziale candidato per decomposizione futura, ma funzionante.
+- **GeneratedScreen.kt** (~2471 righe) è il file più complesso del progetto; contiene già alcuni composable/helper nello stesso file (es. chips bar, calcolatrice, manual entry). TASK-002 ne estende la decomposizione senza assumere monolite totale.
 - **DatabaseScreen.kt** (1084 righe) è il secondo file più grande. Gestisce molte responsabilità (CRUD, import, export, scanner).
 - L'architettura MVVM è coerente: 2 ViewModel, 1 Repository, 5 DAO, 5+1 Entity/View.
 - Schema database a v6 con migrazioni incrementali.
@@ -195,11 +207,12 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-002 — Decomposizione GeneratedScreen
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `BLOCKED`                                               |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UI / GeneratedScreen                                    |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Ridurre la complessità di `GeneratedScreen.kt` (2471 righe) estraendo sotto-composable e logica in funzioni dedicate. Nessun cambio funzionale. |
+| Dipendenze  | TASK-001 (DONE), TASK-013 (DONE)                        |
+| Descrizione | Decomposizione **tecnica** di `GeneratedScreen.kt` (estratti UI, API freeze, `NavGraph` read-only in esecuzione). **Esecuzione tecnica e review statica completate** (build/lint OK nel file task). **Chiusura `DONE` non effettuata:** smoke manuale rimandato dall’utente → task **`BLOCKED`** in attesa di verifica manuale futura o nuova decisione. **Non** include il crash OOM full import DB → **TASK-017**. |
+| Note tracking | Ripresa: eseguire smoke checklist in `TASK-002`, poi `REVIEW` → conferma utente → `DONE`. |
 
 ### TASK-003 — Decomposizione DatabaseScreen
 | Campo       | Valore                                                  |
@@ -217,7 +230,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Priorità    | `ALTA`                                                  |
 | Area        | Test / Qualità                                          |
 | Dipendenze  | TASK-001                                                |
-| Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. |
+| Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. **Nota:** test mirati al path **full import** / OOM non sostituiscono **TASK-017** (fix runtime prima). |
 
 ### TASK-005 — Copertura test unitari — ExcelUtils e ImportAnalyzer
 | Campo       | Valore                                                  |
@@ -235,7 +248,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Priorità    | `MEDIA`                                                 |
 | Area        | Import / Excel                                          |
 | Dipendenze  | TASK-005                                                |
-| Descrizione | Revisione della gestione errori in `ExcelUtils.kt` e `ImportAnalysis.kt`: file corrotti, formati inattesi, colonne mancanti. Migliorare messaggi di errore per l'utente. |
+| Descrizione | Revisione della gestione errori in `ExcelUtils.kt` e `ImportAnalysis.kt`: file corrotti, formati inattesi, colonne mancanti. Migliorare messaggi di errore per l'utente. **Nota:** crash OOM import completo DB da XLSX → **TASK-017** (questo task resta generico). |
 
 ### TASK-007 — Export database completo — verifica round-trip
 | Campo       | Valore                                                  |
@@ -244,7 +257,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Priorità    | `MEDIA`                                                 |
 | Area        | Export / Database                                       |
 | Dipendenze  | TASK-005                                                |
-| Descrizione | Verificare che export full DB (4 fogli) + re-import produca dati identici. Definire test di round-trip per Products, Suppliers, Categories, PriceHistory. |
+| Descrizione | Verificare che export full DB (4 fogli) + re-import produca dati identici. Definire test di round-trip per Products, Suppliers, Categories, PriceHistory. **Follow-up naturale** dopo che l’import completo è **stabile** (**TASK-017**). |
 
 ### TASK-008 — Gestione errori e UX feedback
 | Campo       | Valore                                                  |
@@ -294,7 +307,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-013 — UX polish FilePicker + PreGenerate
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE`                                                |
+| Stato       | `DONE`                                                  |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / UI                                                 |
 | Dipendenze  | TASK-001 (DONE)                                         |
@@ -302,7 +315,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | File Android | `FilePickerScreen.kt`, `PreGenerateScreen.kt`, `app/src/main/res/values*/strings.xml` |
 | Rif. iOS    | Solo riferimento visivo/UX (se presenti); non porting 1:1 |
 | Obiettivo UX | Gerarchia Material3, stati loading/error coerenti, primary action evidente, nessuna regressione funzionale |
-| Note tracking | Planning **chiuso**; **ready for execution** (Codex). Verifiche: 24 criteri nel file task + protocollo esecuzione. |
+| Note tracking | Esecuzione, review e fix completati nel file task; chiusura documentale validata dall’utente nel turno di riallineamento del 2026-03-27 prima del passaggio a `TASK-002`. Verifiche statiche concluse; restano note manuali nel handoff del task. |
 
 ### TASK-014 — UX modernization GeneratedScreen
 | Campo       | Valore                                                  |
@@ -310,7 +323,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Stato       | `BACKLOG`                                               |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / UI                                                 |
-| Dipendenze  | TASK-001                                                |
+| Dipendenze  | TASK-001, TASK-002 (**BLOCKED** — modernization solo dopo `DONE` o sblocco esplicito di TASK-002) |
 | Descrizione | Modernizzare toolbar, dialog/sheet, row affordance e leggibilità della griglia in GeneratedScreen. Nessun cambio alla logica business (editing, export, completamento righe) né rimozione di feature esistenti. |
 | File Android | `GeneratedScreen.kt`, `ZoomableExcelGrid.kt`, `TableCell.kt`, `ExcelViewModel.kt` (sola lettura) |
 | Rif. iOS    | Schermata Generated iOS come guida visiva (se presente) |
@@ -340,18 +353,29 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Rif. iOS    | Schermate History / ImportAnalysis iOS come guida visiva (se presenti) |
 | Obiettivo UX | Leggibilità tabelle/griglie, empty/loading/error states chiari, spacing coerente |
 
+### TASK-017 — Crash full DB import (OOM)
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `ACTIVE`                                                |
+| Priorità    | `CRITICA`                                               |
+| Area        | Import / Database / Stability                           |
+| Dipendenze  | TASK-001 (DONE)                                         |
+| Descrizione | Fix crash **OOM** durante **import completo** database da XLSX (`DatabaseViewModel.startFullDbImport`, `XSSFWorkbook`), preservando Suppliers / Categories / Products / PriceHistory. Nessun redesign UX; minimo cambiamento. **TASK-006/007/004** correlati ma non sostituiscono questo task. Dettaglio: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`. |
+| File Android | `DatabaseViewModel.kt`, `DatabaseScreen.kt`; utility POI solo se necessario |
+
 ---
 
 ## Razionale priorità
 
 ### Priorità prodotto (focus corrente)
 
-Il focus corrente del progetto è il miglioramento UX/UI Android. **TASK-013** è **ACTIVE** e in **EXECUTION** (esecuzione autorizzata). Task suggeriti come successivi:
+**Focus immediato: TASK-017 (CRITICA)** — stabilità import database completo (OOM). **TASK-002** è **`BLOCKED`** (smoke manuale rimandato; non `DONE`). `TASK-013` chiuso. Ordine suggerito:
 
-1. **TASK-013 (MEDIA):** UX polish FilePicker + PreGenerate — **da eseguire dall’esecutore (Codex)**; primo impatto visivo.
-2. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — schermata più complessa.
-3. **TASK-015 (MEDIA):** UX modernization DatabaseScreen — CRUD e scanner.
-4. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — leggibilità incrementale.
+1. **TASK-017 (CRITICA):** Crash OOM full import — pianificazione/esecuzione bugfix, poi verifica con file problema.
+2. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+3. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco TASK-002.
+4. **TASK-015 (MEDIA):** UX modernization DatabaseScreen.
+5. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
 
 ### Priorità tecnica / qualità
 
@@ -360,10 +384,11 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 1. **TASK-001 (CRITICA):** Bootstrap governance — DONE (chiuso 2026-03-27).
 2. **TASK-004, TASK-005 (ALTA):** Test unitari — la repo non ha copertura significativa.
 3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
-4. **TASK-002, TASK-003 (MEDIA):** Decomposizione file grandi — funzionanti ma complessi.
-5. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export — edge case non testati.
-6. **TASK-008, TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
-7. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
+4. **TASK-002 (MEDIA, BLOCKED), TASK-003 (MEDIA):** Decomposizione file grandi.
+5. **TASK-017 (CRITICA):** OOM full import DB — **ACTIVE**.
+6. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export / round-trip — correlati a TASK-017 ma non lo sostituiscono.
+7. **TASK-008, TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
+8. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
 
 ---
 
@@ -371,7 +396,8 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 
 | Rischio                                    | Impatto | Probabilità | Mitigazione                          |
 |--------------------------------------------|---------|-------------|--------------------------------------|
-| GeneratedScreen troppo complesso (2471 LOC) | Medio   | Già presente | TASK-002 nel backlog                |
+| GeneratedScreen troppo complesso (~2471 LOC, decomposizione parziale nello stesso file) | Medio   | Già presente | TASK-002 **BLOCKED** (smoke pendenti); lavoro statico completato |
+| OOM su import DB completo (XLSX / POI) | Alto | Segnalato | **TASK-017** ACTIVE |
 | Nessuna copertura di test significativa (solo template default) | Alto | Certo | TASK-004 e TASK-005 priorità ALTA |
 | Migrazioni DB non testate automaticamente   | Alto    | Possibile   | TASK-009 nel backlog                |
 | Nessuna CI/CD                              | Medio   | Certo       | TASK-012, bassa priorità per ora    |
