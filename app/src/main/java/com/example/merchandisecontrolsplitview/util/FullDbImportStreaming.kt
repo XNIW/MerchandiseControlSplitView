@@ -55,7 +55,7 @@ private data class PriceHistoryHeaderIndexes(
     val sourceIndex: Int
 )
 
-private object StopAfterFirstParsedRow : RuntimeException(null, null, false, false)
+private class StopAfterFirstParsedRow : RuntimeException(null, null, false, false)
 
 suspend fun detectImportWorkbookRoute(
     context: Context,

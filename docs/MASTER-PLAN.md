@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**TASK-003** — decomposizione `DatabaseScreen.kt` — **`DONE`** (2026-03-27, conferma utente dopo test manuale). **TASK-004** — test unitari su `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel` — è l’**unico task `ACTIVE`**, fase **`PLANNING`**. **TASK-015** resta in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** resta **`BLOCKED`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
+**TASK-003** — decomposizione `DatabaseScreen.kt` — **`DONE`** (2026-03-27). **TASK-020** — cleanup code analysis post-TASK-003 — **`DONE`** (2026-03-28, chiusura su **decisione utente**; smoke manuali documentati come **non eseguiti** nel contesto d’execution — vedi file task). **TASK-004** — test unitari repository/ViewModel — è l’**unico task `ACTIVE`**; nel file task **`Stato` = `PLANNING`** finché l’executor non avvia **`EXECUTION`**. **TASK-015** resta in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** resta **`BLOCKED`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
 
 ---
 
@@ -24,11 +24,11 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **TASK-004** (test unitari Repository + ViewModel)   |
-| Fase task attivo     | **PLANNING** (file task: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`) |
-| Milestone            | **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
-| Prossimo passo operativo | Completare **planning TASK-004** → approvazione utente → **EXECUTION** (test JUnit su repository/ViewModel indicati; vedi file task). **Non** avviare senza lettura `AGENTS.md` + task attivo |
-| Ultimo aggiornamento | 2026-03-27                                       |
+| Task attivo          | **TASK-004** (copertura test unitari — Repository e ViewModel)   |
+| Fase task attivo     | **`PLANNING`** nel file task fino all’avvio **`EXECUTION`** — `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md` |
+| Milestone            | **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-004** **`ACTIVE`**. **TASK-015** **`BACKLOG`** |
+| Prossimo passo operativo | **Executor (Codex):** avviare **`EXECUTION`** su **TASK-004** secondo `AGENTS.md` e `docs/CODEX-EXECUTION-PROTOCOL.md`, dopo lettura di questo `MASTER-PLAN` e del file task; al primo intervento aggiornare **`Stato`** del file task a **`EXECUTION`**. **TASK-004** resta l’unico **`ACTIVE`** fino a `DONE` / review / fix. **Non** attivare altri task |
+| Ultimo aggiornamento | 2026-03-28 (chiusura **TASK-020** `DONE`; attivazione **TASK-004** `ACTIVE`)   |
 
 ---
 
@@ -40,13 +40,13 @@ PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente
 
 Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`).
 
-**TASK-004 — tracking:** unico task **`ACTIVE`** nel backlog (fase corrente **`PLANNING`** nel file task).
+**TASK-004 — tracking:** unico task **`ACTIVE`** nel backlog. Nel file task: **`Stato` = `PLANNING`** finché l’executor non avvia **`EXECUTION`**. **Predecessore:** **TASK-020** **`DONE`** (2026-03-28).
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
-1. Sezione **Backlog**: **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**.
+1. Sezione **Backlog**: **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**; **TASK-020** → **`DONE`** (2026-03-28).
 2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
-3. **TASK-004** → **`ACTIVE`** (unico attivo).
+3. **TASK-004** → **`ACTIVE`** (unico attivo — test unitari).
 4. **TASK-015** → **`BACKLOG`** (UX modernization DatabaseScreen — ripresa possibile dopo **TASK-003** `DONE` o su decisione utente).
 5. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
 6. Nessun altro task con stato **`ACTIVE`** oltre **TASK-004**.
@@ -235,9 +235,19 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Stato       | `ACTIVE`                                                |
 | Priorità    | `ALTA`                                                  |
 | Area        | Test / Qualità                                          |
-| Dipendenze  | TASK-001 (DONE); TASK-003 (`DONE`, ordine di sequenziamento consigliato ma non vincolo rigido) |
+| Dipendenze  | TASK-001 (DONE); TASK-003 (`DONE`); **TASK-020** (`DONE`, 2026-03-28) |
 | Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. **Nota:** test mirati al path **full import** / OOM non sostituiscono **TASK-017** (fix runtime già in **DONE**). Dettaglio: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`. |
-| Note tracking | **Unico task ACTIVE**; fase **`PLANNING`** nel file task fino ad approvazione utente per **EXECUTION**. |
+| Note tracking | **Unico task ACTIVE** (dal 2026-03-28). **TASK-020** **`DONE`**. Nel file task: **`Stato` = `PLANNING`** fino all’avvio **`EXECUTION`** da parte dell’executor. |
+
+### TASK-020 — Cleanup code analysis post-TASK-003
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `DONE`                                                  |
+| Priorità    | `ALTA`                                                  |
+| Area        | Qualità / Analisi statica / UI (solo cleanup tecnico)   |
+| Dipendenze  | TASK-003 (`DONE`)                                       |
+| Descrizione | Eliminare errori e triage warning di code analysis emersi dopo la decomposizione `DatabaseScreen` (**TASK-003**): `DatabaseScreen.kt`, `DatabaseScreenComponents.kt`, `DatabaseScreenDialogs.kt`, `EditProductDialog.kt`. Perimetro stretto: nessun redesign, nessun cambio business logic / DAO / repository / `NavGraph`. Dettaglio: `docs/TASKS/TASK-020-cleanup-code-analysis-post-task003.md`. |
+| Note tracking | **`DONE`** 2026-03-28. Chiusura su **decisione utente** con **rischio residuo noto:** smoke manuali **non eseguiti** nel contesto documentato (vedi file task **Chiusura** / **Execution**). Successore **`ACTIVE`:** **TASK-004**. |
 
 ### TASK-005 — Copertura test unitari — ExcelUtils e ImportAnalyzer
 | Campo       | Valore                                                  |
@@ -396,21 +406,22 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato: TASK-004 (ALTA, ACTIVE, PLANNING)** — test unitari `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. **TASK-003** è **`DONE`** (2026-03-27). **TASK-015** (UX modernization DatabaseScreen) è in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** è **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
+**Focus immediato: TASK-004 (ALTA, ACTIVE, `PLANNING` nel file task)** — test unitari `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. **TASK-020** (cleanup code analysis) è **`DONE`** (2026-03-28). **TASK-003** è **`DONE`** (2026-03-27). **TASK-015** (UX modernization DatabaseScreen) è in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** è **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **TASK-004 (ALTA, ACTIVE, PLANNING):** Test unitari repository/ViewModel — planning → esecuzione dopo approvazione utente.
-2. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
-3. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-4. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
-5. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
-6. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
+1. **TASK-004 (ALTA, ACTIVE):** Test unitari — executor avvia **`EXECUTION`** (file task: `Stato` → **`EXECUTION`** all’avvio).
+2. **TASK-020 (ALTA, DONE):** Chiuso 2026-03-28 — smoke manuali documentati come non eseguiti; follow-up opzionale su swipe/Material3 (vedi file task).
+3. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
+4. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+5. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
+6. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
+7. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
 
 ### Priorità tecnica / qualità
 
 Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente:
 
 1. **TASK-001 (CRITICA):** Bootstrap governance — DONE (chiuso 2026-03-27).
-2. **TASK-004, TASK-005 (ALTA):** Test unitari — **TASK-004** **`ACTIVE`** (`PLANNING`); **TASK-005** in backlog; copertura significativa assente.
+2. **TASK-004, TASK-005 (ALTA):** Test unitari — **TASK-004** **`ACTIVE`** (`PLANNING` nel file task fino a execution); **TASK-020** **`DONE`** (2026-03-28); **TASK-005** in backlog; copertura significativa assente.
 3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
 4. **TASK-003 (MEDIA, DONE):** Decomposizione `DatabaseScreen` — chiuso 2026-03-27. **TASK-002 (MEDIA, BLOCKED):** Decomposizione `GeneratedScreen`.
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).

@@ -11,17 +11,18 @@
 | Priorità             | ALTA                       |
 | Area                 | Test / Qualità             |
 | Creato               | 2026-03-27                 |
-| Ultimo aggiornamento | 2026-03-27                 |
-| Tracking `MASTER-PLAN` | **`ACTIVE`** (unico task attivo) |
+| Ultimo aggiornamento | 2026-03-28                 |
+| Tracking `MASTER-PLAN` | **`ACTIVE`** (unico task attivo dopo **`DONE`** di **TASK-020**) |
 
-**Nota tracking:** fase workflow **`PLANNING`** fino ad approvazione utente per **EXECUTION**. Stato backlog: **`ACTIVE`** — vedi `docs/MASTER-PLAN.md`.
+**Nota tracking:** nel `MASTER-PLAN` questo task è l’unico **`ACTIVE`**. Nel file task il campo **`Stato`** resta **`PLANNING`** finché l’executor non avvia materialmente **`EXECUTION`** (poi aggiornare a **`EXECUTION`** per `AGENTS.md`). **Nessuna execution** di **TASK-004** è stata avviata nel passaggio di riattivazione documentale (2026-03-28).
 
 ---
 
 ## Dipendenze
 
 - **TASK-001** (`DONE`) — governance e baseline
-- **TASK-003** (`DONE`, 2026-03-27) — decomposizione `DatabaseScreen`; ordine logico consigliato, non blocco formale per avviare **TASK-004**
+- **TASK-003** (`DONE`, 2026-03-27) — decomposizione `DatabaseScreen`
+- **TASK-020** (`DONE`, 2026-03-28) — cleanup code analysis post-TASK-003 completato; **TASK-004** riattivato come unico **`ACTIVE`** nel `MASTER-PLAN`
 
 ---
 
@@ -83,6 +84,8 @@ Legenda: B=Build, S=Static, M=Manual
 |---|-----------|-------------|------|
 | 1 | **TASK-004** = unico **`ACTIVE`** dopo **`DONE`** di **TASK-003** | Ordine backlog / utente | 2026-03-27 |
 | 2 | Perimetro = tre classi indicate nel `MASTER-PLAN` | Coerenza backlog | 2026-03-27 |
+| 3 | **TASK-004** rimesso in **`BACKLOG`**; **TASK-020** diventa unico **`ACTIVE`** | Decisione utente: cleanup analisi statica prima dei test unitari | 2026-03-27 |
+| 4 | **TASK-020** → **`DONE`**; **TASK-004** → unico **`ACTIVE`** nel `MASTER-PLAN` | Sequenza post-cleanup; chiusura **TASK-020** su decisione utente (2026-03-28) | 2026-03-28 |
 
 ---
 
@@ -145,6 +148,7 @@ _(Al termine.)_
 
 ## Handoff
 
-- **Predecessore:** **TASK-003** (`DONE`, decomposizione `DatabaseScreen`).
+- **Predecessori:** **TASK-003** (`DONE`, decomposizione `DatabaseScreen`); **TASK-020** (`DONE` 2026-03-28, cleanup code analysis post-TASK-003).
+- **Stato corrente:** **TASK-004** è l’unico task **`ACTIVE`** nel `MASTER-PLAN`; avviare **`EXECUTION`** dopo lettura `MASTER-PLAN` + questo file + `AGENTS.md` + approvazione planning se ancora richiesta.
 - **Successore naturale in backlog:** **TASK-005** (test `ExcelUtils` / `ImportAnalysis`); **TASK-009** dipende da **TASK-004** per migrazioni.
 - **Governance:** un solo `ACTIVE`; dopo **DONE** di **TASK-004**, aggiornare `MASTER-PLAN` e attivare il prossimo task con conferma utente.

@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,6 +52,9 @@ fun DatabaseScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val exportProductsBaseName = stringResource(R.string.sheet_name_products)
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+    val scanPromptText = stringResource(R.string.scan_prompt)
 
     var itemToEdit by remember { mutableStateOf<Product?>(null) }
     var itemToDelete by remember { mutableStateOf<Product?>(null) }
@@ -146,8 +150,7 @@ fun DatabaseScreen(
                 onExportProducts = {
                     showExportMenu = false
                     val ts = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH-mm-ss").format(LocalDateTime.now())
-                    val base = context.getString(R.string.sheet_name_products).replace(Regex("""[\\/:*?"<>|]"""), "_")
-                    downloadLauncher.launch("${base}_${ts}.xlsx")
+                    downloadLauncher.launch("${exportProductsBaseName}_${ts}.xlsx")
                 },
                 onExportFullDb = {
                     showExportMenu = false
@@ -185,7 +188,7 @@ fun DatabaseScreen(
                         setCaptureActivity(PortraitCaptureActivity::class.java)
                         setOrientationLocked(true)
                         setBeepEnabled(true)
-                        setPrompt(context.getString(R.string.scan_prompt))
+                        setPrompt(scanPromptText)
                     }
                     scanLauncher.launch(opts)
                 },
@@ -225,15 +228,30 @@ fun DatabaseScreen(
         )
     }
 
-    if (showHistoryFor != null) {
-        val product = showHistoryFor!!
-        val purchase by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
-        val retail   by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
+    showHistoryFor?.let { product ->
+        PriceHistoryBottomSheetHost(
+            product = product,
+            viewModel = viewModel,
+            onDismiss = { showHistoryFor = null }
+        )
+    }
+}
+
+@Composable
+private fun PriceHistoryBottomSheetHost(
+    product: Product,
+    viewModel: DatabaseViewModel,
+    onDismiss: () -> Unit
+) {
+    val purchase by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
+    val retail by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
+
+    key(product.id) {
         PriceHistoryBottomSheet(
             product = product,
             purchase = purchase,
             retail = retail,
-            onDismiss = { showHistoryFor = null }
+            onDismiss = onDismiss
         )
     }
 }
