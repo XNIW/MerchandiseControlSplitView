@@ -298,7 +298,7 @@ private fun validatePriceHistorySheetHeader(
     try {
         parseSheetRows(sheetStream, styles, sharedStrings) { row ->
             headerRow = row
-            throw StopAfterFirstParsedRow
+            throw StopAfterFirstParsedRow()
         }
     } catch (_: StopAfterFirstParsedRow) {
         // Early stop once the first non-empty row has been validated as header.

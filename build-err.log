@@ -1,0 +1,108 @@
+
+> Configure project :app
+WARNING: The option setting 'android.usesSdkInManifest.disallowed=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.sdk.defaultTargetSdkToCompileSdkIfUnset=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.enableAppCompileTimeRClass=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.builtInKotlin=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.newDsl=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.r8.optimizedResourceShrinking=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.defaults.buildfeatures.resvalues=true' is deprecated.
+The current default is 'false'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+w: ⚠️ Deprecated 'org.jetbrains.kotlin.android' plugin usage
+The 'org.jetbrains.kotlin.android' plugin in project ':app' is no longer required for Kotlin support since AGP 9.0.
+Solution: Remove both `android.builtInKotlin=true` and `android.newDsl=false` from `gradle.properties`, then migrate to built-in Kotlin.
+See https://kotl.in/gradle/agp-built-in-kotlin for more details.
+
+
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:kspDebugKotlin UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+> Task :app:bundleDebugClassesToCompileJar UP-TO-DATE
+> Task :app:kspDebugUnitTestKotlin UP-TO-DATE
+
+> Task :app:compileDebugUnitTestKotlin FAILED
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:67:75 No value passed for parameter 'changedFields'.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:69:45 Argument type mismatch: actual type is 'List<ProductUpdate>', but 'List<Product>' was expected.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:110:26 Unresolved reference 'test'.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:111:29 Unresolved reference 'awaitItem'.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:112:13 Unresolved reference 'cancelAndIgnoreRemainingEvents'.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:127:33 Argument type mismatch: actual type is 'String', but 'Int' was expected.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:127:41 None of the following candidates is applicable:
+
+suspend fun <T> Flow<T>.first(): T:
+  Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+suspend fun <T> Flow<T>.first(): T
+
+suspend fun <T> Flow<T>.first(predicate: suspend (T) -> Boolean): T:
+  Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+suspend fun <T> Flow<T>.first(predicate: suspend (T) -> Boolean): T
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:128:33 Argument type mismatch: actual type is 'String', but 'Int' was expected.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:128:41 Unresolved reference 'second'.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:133:33 Argument type mismatch: actual type is 'String', but 'Int' was expected.
+e: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt:133:41 None of the following candidates is applicable:
+
+suspend fun <T> Flow<T>.first(): T:
+  Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+suspend fun <T> Flow<T>.first(): T
+
+suspend fun <T> Flow<T>.first(predicate: suspend (T) -> Boolean): T:
+  Unresolved reference. None of the following candidates is applicable because of a receiver type mismatch:
+suspend fun <T> Flow<T>.first(predicate: suspend (T) -> Boolean): T
+
+[Incubating] Problems report is available at: file:///Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileDebugUnitTestKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.btapi.BuildToolsApiCompilationWork
+   > Compilation error. See log for more details
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 943ms
+21 actionable tasks: 1 executed, 20 up-to-date

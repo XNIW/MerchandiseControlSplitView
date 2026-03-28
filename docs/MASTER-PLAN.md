@@ -25,9 +25,9 @@
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
 | Task attivo          | **TASK-004** (copertura test unitari — Repository e ViewModel)   |
-| Fase task attivo     | **`PLANNING`** nel file task fino all’avvio **`EXECUTION`** — `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md` |
+| Fase task attivo     | **`EXECUTION`** — `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md` |
 | Milestone            | **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-004** **`ACTIVE`**. **TASK-015** **`BACKLOG`** |
-| Prossimo passo operativo | **Executor (Codex):** avviare **`EXECUTION`** su **TASK-004** secondo `AGENTS.md` e `docs/CODEX-EXECUTION-PROTOCOL.md`, dopo lettura di questo `MASTER-PLAN` e del file task; al primo intervento aggiornare **`Stato`** del file task a **`EXECUTION`**. **TASK-004** resta l’unico **`ACTIVE`** fino a `DONE` / review / fix. **Non** attivare altri task |
+| Prossimo passo operativo | **Executor (Codex):** completare implementazione test in **`EXECUTION`** su **TASK-004** secondo `AGENTS.md`. **TASK-004** resta l’unico **`ACTIVE`** fino a `DONE` / review / fix. **Non** attivare altri task |
 | Ultimo aggiornamento | 2026-03-28 (chiusura **TASK-020** `DONE`; attivazione **TASK-004** `ACTIVE`)   |
 
 ---
@@ -40,7 +40,7 @@ PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente
 
 Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`).
 
-**TASK-004 — tracking:** unico task **`ACTIVE`** nel backlog. Nel file task: **`Stato` = `PLANNING`** finché l’executor non avvia **`EXECUTION`**. **Predecessore:** **TASK-020** **`DONE`** (2026-03-28).
+**TASK-004 — tracking:** unico task **`ACTIVE`** nel backlog. Nel file task: **`Stato` = `EXECUTION`**. **Predecessore:** **TASK-020** **`DONE`** (2026-03-28).
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
@@ -237,7 +237,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | Test / Qualità                                          |
 | Dipendenze  | TASK-001 (DONE); TASK-003 (`DONE`); **TASK-020** (`DONE`, 2026-03-28) |
 | Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. **Nota:** test mirati al path **full import** / OOM non sostituiscono **TASK-017** (fix runtime già in **DONE**). Dettaglio: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`. |
-| Note tracking | **Unico task ACTIVE** (dal 2026-03-28). **TASK-020** **`DONE`**. Nel file task: **`Stato` = `PLANNING`** fino all’avvio **`EXECUTION`** da parte dell’executor. |
+| Note tracking | **Unico task ACTIVE** (dal 2026-03-28). **TASK-020** **`DONE`**. Nel file task: **`Stato` = `EXECUTION`**. |
 
 ### TASK-020 — Cleanup code analysis post-TASK-003
 | Campo       | Valore                                                  |

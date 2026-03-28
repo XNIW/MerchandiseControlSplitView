@@ -60,9 +60,11 @@ private data class ResolvedImportPayload(
 )
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
-class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
-    private val repository: InventoryRepository =
-        DefaultInventoryRepository(AppDatabase.getDatabase(app))
+class DatabaseViewModel(
+    app: Application,
+    private val repository: InventoryRepository
+) : AndroidViewModel(app) {
+
 
     private val tsFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
@@ -831,6 +833,20 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
             } finally {
                 importMutex.unlock()
+            }
+        }
+    }
+
+    companion object {
+        fun factory(app: Application, repository: InventoryRepository): androidx.lifecycle.ViewModelProvider.Factory {
+            return object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                    if (modelClass.isAssignableFrom(DatabaseViewModel::class.java)) {
+                        return DatabaseViewModel(app, repository) as T
+                    }
+                    throw IllegalArgumentException("Unknown ViewModel class")
+                }
             }
         }
     }

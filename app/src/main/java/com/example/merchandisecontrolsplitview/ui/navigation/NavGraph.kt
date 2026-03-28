@@ -26,8 +26,19 @@ fun AppNavGraph() {
     val navController = rememberNavController()
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    val excelViewModel: ExcelViewModel = viewModel()
-    val dbViewModel: DatabaseViewModel = viewModel()
+    val app = context.applicationContext as android.app.Application
+    val repository = androidx.compose.runtime.remember {
+        com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository(
+            com.example.merchandisecontrolsplitview.data.AppDatabase.getDatabase(app)
+        )
+    }
+
+    val excelViewModel: ExcelViewModel = viewModel(
+        factory = ExcelViewModel.factory(app, repository)
+    )
+    val dbViewModel: DatabaseViewModel = viewModel(
+        factory = DatabaseViewModel.factory(app, repository)
+    )
 
     val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
     LaunchedEffect(importAnalysisResult) {

@@ -45,7 +45,10 @@ sealed class DateFilter {
  * ViewModel per gestione griglia Excel e cronologia persistente.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-class ExcelViewModel(application: Application) : AndroidViewModel(application) {
+class ExcelViewModel(
+    application: Application,
+    private val repository: InventoryRepository
+) : AndroidViewModel(application) {
     private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
     // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
@@ -93,8 +96,7 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
         loadingProgress.value = p?.coerceIn(0, 100)
     }
 
-    private val repository: InventoryRepository =
-        DefaultInventoryRepository(AppDatabase.getDatabase(application))
+    // Removed repository instantiation as it is now injected via constructor
 
 
     // Stato privato che mantiene il filtro corrente. Inizia con "Mostra tutto".
@@ -771,6 +773,20 @@ class ExcelViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 saveCurrentStateToHistory(entryUid)
+            }
+        }
+    }
+
+    companion object {
+        fun factory(app: Application, repository: InventoryRepository): androidx.lifecycle.ViewModelProvider.Factory {
+            return object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                    if (modelClass.isAssignableFrom(ExcelViewModel::class.java)) {
+                        return ExcelViewModel(app, repository) as T
+                    }
+                    throw IllegalArgumentException("Unknown ViewModel class")
+                }
             }
         }
     }

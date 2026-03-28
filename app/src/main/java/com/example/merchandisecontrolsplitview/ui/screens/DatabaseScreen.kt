@@ -44,7 +44,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun DatabaseScreen(
     navController: NavHostController,
-    viewModel: DatabaseViewModel = viewModel()
+    viewModel: DatabaseViewModel
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
