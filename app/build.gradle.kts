@@ -35,6 +35,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     // CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
     kotlin {
         jvmToolchain(11)

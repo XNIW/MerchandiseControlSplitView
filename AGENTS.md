@@ -128,6 +128,46 @@ Al termine dell'esecuzione, prima di dichiarare completato, esegui **tutti** que
 
 ---
 
+## Baseline regressione automatica post-Execution (TASK-004)
+
+Dopo la fase di **Execution**, prima di dichiarare il task completato o passare a `REVIEW`, verifica se i file modificati toccano aree già coperte dai test introdotti con **TASK-004**.
+
+Lo step scatta automaticamente soprattutto se il task modifica:
+
+- `InventoryRepository` / `DefaultInventoryRepository`
+- `DatabaseViewModel`
+- `ExcelViewModel`
+- logica di import/export
+- analisi import
+- cronologia import / price history collegata
+- flussi Excel
+- entry manuali
+- logica di sincronizzazione / stato collegata a queste aree
+
+Se scatta:
+
+- identifica i test rilevanti già esistenti in `app/src/test/java/...` (baseline minima: `DefaultInventoryRepositoryTest`, `DatabaseViewModelTest`, `ExcelViewModelTest`);
+- esegui automaticamente la suite rilevante come baseline di regressione, preferendo i test mirati; se il perimetro è misto o il dubbio resta, esegui `./gradlew test`;
+- se la logica coperta cambia, aggiorna o estendi i test **nello stesso task** prima della chiusura;
+- riporta nel file task quali test hai eseguito, quali test hai aggiunto/aggiornato e quali limiti residui restano.
+
+**Terminologia vincolante:** i test di **TASK-004** sono principalmente **test unitari / Robolectric su JVM** per logica dati, import/export, history, flussi Excel e stato ViewModel. **Non** sono test UI Compose/Espresso e **non** vanno descritti come tali.
+
+**Non sostituisce:**
+
+- test manuali UI/UX;
+- smoke test di navigazione;
+- verifiche manuali/integrate su scanner, file picker, share intent, dialog, layout Compose;
+- test emulator/device quando richiesti esplicitamente dal task.
+
+**Regola anti-regressione:**
+
+- se una modifica rompe test esistenti, non rimuovere o indebolire i test solo per far passare il task;
+- distingui tra **test obsoleto** perché il comportamento desiderato è cambiato intenzionalmente e **regressione** introdotta dalla modifica;
+- ogni aggiornamento ai test deve essere motivato nel log di esecuzione e coerente con il comportamento atteso.
+
+---
+
 ## Regola Android / iOS
 
 - **Android repo** = fonte di verità per architettura, business logic, Room, repository, ViewModel, barcode, import/export Excel, navigation, integrazioni piattaforma.
@@ -208,6 +248,11 @@ Nel file task, sezione `Execution`, usa questo formato:
 | Warning nuovi            | ✅/⚠️/❌ | ...                      |
 | Coerenza con planning    | ✅/⚠️/❌ | ...                      |
 | Criteri di accettazione  | ✅/⚠️/❌ | ...                      |
+
+**Baseline regressione TASK-004 (se applicabile):**
+- Test eseguiti: ...
+- Test aggiunti/aggiornati: ...
+- Limiti residui: ...
 
 **Incertezze:**
 - (nessuna, oppure elenco)

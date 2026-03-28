@@ -105,6 +105,11 @@ Legenda tipi: B=Build, S=Static, M=Manual, E=Emulator
 | Coerenza con planning    | —    | —     |                                   |
 | Criteri di accettazione  | —    | —     |                                   |
 
+**Baseline regressione TASK-004 (se applicabile):**
+- Test eseguiti: ...
+- Test aggiunti/aggiornati: ...
+- Limiti residui: ...
+
 **Incertezze:**
 - (nessuna, oppure elenco)
 

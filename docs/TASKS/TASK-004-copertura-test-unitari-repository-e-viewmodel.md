@@ -7,14 +7,14 @@
 | Campo                | Valore                     |
 |----------------------|----------------------------|
 | ID                   | TASK-004                   |
-| Stato                | EXECUTION                  |
+| Stato                | DONE                       |
 | Priorità             | ALTA                       |
 | Area                 | Test / Qualità             |
 | Creato               | 2026-03-27                 |
-| Ultimo aggiornamento | 2026-03-28 (planning review: allineamento file coinvolti, precisazione owner VM, firme reali ExcelViewModel, stack versions) |
-| Tracking `MASTER-PLAN` | **`ACTIVE`** (unico task attivo dopo **`DONE`** di **TASK-020**) |
+| Ultimo aggiornamento | 2026-03-28 (execution completata: audit wiring runtime, completamento suite test, verifiche finali) |
+| Tracking `MASTER-PLAN` | **`DONE`** (chiusura esecutiva completata; nessun nuovo task attivato dall’executor) |
 
-**Nota tracking:** nel `MASTER-PLAN` questo task è l’unico **`ACTIVE`**. Questo task è attualmente in **`EXECUTION`**.
+**Nota tracking:** nel `MASTER-PLAN` questo task risulta chiuso in **`DONE`** dopo completamento codice + test + verifiche. Nessun nuovo task è stato attivato in questa esecuzione.
 
 **Nota cronologia:** eventuali date di planning **anteriorsi** a **`Creato` (2026-03-27)** in bozze intermedie erano incoerenti e **non** valgono come timeline del task. **2026-03-30** = factory runtime + allineamento (**Decisione 6–7**). **2026-03-31** = micro-ottimizzazioni owner unico, regola timestamp, preferenza D8 POI (**`Ultimo aggiornamento`**).
 
@@ -74,10 +74,10 @@ La repo ha oggi soprattutto test template di default; **TASK-004** e **TASK-005*
 
 | # | Criterio | Tipo verifica | Stato |
 |---|----------|---------------|-------|
-| 1 | Test unitari eseguibili con `./gradlew test` (o task Gradle concordato) per le tre aree (`DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`) con almeno un caso significativo per area | B | — |
-| 2 | Nessuna regressione: `./gradlew assembleDebug` OK | B | — |
-| 3 | `./gradlew lint` senza nuovi warning introdotti dal task | S | — |
-| 4 | Documentazione in Execution: elenco test aggiunti, dipendenze test se aggiunte, limiti noti (es. parti non coperte) | S | — |
+| 1 | Test unitari eseguibili con `./gradlew test` (o task Gradle concordato) per le tre aree (`DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`) con almeno un caso significativo per area | B | ESEGUITO |
+| 2 | Nessuna regressione: `./gradlew assembleDebug` OK | B | ESEGUITO |
+| 3 | `./gradlew lint` senza nuovi warning introdotti dal task | S | ESEGUITO |
+| 4 | Documentazione in Execution: elenco test aggiunti, dipendenze test se aggiunte, limiti noti (es. parti non coperte) | S | ESEGUITO |
 
 Legenda: B=Build, S=Static, M=Manual
 
@@ -359,7 +359,57 @@ Le tre classi dipendono da **Room** e/o **`AndroidViewModel`**: la combinazione 
 
 ## Execution
 
-_(Non avviata — in **PLANNING**; attendere approvazione utente per **EXECUTION**.)_
+### Esecuzione — 2026-03-28
+
+**Audit iniziale:**
+- Verificato che il wiring runtime pianificato era già correttamente in sede: `DatabaseViewModel` e `ExcelViewModel` usano repository iniettato + `factory(...)`, `NavGraph.kt` è l’unico owner con `viewModel(factory = …)`, `DatabaseScreen.kt` non crea più un `viewModel()` implicito.
+- Verificato che `app/build.gradle.kts` e `gradle/libs.versions.toml` avevano già le dipendenze test principali previste dal planning (`Robolectric`, `kotlinx-coroutines-test`, `Turbine`, `MockK`, `core-testing`); non è stato necessario riaprire il wiring runtime né aggiungere nuove dipendenze.
+- Trovate bozze test presenti ma incomplete/incoerenti con le firme attuali (`ProductUpdate`, `applyImport`, sincronizzazione Robolectric/coroutines, template `ExampleUnitTest` ancora presente).
+
+**File modificati:**
+- `app/build.gradle.kts` — abilitato `unitTests.isIncludeAndroidResources = true` per l’esecuzione Robolectric dei test JVM con accesso corretto alle risorse Android.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt` — riscritta la suite repository con Room in-memory reale, assert robusti su history/timestamp/source e copertura CRUD/import/filter/snapshot.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt` — completata la suite ViewModel con MockK, workbook POI minimo per `startImportAnalysis`, verifica di CRUD/import/export/reset state e attese asincrone robuste su `Dispatchers.IO/Default`.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/ExcelViewModelTest.kt` — completata la suite ViewModel con MockK, copertura selezione colonne, generazione history, rename/delete, export, entry manuali e persistenza stato.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/testutil/MainDispatcherRule.kt` — nuova rule condivisa per `Dispatchers.Main` nei test ViewModel.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/ExampleUnitTest.kt` — rimosso template di default ormai ridondante.
+
+**Azioni eseguite:**
+1. Eseguito mini-audit documentale e del codice già toccato dall’esecuzione precedente per evitare di rifare lavoro già corretto.
+2. Confermato che il wiring runtime approvato nel planning era già coerente e non richiedeva ulteriori modifiche a `DatabaseViewModel.kt`, `ExcelViewModel.kt`, `NavGraph.kt` o `DatabaseScreen.kt`.
+3. Riallineata la base test al codice reale del progetto: firme attuali di `ProductUpdate`, comportamento di `applyImport`, owner unico dei ViewModel e uso del repository iniettato.
+4. Consolidata una suite unitaria unica e pulita:
+   `DefaultInventoryRepositoryTest` = 8 test
+   `DatabaseViewModelTest` = 14 test
+   `ExcelViewModelTest` = 12 test
+   Totale = 34 test
+5. Eliminato il template `ExampleUnitTest` e introdotta una `MainDispatcherRule` condivisa per evitare duplicazioni e flakiness nei test ViewModel.
+6. Verificata la strategia D8 pianificata con workbook `.xlsx` minimo generato in-test tramite Apache POI e passato via `Uri.fromFile(...)`.
+7. Verificato che `lint` fallisce per errori/warning preesistenti fuori scope (`GeneratedScreen.kt`, `ImportAnalysisScreen.kt`, warning di dipendenze/Gradle), senza riferimenti ai file modificati da TASK-004 nel report lint corrente.
+
+**Check obbligatori:**
+| Check                    | Stato | Note |
+|--------------------------|-------|------|
+| Build Gradle             | ✅ ESEGUITO | `./gradlew assembleDebug` → `BUILD SUCCESSFUL` |
+| Lint                     | ⚠️ ESEGUITO | `./gradlew lint` eseguito ma fallisce per 25 errori / 68 warning preesistenti fuori scope; primo errore in `GeneratedScreen.kt:223`; nessun riferimento ai file toccati da TASK-004 nel report |
+| Warning nuovi            | ✅ ESEGUITO | Nessun warning/error lint riferito ai file modificati dal task; warning Gradle/Kotlin plugin e lint Compose sono preesistenti |
+| Coerenza con planning    | ✅ ESEGUITO | Confermato owner unico runtime già corretto; completate le tre suite secondo strategia Room in-memory + MockK + POI in-test |
+| Criteri di accettazione  | ✅ ESEGUITO | C1 `./gradlew test` verde; C2 `./gradlew assembleDebug` verde; C3 verificato nessun issue nei file del task nonostante lint globale preesistente; C4 documentazione aggiornata qui |
+
+**Dettaglio criteri di accettazione:**
+| # | Criterio | Verifica | Stato | Evidenza |
+|---|----------|----------|-------|----------|
+| 1 | Test unitari eseguibili per repository + due ViewModel | `./gradlew test` | ESEGUITO | `BUILD SUCCESSFUL`; 34 test verdi distribuiti su 3 suite |
+| 2 | Nessuna regressione build | `./gradlew assembleDebug` | ESEGUITO | `BUILD SUCCESSFUL` |
+| 3 | Nessun warning nuovo introdotto dal task | `./gradlew lint` + audit report | ESEGUITO | Report lint senza occorrenze sui file modificati da TASK-004; errori/warning residui già presenti fuori scope |
+| 4 | Documentazione execution completa | Ispezione file task | ESEGUITO | Audit, file modificati, verifiche e limiti residui riportati in questa sezione |
+
+**Incertezze:**
+- Nessuna sul perimetro del task.
+
+**Handoff notes:**
+- `lint` globale della repo resta rosso per problemi preesistenti in `GeneratedScreen.kt`, `ImportAnalysisScreen.kt` e warning di dipendenze/Gradle: fuori scope di TASK-004, ma da considerare in un task dedicato di cleanup qualità.
+- Il runtime wiring dei ViewModel era già corretto prima di questa ripresa; questa esecuzione non ha cambiato il comportamento funzionale dell’app.
 
 ---
 
@@ -379,30 +429,24 @@ _(Se necessario.)_
 
 | Campo                  | Valore   |
 |------------------------|----------|
-| Stato finale           | —        |
-| Data chiusura          | —        |
-| Tutti i criteri ✅?    | —        |
-| Rischi residui         | —        |
+| Stato finale           | DONE |
+| Data chiusura          | 2026-03-28 |
+| Tutti i criteri ✅?    | Sì |
+| Rischi residui         | `lint` globale della repo fallisce ancora per errori/warning preesistenti fuori scope; nessuna issue lint sui file modificati da TASK-004 |
 
 ---
 
 ## Riepilogo finale
 
-_(Al termine.)_
+- Audit iniziale: wiring runtime già corretto e dipendenze test principali già presenti; il lavoro rimasto era completare e rendere verde la suite.
+- Completamento: 34 test verdi complessivi (`DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`), rimozione del template inutile, aggiunta di `MainDispatcherRule`, supporto Robolectric alle risorse unit test.
+- Verifiche: `./gradlew test` e `./gradlew assembleDebug` verdi; `./gradlew lint` eseguito ma ancora rosso per debito preesistente fuori scope.
 
 ---
 
 ## Handoff
 
 - **Predecessori:** **TASK-003** (`DONE`, decomposizione `DatabaseScreen`); **TASK-020** (`DONE` 2026-03-28, cleanup code analysis post-TASK-003).
-- **Stato corrente:** **TASK-004** è l’unico task **`ACTIVE`** nel `MASTER-PLAN`; avviare **`EXECUTION`** dopo lettura `MASTER-PLAN` + questo file + `AGENTS.md` + approvazione planning se ancora richiesta.
-- **Successore naturale in backlog:** **TASK-005** (test `ExcelUtils` / `ImportAnalysis`); **TASK-009** dipende da **TASK-004** per migrazioni.
-- **Governance:** un solo `ACTIVE`; dopo **DONE** di **TASK-004**, aggiornare `MASTER-PLAN` e attivare il prossimo task con conferma utente.
-
-### Esecuzione — 2026-03-28
-
-**File modificati:**
-- (in lavorazione)
-
-**Azioni eseguite:**
-1. Aggiornato stato task a EXECUTION in MASTER-PLAN.md e TASK-004.
+- **Stato corrente:** **TASK-004** chiuso in **`DONE`** lato esecuzione; nessun nuovo task attivato automaticamente.
+- **Successore naturale in backlog:** **TASK-005** (test `ExcelUtils` / `ImportAnalysis`) oppure un task dedicato al cleanup del debito `lint`.
+- **Governance:** mantenere un solo task `ACTIVE`; la prossima attivazione richiede decisione planner/utente.

@@ -78,6 +78,30 @@ Non pianificare senza aver letto il codice. Non fare review senza aver letto il 
 - Non fare grossi refactor architetturali se il task è soprattutto visuale.
 - **Task non puramente visivi (es. decomposizione, fix mirati, refactor tecnico):** sono ammessi **piccoli miglioramenti UI/UX intenzionali** solo se locali, coerenti con lo stile dell’app, senza impatto sulla logica business, senza rimozione di feature e senza redesign fuori scope; devono essere **documentati nel log Execution** dall’esecutore (`AGENTS.md`).
 
+### Baseline regressione post-Execution (TASK-004)
+
+Quando pianifichi o fai review di task che toccano aree già coperte da **TASK-004**, considera obbligatorio lo step automatico post-Execution definito in `AGENTS.md`.
+
+Trigger tipici:
+
+- `InventoryRepository` / `DefaultInventoryRepository`
+- `DatabaseViewModel`
+- `ExcelViewModel`
+- import/export
+- analisi import
+- history / flussi Excel / entry manuali
+- logica di sincronizzazione o stato collegata a queste aree
+
+Regole per planning/review:
+
+- chiarire nel planning, quando rilevante, quale baseline test esistente ci si aspetta venga eseguita;
+- in review verificare che l’esecutore abbia eseguito i test rilevanti, o motivato perché ha scelto la suite completa `./gradlew test`;
+- se la logica coperta è cambiata, aspettarsi aggiornamento o estensione dei test nello stesso task;
+- distinguere tra test aggiornato per comportamento intenzionalmente cambiato e test rotto per regressione;
+- non accettare la rimozione o l’indebolimento di test esistenti solo per far passare una modifica.
+
+**Terminologia:** questi test sono principalmente **unit test / Robolectric su JVM** per logica repository/ViewModel/import-export. **Non** sostituiscono review o test manuali UI.
+
 ### Transizioni di stato valide
 
 ```
@@ -92,7 +116,7 @@ Transizioni speciali:
 
 **Regole:**
 - `PLANNING → EXECUTION`: richiede criteri di accettazione definiti e approvazione utente.
-- `EXECUTION → REVIEW`: richiede check obbligatori completati (vedi AGENTS.md).
+- `EXECUTION → REVIEW`: richiede check obbligatori completati e, se applicabile, baseline regressione **TASK-004** eseguita e documentata (vedi `AGENTS.md`).
 - `REVIEW → DONE`: richiede conferma esplicita dell'utente.
 - Il loop `REVIEW → FIX → REVIEW` può ripetersi, ma ogni iterazione deve essere documentata.
 
@@ -135,6 +159,7 @@ Il backlog è in `docs/MASTER-PLAN.md`, sezione "Backlog".
 - Non riscrivere il planning durante la review: se il planning era sbagliato, apri un fix o un nuovo task.
 - Verifica ogni criterio di accettazione singolarmente.
 - Controlla i check obbligatori dell'esecutore (AGENTS.md).
+- Se il task tocca aree coperte da **TASK-004**, controlla nel log `Execution` i test eseguiti, gli eventuali test aggiunti/aggiornati e i limiti residui della baseline di regressione.
 
 ### UI/UX in review (task anche non puramente visivi)
 
