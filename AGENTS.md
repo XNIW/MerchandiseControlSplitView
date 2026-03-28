@@ -155,8 +155,19 @@ Se il task specifica esplicitamente test su emulator o device, segui il protocol
 - Se esiste un flusso equivalente su iOS, usarlo solo come riferimento visivo/UX, non come fonte della logica.
 - Il ViewModel resta la fonte di verità dello stato: non spostare business logic nei composable.
 - Preferire cambi piccoli, progressivi e concreti rispetto a riscritture ampie.
-- Non modificare DAO, repository, modelli dati, navigation o integrazioni di piattaforma salvo necessità reale del task.
+- **Non modificare** DAO, repository, modelli dati, navigation o integrazioni di piattaforma salvo necessità reale del task.
 - Non fare grossi refactor architetturali se il task è soprattutto visuale.
+
+### Piccoli miglioramenti UI/UX in task non puramente visivi
+
+Quando il task **non** è dedicato solo a UX/UI (es. decomposizione file, fix mirati), l’esecutore può comunque applicare **piccoli miglioramenti intenzionali** di UI/UX **solo se**:
+
+- aumentano **chiarezza**, **coerenza** con lo stile esistente dell’app o **qualità percepita** dell’interazione;
+- restano **nel perimetro** del task (nessuno scope creep, nessun redesign ampio);
+- **non** richiedono refactor architetturali né toccano business logic / DAO / repository / navigation oltre quanto già previsto dal task;
+- **non** rimuovono feature Android funzionanti.
+
+**Obbligo di tracciamento:** ogni piccolo cambiamento UI/UX **intenzionale** introdotto in un task **non** puramente visivo deve essere **elencato e motivato** nel log **Execution** del file task (es. sotto **Azioni eseguite** o **File modificati** con una riga dedicata: «UI/UX: … (motivo: chiarezza / coerenza / …)»). Senza questa voce, in review il cambio rischia di essere trattato come regressione non spiegata.
 
 ---
 

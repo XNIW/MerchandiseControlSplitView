@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-Portare **TASK-015** — **UX modernization `DatabaseScreen`**: toolbar, dialog import/export, affordance scanner, chiarezza visiva **senza** cambiare logica business né rimuovere feature. **TASK-017** (OOM full-import) è **`DONE`**. **TASK-002** resta **`BLOCKED`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
+**TASK-003** — decomposizione `DatabaseScreen.kt` — **`DONE`** (2026-03-27, conferma utente dopo test manuale). **TASK-004** — test unitari su `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel` — è l’**unico task `ACTIVE`**, fase **`PLANNING`**. **TASK-015** resta in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** resta **`BLOCKED`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
 
 ---
 
@@ -24,10 +24,10 @@ Portare **TASK-015** — **UX modernization `DatabaseScreen`**: toolbar, dialog 
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **TASK-015** (UX modernization DatabaseScreen)   |
-| Fase task attivo     | **PLANNING** (file task: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`) |
-| Milestone            | **TASK-017** **`DONE`** (2026-03-27, conferma utente smoke). **TASK-002** ancora **`BLOCKED`** (smoke `GeneratedScreen` rimandati) |
-| Prossimo passo operativo | Completare planning **TASK-015** → approvazione utente → **EXECUTION** (solo UI `DatabaseScreen` e composable collegati; ViewModel/repository in sola lettura salvo necessità esplicita) |
+| Task attivo          | **TASK-004** (test unitari Repository + ViewModel)   |
+| Fase task attivo     | **PLANNING** (file task: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`) |
+| Milestone            | **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
+| Prossimo passo operativo | Completare **planning TASK-004** → approvazione utente → **EXECUTION** (test JUnit su repository/ViewModel indicati; vedi file task). **Non** avviare senza lettura `AGENTS.md` + task attivo |
 | Ultimo aggiornamento | 2026-03-27                                       |
 
 ---
@@ -38,18 +38,19 @@ Portare **TASK-015** — **UX modernization `DatabaseScreen`**: toolbar, dialog 
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`).
+Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`).
 
-**TASK-015 — tracking:** unico task **`ACTIVE`** nel backlog (fase corrente **`PLANNING`** nel file task).
+**TASK-004 — tracking:** unico task **`ACTIVE`** nel backlog (fase corrente **`PLANNING`** nel file task).
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
-1. Sezione **Backlog**: **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**.
+1. Sezione **Backlog**: **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**.
 2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
-3. **TASK-015** → **`ACTIVE`** (unico attivo).
-4. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
-5. Nessun altro task con stato **`ACTIVE`** oltre **TASK-015**.
-6. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+3. **TASK-004** → **`ACTIVE`** (unico attivo).
+4. **TASK-015** → **`BACKLOG`** (UX modernization DatabaseScreen — ripresa possibile dopo **TASK-003** `DONE` o su decisione utente).
+5. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
+6. Nessun altro task con stato **`ACTIVE`** oltre **TASK-004**.
+7. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
@@ -101,21 +102,24 @@ Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrisponde
 
 1. Leggere prima il codice Android della schermata coinvolta; usare iOS solo come riferimento visivo/UX.
 2. Il ViewModel resta la fonte di verità dello stato — non spostare business logic nei composable.
-3. Non modificare DAO, repository, modelli dati, navigation o integrazioni piattaforma salvo necessità reale del task.
-4. Cambi piccoli e progressivi — no riscritture ampie se il task è soprattutto visuale.
-5. Non rimuovere feature Android funzionanti.
-6. Dettagli: vedi guardrail completi in `AGENTS.md` e `CLAUDE.md`.
+3. **Invariato (non negoziabile):** non modificare DAO, repository, modelli dati, navigation o integrazioni piattaforma salvo necessità reale del task.
+4. **Piccoli miglioramenti UI/UX intenzionali** sono ammessi **anche** in task **non** puramente visivi (es. decomposizione, fix mirati, refactor tecnico), se sono: **locali**, **coerenti** con lo stile Material3 / pattern già presenti nell’app, e **giustificati** da un guadagno chiaro in chiarezza, coerenza o qualità percepita. **Non** equivalgono a «cambiare qualsiasi UI»: vietati redesign ampi, nuovi flussi non pianificati e scope creep.
+5. Preferire interventi **piccoli e progressivi**; niente riscritture UI che equivalgano a un redesign di schermata fuori perimetro.
+6. **Non rimuovere** feature Android funzionanti.
+7. Ogni intervento UI/UX intenzionale in un task che non sia dedicato solo alla UX va **documentato** nel log di esecuzione del file task (vedi `AGENTS.md`).
+8. Dettagli review: vedi `CLAUDE.md` (distinzione regressione / miglioramento accettabile / fuori scope).
 
 ### Definition of Done — task UX/UI
 
-Checklist minima per dichiarare chiuso un task visuale:
+Checklist minima per dichiarare chiuso un task visuale (o un task con esito UI rilevante):
 
-- [ ] Gerarchia visiva migliorata rispetto allo stato pre-task
-- [ ] Spacing e layout più leggibili
+- [ ] Gerarchia visiva migliorata rispetto allo stato pre-task (ove applicabile al perimetro)
+- [ ] Spacing e layout più leggibili (ove nel perimetro)
 - [ ] Empty / loading / error states più chiari (dove applicabile)
-- [ ] Primary action più evidente
+- [ ] Primary action più evidente (dove applicabile)
 - [ ] Nessuna regressione funzionale intenzionale
 - [ ] Nessun cambio a logica business / Room / repository / navigation salvo richiesta esplicita del task
+- [ ] **Qualità visiva:** nessun cambio **incoerente, arbitrario o fuori scope** con lo stile dell’app e con il perimetro del task; i **piccoli miglioramenti intenzionali** ammessi devono essere coerenti e tracciati nel log
 - [ ] Build Gradle OK, lint senza nuovi warning
 
 ---
@@ -176,7 +180,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### Osservazioni architetturali
 
 - **GeneratedScreen.kt** (~2471 righe) è il file più complesso del progetto; contiene già alcuni composable/helper nello stesso file (es. chips bar, calcolatrice, manual entry). TASK-002 ne estende la decomposizione senza assumere monolite totale.
-- **DatabaseScreen.kt** (1084 righe) è il secondo file più grande. Gestisce molte responsabilità (CRUD, import, export, scanner).
+- **DatabaseScreen** — decomposizione (**TASK-003** `DONE`, 2026-03-27): logica UI ripartita su `DatabaseScreen.kt` + `DatabaseScreenComponents.kt` / `DatabaseScreenDialogs.kt` / `EditProductDialog.kt`; orchestrazione e wiring restano coerenti con `DatabaseViewModel`.
 - L'architettura MVVM è coerente: 2 ViewModel, 1 Repository, 5 DAO, 5+1 Entity/View.
 - Schema database a v6 con migrazioni incrementali.
 - Localizzazione in 4 lingue (en, it, es, zh).
@@ -218,20 +222,22 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-003 — Decomposizione DatabaseScreen
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `DONE`                                                  |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UI / DatabaseScreen                                     |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Ridurre la complessità di `DatabaseScreen.kt` (1084 righe) estraendo dialoghi, sezioni e logica in composable dedicati. Nessun cambio funzionale. |
+| Dipendenze  | TASK-001 (DONE)                                         |
+| Descrizione | Ridurre la complessità di `DatabaseScreen.kt` estraendo dialoghi, sezioni e logica UI in composable dedicati. Nessun cambio funzionale inteso. **Chiusura 2026-03-27** dopo build/lint/review statica positivi e **conferma utente** (test manuale). Dettaglio: `docs/TASKS/TASK-003-decomposizione-databasescreen.md`. |
+| Note tracking | **`DONE`** 2026-03-27.                                                 |
 
 ### TASK-004 — Copertura test unitari — Repository e ViewModel
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `ACTIVE`                                                |
 | Priorità    | `ALTA`                                                  |
 | Area        | Test / Qualità                                          |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. **Nota:** test mirati al path **full import** / OOM non sostituiscono **TASK-017** (fix runtime prima). |
+| Dipendenze  | TASK-001 (DONE); TASK-003 (`DONE`, ordine di sequenziamento consigliato ma non vincolo rigido) |
+| Descrizione | Creare test unitari per `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. Copertura minima delle operazioni CRUD, import analysis, export. **Nota:** test mirati al path **full import** / OOM non sostituiscono **TASK-017** (fix runtime già in **DONE**). Dettaglio: `docs/TASKS/TASK-004-copertura-test-unitari-repository-e-viewmodel.md`. |
+| Note tracking | **Unico task ACTIVE**; fase **`PLANNING`** nel file task fino ad approvazione utente per **EXECUTION**. |
 
 ### TASK-005 — Copertura test unitari — ExcelUtils e ImportAnalyzer
 | Campo       | Valore                                                  |
@@ -333,15 +339,15 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-015 — UX modernization DatabaseScreen
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE`                                                |
+| Stato       | `BACKLOG`                                               |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / UI                                                 |
-| Dipendenze  | TASK-001 (DONE), TASK-017 (DONE)                        |
+| Dipendenze  | TASK-001 (DONE), TASK-017 (DONE); **TASK-003** (`DONE`, decomposizione DatabaseScreen) — ripresa UX consigliata ma non vincolo rigido |
 | Descrizione | Modernizzare layout CRUD, dialog import/export, toolbar e scanner UI in DatabaseScreen. Nessun cambio alla logica business (CRUD, import, export, scanner barcode) né rimozione di feature esistenti. Feedback utente: import diretto senza mini-menu ridondante (già parzialmente emerso in TASK-017), coerenza icone import/export, export con menu dove ha senso, maggiore chiarezza senza rifare l’architettura. Dettaglio: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`. |
 | File Android | `DatabaseScreen.kt`, `DatabaseViewModel.kt` (sola lettura), `InventoryRepository.kt` (sola lettura) |
 | Rif. iOS    | Schermata Database iOS come guida visiva (se presente) |
 | Obiettivo UX | Layout CRUD leggibile, dialog import/export chiari, toolbar e scanner con affordance |
-| Note tracking | **Unico task ACTIVE**; fase **`PLANNING`** nel file task fino ad approvazione utente per EXECUTION. |
+| Note tracking | **Sospeso** finché non riattivato: **TASK-003** ora **`DONE`**. Riattivazione: impostare **`ACTIVE`** in questo backlog e nel file task (un solo ACTIVE alla volta). |
 
 ### TASK-016 — UX polish History / ImportAnalysis / grid readability
 | Campo       | Valore                                                  |
@@ -390,22 +396,23 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato: TASK-015 (MEDIA, ACTIVE, PLANNING)** — UX modernization `DatabaseScreen`. **TASK-017** è **`DONE`**. **TASK-002** è **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
+**Focus immediato: TASK-004 (ALTA, ACTIVE, PLANNING)** — test unitari `DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`. **TASK-003** è **`DONE`** (2026-03-27). **TASK-015** (UX modernization DatabaseScreen) è in **`BACKLOG`**. **TASK-017** è **`DONE`**. **TASK-002** è **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **TASK-015 (MEDIA, ACTIVE):** UX modernization DatabaseScreen — planning → esecuzione dopo approvazione utente.
-2. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-3. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
-4. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
-5. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
+1. **TASK-004 (ALTA, ACTIVE, PLANNING):** Test unitari repository/ViewModel — planning → esecuzione dopo approvazione utente.
+2. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
+3. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+4. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
+5. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
+6. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
 
 ### Priorità tecnica / qualità
 
 Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente:
 
 1. **TASK-001 (CRITICA):** Bootstrap governance — DONE (chiuso 2026-03-27).
-2. **TASK-004, TASK-005 (ALTA):** Test unitari — la repo non ha copertura significativa.
+2. **TASK-004, TASK-005 (ALTA):** Test unitari — **TASK-004** **`ACTIVE`** (`PLANNING`); **TASK-005** in backlog; copertura significativa assente.
 3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
-4. **TASK-002 (MEDIA, BLOCKED), TASK-003 (MEDIA):** Decomposizione file grandi.
+4. **TASK-003 (MEDIA, DONE):** Decomposizione `DatabaseScreen` — chiuso 2026-03-27. **TASK-002 (MEDIA, BLOCKED):** Decomposizione `GeneratedScreen`.
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
 6. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export / round-trip — follow-up naturali post-TASK-017.
 7. **TASK-008, TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
@@ -422,4 +429,4 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 | Nessuna copertura di test significativa (solo template default) | Alto | Certo | TASK-004 e TASK-005 priorità ALTA |
 | Migrazioni DB non testate automaticamente   | Alto    | Possibile   | TASK-009 nel backlog                |
 | Nessuna CI/CD                              | Medio   | Certo       | TASK-012, bassa priorità per ora    |
-| File grandi con molte responsabilità        | Medio   | Già presente | TASK-002 e TASK-003                |
+| File grandi con molte responsabilità        | Medio   | Mitigato su DB screen | **TASK-003** `DONE` (DatabaseScreen modularizzato); **TASK-002** **BLOCKED** (`GeneratedScreen`) |

@@ -74,8 +74,9 @@ Non pianificare senza aver letto il codice. Non fare review senza aver letto il 
 - Se esiste un flusso equivalente su iOS, usarlo solo come riferimento visivo/UX, non come fonte della logica.
 - Il ViewModel resta la fonte di verità dello stato: non spostare business logic nei composable.
 - Preferire cambi piccoli, progressivi e concreti rispetto a riscritture ampie.
-- Non modificare DAO, repository, modelli dati, navigation o integrazioni di piattaforma salvo necessità reale del task.
+- **Non modificare** DAO, repository, modelli dati, navigation o integrazioni di piattaforma salvo necessità reale del task.
 - Non fare grossi refactor architetturali se il task è soprattutto visuale.
+- **Task non puramente visivi (es. decomposizione, fix mirati, refactor tecnico):** sono ammessi **piccoli miglioramenti UI/UX intenzionali** solo se locali, coerenti con lo stile dell’app, senza impatto sulla logica business, senza rimozione di feature e senza redesign fuori scope; devono essere **documentati nel log Execution** dall’esecutore (`AGENTS.md`).
 
 ### Transizioni di stato valide
 
@@ -134,6 +135,15 @@ Il backlog è in `docs/MASTER-PLAN.md`, sezione "Backlog".
 - Non riscrivere il planning durante la review: se il planning era sbagliato, apri un fix o un nuovo task.
 - Verifica ogni criterio di accettazione singolarmente.
 - Controlla i check obbligatori dell'esecutore (AGENTS.md).
+
+### UI/UX in review (task anche non puramente visivi)
+
+- I **piccoli miglioramenti UI/UX intenzionali** documentati nel log **Execution** **non** vanno trattati automaticamente come regressioni: valutarli rispetto a **coerenza** con Material3 / stile dell’app, **beneficio** percepibile (chiarezza, coerenza, usabilità), **assenza di scope creep** e **assenza di impatto** sulla logica business / Room / repository / navigation.
+- Il revisore deve **distinguere**:
+  1. **Regressione UI non voluta** — incoerente, peggiora l’esperienza o rompe flussi; richiede fix.
+  2. **Piccolo miglioramento UI/UX coerente e accettabile** — in linea con `MASTER-PLAN` / `AGENTS.md`, motivato nel log; può essere approvato se i criteri del task restano soddisfatti.
+  3. **Redesign o cambio flusso fuori scope** — da respingere o spostare in un task UX dedicato (es. backlog), anche se “bello”.
+- Se l’esecutore non ha documentato un delta UI visibile, chiedere chiarimento o trattarlo come rischio di regressione non spiegata.
 
 ### Formato review
 

@@ -12,8 +12,11 @@
 | Area                 | UX / UI / DatabaseScreen   |
 | Creato               | 2026-03-27                 |
 | Ultimo aggiornamento | 2026-03-27                 |
+| Tracking `MASTER-PLAN` | **`BACKLOG`** (non più task attivo) |
 
-**Nota tracking:** unico task **`ACTIVE`** nel `MASTER-PLAN`; fase corrente **`PLANNING`** fino ad approvazione utente per **EXECUTION**. **TASK-017** è **`DONE`**. **TASK-002** resta **`BLOCKED`** — **TASK-014** non va attivato finché **TASK-002** dipende da smoke/decisione.
+**Nota tracking (2026-03-27):** questo task **non** è più **`ACTIVE`** nel `MASTER-PLAN`. È stato **temporaneamente de-prioritizzato su richiesta utente** per dare precedenza a **TASK-003** (decomposizione `DatabaseScreen.kt`). Lo **stato interno** resta **`PLANNING`** (nessuna **EXECUTION** avviata). Alla ripresa: aggiornare il backlog e questa riga di tracking a **`ACTIVE`** in coerenza con la regola un solo task attivo.
+
+**Contesto governance:** **TASK-017** è **`DONE`**. **TASK-002** resta **`BLOCKED`** — **TASK-014** non va attivato finché **TASK-002** dipende da smoke/decisione.
 
 ---
 
@@ -82,6 +85,7 @@ Legenda: B=Build, S=Static, M=Manual
 |---|-----------|-------------|------|
 | 1 | Task attivato dopo **DONE** di **TASK-017** | Priorità stabilità import risolta | 2026-03-27 |
 | 2 | **TASK-014** non attivato: dipende da **TASK-002** `BLOCKED` | Ordine backlog nel MASTER-PLAN | 2026-03-27 |
+| 3 | Task rimesso in **`BACKLOG`** (sospensione temporanea) | Richiesta utente: precedenza a **TASK-003** | 2026-03-27 |
 
 ---
 
@@ -143,3 +147,4 @@ _(Al termine.)_
 
 - **Predecessore:** TASK-017 (full-import OOM) **`DONE`**.
 - **Bloccante altrove:** TASK-002 → TASK-014 resta in backlog.
+- **Sospensione (governance 2026-03-27):** focus corrente spostato su **TASK-003** (`docs/TASKS/TASK-003-decomposizione-databasescreen.md`). Riprendere **TASK-015** dopo chiusura o pausa di **TASK-003**, o su esplicita riattivazione utente; aggiornare `MASTER-PLAN` e questo file prima di qualsiasi **EXECUTION**.
