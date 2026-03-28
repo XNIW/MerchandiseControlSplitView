@@ -731,6 +731,13 @@ class DatabaseViewModel(
                 }
 
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(
+                    context.getString(R.string.export_error, errorMessage)
+                )
             } catch (e: Exception) {
                 _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: context.getString(R.string.unknown_error)))
             }

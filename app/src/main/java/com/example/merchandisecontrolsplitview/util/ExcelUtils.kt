@@ -218,8 +218,8 @@ internal val KNOWN_EXCEL_HEADER_ALIASES: Map<String, List<String>> = mapOf(
     "retailPrice" to listOf("retailprice", "retail_price", "零售价", "prezzo vendita", "prezzo retail", "sale price", "listino", "precio de venta", "precio venta", "precio al público", "precio retail", "precio al por menor", "Nuovo Prezzo vendita", "新零售价", "Nuevo precio de venta", "New retail price"),
     "realQuantity" to listOf("实点数量", "Counted quantity", "Quantità contata", "Cantidad contada"),
     "category" to listOf("category", "categoria", "reparto", "department", "分类", "类别", "categoría"),
-    "oldPurchasePrice" to listOf("oldpurchaseprice", "prezzovecchioacquisto", "prezzoprecedenteacquisto", "acquistoprec","previouspurchaseprice","Prezzo vecchio acquisto", "旧进价", "Precio de compra anterior", "Old purchase price"),
-    "oldRetailPrice" to listOf("oldretailprice", "prezzovecchiovendita", "prezzoprecedentevendita", "venditaprec", "previousretailprice", "Prezzo vecchio vendita", "旧零售价", "Precio de venta anterior", "Old retail price")
+    "oldPurchasePrice" to listOf("oldpurchaseprice", "prezzovecchioacquisto", "prezzoprecedenteacquisto", "acquistoprec","previouspurchaseprice","Prezzo vecchio acquisto", "旧进价", "Precio de compra anterior", "Old purchase price", "Purchase (Old)", "Acquisto (Vecchio)", "Compra (Antiguo)", "进价（旧）"),
+    "oldRetailPrice" to listOf("oldretailprice", "prezzovecchiovendita", "prezzoprecedentevendita", "venditaprec", "previousretailprice", "Prezzo vecchio vendita", "旧零售价", "Precio de venta anterior", "Old retail price", "Retail (Old)", "Vendita (Vecchio)", "Venta (Antiguo)", "售价（旧）")
 )
 
 private val NORMALIZED_EXCEL_HEADER_LOOKUP: Map<String, String> = buildMap {

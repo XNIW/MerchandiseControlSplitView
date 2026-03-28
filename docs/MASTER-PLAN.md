@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**TASK-007** — export database completo — verifica **round-trip** (export full DB 4 fogli + re-import → equivalenza dati) — **`ACTIVE`** (**PLANNING**, 2026-03-28). File task: `docs/TASKS/TASK-007-export-database-round-trip.md`. Predecessori rilevanti: **TASK-005** `DONE` (2026-03-28), **TASK-017** `DONE`. **TASK-004** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-020** `DONE` (2026-03-28). **TASK-002** resta **`BLOCKED`**. **TASK-015** resta in **`BACKLOG`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
+**TASK-008** — **Gestione errori e UX feedback** — audit messaggi utente (toast/snackbar/dialog, stati errore), chiarezza e localizzazione — **`ACTIVE`**, fase **`PLANNING`** (2026-03-28). File: `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. Dipendenze: **TASK-001** `DONE`. Predecessore chiuso: **TASK-007** `DONE` (2026-03-28). Altri riferimenti: **TASK-004** / **TASK-005** / **TASK-017** `DONE`; **TASK-002** **`BLOCKED`**; **TASK-015** / **TASK-014** **`BACKLOG`**.
 
 ---
 
@@ -24,11 +24,11 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **TASK-007** — Export database completo — verifica round-trip |
-| Fase task attivo     | PLANNING |
-| Milestone            | **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-007** **`ACTIVE`** (**PLANNING**). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
-| Prossimo passo operativo | **Planner (CLAUDE.md):** completare **Planning** nel file **TASK-007** (mappatura export/import, criteri equivalenza); **approvazione utente** per passaggio a **EXECUTION** (AGENTS.md). |
-| Ultimo aggiornamento | 2026-03-28 (TASK-005 → **DONE** su conferma utente; **TASK-007** unico **ACTIVE** `PLANNING`; creato file task TASK-007)   |
+| Task attivo          | **TASK-008** — Gestione errori e UX feedback |
+| Fase task attivo     | **PLANNING** (planning iniziale nel file task; **non** EXECUTION finché l’esecutore non aggiorna lo `Stato` nel file task) |
+| Milestone            | **TASK-007** **`DONE`** (2026-03-28 — review **APPROVED**, conferma utente). **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-008** **`ACTIVE`** (**PLANNING**). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
+| Prossimo passo operativo | **Planner / utente:** consolidare eventuali integrazioni al **Planning** di **TASK-008**; **approvazione utente** per passaggio a **EXECUTION** (AGENTS.md). **Esecutore:** non iniziare codice prima di `Stato` → **EXECUTION** nel file task. |
+| Ultimo aggiornamento | 2026-03-28 — **TASK-007** → **`DONE`**; **TASK-008** unico **`ACTIVE`** (**PLANNING**) |
 
 ---
 
@@ -38,9 +38,9 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Task attivo: **TASK-007** (`docs/TASKS/TASK-007-export-database-round-trip.md`), fase **PLANNING** (file task: `Stato` = PLANNING).
+Il task attivo è sempre **uno solo**. Task attivo: **TASK-008** (`docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`), fase **PLANNING**.
 
-**TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **Successore attivo backlog:** **TASK-007** `ACTIVE` (**PLANNING**, dal 2026-03-28).
+**TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`ACTIVE`** (**PLANNING**, 2026-03-28).
 
 **Baseline automatica post-Execution (TASK-004):** dopo la fase di **Execution**, se un task tocca aree già coperte dai test introdotti con **TASK-004** (`DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`, import/export, analisi import, history, flussi Excel, entry manuali, logica di sincronizzazione/stato collegata), l’esecutore deve usare automaticamente quei **test unitari / Robolectric su JVM** come baseline di regressione, aggiornandoli nello stesso task se la logica cambia. Questo step **non** sostituisce test manuali UI/UX, smoke di navigazione o verifiche manuali su integrazioni piattaforma.
 
@@ -52,8 +52,9 @@ Il task attivo è sempre **uno solo**. Task attivo: **TASK-007** (`docs/TASKS/TA
 4. **TASK-015** → **`BACKLOG`** (UX modernization DatabaseScreen — ripresa possibile dopo **TASK-003** `DONE` o su decisione utente).
 5. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
 6. **TASK-005** → **`DONE`** (2026-03-28 — conferma utente; vedi file task **Chiusura**).
-7. **TASK-007** → **`ACTIVE`** (**PLANNING**, 2026-03-28). Unico task attivo; nessun altro ACTIVE concorrente.
-8. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+7. **TASK-007** → **`DONE`** (2026-03-28 — review **APPROVED**, conferma utente).
+8. **TASK-008** → **`ACTIVE`** (**PLANNING**, 2026-03-28). Unico task attivo; nessun altro ACTIVE concorrente.
+9. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
@@ -269,7 +270,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | Test / Qualità                                          |
 | Dipendenze  | TASK-001 (DONE), TASK-004 (DONE)                        |
 | Descrizione | Test JVM: `parseNumber`/`formatNumber*`, `getLocalizedHeader`, **`analyzePoiSheet`** (core + POI row norm; best effort colonne/summary/no-header). **Esclusi:** `readAndAnalyzeExcel`, HTML. **`ImportAnalyzer`:** duplicati — last row wins, qty aggregata, **`DuplicateWarning.rowNumbers`**; validazione fallita post-merge → **`RowImportError.rowNumber` = ultima occorrenza** (streaming: ultimo `rowNumbers`). Dettaglio: `docs/TASKS/TASK-005-copertura-test-unitari-excelutils-e-importanalyzer.md`. Minimi ≥18 test/file. |
-| Note tracking | **`DONE`** 2026-03-28 — conferma utente; review **APPROVED**; successore attivo **TASK-007**. |
+| Note tracking | **`DONE`** 2026-03-28 — conferma utente; review **APPROVED**; **TASK-007** poi **`DONE`** (2026-03-28); attivo **TASK-008**. |
 
 ### TASK-006 — Validazione e robustezza import Excel
 | Campo       | Valore                                                  |
@@ -283,21 +284,22 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-007 — Export database completo — verifica round-trip
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE` (**PLANNING**)                                 |
+| Stato       | `DONE`                                                  |
 | Priorità    | `MEDIA`                                                 |
 | Area        | Export / Database                                       |
 | Dipendenze  | TASK-005 (DONE), TASK-017 (DONE)                        |
-| Descrizione | Verificare che export full DB (4 fogli) + re-import produca dati identici. Definire test di round-trip per Products, Suppliers, Categories, PriceHistory. **Follow-up naturale** dopo che l’import completo è **stabile** (**TASK-017**). Dettaglio: `docs/TASKS/TASK-007-export-database-round-trip.md`. |
-| Note tracking | **Attivato** 2026-03-28 — unico task **ACTIVE**; in **PLANNING** fino ad approvazione utente per **EXECUTION**. |
+| Descrizione | **Round-trip** export full DB → import su DB isolato (Products, Suppliers, Categories, PriceHistory; matrix **§6bis**, normalizzazione **§3bis**, doppio canale storico **§5**). **Robustezza export** su dataset realistico (**§6ter**, criteri **#4–#5**, failure mode **FM‑*** **§1bis**). **Fuori scope:** redesign UI (follow-up in Planning §10). Dipende da import stabile **TASK-017**. Dettaglio: `docs/TASKS/TASK-007-export-database-round-trip.md`. |
+| Note tracking | **`DONE`** 2026-03-28 — review **APPROVED**, **conferma utente**; fix `ExcelUtils` (alias header old\*) + `DatabaseViewModel.exportFullDbToExcel` (OOM/`CancellationException`); suite `FullDbExportImportRoundTripTest`. Criterio **#5** ⚠️ NON ESEGUIBILE (smoke SAF/device) con motivazione accettata. Successore attivo: **TASK-008**. |
 
 ### TASK-008 — Gestione errori e UX feedback
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `ACTIVE` (**PLANNING**)                                 |
 | Priorità    | `BASSA`                                                 |
 | Area        | UX / Error handling                                     |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Audit della gestione errori utente-visibili: toast, dialog, messaggi. Verificare che ogni errore sia comprensibile e localizzato. |
+| Dipendenze  | TASK-001 (DONE)                                         |
+| Descrizione | Audit della gestione errori utente-visibili: toast, dialog, messaggi. Verificare che ogni errore sia comprensibile e localizzato. Dettaglio: `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. |
+| Note tracking | **Attivato** 2026-03-28 — unico task **ACTIVE**; **PLANNING** consolidato nel file task; gate **EXECUTION** su approvazione utente. |
 
 ### TASK-009 — Migrazione database — safety e recovery
 | Campo       | Valore                                                  |
@@ -420,9 +422,9 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** **TASK-007** `ACTIVE` (**PLANNING**, 2026-03-28) — round-trip export full DB / re-import (Products, Suppliers, Categories, PriceHistory); file `docs/TASKS/TASK-007-export-database-round-trip.md`. **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito dopo pianificazione TASK-007:
+**Focus immediato:** **TASK-008** `ACTIVE` (**PLANNING**, 2026-03-28) — gestione errori e UX feedback; file `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. **TASK-007** `DONE` (2026-03-28). **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **TASK-007** — **`ACTIVE`** (**PLANNING**): completare planning e ottenere **EXECUTION** da utente.
+1. **TASK-008** — **`ACTIVE`** (**PLANNING**): consolidare planning; **EXECUTION** su approvazione utente.
 2. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
 3. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
 4. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
@@ -439,9 +441,10 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
 4. **TASK-003 (MEDIA, DONE):** Decomposizione `DatabaseScreen` — chiuso 2026-03-27. **TASK-002 (MEDIA, BLOCKED):** Decomposizione `GeneratedScreen`.
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
-6. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export / round-trip — **TASK-007** **`ACTIVE`** (**PLANNING**); **TASK-006** in backlog (dip. TASK-005 `DONE`).
-7. **TASK-008, TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
-8. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
+6. **TASK-006 (MEDIA, BACKLOG):** Robustezza import Excel generica — dip. TASK-005 `DONE`.
+7. **TASK-007 (MEDIA):** Round-trip export full DB — **`DONE`** (2026-03-28).
+8. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`ACTIVE`** (**PLANNING**). **TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
+9. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
 
 ---
 

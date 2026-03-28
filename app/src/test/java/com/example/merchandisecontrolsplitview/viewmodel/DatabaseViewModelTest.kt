@@ -301,6 +301,26 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `exportFullDbToExcel maps out of memory failures to error state`() = runTest {
+        coEvery { repository.getAllProductsWithDetails() } returns emptyList()
+        coEvery { repository.getAllSuppliers() } returns emptyList()
+        coEvery { repository.getAllCategories() } returns emptyList()
+        coEvery { repository.getAllPriceHistoryRows() } throws OutOfMemoryError("heap exhausted")
+        val targetFile = File.createTempFile("export-full-oom", ".xlsx", app.cacheDir)
+
+        viewModel.exportFullDbToExcel(app, Uri.fromFile(targetFile))
+        advanceUntilIdle()
+        waitForCondition { viewModel.uiState.value is UiState.Error }
+
+        val state = viewModel.uiState.value
+        assertTrue(state is UiState.Error)
+        assertEquals(
+            app.getString(R.string.export_error, "heap exhausted"),
+            (state as UiState.Error).message
+        )
+    }
+
+    @Test
     fun `consumeUiState resets state to idle`() = runTest {
         coEvery { repository.addProduct(any()) } just runs
         viewModel.addProduct(sampleProduct(barcode = "98989898"))
