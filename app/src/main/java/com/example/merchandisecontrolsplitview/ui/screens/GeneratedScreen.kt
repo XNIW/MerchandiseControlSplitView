@@ -95,6 +95,17 @@ fun GeneratedScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val productAlreadyInListText = stringResource(R.string.product_already_in_list)
+    val productFoundInDbText = stringResource(R.string.product_found_in_db)
+    val notFoundText = stringResource(R.string.not_found)
+    val noScannerResultText = stringResource(R.string.no_scanner_result)
+    val fileExportedSuccessfullyText = stringResource(R.string.file_exported_successfully)
+    val shareXlsxText = stringResource(R.string.share_xlsx)
+    val scanPromptText = stringResource(R.string.scan_prompt)
+    val supplierManualText = stringResource(R.string.supplier_manual)
+    val syncAnalysisStartedText = stringResource(R.string.sync_analysis_started)
+    val noValidRowsToSyncText = stringResource(R.string.no_valid_rows_to_sync)
+    val openDatabaseText = stringResource(R.string.open_database)
 
     DisposableEffect(Unit) {
         onDispose {
@@ -220,7 +231,7 @@ fun GeneratedScreen(
                     // Caso 1: Trovato nella griglia corrente -> Apri in modifica
                     productToEditIndex = rowIndex
                     productDataToPrefill = null // Assicurati che non ci siano dati da pre-compilare
-                    Toast.makeText(context, context.getString(R.string.product_already_in_list), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, productAlreadyInListText, Toast.LENGTH_SHORT).show()
                     showManualEntryDialog = true
                 } else {
                     // Caso 2: Non trovato nella griglia, cerca nel DB principale
@@ -230,7 +241,7 @@ fun GeneratedScreen(
                             // Trovato nel DB -> Apri in aggiunta con dati pre-compilati
                             productToEditIndex = null
                             productDataToPrefill = productFromDb
-                            Toast.makeText(context, context.getString(R.string.product_found_in_db), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, productFoundInDbText, Toast.LENGTH_SHORT).show()
                         } else {
                             // Non trovato da nessuna parte -> Apri in aggiunta con solo il barcode
                             productToEditIndex = null
@@ -255,12 +266,12 @@ fun GeneratedScreen(
                 } else {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.not_found),
+                        notFoundText,
                         Toast.LENGTH_SHORT
                     ).show()
                 }
             }
-        } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
+        } ?: Toast.makeText(context, noScannerResultText, Toast.LENGTH_SHORT).show()
     }
 
     val dialogScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -277,7 +288,7 @@ fun GeneratedScreen(
             scope.launch {
                 excelViewModel.exportToUri(context, it)
                 excelViewModel.markCurrentEntryAsExported(entryUid)
-                Toast.makeText(context, context.getString(R.string.file_exported_successfully), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -296,7 +307,7 @@ fun GeneratedScreen(
                 putExtra(Intent.EXTRA_SUBJECT, "Inventario")
                 putExtra(Intent.EXTRA_TEXT, "File generato dall’app 对货")
             }
-            context.startActivity(Intent.createChooser(share, context.getString(R.string.share_xlsx)))
+            context.startActivity(Intent.createChooser(share, shareXlsxText))
             excelViewModel.markCurrentEntryAsExported(entryUid)
         }
     }
@@ -308,7 +319,7 @@ fun GeneratedScreen(
                 setCaptureActivity(PortraitCaptureActivity::class.java)
                 setOrientationLocked(true)
                 setBeepEnabled(true)
-                setPrompt(context.getString(R.string.scan_prompt))
+                setPrompt(scanPromptText)
             }
         )
     }
@@ -342,7 +353,7 @@ fun GeneratedScreen(
                     "purchasePrice" to (rowData.getOrNull(purchaseIdx) ?: ""),
                     "retailPrice" to (rowData.getOrNull(retailPriceIdx) ?: ""),
                     "category" to (rowData.getOrNull(categoryIdx) ?: ""),
-                    "supplier" to context.getString(R.string.supplier_manual)
+                    "supplier" to supplierManualText
                 )
             }
         } else {
@@ -368,13 +379,13 @@ fun GeneratedScreen(
             databaseViewModel.analyzeGridData(gridDataForAnalysis)
             Toast.makeText(
                 context,
-                context.getString(R.string.sync_analysis_started),
+                syncAnalysisStartedText,
                 Toast.LENGTH_SHORT
             ).show()
         } else {
             Toast.makeText(
                 context,
-                context.getString(R.string.no_valid_rows_to_sync),
+                noValidRowsToSyncText,
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -383,7 +394,7 @@ fun GeneratedScreen(
     fun performSearch() {
         val query = searchText.trim()
         if (query.isBlank()) {
-            Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, notFoundText, Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -403,7 +414,7 @@ fun GeneratedScreen(
             showSearchDialog = false
         } else {
             searchText = ""
-            Toast.makeText(context, context.getString(R.string.not_found), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, notFoundText, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -420,7 +431,7 @@ fun GeneratedScreen(
                 // 1. MOSTRA la snackbar (operazione sospensiva)
                 val res = snackbarHostState.showSnackbar(
                     message = msg,
-                    actionLabel = context.getString(R.string.open_database),
+                    actionLabel = openDatabaseText,
                     withDismissAction = true,
                     duration = SnackbarDuration.Short
                 )
@@ -594,7 +605,7 @@ fun GeneratedScreen(
                             val portraitScanOptions = ScanOptions().apply {
                                 setDesiredBarcodeFormats(ALL_CODE_TYPES)
                                 setBeepEnabled(true)
-                                setPrompt(context.getString(R.string.scan_prompt))
+                                setPrompt(scanPromptText)
                                 setOrientationLocked(true)
                                 setCaptureActivity(PortraitCaptureActivity::class.java)
                             }
@@ -662,7 +673,7 @@ fun GeneratedScreen(
                                     setCaptureActivity(PortraitCaptureActivity::class.java)
                                     setOrientationLocked(true)
                                     setBeepEnabled(true)
-                                    setPrompt(context.getString(R.string.scan_prompt))
+                                    setPrompt(scanPromptText)
                                 }
                             )
                         },
@@ -1060,6 +1071,7 @@ private fun GeneratedScreenInfoDialog(
     onOpenPurchaseCalculator: (String) -> Unit,
 ) {
     val context = LocalContext.current
+    val rowUpdatedText = stringResource(R.string.row_updated)
     val header = excelViewModel.excelData.firstOrNull() ?: return
     val row = excelViewModel.excelData.getOrNull(infoRowIndex) ?: return
 
@@ -1113,7 +1125,7 @@ private fun GeneratedScreenInfoDialog(
                             excelViewModel.updateHistoryEntry(entryUid)
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.row_updated),
+                                rowUpdatedText,
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -1933,6 +1945,10 @@ fun ManualEntryDialog(
 ) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val noScannerResultText = stringResource(R.string.no_scanner_result)
+    val productAlreadyInListText = stringResource(R.string.product_already_in_list)
+    val productFoundInDbText = stringResource(R.string.product_found_in_db)
+    val scanPromptText = stringResource(R.string.scan_prompt)
 
     val quantityFocusRequester = remember { FocusRequester() }
     val priceFocusRequester = remember { FocusRequester() }
@@ -1970,7 +1986,7 @@ fun ManualEntryDialog(
     val dialogScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
             barcode = code
-        } ?: Toast.makeText(context, context.getString(R.string.no_scanner_result), Toast.LENGTH_SHORT).show()
+        } ?: Toast.makeText(context, noScannerResultText, Toast.LENGTH_SHORT).show()
     }
 
     val purchIdx = remember(header) { header.indexOf("purchasePrice") }
@@ -2128,7 +2144,7 @@ fun ManualEntryDialog(
             rowBarcode == barcode && (rowIndexToEdit == null || rowIndexToEdit != idxBeingChecked)
         }
         if (isDuplicateInGrid) {
-            barcodeError = context.getString(R.string.product_already_in_list)
+            barcodeError = productAlreadyInListText
             barcodeInfo = null
             productFromDb = null
             dbLookupJob?.cancel()
@@ -2144,7 +2160,7 @@ fun ManualEntryDialog(
             scope.launch {
                 val inDb = databaseViewModel.findProductByBarcode(barcode)
                 productFromDb = inDb
-                barcodeInfo = inDb?.let { context.getString(R.string.product_found_in_db) }
+                barcodeInfo = inDb?.let { productFoundInDbText }
             }
         } else {
             null
@@ -2251,7 +2267,7 @@ fun ManualEntryDialog(
                             val options = ScanOptions().apply {
                                 setDesiredBarcodeFormats(ALL_CODE_TYPES)
                                 setBeepEnabled(true)
-                                setPrompt(context.getString(R.string.scan_prompt))
+                                setPrompt(scanPromptText)
                                 setCaptureActivity(PortraitCaptureActivity::class.java)
                             }
                             dialogScanLauncher.launch(options)

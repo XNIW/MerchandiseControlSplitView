@@ -47,6 +47,7 @@ fun ImportAnalysisScreen(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    val errorFileExportedText = stringResource(R.string.error_file_exported)
 
     val editableNewProducts = remember { importAnalysis.newProducts.map { it.copy() }.toMutableStateList() }
     val editableUpdatedProducts = remember { importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList() }
@@ -64,7 +65,7 @@ fun ImportAnalysisScreen(
     ) { uri ->
         uri?.let {
             ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
-            Toast.makeText(context, context.getString(R.string.error_file_exported), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, errorFileExportedText, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -253,26 +254,27 @@ private fun DisplayProductRow(
     // --- 2. STATI PER CONSERVARE I NOMI RECUPERATI ---
     var supplierName by remember { mutableStateOf<String?>(null) }
     var categoryName by remember { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
+    val loadingEllipsisText = stringResource(R.string.loading_ellipsis)
+    val notFoundShortText = stringResource(R.string.not_found_short)
 
     // --- 3. EFFETTO PER CARICARE I NOMI QUANDO GLI ID CAMBIANO ---
     LaunchedEffect(product.supplierId) {
         if (product.supplierId != null) {
             // Se non è già stato caricato, impostiamo un testo temporaneo
-            if (supplierName == null) supplierName = context.getString(R.string.loading_ellipsis)
+            if (supplierName == null) supplierName = loadingEllipsisText
 
             // Chiamata asincrona per ottenere il nome
             val supplier = databaseViewModel.getSupplierById(product.supplierId)
-            supplierName = supplier?.name ?: context.getString(R.string.not_found_short)
+            supplierName = supplier?.name ?: notFoundShortText
         }
     }
 
     LaunchedEffect(product.categoryId) {
         if (product.categoryId != null) {
-            if (categoryName == null) categoryName = context.getString(R.string.loading_ellipsis)
+            if (categoryName == null) categoryName = loadingEllipsisText
 
             val category = databaseViewModel.getCategoryById(product.categoryId)
-            categoryName = category?.name ?: context.getString(R.string.not_found_short)
+            categoryName = category?.name ?: notFoundShortText
         }
     }
 
