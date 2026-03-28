@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-Ripristinare la **stabilità** dell’import completo del database da XLSX (**DatabaseScreen** / `DatabaseViewModel.startFullDbImport`): eliminare il **crash OOM** segnalato sul workbook POI (`XSSFWorkbook`), preservando i quattro fogli (Suppliers, Categories, Products, PriceHistory). **TASK-002** (decomposizione `GeneratedScreen`) resta **`BLOCKED`** in attesa di smoke manuale futuro — **non** è il contenitore di questo bugfix.
+Portare **TASK-015** — **UX modernization `DatabaseScreen`**: toolbar, dialog import/export, affordance scanner, chiarezza visiva **senza** cambiare logica business né rimuovere feature. **TASK-017** (OOM full-import) è **`DONE`**. **TASK-002** resta **`BLOCKED`**. **TASK-014** resta in backlog finché **TASK-002** non è sbloccato o `DONE`.
 
 ---
 
@@ -24,10 +24,10 @@ Ripristinare la **stabilità** dell’import completo del database da XLSX (**Da
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **TASK-017** (Crash full DB import — OOM)        |
-| Fase task attivo     | **PLANNING** (bugfix import DB; file task `TASK-017`; passare a **EXECUTION** dopo lettura piano/criteri) |
-| Milestone            | TASK-002: lavoro tecnico UI **completato** a livello statico; chiusura **`DONE` non effettuata** — stato **`BLOCKED`** per smoke rimandati |
-| Prossimo passo operativo | Pianificare ed eseguire **TASK-017** (analisi OOM, fix mirato, build/lint, test con file XLSX problema); **TASK-002**: ripresa solo dopo smoke/decisione utente |
+| Task attivo          | **TASK-015** (UX modernization DatabaseScreen)   |
+| Fase task attivo     | **PLANNING** (file task: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`) |
+| Milestone            | **TASK-017** **`DONE`** (2026-03-27, conferma utente smoke). **TASK-002** ancora **`BLOCKED`** (smoke `GeneratedScreen` rimandati) |
+| Prossimo passo operativo | Completare planning **TASK-015** → approvazione utente → **EXECUTION** (solo UI `DatabaseScreen` e composable collegati; ViewModel/repository in sola lettura salvo necessità esplicita) |
 | Ultimo aggiornamento | 2026-03-27                                       |
 
 ---
@@ -38,19 +38,20 @@ Ripristinare la **stabilità** dell’import completo del database da XLSX (**Da
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`).
+Il task attivo è sempre **uno solo**. Il suo stato è nel file task corrispondente (oggi: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`).
 
-**TASK-017 — tracking:** unico task **`ACTIVE`** nel backlog. Prima di modificare Kotlin per il bugfix, verificare nel **file reale** di questo piano che **TASK-017** = `ACTIVE` e che **TASK-002** = `BLOCKED` (non `DONE`).
+**TASK-015 — tracking:** unico task **`ACTIVE`** nel backlog (fase corrente **`PLANNING`** nel file task).
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
-1. Sezione **Backlog**: **TASK-013** → **`DONE`**.
+1. Sezione **Backlog**: **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**.
 2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
-3. **TASK-017** → **`ACTIVE`** (unico attivo).
-4. Nessun altro task con stato **`ACTIVE`** oltre **TASK-017**.
-5. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+3. **TASK-015** → **`ACTIVE`** (unico attivo).
+4. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
+5. Nessun altro task con stato **`ACTIVE`** oltre **TASK-015**.
+6. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
-**Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **Non** mescolare con crash import DB (**TASK-017**).
+**Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
@@ -332,14 +333,15 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-015 — UX modernization DatabaseScreen
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `ACTIVE`                                                |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / UI                                                 |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Modernizzare layout CRUD, dialog import/export, toolbar e scanner UI in DatabaseScreen. Nessun cambio alla logica business (CRUD, import, export, scanner barcode) né rimozione di feature esistenti. |
+| Dipendenze  | TASK-001 (DONE), TASK-017 (DONE)                        |
+| Descrizione | Modernizzare layout CRUD, dialog import/export, toolbar e scanner UI in DatabaseScreen. Nessun cambio alla logica business (CRUD, import, export, scanner barcode) né rimozione di feature esistenti. Feedback utente: import diretto senza mini-menu ridondante (già parzialmente emerso in TASK-017), coerenza icone import/export, export con menu dove ha senso, maggiore chiarezza senza rifare l’architettura. Dettaglio: `docs/TASKS/TASK-015-ux-modernization-databasescreen.md`. |
 | File Android | `DatabaseScreen.kt`, `DatabaseViewModel.kt` (sola lettura), `InventoryRepository.kt` (sola lettura) |
 | Rif. iOS    | Schermata Database iOS come guida visiva (se presente) |
 | Obiettivo UX | Layout CRUD leggibile, dialog import/export chiari, toolbar e scanner con affordance |
+| Note tracking | **Unico task ACTIVE**; fase **`PLANNING`** nel file task fino ad approvazione utente per EXECUTION. |
 
 ### TASK-016 — UX polish History / ImportAnalysis / grid readability
 | Campo       | Valore                                                  |
@@ -356,12 +358,31 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-017 — Crash full DB import (OOM)
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE`                                                |
+| Stato       | `DONE`                                                  |
 | Priorità    | `CRITICA`                                               |
 | Area        | Import / Database / Stability                           |
 | Dipendenze  | TASK-001 (DONE)                                         |
-| Descrizione | Fix crash **OOM** durante **import completo** database da XLSX (`DatabaseViewModel.startFullDbImport`, `XSSFWorkbook`), preservando Suppliers / Categories / Products / PriceHistory. Nessun redesign UX; minimo cambiamento. **TASK-006/007/004** correlati ma non sostituiscono questo task. Dettaglio: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`. |
-| File Android | `DatabaseViewModel.kt`, `DatabaseScreen.kt`; utility POI solo se necessario |
+| Descrizione | Fix crash **OOM** durante **import completo** database da XLSX (`DatabaseViewModel.startFullDbImport`, `XSSFWorkbook`), preservando Suppliers / Categories / Products / PriceHistory. Chiusura **2026-03-27**: verifiche statiche OK, review/fix completati, **test manuali utente con esito positivo**. Dettaglio: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`. |
+| File Android | `DatabaseViewModel.kt`, `DatabaseScreen.kt`, `FullDbImportStreaming.kt`, `ExcelUtils.kt`, ecc. (vedi file task) |
+| Note tracking | Follow-up backlog: **TASK-018** (double staging file), **TASK-019** (localizzazione errori PriceHistory). |
+
+### TASK-018 — Eliminare double file staging nel full-import
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | Import / Performance                                    |
+| Dipendenze  | TASK-017                                                |
+| Descrizione | `detectImportWorkbookRoute` copia il file XLSX in cache per ispezionare i nomi foglio, poi `analyzeFullDbImportStreaming` lo copia di nuovo. Per file molto grandi è IO doppio non necessario. Ottimizzare passando il file staged dalla detection all'analisi, oppure unificando i due step. Emerso dalla review di TASK-017. |
+
+### TASK-019 — Localizzare messaggi errore PriceHistory
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | Import / Localizzazione                                 |
+| Dipendenze  | TASK-017                                                |
+| Descrizione | I messaggi di errore del foglio PriceHistory nel full-import streaming sono hardcoded in inglese ("PriceHistory sheet is empty or missing the header row.", "PriceHistory sheet missing required headers: ..."). Spostarli in `strings.xml` con traduzioni it/es/zh coerenti col pattern localizzato esistente. Emerso dalla review di TASK-017. |
 
 ---
 
@@ -369,13 +390,13 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato: TASK-017 (CRITICA)** — stabilità import database completo (OOM). **TASK-002** è **`BLOCKED`** (smoke manuale rimandato; non `DONE`). `TASK-013` chiuso. Ordine suggerito:
+**Focus immediato: TASK-015 (MEDIA, ACTIVE, PLANNING)** — UX modernization `DatabaseScreen`. **TASK-017** è **`DONE`**. **TASK-002** è **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **TASK-017 (CRITICA):** Crash OOM full import — pianificazione/esecuzione bugfix, poi verifica con file problema.
+1. **TASK-015 (MEDIA, ACTIVE):** UX modernization DatabaseScreen — planning → esecuzione dopo approvazione utente.
 2. **TASK-002 (MEDIA, BLOCKED):** Ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-3. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco TASK-002.
-4. **TASK-015 (MEDIA):** UX modernization DatabaseScreen.
-5. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
+3. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
+4. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
+5. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
 
 ### Priorità tecnica / qualità
 
@@ -385,8 +406,8 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 2. **TASK-004, TASK-005 (ALTA):** Test unitari — la repo non ha copertura significativa.
 3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
 4. **TASK-002 (MEDIA, BLOCKED), TASK-003 (MEDIA):** Decomposizione file grandi.
-5. **TASK-017 (CRITICA):** OOM full import DB — **ACTIVE**.
-6. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export / round-trip — correlati a TASK-017 ma non lo sostituiscono.
+5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
+6. **TASK-006, TASK-007 (MEDIA):** Robustezza import/export / round-trip — follow-up naturali post-TASK-017.
 7. **TASK-008, TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
 8. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
 
@@ -397,7 +418,7 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 | Rischio                                    | Impatto | Probabilità | Mitigazione                          |
 |--------------------------------------------|---------|-------------|--------------------------------------|
 | GeneratedScreen troppo complesso (~2471 LOC, decomposizione parziale nello stesso file) | Medio   | Già presente | TASK-002 **BLOCKED** (smoke pendenti); lavoro statico completato |
-| OOM su import DB completo (XLSX / POI) | Alto | Segnalato | **TASK-017** ACTIVE |
+| OOM su import DB completo (XLSX / POI) | Alto | Mitigato | **TASK-017** **DONE**; monitorare hotspot RAM residui (analyzer / `getAllProducts`) su file enormi |
 | Nessuna copertura di test significativa (solo template default) | Alto | Certo | TASK-004 e TASK-005 priorità ALTA |
 | Migrazioni DB non testate automaticamente   | Alto    | Possibile   | TASK-009 nel backlog                |
 | Nessuna CI/CD                              | Medio   | Certo       | TASK-012, bassa priorità per ora    |

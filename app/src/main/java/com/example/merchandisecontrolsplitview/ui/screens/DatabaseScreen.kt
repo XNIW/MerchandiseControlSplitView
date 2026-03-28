@@ -99,7 +99,7 @@ fun DatabaseScreen(
             // ✅ SOLO READ (o READ|WRITE se ti serve scrivere)
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
             try { context.contentResolver.takePersistableUriPermission(it, flags) } catch (_: SecurityException) {}
-            viewModel.startImportAnalysis(context, it)
+            viewModel.startSmartImport(context, it)
         }
     }
 
@@ -129,25 +129,11 @@ fun DatabaseScreen(
         }
     }
 
-    // ⬇️ in top-level composable DatabaseScreen(...) aggiungi gli ActivityResult launcher nuovi:
-    val uploadFullDbLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let {
-            // ✅ SOLO READ
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
-            try { context.contentResolver.takePersistableUriPermission(it, flags) } catch (_: SecurityException) {}
-            viewModel.startFullDbImport(context, it)
-        }
-    }
-
     val downloadFullDbLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         onResult = { uri: Uri? -> uri?.let { viewModel.exportFullDbToExcel(context, it) } }
     )
 
-    // ⬇️ stati per i menu a tendina nella TopAppBar:
-    var showImportMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState) {
@@ -188,33 +174,23 @@ fun DatabaseScreen(
                     }
                 },
                 actions = {
-                    // IMPORT menu
-                    Box {
-                        IconButton(onClick = { showImportMenu = true }) {
-                            Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.import_file))
-                        }
-                        DropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.import_products_single_sheet)) },
-                                onClick = {
-                                    showImportMenu = false
-                                    uploadLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.import_database_full)) },
-                                onClick = {
-                                    showImportMenu = false
-                                    uploadFullDbLauncher.launch(arrayOf("application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
-                                }
+                    IconButton(
+                        onClick = {
+                            uploadLauncher.launch(
+                                arrayOf(
+                                    "application/vnd.ms-excel",
+                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
                             )
                         }
+                    ) {
+                        Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.import_file))
                     }
 
                     // EXPORT menu
                     Box {
                         IconButton(onClick = { showExportMenu = true }) {
-                            Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.export_file))
+                            Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.export_file))
                         }
                         DropdownMenu(expanded = showExportMenu, onDismissRequest = { showExportMenu = false }) {
                             DropdownMenuItem(
@@ -301,7 +277,7 @@ fun DatabaseScreen(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(products.itemCount, key = { products[it]?.product?.id ?: -1 }) { idx ->
+                            items(products.itemCount, key = { idx -> products[idx]?.product?.id ?: "placeholder-$idx" }) { idx ->
                                 products[idx]?.let { details ->
                                     val product = details.product
 
@@ -1081,4 +1057,3 @@ private fun DismissBackground(state: SwipeToDismissBoxState) {
         )
     }
 }
-

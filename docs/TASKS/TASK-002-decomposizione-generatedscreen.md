@@ -19,7 +19,7 @@
 
 - TASK-001 (DONE)
 - TASK-013 (DONE) — prerequisito di sequencing e baseline UX FilePicker/PreGenerate
-- **Nota tracking:** al 2026-03-27 il task è **BLOCKED** (smoke manuale rimandato dall’utente); l’unico `ACTIVE` nel backlog è **TASK-017** (crash import DB). Vedi `MASTER-PLAN.md`.
+- **Nota tracking:** task **BLOCKED** (smoke manuale rimandato dall’utente). Unico `ACTIVE` nel backlog: **TASK-015** (UX DatabaseScreen). **TASK-017** **`DONE`**. Vedi `MASTER-PLAN.md`.
 
 ---
 

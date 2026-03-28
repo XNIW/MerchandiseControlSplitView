@@ -8,16 +8,20 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.*
 import com.example.merchandisecontrolsplitview.data.*
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
+import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
+import com.example.merchandisecontrolsplitview.util.applyFullDbPriceHistoryStreaming
+import com.example.merchandisecontrolsplitview.util.detectImportWorkbookRoute
+import com.example.merchandisecontrolsplitview.util.ImportWorkbookRoute
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
-import com.example.merchandisecontrolsplitview.util.analyzePoiSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
@@ -38,6 +42,21 @@ private data class PendingPriceEvent(
     val type: String,   // "PURCHASE" | "RETAIL"
     val newPrice: Double,
     val source: String?
+)
+
+private data class PendingImportApplySnapshot(
+    val pendingPriceHistory: List<PendingPriceEvent>,
+    val pendingSupplierNames: Set<String>,
+    val pendingCategoryNames: Set<String>,
+    val pendingTempSuppliers: Map<Long, String>,
+    val pendingTempCategories: Map<Long, String>,
+    val pendingFullImportUri: Uri?,
+    val hasPendingPriceHistorySheet: Boolean
+)
+
+private data class ResolvedImportPayload(
+    val newProducts: List<Product>,
+    val updatedProducts: List<Product>
 )
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -82,7 +101,9 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
             repository.updateHistoryEntry(
                 cur.copy(
                     data = cur.data + listOf(listOf(status, message)),
-                    complete = cur.complete + listOf(status == "SUCCESS" || status == "FAILED")
+                    complete = cur.complete + listOf(
+                        status == "SUCCESS" || status == "FAILED" || status == "CANCELLED"
+                    )
                 )
             )
         }
@@ -142,6 +163,12 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     // --- FIX END ---
 
     private var pendingPriceHistory: List<PendingPriceEvent> = emptyList()
+    private var pendingSupplierNames: Set<String> = emptySet()
+    private var pendingCategoryNames: Set<String> = emptySet()
+    private var pendingTempSuppliers: Map<Long, String> = emptyMap()
+    private var pendingTempCategories: Map<Long, String> = emptyMap()
+    private var pendingFullImportUri: Uri? = null
+    private var hasPendingPriceHistorySheet = false
 
     private val sheetProducts = "Products"
     private val sheetSuppliers = "Suppliers"
@@ -154,6 +181,26 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _importAnalysisResult = MutableStateFlow<ImportAnalysis?>(null)
     val importAnalysisResult: StateFlow<ImportAnalysis?> = _importAnalysisResult.asStateFlow()
+
+    fun startSmartImport(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                when (withContext(Dispatchers.IO) { detectImportWorkbookRoute(context, uri) }) {
+                    ImportWorkbookRoute.FULL_DATABASE -> startFullDbImport(context, uri)
+                    ImportWorkbookRoute.SINGLE_SHEET -> startImportAnalysis(context, uri)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                e.printStackTrace()
+                _importAnalysisResult.value = null
+                val errorMessage = e.message ?: "Not enough memory to analyze this file"
+                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
+            } catch (e: Exception) {
+                handleImportAnalysisError(context, e)
+            }
+        }
+    }
 
     fun startImportAnalysis(context: Context, uri: Uri) {
         _uiState.value = UiState.Loading(message = context.getString(R.string.import_loading_file), progress = 5)
@@ -173,6 +220,11 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
+            } catch (e: OutOfMemoryError) {
+                e.printStackTrace()
+                _importAnalysisResult.value = null
+                val errorMessage = e.message ?: "Not enough memory to analyze this file"
+                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
             } catch (e: Exception) {
                 handleImportAnalysisError(context, e)
             }
@@ -239,7 +291,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearImportAnalysis() {
-        _importAnalysisResult.value = null
+        resetPendingImportState(clearAnalysisResult = true)
     }
 
     fun importProducts(
@@ -247,6 +299,8 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
         updatedProducts: List<ProductUpdate>,
         context: Context
     ) {
+        val pendingSnapshot = snapshotPendingImportApplyState()
+
         // prima era progress = null
         _uiState.value = UiState.Loading(
             message = context.getString(R.string.import_applying_changes),
@@ -262,14 +316,18 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
 
             try {
                 withContext(Dispatchers.IO) {
-                    // Applica prodotti
-                    val updatesAsProducts = updatedProducts.map { pu ->
-                        pu.newProduct.copy(id = pu.oldProduct.id)
-                    }
-                    repository.applyImport(newProducts, updatesAsProducts)
+                    val resolvedPayload = resolveImportPayload(
+                        newProducts = newProducts,
+                        updatedProducts = updatedProducts,
+                        pendingSnapshot = pendingSnapshot
+                    )
+                    repository.applyImport(
+                        resolvedPayload.newProducts,
+                        resolvedPayload.updatedProducts
+                    )
 
                     // Eventuale storico prezzi
-                    applyPendingPriceHistory()
+                    applyPendingPriceHistory(context, pendingSnapshot)
                 }
 
                 // mini feedback finale prima del SUCCESS
@@ -286,23 +344,117 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                 _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
                 appendHistoryLog(applyLogUid, "FAILED", "Errore durante apply: ${e.message}")
                 Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
+            } finally {
+                resetPendingImportState(clearAnalysisResult = false)
             }
         }
     }
 
-    private suspend fun applyPendingPriceHistory() {
-        if (pendingPriceHistory.isEmpty()) return
+    private fun snapshotPendingImportApplyState(): PendingImportApplySnapshot =
+        PendingImportApplySnapshot(
+            pendingPriceHistory = pendingPriceHistory.toList(),
+            pendingSupplierNames = pendingSupplierNames.toSet(),
+            pendingCategoryNames = pendingCategoryNames.toSet(),
+            pendingTempSuppliers = pendingTempSuppliers.toMap(),
+            pendingTempCategories = pendingTempCategories.toMap(),
+            pendingFullImportUri = pendingFullImportUri,
+            hasPendingPriceHistorySheet = hasPendingPriceHistorySheet
+        )
 
-        pendingPriceHistory
-            .groupBy { it.source ?: "IMPORT_SHEET" }
-            .forEach { (src, events) ->
-                val rows = events.map { e ->
-                    Triple(e.barcode, e.type, e.timestamp to e.newPrice)
+    private fun resetPendingImportState(clearAnalysisResult: Boolean) {
+        if (clearAnalysisResult) {
+            _importAnalysisResult.value = null
+        }
+        pendingPriceHistory = emptyList()
+        pendingSupplierNames = emptySet()
+        pendingCategoryNames = emptySet()
+        pendingTempSuppliers = emptyMap()
+        pendingTempCategories = emptyMap()
+        pendingFullImportUri = null
+        hasPendingPriceHistorySheet = false
+    }
+
+    private suspend fun resolveImportPayload(
+        newProducts: List<Product>,
+        updatedProducts: List<ProductUpdate>,
+        pendingSnapshot: PendingImportApplySnapshot
+    ): ResolvedImportPayload {
+        if (
+            pendingSnapshot.pendingSupplierNames.isEmpty() &&
+            pendingSnapshot.pendingCategoryNames.isEmpty() &&
+            pendingSnapshot.pendingTempSuppliers.isEmpty() &&
+            pendingSnapshot.pendingTempCategories.isEmpty()
+        ) {
+            return ResolvedImportPayload(
+                newProducts = newProducts,
+                updatedProducts = updatedProducts.map { pu ->
+                    pu.newProduct.copy(id = pu.oldProduct.id)
                 }
-                repository.recordPriceHistoryByBarcodeBatch(rows, src)
+            )
+        }
+
+        pendingSnapshot.pendingSupplierNames.forEach { repository.addSupplier(it) }
+        pendingSnapshot.pendingCategoryNames.forEach { repository.addCategory(it) }
+
+        val supplierIdsByName = repository.getAllSuppliers()
+            .associateBy { it.name.trim().lowercase() }
+        val categoryIdsByName = repository.getAllCategories()
+            .associateBy { it.name.trim().lowercase() }
+
+        fun resolveProduct(product: Product): Product {
+            val resolvedSupplierId = when {
+                product.supplierId == null -> null
+                product.supplierId >= 0L -> product.supplierId
+                else -> pendingSnapshot.pendingTempSuppliers[product.supplierId]
+                    ?.trim()
+                    ?.lowercase()
+                    ?.let { supplierIdsByName[it]?.id }
             }
 
-        pendingPriceHistory = emptyList()
+            val resolvedCategoryId = when {
+                product.categoryId == null -> null
+                product.categoryId >= 0L -> product.categoryId
+                else -> pendingSnapshot.pendingTempCategories[product.categoryId]
+                    ?.trim()
+                    ?.lowercase()
+                    ?.let { categoryIdsByName[it]?.id }
+            }
+
+            return product.copy(
+                supplierId = resolvedSupplierId,
+                categoryId = resolvedCategoryId
+            )
+        }
+
+        return ResolvedImportPayload(
+            newProducts = newProducts.map(::resolveProduct),
+            updatedProducts = updatedProducts.map { pu ->
+                resolveProduct(pu.newProduct).copy(id = pu.oldProduct.id)
+            }
+        )
+    }
+
+    private suspend fun applyPendingPriceHistory(
+        context: Context,
+        pendingSnapshot: PendingImportApplySnapshot
+    ) {
+        if (pendingSnapshot.pendingPriceHistory.isNotEmpty()) {
+            pendingSnapshot.pendingPriceHistory
+                .groupBy { it.source ?: "IMPORT_SHEET" }
+                .forEach { (src, events) ->
+                    val rows = events.map { e ->
+                        Triple(e.barcode, e.type, e.timestamp to e.newPrice)
+                    }
+                    repository.recordPriceHistoryByBarcodeBatch(rows, src)
+                }
+            return
+        }
+
+        if (!pendingSnapshot.hasPendingPriceHistorySheet) return
+
+        val fullImportUri = pendingSnapshot.pendingFullImportUri
+            ?: throw IllegalStateException("Missing full import uri for pending price history")
+        applyFullDbPriceHistoryStreaming(context, fullImportUri, repository)
     }
 
     fun exportToExcel(context: Context, uri: Uri) {
@@ -587,6 +739,7 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
     fun startFullDbImport(context: Context, uri: Uri) {
         // blocca se c'è già un import in corso
         if (!importMutex.tryLock()) return
+        resetPendingImportState(clearAnalysisResult = true)
         _uiState.value = UiState.Loading(message = context.getString(R.string.operation_in_progress))
 
         viewModelScope.launch {
@@ -601,104 +754,72 @@ class DatabaseViewModel(app: Application) : AndroidViewModel(app) {
                     progress = 5
                 )
 
-                withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri).use { inStream ->
-                        XSSFWorkbook(inStream).use { wb ->
-                            fun getSheetByName(name: String) =
-                                (0 until wb.numberOfSheets)
-                                    .firstOrNull { i -> wb.getSheetName(i).equals(name, true) }
-                                    ?.let { wb.getSheetAt(it) }
+                _uiState.value = UiState.Loading(
+                    message = context.getString(R.string.import_fetching_db),
+                    progress = 55
+                )
+                val currentDbProducts = withContext(Dispatchers.IO) {
+                    repository.getAllProducts()
+                }
 
-                            val suppliersSheet   = getSheetByName("Suppliers")
-                            val categoriesSheet  = getSheetByName("Categories")
-                            val productsSheet    = getSheetByName("Products")
-                            val priceHistorySheet= getSheetByName("PriceHistory")
+                _uiState.value = UiState.Loading(
+                    message = context.getString(R.string.import_analyzing),
+                    progress = 85
+                )
 
-                            // Suppliers (opzionale)
-                            suppliersSheet?.let { s ->
-                                val (h, rows, _) = analyzePoiSheet(context, s)
-                                val nameIdx = h.indexOfFirst { it.equals("name", true) }
-                                if (nameIdx >= 0) {
-                                    rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
-                                        .filter { it.isNotBlank() }
-                                        .forEach { repository.addSupplier(it) }
-                                }
-                            }
+                val importResult = withContext(Dispatchers.IO) {
+                    analyzeFullDbImportStreaming(
+                        context = context,
+                        uri = uri,
+                        currentDbProducts = currentDbProducts,
+                        repository = repository
+                    )
+                }
 
-                            // Categories (opzionale)
-                            categoriesSheet?.let { s ->
-                                val (h, rows, _) = analyzePoiSheet(context, s)
-                                val nameIdx = h.indexOfFirst { it.equals("name", true) }
-                                if (nameIdx >= 0) {
-                                    rows.mapNotNull { it.getOrNull(nameIdx)?.trim() }
-                                        .filter { it.isNotBlank() }
-                                        .forEach { repository.addCategory(it) }
-                                }
-                            }
-
-                            // Products (obbligatorio)
-                            if (productsSheet == null) {
-                                throw IllegalArgumentException(context.getString(R.string.error_file_empty_or_invalid))
-                            }
-
-                            val (header, rows, _) = analyzePoiSheet(context, productsSheet)
-
-                            // sequence + chunking per non caricare tutto in RAM
-                            val rowMapsSeq: Sequence<Map<String, String>> = sequence {
-                                for (row in rows) {
-                                    val m = HashMap<String, String>(header.size)
-                                    header.forEachIndexed { i, key -> m[key] = row.getOrNull(i) ?: "" }
-                                    yield(m)
-                                }
-                            }
-
-                            val currentDbProducts = repository.getAllProducts()
-                            val analysis = ImportAnalyzer.analyzeStreaming(
-                                context,
-                                rowMapsSeq.chunked(1_000),
-                                currentDbProducts,
-                                repository
-                            )
-
-                            _importAnalysisResult.value = analysis
-
-                            // PriceHistory (opzionale)
-                            pendingPriceHistory = priceHistorySheet?.let { s ->
-                                val (h, rowsPH, _) = analyzePoiSheet(context, s)
-                                val idxB   = h.indexOfFirst { it.equals("productBarcode", true) || it.equals("barcode", true) }
-                                val idxTs  = h.indexOfFirst { it.equals("timestamp", true) }
-                                val idxTy  = h.indexOfFirst { it.equals("type", true) }
-                                val idxNp  = h.indexOfFirst { it.equals("newPrice", true) }
-                                val idxSrc = h.indexOfFirst { it.equals("source", true) }
-
-                                rowsPH.mapNotNull { r ->
-                                    val bc  = r.getOrNull(idxB)?.trim().orEmpty()
-                                    val ts  = r.getOrNull(idxTs)?.trim().orEmpty()
-                                    val ty  = r.getOrNull(idxTy)?.trim()?.lowercase().orEmpty()
-                                    val np  = r.getOrNull(idxNp)?.replace(",", ".")?.toDoubleOrNull()
-                                    val src = r.getOrNull(idxSrc)?.trim()
-                                    if (bc.isBlank() || ts.isBlank() || ty.isBlank() || np == null) null
-                                    else PendingPriceEvent(
-                                        barcode   = bc,
-                                        timestamp = ts,
-                                        type      = if (ty.startsWith("pur")) "PURCHASE" else "RETAIL",
-                                        newPrice  = np,
-                                        source    = src
-                                    )
-                                }
-                            } ?: emptyList()
-                        } // wb.use
-                    }     // stream.use
-                }         // withContext(IO)
+                _importAnalysisResult.value = importResult.analysis.analysis
+                pendingPriceHistory = emptyList()
+                pendingSupplierNames = importResult.pendingSupplierNames
+                pendingCategoryNames = importResult.pendingCategoryNames
+                pendingTempSuppliers = importResult.analysis.pendingSuppliers
+                pendingTempCategories = importResult.analysis.pendingCategories
+                pendingFullImportUri = uri
+                hasPendingPriceHistorySheet = importResult.hasPriceHistorySheet
 
                 _uiState.value = UiState.Idle
                 currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "SUCCESS", "Analisi completata. Pronto ad applicare le modifiche.")
+                    appendHistoryLog(
+                        uid,
+                        "SUCCESS",
+                        "Analisi completata. Products=${importResult.productsRowCount}, Suppliers=${importResult.supplierRowCount}, Categories=${importResult.categoryRowCount}, PriceHistory=${importResult.hasPriceHistorySheet}."
+                    )
                     Log.d("DB_IMPORT", "FULL_IMPORT SUCCESS uid=$uid")
                 }
                 currentImportLogUid = null
 
+            } catch (e: CancellationException) {
+                resetPendingImportState(clearAnalysisResult = true)
+                _uiState.value = UiState.Idle
+                currentImportLogUid?.let { uid ->
+                    appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
+                    Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED uid=$uid")
+                }
+                currentImportLogUid = null
+                throw e
+
+            } catch (e: OutOfMemoryError) {
+                resetPendingImportState(clearAnalysisResult = true)
+                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
+                _uiState.value = UiState.Error(
+                    context.getString(R.string.error_data_analysis, errorMessage)
+                )
+                currentImportLogUid?.let { uid ->
+                    appendHistoryLog(uid, "FAILED", "Analisi fallita per memoria insufficiente: $errorMessage")
+                    Log.e("DB_IMPORT", "FULL_IMPORT OOM uid=$uid", e)
+                }
+                currentImportLogUid = null
+
             } catch (e: Exception) {
+                resetPendingImportState(clearAnalysisResult = true)
                 _uiState.value = UiState.Error(
                     context.getString(R.string.error_data_analysis, e.message ?: context.getString(R.string.unknown_error))
                 )

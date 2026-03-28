@@ -10,6 +10,42 @@ object ImportAnalyzer {
 
     private const val MAX_PRODUCT_NAME_LENGTH = 100
     private const val PRICE_COMPARISON_TOLERANCE = 0.001
+    private val DEFERRED_RELATION_ROW_KEYS = setOf(
+        "barcode",
+        "itemNumber",
+        "productName",
+        "secondProductName",
+        "supplier",
+        "category",
+        "quantity",
+        "realQuantity",
+        "purchasePrice",
+        "retailPrice",
+        "discount",
+        "discountedPrice",
+        "oldPurchasePrice",
+        "oldRetailPrice",
+        "prevPurchase",
+        "prevRetail"
+    )
+
+    data class DeferredRelationImportAnalysis(
+        val analysis: ImportAnalysis,
+        val pendingSuppliers: Map<Long, String>,
+        val pendingCategories: Map<Long, String>
+    )
+
+    private fun compactDeferredRelationRow(row: Map<String, String>, barcode: String): MutableMap<String, String> {
+        val compactRow = linkedMapOf<String, String>()
+        compactRow["barcode"] = barcode
+        DEFERRED_RELATION_ROW_KEYS.forEach { key ->
+            if (key == "barcode") return@forEach
+            row[key]
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { compactRow[key] = it }
+        }
+        return compactRow
+    }
 
     private fun parseDouble(s: String?): Double? = parseNumber(s)
 
@@ -405,6 +441,230 @@ object ImportAnalyzer {
         }
 
         return ImportAnalysis(newProducts, updatedProducts, errors, warnings)
+    }
+
+    suspend fun analyzeStreamingDeferredRelations(
+        context: Context,
+        currentDbProducts: List<Product>,
+        repository: InventoryRepository,
+        rowProducer: ((Map<String, String>) -> Unit) -> Unit
+    ): DeferredRelationImportAnalysis {
+        val dbProductByBarcode = currentDbProducts.associateBy { it.barcode }
+
+        val initialSuppliersById = repository.getAllSuppliers().associateBy { it.id }
+        val initialCategoriesById = repository.getAllCategories().associateBy { it.id }
+        val suppliersById = initialSuppliersById.toMutableMap()
+        val categoriesById = initialCategoriesById.toMutableMap()
+        val supplierCacheByName = initialSuppliersById.values
+            .associateBy { it.name.trim().lowercase() }
+            .toMutableMap()
+        val categoryCacheByName = initialCategoriesById.values
+            .associateBy { it.name.trim().lowercase() }
+            .toMutableMap()
+        val pendingSuppliers = linkedMapOf<Long, String>()
+        val pendingCategories = linkedMapOf<Long, String>()
+        var nextTempSupplierId = -1L
+        var nextTempCategoryId = -1L
+
+        suspend fun resolveSupplierId(name: String): Long? {
+            val normalizedName = name.trim()
+            val key = normalizedName.lowercase()
+            if (key.isBlank()) return null
+            supplierCacheByName[key]?.let { return it.id }
+            repository.findSupplierByName(normalizedName)?.let {
+                supplierCacheByName[key] = it
+                suppliersById[it.id] = it
+                return it.id
+            }
+
+            val tempId = nextTempSupplierId--
+            val tempSupplier = Supplier(id = tempId, name = normalizedName)
+            supplierCacheByName[key] = tempSupplier
+            suppliersById[tempId] = tempSupplier
+            pendingSuppliers[tempId] = normalizedName
+            return tempId
+        }
+
+        suspend fun resolveCategoryId(name: String): Long? {
+            val normalizedName = name.trim()
+            val key = normalizedName.lowercase()
+            if (key.isBlank()) return null
+            categoryCacheByName[key]?.let { return it.id }
+            repository.findCategoryByName(normalizedName)?.let {
+                categoryCacheByName[key] = it
+                categoriesById[it.id] = it
+                return it.id
+            }
+
+            val tempId = nextTempCategoryId--
+            val tempCategory = Category(id = tempId, name = normalizedName)
+            categoryCacheByName[key] = tempCategory
+            categoriesById[tempId] = tempCategory
+            pendingCategories[tempId] = normalizedName
+            return tempId
+        }
+
+        val newProducts = mutableListOf<Product>()
+        val updatedProducts = mutableListOf<ProductUpdate>()
+        val errors = mutableListOf<RowImportError>()
+        val warnings = mutableListOf<DuplicateWarning>()
+
+        data class Pending(
+            val lastRow: MutableMap<String, String>,
+            val rowNumbers: MutableList<Int>,
+            var qtySum: Double
+        )
+
+        val pendingByBarcode = LinkedHashMap<String, Pending>()
+        var rowIndex = 0
+
+        rowProducer { row ->
+            rowIndex++
+            val barcode = row["barcode"]?.trim().orEmpty()
+            if (barcode.isBlank()) {
+                errors += RowImportError(rowIndex, row, R.string.error_barcode_required)
+                return@rowProducer
+            }
+
+            val supplierQty = parseDouble(row["quantity"]) ?: 0.0
+            val realQty = parseDouble(row["realQuantity"]) ?: 0.0
+            val qtyForRow = if (realQty > 0) realQty else supplierQty
+
+            val pending = pendingByBarcode[barcode]
+            if (pending == null) {
+                pendingByBarcode[barcode] = Pending(
+                    lastRow = compactDeferredRelationRow(row, barcode),
+                    rowNumbers = mutableListOf(rowIndex),
+                    qtySum = qtyForRow
+                )
+            } else {
+                pending.lastRow.clear()
+                pending.lastRow.putAll(compactDeferredRelationRow(row, barcode))
+                pending.rowNumbers.add(rowIndex)
+                pending.qtySum += qtyForRow
+            }
+        }
+
+        for ((barcode, pending) in pendingByBarcode) {
+            val finalRow = pending.lastRow
+            finalRow["quantity"] = pending.qtySum.toString()
+            if (pending.rowNumbers.size > 1) {
+                warnings += DuplicateWarning(barcode, pending.rowNumbers)
+            }
+
+            try {
+                val itemNumber = finalRow["itemNumber"]?.trim()?.takeIf { it.isNotBlank() }
+                val productName = finalRow["productName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val secondProductName = finalRow["secondProductName"]?.trim()?.take(MAX_PRODUCT_NAME_LENGTH)?.takeIf { it.isNotBlank() }
+                val supplierName = finalRow["supplier"]?.trim()?.takeIf { it.isNotBlank() }
+                val categoryName = finalRow["category"]?.trim()?.takeIf { it.isNotBlank() }
+
+                val quantityToUse = parseDouble(finalRow["quantity"])
+                val purchasePriceFromFile = parseDouble(finalRow["purchasePrice"])
+                val retailPriceFromFile = round3(parseDouble(finalRow["retailPrice"]))
+                val discountFromFile = parseDouble(finalRow["discount"])
+                val discountedPriceFromFile = parseDouble(finalRow["discountedPrice"])
+
+                if (discountFromFile != null && (discountFromFile < 0 || discountFromFile > 100)) {
+                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_discount)
+                    continue
+                }
+
+                val finalPurchasePrice = round3(
+                    when {
+                        discountedPriceFromFile != null -> discountedPriceFromFile
+                        purchasePriceFromFile != null && discountFromFile != null ->
+                            purchasePriceFromFile * (1 - (discountFromFile / 100))
+                        else -> purchasePriceFromFile
+                    }
+                )
+
+                val prevPurchaseFromFile = round3(parseDouble(finalRow["oldPurchasePrice"] ?: finalRow["prevPurchase"]))
+                val prevRetailFromFile = round3(parseDouble(finalRow["oldRetailPrice"] ?: finalRow["prevRetail"]))
+
+                val validationError = validateRow(
+                    pending.rowNumbers.last() - 1,
+                    finalRow,
+                    barcode,
+                    productName,
+                    secondProductName,
+                    finalPurchasePrice
+                )
+                if (validationError != null) {
+                    errors += validationError
+                    continue
+                }
+
+                val existing = dbProductByBarcode[barcode]
+                if (existing != null && retailPriceFromFile != null && retailPriceFromFile <= 0.0) {
+                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    continue
+                }
+                if (existing == null && (retailPriceFromFile == null || retailPriceFromFile <= 0.0)) {
+                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    continue
+                }
+                if (quantityToUse != null && quantityToUse < 0) {
+                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_negative_quantity)
+                    continue
+                }
+
+                val supplierId = supplierName?.let { resolveSupplierId(it) }
+                val categoryId = categoryName?.let { resolveCategoryId(it) }
+
+                if (existing == null) {
+                    newProducts += Product(
+                        barcode = barcode,
+                        itemNumber = itemNumber,
+                        productName = productName ?: secondProductName!!,
+                        secondProductName = secondProductName,
+                        purchasePrice = finalPurchasePrice,
+                        retailPrice = retailPriceFromFile,
+                        supplierId = supplierId,
+                        categoryId = categoryId,
+                        stockQuantity = quantityToUse ?: 0.0,
+                        oldPurchasePrice = prevPurchaseFromFile,
+                        oldRetailPrice = prevRetailFromFile
+                    )
+                } else {
+                    val updated = existing.copy(
+                        itemNumber = itemNumber ?: existing.itemNumber,
+                        productName = productName ?: existing.productName,
+                        secondProductName = secondProductName ?: existing.secondProductName,
+                        supplierId = supplierId ?: existing.supplierId,
+                        categoryId = categoryId ?: existing.categoryId,
+                        purchasePrice = finalPurchasePrice ?: existing.purchasePrice,
+                        retailPrice = retailPriceFromFile ?: existing.retailPrice,
+                        stockQuantity = quantityToUse ?: existing.stockQuantity,
+                        oldPurchasePrice = prevPurchaseFromFile ?: existing.oldPurchasePrice,
+                        oldRetailPrice = prevRetailFromFile ?: existing.oldRetailPrice
+                    )
+
+                    val changed = getChangedFields(
+                        old = existing,
+                        new = updated,
+                        suppliersById = suppliersById,
+                        categoriesById = categoriesById
+                    )
+                    if (changed.isNotEmpty()) {
+                        updatedProducts += ProductUpdate(existing, updated, changed)
+                    }
+                }
+            } catch (ex: Exception) {
+                errors += RowImportError(
+                    rowNumber = pending.rowNumbers.last(),
+                    rowContent = pending.lastRow,
+                    errorReasonResId = R.string.error_unexpected_parsing,
+                    formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
+                )
+            }
+        }
+
+        return DeferredRelationImportAnalysis(
+            analysis = ImportAnalysis(newProducts, updatedProducts, errors, warnings),
+            pendingSuppliers = pendingSuppliers,
+            pendingCategories = pendingCategories
+        )
     }
 
     private fun getChangedFields(
