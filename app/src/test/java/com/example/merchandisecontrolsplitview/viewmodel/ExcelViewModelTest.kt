@@ -22,6 +22,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -353,6 +354,139 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `loadFromMultipleUris empty first workbook uses first file empty message`() = runTest {
+        val emptyWorkbook = createWorkbook("excel-first-empty", emptyList())
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(emptyWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.loadError.value != null }
+
+        assertEquals(
+            app.getString(R.string.error_first_file_empty_or_invalid),
+            viewModel.loadError.value
+        )
+        assertTrue(viewModel.excelData.isEmpty())
+    }
+
+    @Test
+    fun `appendFromMultipleUris without base grid shows main file needed and keeps state`() = runTest {
+        val validWorkbook = createWorkbook(
+            name = "append-no-base",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(12345678.0, "Base Item", 4.0, 6.0, 2.0)
+            )
+        )
+        val before = captureGridState()
+
+        viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(validWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.loadError.value != null && !viewModel.isLoading.value }
+
+        assertEquals(
+            app.getString(R.string.error_main_file_needed),
+            viewModel.loadError.value
+        )
+        assertEquals(before, captureGridState())
+    }
+
+    @Test
+    fun `appendFromMultipleUris all empty files keeps grid unchanged and shows append error`() = runTest {
+        val baseWorkbook = createWorkbook(
+            name = "append-base",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(12345678.0, "Base Item", 4.0, 6.0, 2.0)
+            )
+        )
+        val emptyWorkbook = createWorkbook("append-empty", emptyList())
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 }
+        val before = captureGridState()
+
+        viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(emptyWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.loadError.value != null && !viewModel.isLoading.value }
+
+        assertEquals(
+            app.getString(R.string.error_append_no_data_rows),
+            viewModel.loadError.value
+        )
+        assertEquals(before, captureGridState())
+    }
+
+    @Test
+    fun `appendFromMultipleUris incompatible header keeps grid unchanged`() = runTest {
+        val baseWorkbook = createWorkbook(
+            name = "append-base-incompatible",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(12345678.0, "Base Item", 4.0, 6.0, 2.0)
+            )
+        )
+        val incompatibleWorkbook = createWorkbook(
+            name = "append-incompatible",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Quantity"),
+                listOf(87654321.0, "Other Item", 5.0, 1.0)
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 }
+        val before = captureGridState()
+
+        viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(incompatibleWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.loadError.value != null && !viewModel.isLoading.value }
+
+        assertEquals(
+            app.getString(R.string.error_incompatible_file_structure),
+            viewModel.loadError.value
+        )
+        assertEquals(before, captureGridState())
+    }
+
+    @Test
+    fun `appendFromMultipleUris appends valid rows and skips empty files in same batch`() = runTest {
+        val baseWorkbook = createWorkbook(
+            name = "append-base-valid",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(12345678.0, "Base Item", 4.0, 6.0, 2.0)
+            )
+        )
+        val emptyWorkbook = createWorkbook("append-skip-empty", emptyList())
+        val appendWorkbook = createWorkbook(
+            name = "append-valid",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(87654321.0, "Added Item", 5.0, 8.0, 3.0)
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 }
+
+        viewModel.appendFromMultipleUris(
+            app,
+            listOf(Uri.fromFile(emptyWorkbook), Uri.fromFile(appendWorkbook))
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 3 && !viewModel.isLoading.value }
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(listOf("87654321", "Added Item", "5", "8", "3"), viewModel.excelData.last())
+        assertEquals(3, viewModel.editableValues.size)
+        assertEquals(listOf("", ""), viewModel.editableValues.last().map { it.value })
+        assertEquals(listOf(false, false, false), viewModel.completeStates.toList())
+    }
+
+    @Test
     fun `createManualEntry persists manual history entry and loads it into state`() = runTest {
         val insertedEntry = slot<HistoryEntry>()
         val callback = mockk<(Long) -> Unit>(relaxed = true)
@@ -395,6 +529,35 @@ class ExcelViewModelTest {
         assertEquals(2, viewModel.completeStates.size)
         assertEquals("11112222", updatedEntry.captured.data[1][0])
     }
+
+    private fun createWorkbook(
+        name: String,
+        rows: List<List<Any>>
+    ): File {
+        val file = File.createTempFile(name, ".xlsx", app.cacheDir)
+        XSSFWorkbook().use { workbook ->
+            val sheet = workbook.createSheet("Sheet1")
+            rows.forEachIndexed { rowIndex, values ->
+                val row = sheet.createRow(rowIndex)
+                values.forEachIndexed { cellIndex, value ->
+                    val cell = row.createCell(cellIndex)
+                    when (value) {
+                        is Number -> cell.setCellValue(value.toDouble())
+                        else -> cell.setCellValue(value.toString())
+                    }
+                }
+            }
+            file.outputStream().use(workbook::write)
+        }
+        return file
+    }
+
+    private fun captureGridState() = GridSnapshot(
+        data = viewModel.excelData.map { it.toList() },
+        editable = viewModel.editableValues.map { row -> row.map { it.value } },
+        complete = viewModel.completeStates.toList(),
+        headerTypes = viewModel.headerTypes.toList()
+    )
 
     private fun seedColumnSelectionState() {
         viewModel.excelData.add(listOf("barcode", "quantity"))
@@ -456,4 +619,11 @@ class ExcelViewModelTest {
         shadowOf(Looper.getMainLooper()).idle()
         assertTrue("Condition not met within ${timeoutMs}ms", condition())
     }
+
+    private data class GridSnapshot(
+        val data: List<List<String>>,
+        val editable: List<List<String>>,
+        val complete: List<Boolean>,
+        val headerTypes: List<String>
+    )
 }

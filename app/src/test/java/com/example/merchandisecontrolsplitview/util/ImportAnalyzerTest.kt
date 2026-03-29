@@ -279,6 +279,23 @@ class ImportAnalyzerTest {
     }
 
     @Test
+    fun `analyze unexpected row error hides technical exception text`() = runTest {
+        coEvery { repository.addSupplier("Broken Supplier") } throws IllegalStateException("db boom")
+
+        val analysis = analyze(
+            importedRows = listOf(importedRow(supplier = "Broken Supplier"))
+        )
+
+        val error = analysis.errors.single()
+        assertEquals(R.string.error_import_row_processing_failed, error.errorReasonResId)
+        assertTrue(error.formatArgs.isEmpty())
+        assertEquals(
+            context.getString(R.string.error_import_row_processing_failed),
+            context.getString(error.errorReasonResId, *error.formatArgs.toTypedArray())
+        )
+    }
+
+    @Test
     fun `analyzeStreaming processes a basic new product chunk`() = runTest {
         val analysis = analyzeStreaming(
             chunks = sequenceOf(
@@ -335,6 +352,23 @@ class ImportAnalyzerTest {
 
         assertEquals(listOf(1, 3), warning.rowNumbers)
         assertEquals(3, error.rowNumber)
+    }
+
+    @Test
+    fun `analyzeStreaming unexpected row error hides technical exception text`() = runTest {
+        coEvery { repository.addSupplier("Broken Supplier") } throws IllegalStateException("stream boom")
+
+        val analysis = analyzeStreaming(
+            chunks = sequenceOf(listOf(importedRow(supplier = "Broken Supplier")))
+        )
+
+        val error = analysis.errors.single()
+        assertEquals(R.string.error_import_row_processing_failed, error.errorReasonResId)
+        assertTrue(error.formatArgs.isEmpty())
+        assertEquals(
+            context.getString(R.string.error_import_row_processing_failed),
+            context.getString(error.errorReasonResId, *error.formatArgs.toTypedArray())
+        )
     }
 
     private suspend fun analyze(

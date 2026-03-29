@@ -1,12 +1,18 @@
 package com.example.merchandisecontrolsplitview.util
 
+import android.content.ContentResolver
 import android.content.Context
+import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
+import io.mockk.every
+import io.mockk.mockk
 import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -232,6 +238,67 @@ class ExcelUtilsTest {
         }
     }
 
+    @Test
+    fun `readAndAnalyzeExcel empty byte file throws localized empty file error`() {
+        val emptyFile = File.createTempFile("excel-empty-bytes", ".xlsx", context.cacheDir)
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readAndAnalyzeExcel(context, Uri.fromFile(emptyFile))
+        }
+
+        assertEquals(context.getString(R.string.error_file_empty_or_invalid), error.message)
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel null input stream throws localized empty file error`() {
+        val resolver = mockk<ContentResolver>()
+        val testContext = mockk<Context>()
+        val expectedMessage = "The Excel file is empty or has no valid header."
+
+        every { testContext.contentResolver } returns resolver
+        every { testContext.getString(R.string.error_file_empty_or_invalid) } returns expectedMessage
+        every { resolver.openInputStream(any()) } returns null
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readAndAnalyzeExcel(testContext, Uri.parse("content://test/null"))
+        }
+
+        assertEquals(expectedMessage, error.message)
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel empty workbook returns empty triple only when allowed`() {
+        val workbookFile = createWorkbookFile("excel-empty-workbook")
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readAndAnalyzeExcel(context, Uri.fromFile(workbookFile))
+        }
+        assertEquals(context.getString(R.string.error_file_empty_or_invalid), error.message)
+
+        val result = readAndAnalyzeExcel(
+            context = context,
+            uri = Uri.fromFile(workbookFile),
+            allowEmptyTabularResult = true
+        )
+
+        assertTrue(result.first.isEmpty())
+        assertTrue(result.second.isEmpty())
+        assertTrue(result.third.isEmpty())
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel html without table throws localized empty file error`() {
+        val htmlFile = File.createTempFile("excel-no-table", ".xls", context.cacheDir).apply {
+            writeText("<html><body><p>No table here</p></body></html>")
+        }
+
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            readAndAnalyzeExcel(context, Uri.fromFile(htmlFile))
+        }
+
+        assertEquals(context.getString(R.string.error_file_empty_or_invalid), error.message)
+    }
+
     private fun withSheet(vararg rows: List<Any?>, block: (Sheet) -> Unit) {
         XSSFWorkbook().use { workbook ->
             val sheet = workbook.createSheet("test")
@@ -247,5 +314,27 @@ class ExcelUtilsTest {
             }
             block(sheet)
         }
+    }
+
+    private fun createWorkbookFile(
+        name: String,
+        rows: List<List<Any?>> = emptyList()
+    ): File {
+        val file = File.createTempFile(name, ".xlsx", context.cacheDir)
+        XSSFWorkbook().use { workbook ->
+            val sheet = workbook.createSheet("Sheet1")
+            rows.forEachIndexed { rowIndex, values ->
+                val row = sheet.createRow(rowIndex)
+                values.forEachIndexed { cellIndex, value ->
+                    when (value) {
+                        null -> Unit
+                        is Number -> row.createCell(cellIndex).setCellValue(value.toDouble())
+                        else -> row.createCell(cellIndex).setCellValue(value.toString())
+                    }
+                }
+            }
+            file.outputStream().use(workbook::write)
+        }
+        return file
     }
 }

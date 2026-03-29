@@ -184,6 +184,7 @@
     <string name="counted_quantity_label">已计数量</string>
     <string name="new_retail_price_short_label">新售价</string>
     <string name="error_unexpected_parsing">解析出现意外错误：%1$s</string>
+    <string name="error_import_row_processing_failed">无法处理这一行。</string>
     <string name="error_invalid_retail_price">售价不是有效数字。</string>
     <string name="error_negative_prices">价格不能为负数。</string>
     <string name="error_invalid_quantity">数量不是有效数字。</string>
@@ -238,6 +239,7 @@
     <string name="error_main_file_needed">请先加载主文件，再添加其他文件。</string>
     <string name="error_incompatible_file_structure">所选文件之一的列结构不兼容。操作已取消。</string>
     <string name="error_adding_files">添加文件时出错。</string>
+    <string name="error_append_no_data_rows">添加的文件不包含可用的数据行。</string>
     <string name="error_first_file_empty_or_invalid">选择的第一个文件为空或格式无效。</string>
     <string name="error_different_columns">所选文件的列不一致。操作已取消。</string>
     <string name="error_unknown_file_analysis">分析文件时发生未知错误。</string>

@@ -184,6 +184,7 @@
     <string name="counted_quantity_label">Cantidad contada</string>
     <string name="new_retail_price_short_label">Nuevo precio v.</string>
     <string name="error_unexpected_parsing">Error de análisis inesperado: %1$s</string>
+    <string name="error_import_row_processing_failed">No se pudo procesar esta fila.</string>
     <string name="error_invalid_retail_price">El precio de venta no es un número válido.</string>
     <string name="error_negative_prices">Los precios no pueden ser negativos.</string>
     <string name="error_invalid_quantity">La cantidad no es un número válido.</string>
@@ -238,6 +239,7 @@
     <string name="error_main_file_needed">Cargue un archivo principal antes de añadir otros.</string>
     <string name="error_incompatible_file_structure">Uno de los archivos seleccionados tiene una estructura de columnas incompatible. Operación cancelada.</string>
     <string name="error_adding_files">Error al añadir los archivos.</string>
+    <string name="error_append_no_data_rows">Los archivos añadidos no contienen filas de datos utilizables.</string>
     <string name="error_first_file_empty_or_invalid">El primer archivo seleccionado está vacío o tiene un formato no válido.</string>
     <string name="error_different_columns">Los archivos seleccionados tienen columnas diferentes. Operación cancelada.</string>
     <string name="error_unknown_file_analysis">Error desconocido al analizar los archivos.</string>

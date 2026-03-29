@@ -14,11 +14,19 @@ import org.apache.poi.ss.usermodel.DataFormatter
 
 fun readAndAnalyzeExcel(
     context: Context,
-    uri: Uri
+    uri: Uri,
+    allowEmptyTabularResult: Boolean = false
 ): Triple<List<String>, List<List<String>>, List<String>> {
     val rows = mutableListOf<List<String>>()
-    context.contentResolver.openInputStream(uri)?.use { inStream ->
+    val emptyFileMessage = context.getString(R.string.error_file_empty_or_invalid)
+    val inputStream = context.contentResolver.openInputStream(uri)
+        ?: throw IllegalArgumentException(emptyFileMessage)
+
+    inputStream.use { inStream ->
         val bytes = inStream.readBytes()
+        if (bytes.isEmpty()) {
+            throw IllegalArgumentException(emptyFileMessage)
+        }
 
         if (looksLikeExcelHtml(bytes)) {
             // Fallback HTML → righe
@@ -56,7 +64,15 @@ fun readAndAnalyzeExcel(
         }
     }
 
-    return analyzeRows(context, rows)
+    val analysis = analyzeRows(context, rows)
+    val hasEmptyTabularResult = analysis.first.isEmpty() || analysis.second.isEmpty()
+    if (hasEmptyTabularResult) {
+        if (!allowEmptyTabularResult) {
+            throw IllegalArgumentException(emptyFileMessage)
+        }
+        return Triple(emptyList(), emptyList(), emptyList())
+    }
+    return analysis
 }
 
 

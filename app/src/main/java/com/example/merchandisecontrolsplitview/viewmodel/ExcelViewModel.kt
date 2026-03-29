@@ -294,8 +294,19 @@ class ExcelViewModel(
             postProgress(5) // sta partendo
 
             try {
-                val (goldenHeader, firstDataRows, headerSource) = withContext(Dispatchers.IO) {
-                    readAndAnalyzeExcel(context, uris.first())
+                val (goldenHeader, firstDataRows, headerSource) = try {
+                    withContext(Dispatchers.IO) {
+                        readAndAnalyzeExcel(context, uris.first())
+                    }
+                } catch (e: Exception) {
+                    val isFirstFileEmpty = knownUserFacingFileMessage(context, e) ==
+                        context.getString(R.string.error_file_empty_or_invalid)
+                    if (isFirstFileEmpty) {
+                        throw IllegalArgumentException(
+                            context.getString(R.string.error_first_file_empty_or_invalid)
+                        )
+                    }
+                    throw e
                 }
                 postProgress(15)
 
@@ -338,19 +349,33 @@ class ExcelViewModel(
     }
 
     fun appendFromMultipleUris(context: Context, uris: List<Uri>) {
+        if (uris.isEmpty()) return
         viewModelScope.launch {
             isLoading.value = true
             loadError.value = null
             postProgress(5)
 
             try {
-                val originalHeader = excelData.first()
+                val originalHeader = excelData.firstOrNull()
+                if (originalHeader.isNullOrEmpty()) {
+                    loadError.value = context.getString(R.string.error_main_file_needed)
+                    return@launch
+                }
                 val allNewDataRows = mutableListOf<List<String>>()
 
                 withContext(Dispatchers.IO) {
                     val total = uris.size.coerceAtLeast(1)
                     for ((i, uri) in uris.withIndex()) {
-                        val (newHeader, newDataRows, _) = readAndAnalyzeExcel(context, uri)
+                        val (newHeader, newDataRows, _) = readAndAnalyzeExcel(
+                            context = context,
+                            uri = uri,
+                            allowEmptyTabularResult = true
+                        )
+                        if (newHeader.isEmpty() && newDataRows.isEmpty()) {
+                            val pct = 10 + ((i + 1) * 80 / total)
+                            postProgress(pct)
+                            continue
+                        }
                         if (originalHeader != newHeader) {
                             throw IllegalArgumentException(context.getString(R.string.error_incompatible_file_structure))
                         }
@@ -361,10 +386,13 @@ class ExcelViewModel(
                     }
                 }
 
-                if (allNewDataRows.isNotEmpty()) {
-                    postProgress(95)
-                    // ... append alle tue strutture esistenti ...
+                if (allNewDataRows.isEmpty()) {
+                    loadError.value = context.getString(R.string.error_append_no_data_rows)
+                    return@launch
                 }
+
+                postProgress(95)
+                appendRowsToCurrentGrid(allNewDataRows)
             } catch (e: Exception) {
                 loadError.value = fileLoadErrorMessage(
                     context,
@@ -375,6 +403,15 @@ class ExcelViewModel(
                 isLoading.value = false
                 postProgress(null)
             }
+        }
+    }
+
+    private fun appendRowsToCurrentGrid(newRows: List<List<String>>) {
+        if (newRows.isEmpty()) return
+        excelData.addAll(newRows)
+        repeat(newRows.size) {
+            editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            completeStates.add(false)
         }
     }
 

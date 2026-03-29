@@ -260,6 +260,21 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `startImportAnalysis empty workbook emits empty file error state`() = runTest {
+        val emptyWorkbook = createWorkbook(name = "import-empty", rows = emptyList())
+
+        viewModel.startImportAnalysis(app, Uri.fromFile(emptyWorkbook))
+        advanceUntilIdle()
+        waitForCondition { viewModel.uiState.value is UiState.Error }
+
+        assertNull(viewModel.importAnalysisResult.value)
+        assertEquals(
+            UiState.Error(app.getString(R.string.error_file_empty_or_invalid)),
+            viewModel.uiState.value
+        )
+    }
+
+    @Test
     fun `exportToExcel with empty dataset emits no products error`() = runTest {
         coEvery { repository.getAllProductsWithDetails() } returns emptyList()
         val targetFile = File.createTempFile("export-empty", ".xlsx", app.cacheDir)

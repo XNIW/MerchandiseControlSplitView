@@ -51,6 +51,7 @@ object ImportAnalyzer {
 
     private fun round3(x: Double?) = x?.let { round(it * 1000.0) / 1000.0 }
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun analyze(
         context: Context,
         importedRows: List<Map<String, String>>,
@@ -222,14 +223,7 @@ object ImportAnalyzer {
 
                 }
             } catch (ex: Exception) {
-                errors.add(
-                    RowImportError(
-                        rowNumber = originalRowIndex + 1,
-                        rowContent = finalRow,
-                        errorReasonResId = R.string.error_unexpected_parsing,
-                        formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
-                    )
-                )
+                errors.add(unexpectedRowProcessingError(originalRowIndex + 1, finalRow))
             }
         }
         return ImportAnalysis(newProducts, updatedProducts, errors, warnings)
@@ -249,6 +243,7 @@ object ImportAnalyzer {
     }
 
     /** Analisi "streaming" a chunk: non materializza tutte le righe in RAM. */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun analyzeStreaming(
         context: Context,
         chunks: Sequence<List<Map<String, String>>>,
@@ -431,18 +426,14 @@ object ImportAnalyzer {
                     }
                 }
             } catch (ex: Exception) {
-                errors += RowImportError(
-                    rowNumber = p.rowNumbers.last(),
-                    rowContent = p.lastRow,
-                    errorReasonResId = R.string.error_unexpected_parsing,
-                    formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
-                )
+                errors += unexpectedRowProcessingError(p.rowNumbers.last(), p.lastRow)
             }
         }
 
         return ImportAnalysis(newProducts, updatedProducts, errors, warnings)
     }
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun analyzeStreamingDeferredRelations(
         context: Context,
         currentDbProducts: List<Product>,
@@ -651,12 +642,7 @@ object ImportAnalyzer {
                     }
                 }
             } catch (ex: Exception) {
-                errors += RowImportError(
-                    rowNumber = pending.rowNumbers.last(),
-                    rowContent = pending.lastRow,
-                    errorReasonResId = R.string.error_unexpected_parsing,
-                    formatArgs = listOf(ex.message ?: context.getString(R.string.unknown))
-                )
+                errors += unexpectedRowProcessingError(pending.rowNumbers.last(), pending.lastRow)
             }
         }
 
@@ -700,4 +686,13 @@ object ImportAnalyzer {
         }
         return fields
     }
+
+    private fun unexpectedRowProcessingError(
+        rowNumber: Int,
+        rowContent: Map<String, String>
+    ) = RowImportError(
+        rowNumber = rowNumber,
+        rowContent = rowContent,
+        errorReasonResId = R.string.error_import_row_processing_failed
+    )
 }

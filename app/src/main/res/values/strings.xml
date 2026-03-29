@@ -184,6 +184,7 @@
     <string name="new_retail_price_short_label">Nuovo prezzo v.</string>
 
     <string name="error_unexpected_parsing">Errore di parsing imprevisto: %1$s</string>
+    <string name="error_import_row_processing_failed">Impossibile elaborare questa riga.</string>
     <string name="error_invalid_retail_price">Il prezzo di vendita non è un numero valido.</string>
     <string name="error_negative_prices">I prezzi non possono essere negativi.</string>
     <string name="field_product_name">Nome Prodotto</string>
@@ -245,6 +246,7 @@
     <string name="error_main_file_needed">Caricare un file principale prima di aggiungerne altri.</string>
     <string name="error_incompatible_file_structure">Uno dei file selezionati ha una struttura di colonne non compatibile. Operazione annullata.</string>
     <string name="error_adding_files">Errore durante l\'aggiunta dei file.</string>
+    <string name="error_append_no_data_rows">I file aggiunti non contengono righe dati utilizzabili.</string>
     <string name="error_first_file_empty_or_invalid">Il primo file selezionato è vuoto o ha un formato non valido.</string>
     <string name="error_different_columns">I file selezionati hanno colonne diverse. L\'operazione è stata annullata.</string>
     <string name="error_unknown_file_analysis">Errore sconosciuto durante l\'analisi dei file.</string>

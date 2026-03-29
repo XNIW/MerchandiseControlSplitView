@@ -185,6 +185,7 @@
     <string name="counted_quantity_label">Counted quantity</string>
     <string name="new_retail_price_short_label">New retail p.</string>
     <string name="error_unexpected_parsing">Unexpected parsing error: %1$s</string>
+    <string name="error_import_row_processing_failed">Could not process this row.</string>
     <string name="error_invalid_retail_price">Retail price is not a valid number.</string>
     <string name="error_negative_prices">Prices cannot be negative.</string>
     <string name="error_invalid_quantity">The quantity is not a valid number.</string>
@@ -239,6 +240,7 @@
     <string name="error_main_file_needed">Load a main file before adding others.</string>
     <string name="error_incompatible_file_structure">One of the selected files has an incompatible column structure. Operation cancelled.</string>
     <string name="error_adding_files">Error while adding files.</string>
+    <string name="error_append_no_data_rows">The added files do not contain usable data rows.</string>
     <string name="error_first_file_empty_or_invalid">The first selected file is empty or has an invalid format.</string>
     <string name="error_different_columns">The selected files have different columns. Operation cancelled.</string>
     <string name="error_unknown_file_analysis">Unknown error while analyzing files.</string>
