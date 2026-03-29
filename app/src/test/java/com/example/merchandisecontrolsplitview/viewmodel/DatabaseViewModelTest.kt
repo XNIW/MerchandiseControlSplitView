@@ -11,8 +11,11 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
+import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
+import com.example.merchandisecontrolsplitview.util.DatabaseExportConstants
+import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -275,58 +278,118 @@ class DatabaseViewModelTest {
     }
 
     @Test
-    fun `exportToExcel with empty dataset emits no products error`() = runTest {
+    fun `exportDatabase products only with empty dataset writes header only and emits success`() = runTest {
         coEvery { repository.getAllProductsWithDetails() } returns emptyList()
-        val targetFile = File.createTempFile("export-empty", ".xlsx", app.cacheDir)
+        val targetFile = File.createTempFile("export-products-empty", ".xlsx", app.cacheDir)
 
-        viewModel.exportToExcel(app, Uri.fromFile(targetFile))
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            assertEquals(
-                UiState.Error(app.getString(R.string.error_no_products_to_export)),
-                awaitItem()
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `exportToExcel with products writes workbook and emits success`() = runTest {
-        coEvery { repository.getAllProductsWithDetails() } returns listOf(
-            ProductWithDetails(
-                product = sampleProduct(id = 7L, barcode = "55554444"),
-                supplierName = "Supplier",
-                categoryName = "Category",
-                lastPurchase = 3.0,
-                prevPurchase = 2.5,
-                lastRetail = 5.0,
-                prevRetail = 4.5
-            )
+        viewModel.exportDatabase(
+            context = app,
+            uri = Uri.fromFile(targetFile),
+            selection = ExportSheetSelection.productsOnly()
         )
-        val targetFile = File.createTempFile("export-success", ".xlsx", app.cacheDir)
-
-        viewModel.exportToExcel(app, Uri.fromFile(targetFile))
         advanceUntilIdle()
-
         waitForCondition { viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error }
 
-        assertTrue(targetFile.length() > 0)
         assertEquals(
             UiState.Success(app.getString(R.string.export_success)),
             viewModel.uiState.value
         )
+        XSSFWorkbook(targetFile.inputStream()).use { workbook ->
+            assertEquals(1, workbook.numberOfSheets)
+            assertEquals(
+                DatabaseExportConstants.SHEET_PRODUCTS,
+                workbook.getSheetName(0)
+            )
+            assertEquals(
+                1,
+                workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS).physicalNumberOfRows
+            )
+        }
+        coVerify(exactly = 1) { repository.getAllProductsWithDetails() }
+        coVerify(exactly = 0) { repository.getAllSuppliers() }
+        coVerify(exactly = 0) { repository.getAllCategories() }
+        coVerify(exactly = 0) { repository.getAllPriceHistoryRows() }
     }
 
     @Test
-    fun `exportFullDbToExcel maps out of memory failures to error state`() = runTest {
+    fun `exportDatabase catalog only skips product and price history fetches`() = runTest {
+        coEvery { repository.getAllSuppliers() } returns listOf(
+            Supplier(
+                id = 9L,
+                name = "Supplier"
+            )
+        )
+        coEvery { repository.getAllCategories() } returns emptyList()
+        val targetFile = File.createTempFile("export-catalog", ".xlsx", app.cacheDir)
+
+        viewModel.exportDatabase(
+            context = app,
+            uri = Uri.fromFile(targetFile),
+            selection = ExportSheetSelection.catalogOnly()
+        )
+        advanceUntilIdle()
+
+        waitForCondition { viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error }
+
+        assertEquals(
+            UiState.Success(app.getString(R.string.export_success)),
+            viewModel.uiState.value
+        )
+        XSSFWorkbook(targetFile.inputStream()).use { workbook ->
+            assertEquals(2, workbook.numberOfSheets)
+            assertEquals(DatabaseExportConstants.SHEET_SUPPLIERS, workbook.getSheetName(0))
+            assertEquals(DatabaseExportConstants.SHEET_CATEGORIES, workbook.getSheetName(1))
+            assertEquals(
+                2,
+                workbook.getSheet(DatabaseExportConstants.SHEET_SUPPLIERS).physicalNumberOfRows
+            )
+            assertEquals(
+                1,
+                workbook.getSheet(DatabaseExportConstants.SHEET_CATEGORIES).physicalNumberOfRows
+            )
+        }
+        coVerify(exactly = 1) { repository.getAllSuppliers() }
+        coVerify(exactly = 1) { repository.getAllCategories() }
+        coVerify(exactly = 0) { repository.getAllProductsWithDetails() }
+        coVerify(exactly = 0) { repository.getAllPriceHistoryRows() }
+    }
+
+    @Test
+    fun `exportDatabase ignores second request while one export is already running`() = runTest {
+        coEvery { repository.getAllProductsWithDetails() } returns emptyList()
+        val firstTargetFile = File.createTempFile("export-guard-first", ".xlsx", app.cacheDir)
+        val secondTargetFile = File.createTempFile("export-guard-second", ".xlsx", app.cacheDir)
+
+        viewModel.exportDatabase(
+            context = app,
+            uri = Uri.fromFile(firstTargetFile),
+            selection = ExportSheetSelection.productsOnly()
+        )
+
+        viewModel.exportDatabase(
+            context = app,
+            uri = Uri.fromFile(secondTargetFile),
+            selection = ExportSheetSelection.productsOnly()
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error }
+
+        coVerify(exactly = 1) { repository.getAllProductsWithDetails() }
+    }
+
+    @Test
+    fun `exportDatabase full selection maps out of memory failures to error state`() = runTest {
         coEvery { repository.getAllProductsWithDetails() } returns emptyList()
         coEvery { repository.getAllSuppliers() } returns emptyList()
         coEvery { repository.getAllCategories() } returns emptyList()
         coEvery { repository.getAllPriceHistoryRows() } throws OutOfMemoryError("heap exhausted")
         val targetFile = File.createTempFile("export-full-oom", ".xlsx", app.cacheDir)
 
-        viewModel.exportFullDbToExcel(app, Uri.fromFile(targetFile))
+        viewModel.exportDatabase(
+            context = app,
+            uri = Uri.fromFile(targetFile),
+            selection = ExportSheetSelection.full()
+        )
         advanceUntilIdle()
         waitForCondition { viewModel.uiState.value is UiState.Error }
 

@@ -1,0 +1,152 @@
+package com.example.merchandisecontrolsplitview.util
+
+import com.example.merchandisecontrolsplitview.data.PriceHistoryExportRow
+import com.example.merchandisecontrolsplitview.data.Supplier
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.time.LocalDateTime
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class DatabaseExportWriterTest {
+
+    @Test
+    fun `buildDatabaseExportDisplayName follows full and partial naming rules`() {
+        val timestamp = LocalDateTime.of(2026, 3, 29, 14, 30, 0)
+
+        assertEquals(
+            "Database_2026_03_29_14-30-00.xlsx",
+            buildDatabaseExportDisplayName(
+                selection = ExportSheetSelection.full(),
+                timestamp = timestamp
+            )
+        )
+        assertEquals(
+            "Database_partial_S_C_2026_03_29_14-30-00.xlsx",
+            buildDatabaseExportDisplayName(
+                selection = ExportSheetSelection.catalogOnly(),
+                timestamp = timestamp
+            )
+        )
+        assertEquals(
+            "Database_partial_P_S_PH_2026_03_29_14-30-00.xlsx",
+            buildDatabaseExportDisplayName(
+                selection = ExportSheetSelection(
+                    products = true,
+                    suppliers = true,
+                    categories = false,
+                    priceHistory = true
+                ),
+                timestamp = timestamp
+            )
+        )
+    }
+
+    @Test
+    fun `writeDatabaseExport keeps workbook selective and writes header only for empty selected sheet`() {
+        val output = ByteArrayOutputStream()
+
+        writeDatabaseExport(
+            outputStream = output,
+            selection = ExportSheetSelection.catalogOnly(),
+            schema = sampleSchema(),
+            content = DatabaseExportContent(
+                suppliers = listOf(Supplier(id = 1L, name = "Supplier One")),
+                categories = emptyList()
+            )
+        )
+
+        XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
+            val sheetNames = (0 until workbook.numberOfSheets).map(workbook::getSheetName)
+            assertEquals(
+                listOf(
+                    DatabaseExportConstants.SHEET_SUPPLIERS,
+                    DatabaseExportConstants.SHEET_CATEGORIES
+                ),
+                sheetNames
+            )
+            assertEquals(
+                DatabaseExportConstants.SUPPLIER_HEADERS,
+                firstRowAsStrings(workbook, DatabaseExportConstants.SHEET_SUPPLIERS)
+            )
+            assertEquals(
+                DatabaseExportConstants.CATEGORY_HEADERS,
+                firstRowAsStrings(workbook, DatabaseExportConstants.SHEET_CATEGORIES)
+            )
+            assertEquals(
+                2,
+                workbook.getSheet(DatabaseExportConstants.SHEET_SUPPLIERS).physicalNumberOfRows
+            )
+            assertEquals(
+                1,
+                workbook.getSheet(DatabaseExportConstants.SHEET_CATEGORIES).physicalNumberOfRows
+            )
+        }
+    }
+
+    @Test
+    fun `writeDatabaseExport computes old price per barcode and type without sheet grouping`() {
+        val output = ByteArrayOutputStream()
+
+        writeDatabaseExport(
+            outputStream = output,
+            selection = ExportSheetSelection.priceHistoryOnly(),
+            schema = sampleSchema(),
+            content = DatabaseExportContent(
+                priceHistoryRows = listOf(
+                    PriceHistoryExportRow(
+                        barcode = "00000001",
+                        timestamp = "2026-01-01 10:00:00",
+                        type = "PURCHASE",
+                        price = 3.0,
+                        source = "MANUAL"
+                    ),
+                    PriceHistoryExportRow(
+                        barcode = "00000001",
+                        timestamp = "2026-02-01 10:00:00",
+                        type = "PURCHASE",
+                        price = 4.0,
+                        source = "MANUAL"
+                    ),
+                    PriceHistoryExportRow(
+                        barcode = "00000001",
+                        timestamp = "2026-03-01 10:00:00",
+                        type = "RETAIL",
+                        price = 7.0,
+                        source = "MANUAL"
+                    )
+                )
+            )
+        )
+
+        XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
+            val sheet = workbook.getSheet(DatabaseExportConstants.SHEET_PRICE_HISTORY)
+
+            assertEquals(
+                DatabaseExportConstants.PRICE_HISTORY_HEADERS,
+                firstRowAsStrings(workbook, DatabaseExportConstants.SHEET_PRICE_HISTORY)
+            )
+            assertTrue(sheet.getRow(1).getCell(3) == null || sheet.getRow(1).getCell(3).toString().isBlank())
+            assertEquals(3.0, sheet.getRow(2).getCell(3).numericCellValue, 0.0001)
+            assertEquals(
+                DatabaseExportConstants.PRICE_TYPE_RETAIL,
+                sheet.getRow(3).getCell(2).stringCellValue
+            )
+            assertTrue(sheet.getRow(3).getCell(3) == null || sheet.getRow(3).getCell(3).toString().isBlank())
+        }
+    }
+
+    private fun sampleSchema(): DatabaseExportSchema =
+        DatabaseExportSchema(
+            productHeaders = listOf("barcode", "name")
+        )
+
+    private fun firstRowAsStrings(workbook: XSSFWorkbook, sheetName: String): List<String> {
+        val row = workbook.getSheet(sheetName).getRow(0)
+        return (0 until row.lastCellNum).map { index ->
+            row.getCell(index).stringCellValue
+        }
+    }
+}

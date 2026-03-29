@@ -349,6 +349,10 @@
     <string name="import_analyzing">正在分析数据…</string>
     <string name="operation_in_progress">操作进行中…</string>
     <string name="export_in_progress">正在导出…</string>
+    <string name="export_preparing">正在准备导出…</string>
+    <string name="export_fetching_sheet">正在读取%1$s…</string>
+    <string name="export_writing_sheet">正在写入%1$s…</string>
+    <string name="export_finishing">正在完成文件…</string>
     <string name="open_database">打开数据库</string>
     <string name="share_xlsx">分享</string>
     <string name="share_export_message">%1$s 生成的 Excel 文件。</string>
@@ -365,6 +369,20 @@
     <string name="import_database_full">导入数据库（完整）</string>
     <string name="export_products">导出商品</string>
     <string name="export_database_full">导出数据库（完整）</string>
+    <string name="export_database_dialog_title">导出数据库</string>
+    <string name="export_database_dialog_subtitle">选择要包含在 Excel 文件中的工作表。</string>
+    <string name="export_database_dialog_presets_label">快捷预设</string>
+    <string name="export_database_dialog_sheets_label">要导出的工作表</string>
+    <string name="export_database_dialog_full_copy">选中全部工作表时，会生成与完整数据库导入兼容的完整 Excel 备份。</string>
+    <string name="export_database_dialog_partial_copy">部分选择时，文件仍是有效的 Excel 导出，但可能不适用于完整数据库重新导入。</string>
+    <string name="export_preset_all">全部</string>
+    <string name="export_preset_products_only">仅商品</string>
+    <string name="export_preset_catalog">基础资料</string>
+    <string name="export_preset_price_history_only">仅价格历史</string>
+    <string name="export_sheet_products">商品</string>
+    <string name="export_sheet_suppliers">供应商</string>
+    <string name="export_sheet_categories">分类</string>
+    <string name="export_sheet_price_history">价格历史</string>
 
     <!-- 完整数据库导出文件名前缀 -->
     <string name="export_database_filename_prefix">数据库_</string>

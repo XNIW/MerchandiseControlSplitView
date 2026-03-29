@@ -12,15 +12,18 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.DatabaseExportContent
+import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
+import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
 import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
 import com.example.merchandisecontrolsplitview.util.applyFullDbPriceHistoryStreaming
+import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.detectImportWorkbookRoute
 import com.example.merchandisecontrolsplitview.util.ImportWorkbookRoute
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
-import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import com.example.merchandisecontrolsplitview.util.writeDatabaseExport
 import java.io.IOException
-import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +37,73 @@ sealed class UiState {
     data class Loading(val message: String? = null, val progress: Int? = null) : UiState()
     data class Success(val message: String) : UiState()
     data class Error(val message: String) : UiState()
+}
+
+data class ExportUiState(
+    val inProgress: Boolean = false,
+    val message: String? = null,
+    val progress: Int? = null
+)
+
+private data class ExportProgressSnapshot(
+    val message: String,
+    val progress: Int
+)
+
+private class ExportProgressTracker(
+    private val context: Context,
+    selection: ExportSheetSelection
+) {
+    private val totalWeight = selection.selectedSheetsInOrder()
+        .sumOf(DatabaseExportSheet::weight)
+        .coerceAtLeast(1)
+    private var completedWeight = 0f
+
+    fun preparing(): ExportProgressSnapshot =
+        ExportProgressSnapshot(
+            message = context.getString(R.string.export_preparing),
+            progress = 5
+        )
+
+    fun fetching(sheet: DatabaseExportSheet): ExportProgressSnapshot =
+        ExportProgressSnapshot(
+            message = context.getString(
+                R.string.export_fetching_sheet,
+                context.getString(sheet.labelRes)
+            ),
+            progress = progressFor(completedWeight)
+        )
+
+    fun fetched(sheet: DatabaseExportSheet): ExportProgressSnapshot =
+        ExportProgressSnapshot(
+            message = context.getString(
+                R.string.export_writing_sheet,
+                context.getString(sheet.labelRes)
+            ),
+            progress = progressFor(completedWeight + (sheet.weight * 0.4f))
+        )
+
+    fun sheetWritten(sheet: DatabaseExportSheet): ExportProgressSnapshot {
+        completedWeight += sheet.weight.toFloat()
+        return ExportProgressSnapshot(
+            message = context.getString(
+                R.string.export_writing_sheet,
+                context.getString(sheet.labelRes)
+            ),
+            progress = progressFor(completedWeight)
+        )
+    }
+
+    fun finishing(): ExportProgressSnapshot =
+        ExportProgressSnapshot(
+            message = context.getString(R.string.export_finishing),
+            progress = 97
+        )
+
+    private fun progressFor(consumedWeight: Float): Int {
+        val normalized = (consumedWeight / totalWeight).coerceIn(0f, 1f)
+        return (5 + (normalized * 90f)).toInt().coerceIn(5, 95)
+    }
 }
 
 private data class PendingPriceEvent(
@@ -71,6 +141,7 @@ class DatabaseViewModel(
     // Uid dell'entry di log per il "full import" (analisi file)
     private var currentImportLogUid: Long? = null
     private val importMutex = Mutex()
+    private val exportMutex = Mutex()
 // --- Helper per creare/aggiornare i log nella tabella history_entries ---
 
     private suspend fun startHistoryLog(kind: String, message: String): Long =
@@ -112,6 +183,8 @@ class DatabaseViewModel(
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    private val _exportUiState = MutableStateFlow(ExportUiState())
+    val exportUiState: StateFlow<ExportUiState> = _exportUiState.asStateFlow()
 
     fun consumeUiState() { _uiState.value = UiState.Idle }
     private val _filter = MutableStateFlow<String?>(null)
@@ -172,11 +245,6 @@ class DatabaseViewModel(
     private var pendingFullImportUri: Uri? = null
     private var hasPendingPriceHistorySheet = false
 
-    private val sheetProducts = "Products"
-    private val sheetSuppliers = "Suppliers"
-    private val sheetCategories = "Categories"
-    private val sheetPriceHistory = "PriceHistory"
-
     private fun knownUserFacingFileMessage(context: Context, throwable: Throwable): String? {
         val message = throwable.message?.trim().orEmpty()
         if (message.isEmpty()) return null
@@ -219,6 +287,18 @@ class DatabaseViewModel(
                 context.getString(R.string.error_file_access_denied)
             else -> context.getString(R.string.error_export_generic)
         }
+    }
+
+    private fun updateExportUiState(snapshot: ExportProgressSnapshot) {
+        _exportUiState.value = ExportUiState(
+            inProgress = true,
+            message = snapshot.message,
+            progress = snapshot.progress
+        )
+    }
+
+    private fun clearExportUiState() {
+        _exportUiState.value = ExportUiState()
     }
 
     fun setFilter(text: String) {
@@ -500,22 +580,86 @@ class DatabaseViewModel(
         applyFullDbPriceHistoryStreaming(context, fullImportUri, repository)
     }
 
-    fun exportToExcel(context: Context, uri: Uri) {
-        _uiState.value = UiState.Loading()
+    fun exportDatabase(
+        context: Context,
+        uri: Uri,
+        selection: ExportSheetSelection
+    ) {
+        if (selection.isEmpty || !exportMutex.tryLock()) return
+
+        val progressTracker = ExportProgressTracker(context, selection)
+        updateExportUiState(progressTracker.preparing())
+
         viewModelScope.launch {
             try {
-                val products = repository.getAllProductsWithDetails()
-                if (products.isEmpty()) {
-                    _uiState.value = UiState.Error(context.getString(R.string.error_no_products_to_export))
-                    return@launch
+                val schema = buildDatabaseExportSchema(context)
+
+                val products = if (selection.products) {
+                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRODUCTS))
+                    repository.getAllProductsWithDetails().also {
+                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRODUCTS))
+                    }
+                } else {
+                    emptyList()
                 }
-                // Scrittura file su dispatcher I/O
+
+                val suppliers = if (selection.suppliers) {
+                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.SUPPLIERS))
+                    repository.getAllSuppliers().also {
+                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.SUPPLIERS))
+                    }
+                } else {
+                    emptyList()
+                }
+
+                val categories = if (selection.categories) {
+                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.CATEGORIES))
+                    repository.getAllCategories().also {
+                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.CATEGORIES))
+                    }
+                } else {
+                    emptyList()
+                }
+
+                val priceHistoryRows = if (selection.priceHistory) {
+                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRICE_HISTORY))
+                    repository.getAllPriceHistoryRows().also {
+                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRICE_HISTORY))
+                    }
+                } else {
+                    emptyList()
+                }
+
                 withContext(Dispatchers.IO) {
-                    writeProductsToExcel(context, uri, products)
+                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                        writeDatabaseExport(
+                            outputStream = outputStream,
+                            selection = selection,
+                            schema = schema,
+                            content = DatabaseExportContent(
+                                products = products,
+                                suppliers = suppliers,
+                                categories = categories,
+                                priceHistoryRows = priceHistoryRows
+                            ),
+                            onSheetWritten = { sheet ->
+                                updateExportUiState(progressTracker.sheetWritten(sheet))
+                            }
+                        )
+                    } ?: throw IOException("Unable to open output stream for $uri")
                 }
+
+                updateExportUiState(progressTracker.finishing())
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: OutOfMemoryError) {
+                _uiState.value = UiState.Error(exportErrorMessage(context, e))
             } catch (e: Exception) {
                 _uiState.value = UiState.Error(exportErrorMessage(context, e))
+            } finally {
+                clearExportUiState()
+                exportMutex.unlock()
             }
         }
     }
@@ -566,54 +710,6 @@ class DatabaseViewModel(
     }
     // --- FIX END ---
 
-    private fun writeProductsToExcel(context: Context, uri: Uri, products: List<ProductWithDetails>) {
-        XSSFWorkbook().use { workbook ->
-            val sheet = workbook.createSheet(context.getString(R.string.sheet_name_products))
-
-            val headerRow = sheet.createRow(0)
-            val headers = listOf(
-                context.getString(R.string.header_barcode),
-                context.getString(R.string.header_item_number),
-                context.getString(R.string.header_product_name),
-                context.getString(R.string.header_second_product_name),
-                context.getString(R.string.header_purchase_price),
-                context.getString(R.string.header_retail_price),
-                context.getString(R.string.product_purchase_price_old_short), // PrevPurchase
-                context.getString(R.string.product_retail_price_old_short),
-                context.getString(R.string.header_supplier),
-                context.getString(R.string.header_category),
-                context.getString(R.string.header_stock_quantity)
-            )
-            headers.forEachIndexed { index, header ->
-                headerRow.createCell(index).setCellValue(header)
-            }
-
-            products.forEachIndexed { index, details ->
-                val p = details.product
-                val row = sheet.createRow(index + 1)
-
-                row.createCell(0).setCellValue(p.barcode)
-                row.createCell(1).setCellValue(p.itemNumber ?: "")
-                row.createCell(2).setCellValue(p.productName ?: "")
-                row.createCell(3).setCellValue(p.secondProductName ?: "")
-                row.createCell(4).setCellValue(p.purchasePrice ?: 0.0)          // prezzo corrente
-                row.createCell(5).setCellValue(p.retailPrice ?: 0.0)
-                row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
-                row.createCell(7).setCellValue(details.prevRetail ?: 0.0)// prezzo corrente
-                row.createCell(8).setCellValue(details.supplierName ?: "")
-                row.createCell(9).setCellValue(details.categoryName ?: "")
-                row.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
-            }
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
-                    ?: throw IOException("Unable to open output stream for $uri")
-            } catch (e: IOException) {
-                e.printStackTrace()
-                throw e
-            }
-        }
-    }
-
     fun analyzeGridData(gridData: List<Map<String, String>>) {
         _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_analyzing), progress = 10)
         viewModelScope.launch {
@@ -655,132 +751,6 @@ class DatabaseViewModel(
     }
     fun getPriceSeries(productId: Long, type: String) =
         repository.getPriceSeries(productId, type)
-
-    // ⬇️ EXPORT COMPLETO: nuovo metodo pubblico
-    fun exportFullDbToExcel(context: Context, uri: Uri) {
-        _uiState.value = UiState.Loading(message = context.getString(R.string.operation_in_progress), progress = null)
-        viewModelScope.launch {
-            try {
-                val products = repository.getAllProductsWithDetails()
-                val suppliers = repository.getAllSuppliers()
-                val categories = repository.getAllCategories()
-                val priceRows = repository.getAllPriceHistoryRows()
-
-                withContext(Dispatchers.IO) {
-                    XSSFWorkbook().use { wb ->
-
-                        // 1) Products (stesso schema dell'export attuale)
-                        run {
-                            val sheet = wb.createSheet(sheetProducts)
-                            val header = listOf(
-                                context.getString(R.string.header_barcode),
-                                context.getString(R.string.header_item_number),
-                                context.getString(R.string.header_product_name),
-                                context.getString(R.string.header_second_product_name),
-                                context.getString(R.string.header_purchase_price),
-                                context.getString(R.string.header_retail_price),
-                                context.getString(R.string.product_purchase_price_old_short),
-                                context.getString(R.string.product_retail_price_old_short),
-                                context.getString(R.string.header_supplier),
-                                context.getString(R.string.header_category),
-                                context.getString(R.string.header_stock_quantity)
-                            )
-                            val h = sheet.createRow(0)
-                            header.forEachIndexed { i, t -> h.createCell(i).setCellValue(t) }
-
-                            products.forEachIndexed { idx, d ->
-                                val p = d.product
-                                val r = sheet.createRow(idx + 1)
-                                r.createCell(0).setCellValue(p.barcode)
-                                r.createCell(1).setCellValue(p.itemNumber ?: "")
-                                r.createCell(2).setCellValue(p.productName ?: "")
-                                r.createCell(3).setCellValue(p.secondProductName ?: "")
-                                r.createCell(4).setCellValue(p.purchasePrice ?: 0.0)
-                                r.createCell(5).setCellValue(p.retailPrice ?: 0.0)
-                                r.createCell(6).setCellValue(d.prevPurchase ?: 0.0)
-                                r.createCell(7).setCellValue(d.prevRetail ?: 0.0)
-                                r.createCell(8).setCellValue(d.supplierName ?: "")
-                                r.createCell(9).setCellValue(d.categoryName ?: "")
-                                r.createCell(10).setCellValue(p.stockQuantity ?: 0.0)
-                            }
-                        }
-
-                        // 2) Suppliers
-                        run {
-                            val sheet = wb.createSheet(sheetSuppliers)
-                            val h = sheet.createRow(0)
-                            h.createCell(0).setCellValue("id")
-                            h.createCell(1).setCellValue("name")
-                            suppliers.forEachIndexed { idx, s ->
-                                val r = sheet.createRow(idx + 1)
-                                r.createCell(0).setCellValue(s.id.toDouble())
-                                r.createCell(1).setCellValue(s.name)
-                            }
-                        }
-
-                        // 3) Categories
-                        run {
-                            val sheet = wb.createSheet(sheetCategories)
-                            val h = sheet.createRow(0)
-                            h.createCell(0).setCellValue("id")
-                            h.createCell(1).setCellValue("name")
-                            categories.forEachIndexed { idx, c ->
-                                val r = sheet.createRow(idx + 1)
-                                r.createCell(0).setCellValue(c.id.toDouble())
-                                r.createCell(1).setCellValue(c.name)
-                            }
-                        }
-
-                        // 4) PriceHistory (compute oldPrice accodando gli eventi ordinati)
-                        run {
-                            val sheet = wb.createSheet(sheetPriceHistory)
-                            val h = sheet.createRow(0)
-                            listOf(
-                                "productBarcode",
-                                "timestamp",
-                                "type",
-                                "oldPrice",
-                                "newPrice",
-                                "source"
-                            ).forEachIndexed { i, t -> h.createCell(i).setCellValue(t) }
-
-                            // group per (barcode,type) e ordina per timestamp
-                            val grouped =
-                                priceRows.groupBy { it.barcode + "|" + it.type.uppercase() }
-                            var rowIdx = 1
-                            for ((_, events) in grouped) {
-                                var prev: Double? = null
-                                for (e in events.sortedBy { it.timestamp }) {
-                                    val r = sheet.createRow(rowIdx++)
-                                    r.createCell(0).setCellValue(e.barcode)
-                                    r.createCell(1).setCellValue(e.timestamp)
-                                    val t = e.type.uppercase()
-                                    r.createCell(2)
-                                        .setCellValue(if (t.startsWith("PUR")) "purchase" else "retail")
-                                    prev?.let { r.createCell(3).setCellValue(it) }
-                                        ?: r.createCell(3).setBlank()
-                                    r.createCell(4).setCellValue(e.price)
-                                    r.createCell(5).setCellValue(e.source ?: "")
-                                    prev = e.price
-                                }
-                            }
-                        }
-
-                        context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
-                            ?: throw IOException("Unable to open output stream for $uri")
-                    }
-                }
-
-                _uiState.value = UiState.Success(context.getString(R.string.export_success))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: OutOfMemoryError) {
-                _uiState.value = UiState.Error(exportErrorMessage(context, e))
-            } catch (e: Exception) {
-                _uiState.value = UiState.Error(exportErrorMessage(context, e))
-            }
-        }
-    }
 
     // ⬇️ IMPORT COMPLETO: nuovo metodo pubblico
     fun startFullDbImport(context: Context, uri: Uri) {

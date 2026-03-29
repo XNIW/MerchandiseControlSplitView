@@ -28,8 +28,6 @@ import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -62,12 +60,10 @@ import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun DatabaseScreenTopBar(
-    showExportMenu: Boolean,
     onNavigateBack: () -> Unit,
     onImportClick: () -> Unit,
-    onShowExportMenuChange: (Boolean) -> Unit,
-    onExportProducts: () -> Unit,
-    onExportFullDb: () -> Unit
+    onExportClick: () -> Unit,
+    exportEnabled: Boolean
 ) {
     TopAppBar(
         title = { Text(stringResource(R.string.database_screen_title)) },
@@ -82,18 +78,11 @@ internal fun DatabaseScreenTopBar(
             }
 
             Box {
-                IconButton(onClick = { onShowExportMenuChange(true) }) {
+                IconButton(
+                    enabled = exportEnabled,
+                    onClick = onExportClick
+                ) {
                     Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.export_file))
-                }
-                DropdownMenu(expanded = showExportMenu, onDismissRequest = { onShowExportMenuChange(false) }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.export_products)) },
-                        onClick = onExportProducts
-                    )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.export_database_full)) },
-                        onClick = onExportFullDb
-                    )
                 }
             }
         }

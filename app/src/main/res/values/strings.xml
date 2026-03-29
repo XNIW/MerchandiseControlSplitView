@@ -362,6 +362,10 @@
     <string name="import_analyzing">Analisi dei dati…</string>
     <string name="operation_in_progress">Operazione in corso…</string>
     <string name="export_in_progress">Esportazione in corso…</string>
+    <string name="export_preparing">Preparazione esportazione…</string>
+    <string name="export_fetching_sheet">Lettura %1$s…</string>
+    <string name="export_writing_sheet">Scrittura %1$s…</string>
+    <string name="export_finishing">Finalizzazione file…</string>
     <string name="open_database">Apri database</string>
     <string name="share_xlsx">Condividi</string>
     <string name="share_export_message">File Excel generato da %1$s.</string>
@@ -378,6 +382,20 @@
     <string name="import_database_full">Importa database (completo)</string>
     <string name="export_products">Esporta prodotti</string>
     <string name="export_database_full">Esporta database (completo)</string>
+    <string name="export_database_dialog_title">Esporta database</string>
+    <string name="export_database_dialog_subtitle">Scegli i fogli da includere nel file Excel.</string>
+    <string name="export_database_dialog_presets_label">Preset rapidi</string>
+    <string name="export_database_dialog_sheets_label">Fogli da esportare</string>
+    <string name="export_database_dialog_full_copy">Con tutti i fogli selezionati ottieni un backup Excel completo compatibile con l\'import database completo.</string>
+    <string name="export_database_dialog_partial_copy">Con una selezione parziale il file resta un export Excel valido, ma potrebbe non essere adatto al re-import completo del database.</string>
+    <string name="export_preset_all">Tutto</string>
+    <string name="export_preset_products_only">Solo prodotti</string>
+    <string name="export_preset_catalog">Anagrafica</string>
+    <string name="export_preset_price_history_only">Solo storico prezzi</string>
+    <string name="export_sheet_products">Prodotti</string>
+    <string name="export_sheet_suppliers">Fornitori</string>
+    <string name="export_sheet_categories">Categorie</string>
+    <string name="export_sheet_price_history">Storico prezzi</string>
 
     <!-- Prefisso nome file export completo -->
     <string name="export_database_filename_prefix">Database_</string>

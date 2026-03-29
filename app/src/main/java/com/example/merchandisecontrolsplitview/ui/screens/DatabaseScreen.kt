@@ -24,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.navigation.NavHostController
 import androidx.compose.ui.platform.LocalContext
@@ -32,13 +31,13 @@ import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Product
+import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
+import com.example.merchandisecontrolsplitview.util.buildDatabaseExportDisplayName
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.launch
 
 @Composable
@@ -47,20 +46,19 @@ fun DatabaseScreen(
     viewModel: DatabaseViewModel
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val exportUiState by viewModel.exportUiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val exportProductsBaseName = stringResource(R.string.sheet_name_products)
-        .replace(Regex("""[\\/:*?"<>|]"""), "_")
-    val exportDatabaseFilenamePrefix = stringResource(R.string.export_database_filename_prefix)
-        .replace(Regex("""[\\/:*?"<>|]"""), "_")
     val scanPromptText = stringResource(R.string.scan_prompt)
 
     var itemToEdit by remember { mutableStateOf<Product?>(null) }
     var itemToDelete by remember { mutableStateOf<Product?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
+    var requestedExportSelection by remember { mutableStateOf(ExportSheetSelection.full()) }
 
     var showHistoryFor by remember { mutableStateOf<Product?>(null) }
     val uploadLauncher = rememberLauncherForActivityResult(
@@ -74,11 +72,13 @@ fun DatabaseScreen(
         }
     }
 
-    val isLoading = uiState is UiState.Loading
+    val isLoading = uiState is UiState.Loading || exportUiState.inProgress
 
-    val downloadLauncher = rememberLauncherForActivityResult(
+    val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-        onResult = { uri: Uri? -> uri?.let { viewModel.exportToExcel(context, it) } }
+        onResult = { uri: Uri? ->
+            uri?.let { viewModel.exportDatabase(context, it, requestedExportSelection) }
+        }
     )
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -99,13 +99,6 @@ fun DatabaseScreen(
             }
         }
     }
-
-    val downloadFullDbLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
-        onResult = { uri: Uri? -> uri?.let { viewModel.exportFullDbToExcel(context, it) } }
-    )
-
-    var showExportMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState) {
         when (val s = uiState) {
@@ -138,7 +131,6 @@ fun DatabaseScreen(
     Scaffold(
         topBar = {
             DatabaseScreenTopBar(
-                showExportMenu = showExportMenu,
                 onNavigateBack = { navController.popBackStack() },
                 onImportClick = {
                     uploadLauncher.launch(
@@ -148,17 +140,10 @@ fun DatabaseScreen(
                         )
                     )
                 },
-                onShowExportMenuChange = { showExportMenu = it },
-                onExportProducts = {
-                    showExportMenu = false
-                    val ts = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH-mm-ss").format(LocalDateTime.now())
-                    downloadLauncher.launch("${exportProductsBaseName}_${ts}.xlsx")
+                onExportClick = {
+                    showExportDialog = true
                 },
-                onExportFullDb = {
-                    showExportMenu = false
-                    val ts = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH-mm-ss").format(LocalDateTime.now())
-                    downloadFullDbLauncher.launch("${exportDatabaseFilenamePrefix}${ts}.xlsx")
-                }
+                exportEnabled = !exportUiState.inProgress
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -203,8 +188,30 @@ fun DatabaseScreen(
             )
         }
     }
-    if (uiState is UiState.Loading) {
-        LoadingDialog(uiState as UiState.Loading)
+
+    when {
+        exportUiState.inProgress -> {
+            LoadingDialog(
+                message = exportUiState.message,
+                progress = exportUiState.progress
+            )
+        }
+        uiState is UiState.Loading -> {
+            LoadingDialog(uiState as UiState.Loading)
+        }
+    }
+
+    if (showExportDialog) {
+        DatabaseExportDialog(
+            selection = requestedExportSelection,
+            exportInProgress = exportUiState.inProgress,
+            onSelectionChange = { requestedExportSelection = it },
+            onConfirm = {
+                showExportDialog = false
+                exportLauncher.launch(buildDatabaseExportDisplayName(requestedExportSelection))
+            },
+            onDismiss = { showExportDialog = false }
+        )
     }
 
     if (itemToEdit != null) {

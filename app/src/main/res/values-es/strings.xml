@@ -348,6 +348,10 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="import_analyzing">Analizando datos…</string>
     <string name="operation_in_progress">Operación en curso…</string>
     <string name="export_in_progress">Exportación en curso…</string>
+    <string name="export_preparing">Preparando exportación…</string>
+    <string name="export_fetching_sheet">Cargando %1$s…</string>
+    <string name="export_writing_sheet">Escribiendo %1$s…</string>
+    <string name="export_finishing">Finalizando archivo…</string>
     <string name="open_database">Abrir base de datos</string>
     <string name="share_xlsx">Compartir</string>
     <string name="share_export_message">Archivo Excel generado por %1$s.</string>
@@ -364,6 +368,20 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="import_database_full">Importar base de datos (completa)</string>
     <string name="export_products">Exportar productos</string>
     <string name="export_database_full">Exportar base de datos (completa)</string>
+    <string name="export_database_dialog_title">Exportar base de datos</string>
+    <string name="export_database_dialog_subtitle">Elige las hojas que quieres incluir en el archivo Excel.</string>
+    <string name="export_database_dialog_presets_label">Presets rápidos</string>
+    <string name="export_database_dialog_sheets_label">Hojas a exportar</string>
+    <string name="export_database_dialog_full_copy">Con todas las hojas seleccionadas obtienes una copia de seguridad Excel completa compatible con la importación completa de la base de datos.</string>
+    <string name="export_database_dialog_partial_copy">Con una selección parcial el archivo sigue siendo una exportación Excel válida, pero puede no servir para la reimportación completa de la base de datos.</string>
+    <string name="export_preset_all">Todo</string>
+    <string name="export_preset_products_only">Solo productos</string>
+    <string name="export_preset_catalog">Catálogo</string>
+    <string name="export_preset_price_history_only">Solo historial de precios</string>
+    <string name="export_sheet_products">Productos</string>
+    <string name="export_sheet_suppliers">Proveedores</string>
+    <string name="export_sheet_categories">Categorías</string>
+    <string name="export_sheet_price_history">Historial de precios</string>
 
     <!-- Prefijo de nombre de archivo para exportación completa -->
     <string name="export_database_filename_prefix">BaseDeDatos_</string>

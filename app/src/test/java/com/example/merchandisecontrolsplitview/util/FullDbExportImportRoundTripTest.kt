@@ -17,6 +17,8 @@ import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import com.example.merchandisecontrolsplitview.util.DatabaseExportConstants
+import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -95,7 +97,10 @@ class FullDbExportImportRoundTripTest {
             val sourceRepository = DefaultInventoryRepository(sourceDb)
             val expected = seedStandardRoundTripFixture(sourceDb, sourceRepository)
             val workbookFile = exportFullDatabase(app, sourceRepository, "rt-noph")
-            val workbookWithoutPriceHistory = copyWorkbookWithoutSheet(workbookFile, "PriceHistory")
+            val workbookWithoutPriceHistory = copyWorkbookWithoutSheet(
+                workbookFile,
+                DatabaseExportConstants.SHEET_PRICE_HISTORY
+            )
 
             assertWorkbookOpenable(workbookWithoutPriceHistory)
             assertEquals(
@@ -126,7 +131,7 @@ class FullDbExportImportRoundTripTest {
         val workbookFile = exportFullDatabase(spanishContext, sourceRepository, "rt-locale")
 
         XSSFWorkbook(workbookFile.inputStream()).use { workbook ->
-            val productsSheet = workbook.getSheet("Products")
+            val productsSheet = workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS)
             val barcodeHeader = productsSheet.getRow(0).getCell(0).stringCellValue
             assertEquals(spanishContext.getString(R.string.header_barcode), barcodeHeader)
             assertNotEquals("Barcode", barcodeHeader)
@@ -185,14 +190,17 @@ class FullDbExportImportRoundTripTest {
 
             assertTrue(workbookFile.length() > 0)
             XSSFWorkbook(workbookFile.inputStream()).use { workbook ->
-                assertNotNull(workbook.getSheet("Products"))
-                assertNotNull(workbook.getSheet("Suppliers"))
-                assertNotNull(workbook.getSheet("Categories"))
-                assertNotNull(workbook.getSheet("PriceHistory"))
-                assertEquals(productCount + 1, workbook.getSheet("Products").physicalNumberOfRows)
+                assertNotNull(workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS))
+                assertNotNull(workbook.getSheet(DatabaseExportConstants.SHEET_SUPPLIERS))
+                assertNotNull(workbook.getSheet(DatabaseExportConstants.SHEET_CATEGORIES))
+                assertNotNull(workbook.getSheet(DatabaseExportConstants.SHEET_PRICE_HISTORY))
+                assertEquals(
+                    productCount + 1,
+                    workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS).physicalNumberOfRows
+                )
                 assertEquals(
                     (productCount * historyRowsPerProduct) + 1,
-                    workbook.getSheet("PriceHistory").physicalNumberOfRows
+                    workbook.getSheet(DatabaseExportConstants.SHEET_PRICE_HISTORY).physicalNumberOfRows
                 )
             }
         }
@@ -218,7 +226,11 @@ class FullDbExportImportRoundTripTest {
         val file = File.createTempFile(prefix, ".xlsx", app.cacheDir)
         val viewModel = DatabaseViewModel(app, repository)
 
-        viewModel.exportFullDbToExcel(context, Uri.fromFile(file))
+        viewModel.exportDatabase(
+            context = context,
+            uri = Uri.fromFile(file),
+            selection = ExportSheetSelection.full()
+        )
         waitForCondition(timeoutMs) {
             viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error
         }
@@ -618,7 +630,7 @@ class FullDbExportImportRoundTripTest {
     private fun assertWorkbookOpenable(workbookFile: File) {
         assertTrue(workbookFile.length() > 0)
         XSSFWorkbook(workbookFile.inputStream()).use { workbook ->
-            assertNotNull(workbook.getSheet("Products"))
+            assertNotNull(workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS))
         }
     }
 

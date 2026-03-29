@@ -1,14 +1,18 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,8 +21,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -29,13 +35,14 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +52,8 @@ import androidx.core.os.ConfigurationCompat
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
+import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
+import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import java.time.LocalDateTime
@@ -60,6 +69,17 @@ private const val PRICE_HISTORY_ELLIPSIS = "\u2026"
 
 @Composable
 internal fun LoadingDialog(loading: UiState.Loading) {
+    LoadingDialog(
+        message = loading.message,
+        progress = loading.progress
+    )
+}
+
+@Composable
+internal fun LoadingDialog(
+    message: String?,
+    progress: Int?
+) {
     Dialog(
         onDismissRequest = {},
         properties = DialogProperties(
@@ -94,15 +114,15 @@ internal fun LoadingDialog(loading: UiState.Loading) {
                     )
 
                     Text(
-                        text = loading.message ?: stringResource(R.string.operation_in_progress),
+                        text = message ?: stringResource(R.string.operation_in_progress),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
 
-                    val target = ((loading.progress ?: 0).coerceIn(0, 100)) / 100f
+                    val target = ((progress ?: 0).coerceIn(0, 100)) / 100f
                     val animated by animateFloatAsState(targetValue = target, label = "importProgress")
 
-                    if (loading.progress != null) {
+                    if (progress != null) {
                         LinearProgressIndicator(
                             progress = { animated },
                             modifier = Modifier
@@ -117,6 +137,156 @@ internal fun LoadingDialog(loading: UiState.Loading) {
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun DatabaseExportDialog(
+    selection: ExportSheetSelection,
+    exportInProgress: Boolean,
+    onSelectionChange: (ExportSheetSelection) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val presets = remember {
+        listOf(
+            R.string.export_preset_all to ExportSheetSelection.full(),
+            R.string.export_preset_products_only to ExportSheetSelection.productsOnly(),
+            R.string.export_preset_catalog to ExportSheetSelection.catalogOnly(),
+            R.string.export_preset_price_history_only to ExportSheetSelection.priceHistoryOnly()
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.export_database_dialog_title))
+                Text(
+                    text = stringResource(R.string.export_database_dialog_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.export_database_dialog_presets_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        presets.forEach { (labelRes, presetSelection) ->
+                            FilterChip(
+                                selected = selection == presetSelection,
+                                onClick = { onSelectionChange(presetSelection) },
+                                label = { Text(stringResource(labelRes)) }
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider()
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.export_database_dialog_sheets_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    DatabaseExportSheet.entries.forEach { sheet ->
+                        ExportSheetSelectionRow(
+                            sheet = sheet,
+                            checked = when (sheet) {
+                                DatabaseExportSheet.PRODUCTS -> selection.products
+                                DatabaseExportSheet.SUPPLIERS -> selection.suppliers
+                                DatabaseExportSheet.CATEGORIES -> selection.categories
+                                DatabaseExportSheet.PRICE_HISTORY -> selection.priceHistory
+                            },
+                            onCheckedChange = { checked ->
+                                onSelectionChange(selection.withSheet(sheet, checked))
+                            }
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (selection.isFullExport) {
+                                R.string.export_database_dialog_full_copy
+                            } else {
+                                R.string.export_database_dialog_partial_copy
+                            }
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !selection.isEmpty && !exportInProgress,
+                onClick = onConfirm
+            ) {
+                Text(stringResource(R.string.export_file))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun ExportSheetSelectionRow(
+    sheet: DatabaseExportSheet,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onCheckedChange
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(sheet.labelRes),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = sheet.technicalName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
