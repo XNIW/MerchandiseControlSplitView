@@ -1,0 +1,413 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 7,
+    "identityHash": "470cd31ab22e597e1b3c946e54b77c48",
+    "entities": [
+      {
+        "tableName": "products",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `barcode` TEXT NOT NULL, `itemNumber` TEXT, `productName` TEXT, `secondProductName` TEXT, `purchasePrice` REAL, `retailPrice` REAL, `oldPurchasePrice` REAL, `oldRetailPrice` REAL, `supplierId` INTEGER, `categoryId` INTEGER, `stockQuantity` REAL, FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL , FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "barcode",
+            "columnName": "barcode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemNumber",
+            "columnName": "itemNumber",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "productName",
+            "columnName": "productName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "secondProductName",
+            "columnName": "secondProductName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "purchasePrice",
+            "columnName": "purchasePrice",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "retailPrice",
+            "columnName": "retailPrice",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "oldPurchasePrice",
+            "columnName": "oldPurchasePrice",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "oldRetailPrice",
+            "columnName": "oldRetailPrice",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "supplierId",
+            "columnName": "supplierId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "stockQuantity",
+            "columnName": "stockQuantity",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_products_barcode",
+            "unique": true,
+            "columnNames": [
+              "barcode"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_products_barcode` ON `${TABLE_NAME}` (`barcode`)"
+          },
+          {
+            "name": "index_products_supplierId",
+            "unique": false,
+            "columnNames": [
+              "supplierId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_products_supplierId` ON `${TABLE_NAME}` (`supplierId`)"
+          },
+          {
+            "name": "index_products_categoryId",
+            "unique": false,
+            "columnNames": [
+              "categoryId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_products_categoryId` ON `${TABLE_NAME}` (`categoryId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "suppliers",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "supplierId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "categories",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "categoryId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "suppliers",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_suppliers_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_suppliers_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "categories",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL COLLATE NOCASE)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_categories_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_categories_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "history_entries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`uid` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `timestamp` TEXT NOT NULL, `data` TEXT NOT NULL, `editable` TEXT NOT NULL, `complete` TEXT NOT NULL, `supplier` TEXT NOT NULL, `category` TEXT NOT NULL, `wasExported` INTEGER NOT NULL, `syncStatus` TEXT NOT NULL, `orderTotal` REAL NOT NULL, `paymentTotal` REAL NOT NULL, `missingItems` INTEGER NOT NULL, `totalItems` INTEGER NOT NULL, `isManualEntry` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "uid",
+            "columnName": "uid",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "data",
+            "columnName": "data",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "editable",
+            "columnName": "editable",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "complete",
+            "columnName": "complete",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "supplier",
+            "columnName": "supplier",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wasExported",
+            "columnName": "wasExported",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orderTotal",
+            "columnName": "orderTotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "paymentTotal",
+            "columnName": "paymentTotal",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "missingItems",
+            "columnName": "missingItems",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalItems",
+            "columnName": "totalItems",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isManualEntry",
+            "columnName": "isManualEntry",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "uid"
+          ]
+        }
+      },
+      {
+        "tableName": "product_prices",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `productId` INTEGER NOT NULL, `type` TEXT NOT NULL, `price` REAL NOT NULL, `effectiveAt` TEXT NOT NULL, `source` TEXT, `note` TEXT, `createdAt` TEXT NOT NULL, FOREIGN KEY(`productId`) REFERENCES `products`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "productId",
+            "columnName": "productId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "effectiveAt",
+            "columnName": "effectiveAt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_product_prices_productId_type_effectiveAt",
+            "unique": true,
+            "columnNames": [
+              "productId",
+              "type",
+              "effectiveAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_product_prices_productId_type_effectiveAt` ON `${TABLE_NAME}` (`productId`, `type`, `effectiveAt`)"
+          },
+          {
+            "name": "index_product_prices_productId_type_createdAt",
+            "unique": false,
+            "columnNames": [
+              "productId",
+              "type",
+              "createdAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_product_prices_productId_type_createdAt` ON `${TABLE_NAME}` (`productId`, `type`, `createdAt`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "products",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "productId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "viewName": "product_price_summary",
+        "createSql": "CREATE VIEW `${VIEW_NAME}` AS SELECT \n      p.id AS productId,\n      -- ultimo prezzo di acquisto\n      (SELECT price FROM product_prices pr \n         WHERE pr.productId = p.id AND pr.type = 'PURCHASE'\n         ORDER BY pr.effectiveAt DESC LIMIT 1) AS lastPurchase,\n      -- penultimo prezzo di acquisto\n      (SELECT price FROM product_prices pr \n         WHERE pr.productId = p.id AND pr.type = 'PURCHASE'\n           AND pr.effectiveAt < (SELECT MAX(effectiveAt) FROM product_prices pr3 \n                                 WHERE pr3.productId = p.id AND pr3.type = 'PURCHASE')\n         ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevPurchase,\n      -- ultimo prezzo di vendita\n      (SELECT price FROM product_prices pr \n         WHERE pr.productId = p.id AND pr.type = 'RETAIL'\n         ORDER BY pr.effectiveAt DESC LIMIT 1) AS lastRetail,\n      -- penultimo prezzo di vendita\n      (SELECT price FROM product_prices pr \n         WHERE pr.productId = p.id AND pr.type = 'RETAIL'\n           AND pr.effectiveAt < (SELECT MAX(effectiveAt) FROM product_prices pr3 \n                                 WHERE pr3.productId = p.id AND pr3.type = 'RETAIL')\n         ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevRetail\n    FROM products p"
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '470cd31ab22e597e1b3c946e54b77c48')"
+    ]
+  }
+}

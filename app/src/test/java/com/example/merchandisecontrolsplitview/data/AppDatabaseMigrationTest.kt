@@ -1,0 +1,730 @@
+package com.example.merchandisecontrolsplitview.data
+
+import android.app.Application
+import android.database.sqlite.SQLiteDatabase
+import androidx.room.Room
+import java.io.File
+import kotlinx.coroutines.test.runTest
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
+class AppDatabaseMigrationTest {
+
+    private lateinit var app: Application
+    private val openedDatabases = mutableListOf<AppDatabase>()
+    private val databaseNames = mutableSetOf<String>()
+
+    companion object {
+        private const val RELEASED_V6_IDENTITY_HASH = "c52a22bb706c042a91802612b02570a4"
+    }
+
+    @Before
+    fun setup() {
+        app = RuntimeEnvironment.getApplication()
+    }
+
+    @After
+    fun tearDown() {
+        openedDatabases.asReversed().forEach(AppDatabase::close)
+        openedDatabases.clear()
+        databaseNames.forEach(app::deleteDatabase)
+        databaseNames.clear()
+    }
+
+    @Test
+    fun `migration 5 chain preserves products and matches fresh install schema at v7`() = runTest {
+        val migratedName = "task009-migrated-v5-to-v7.db"
+        val freshName = "task009-fresh-v7-products.db"
+
+        createLegacyDatabase(migratedName, version = 5) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_unique ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_prices_lookup ON product_prices(productId,type,createdAt)")
+
+            db.execSQL("INSERT INTO suppliers(id, name) VALUES (10, 'Supplier MVC')")
+            db.execSQL("INSERT INTO categories(id, name) VALUES (20, 'Category MVC')")
+            db.execSQL(
+                """
+                INSERT INTO products(
+                    id,
+                    barcode,
+                    itemNumber,
+                    productName,
+                    secondProductName,
+                    purchasePrice,
+                    retailPrice,
+                    oldPurchasePrice,
+                    oldRetailPrice,
+                    supplierId,
+                    categoryId,
+                    stockQuantity
+                ) VALUES (
+                    1,
+                    '8050000000012',
+                    'ITM-001',
+                    'Whole Milk',
+                    'Bottle',
+                    1.50,
+                    2.50,
+                    1.20,
+                    2.20,
+                    10,
+                    20,
+                    7.0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO product_prices(id, productId, type, price, effectiveAt, source, note, createdAt)
+                VALUES
+                    (1, 1, 'PURCHASE', 1.20, '2026-03-01 10:00:00', 'IMPORT_PREV', NULL, '2026-03-01 10:00:00'),
+                    (2, 1, 'PURCHASE', 1.50, '2026-03-02 10:00:00', 'IMPORT', NULL, '2026-03-02 10:00:00'),
+                    (3, 1, 'RETAIL', 2.20, '2026-03-01 10:00:00', 'IMPORT_PREV', NULL, '2026-03-01 10:00:00'),
+                    (4, 1, 'RETAIL', 2.50, '2026-03-02 10:00:00', 'IMPORT', NULL, '2026-03-02 10:00:00')
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openMigratedDatabase(migratedName)
+        val fresh = openFreshDatabase(freshName)
+
+        assertEquals("7", querySingleValue(migrated, "PRAGMA user_version"))
+
+        val product = migrated.productDao().findByBarcode("8050000000012")
+        assertNotNull(product)
+        assertEquals("ITM-001", product!!.itemNumber)
+        assertEquals("Whole Milk", product.productName)
+        assertEquals("Bottle", product.secondProductName)
+        assertEquals(1.50, product.purchasePrice!!, 0.0001)
+        assertEquals(2.50, product.retailPrice!!, 0.0001)
+        assertEquals(1.20, product.oldPurchasePrice!!, 0.0001)
+        assertEquals(2.20, product.oldRetailPrice!!, 0.0001)
+        assertEquals(10L, product.supplierId)
+        assertEquals(20L, product.categoryId)
+        assertEquals(7.0, product.stockQuantity!!, 0.0001)
+
+        assertEquals(
+            columnShape(fresh, "products"),
+            columnShape(migrated, "products")
+        )
+        assertEquals(
+            indexInfo(fresh, "products"),
+            indexInfo(migrated, "products")
+        )
+        assertEquals(
+            indexInfo(fresh, "product_prices"),
+            indexInfo(migrated, "product_prices")
+        )
+        assertEquals(
+            viewSql(fresh, "product_price_summary"),
+            viewSql(migrated, "product_price_summary")
+        )
+
+        val viewRow = querySingleRow(
+            migrated,
+            """
+            SELECT lastPurchase, prevPurchase, lastRetail, prevRetail
+            FROM product_price_summary
+            WHERE productId = 1
+            """.trimIndent()
+        )
+        assertEquals(1.5, viewRow["lastPurchase"]!!.toDouble(), 0.0001)
+        assertEquals(1.2, viewRow["prevPurchase"]!!.toDouble(), 0.0001)
+        assertEquals(2.5, viewRow["lastRetail"]!!.toDouble(), 0.0001)
+        assertEquals(2.2, viewRow["prevRetail"]!!.toDouble(), 0.0001)
+
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+        assertTrue(viewExists(migrated, "product_price_summary"))
+    }
+
+    @Test
+    fun `migration 3 chain preserves history rows and aligns table name with fresh install at v7`() = runTest {
+        val migratedName = "task009-migrated-v3-history.db"
+        val freshName = "task009-fresh-v7-history.db"
+
+        createLegacyDatabase(migratedName, version = 3) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    stockQuantity REAL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS HistoryEntry(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+
+            db.execSQL("INSERT INTO suppliers(id, name) VALUES (11, 'History Supplier')")
+            db.execSQL(
+                """
+                INSERT INTO products(
+                    id,
+                    barcode,
+                    itemNumber,
+                    productName,
+                    secondProductName,
+                    purchasePrice,
+                    retailPrice,
+                    oldPurchasePrice,
+                    oldRetailPrice,
+                    supplierId,
+                    stockQuantity
+                ) VALUES (
+                    1,
+                    '8050000000099',
+                    'ITM-HIST',
+                    'History Product',
+                    'Legacy',
+                    3.0,
+                    4.5,
+                    2.8,
+                    4.2,
+                    11,
+                    2.0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO HistoryEntry(
+                    uid,
+                    id,
+                    timestamp,
+                    data,
+                    editable,
+                    complete,
+                    supplier,
+                    wasExported,
+                    syncStatus,
+                    orderTotal,
+                    paymentTotal,
+                    missingItems,
+                    totalItems,
+                    isManualEntry
+                ) VALUES (
+                    1,
+                    'history-1',
+                    '2026-03-01 09:30:00',
+                    '[["barcode","qty"],["8050000000099","2"]]',
+                    '[["",""],["",""]]',
+                    '[false,true]',
+                    'History Supplier',
+                    0,
+                    'NOT_ATTEMPTED',
+                    12.0,
+                    9.5,
+                    1,
+                    2,
+                    0
+                )
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openMigratedDatabase(migratedName)
+        val fresh = openFreshDatabase(freshName)
+
+        assertFalse(tableExists(migrated, "HistoryEntry"))
+        assertTrue(tableExists(migrated, "history_entries"))
+        assertEquals(
+            columnShape(fresh, "history_entries"),
+            columnShape(migrated, "history_entries")
+        )
+
+        val historyRow = querySingleRow(
+            migrated,
+            """
+            SELECT uid, id, timestamp, supplier, category, orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+            FROM history_entries
+            WHERE uid = 1
+            """.trimIndent()
+        )
+        assertEquals("1", historyRow["uid"])
+        assertEquals("history-1", historyRow["id"])
+        assertEquals("2026-03-01 09:30:00", historyRow["timestamp"])
+        assertEquals("History Supplier", historyRow["supplier"])
+        assertEquals("", historyRow["category"])
+        assertEquals(12.0, historyRow["orderTotal"]!!.toDouble(), 0.0001)
+        assertEquals(9.5, historyRow["paymentTotal"]!!.toDouble(), 0.0001)
+        assertEquals("1", historyRow["missingItems"])
+        assertEquals("2", historyRow["totalItems"])
+        assertEquals("0", historyRow["isManualEntry"])
+
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+    }
+
+    @Test
+    fun `migration 6 to 7 upgrades released v6 schema without identity hash crash`() = runTest {
+        val migratedName = "task009-migrated-v6-to-v7.db"
+        val freshName = "task009-fresh-v7-from-v6.db"
+
+        createLegacyDatabase(migratedName, version = 6) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+            db.execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+            db.execSQL("CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)")
+            db.execSQL(
+                """
+                INSERT OR REPLACE INTO room_master_table(id, identity_hash)
+                VALUES (42, '$RELEASED_V6_IDENTITY_HASH')
+                """.trimIndent()
+            )
+
+            db.execSQL("INSERT INTO suppliers(id, name) VALUES (12, 'Released Supplier')")
+            db.execSQL("INSERT INTO categories(id, name) VALUES (21, 'Released Category')")
+            db.execSQL(
+                """
+                INSERT INTO products(
+                    id,
+                    barcode,
+                    itemNumber,
+                    productName,
+                    secondProductName,
+                    purchasePrice,
+                    retailPrice,
+                    oldPurchasePrice,
+                    oldRetailPrice,
+                    supplierId,
+                    categoryId,
+                    stockQuantity
+                ) VALUES (
+                    1,
+                    '8050000000077',
+                    'ITM-V6',
+                    'Released Product',
+                    'Legacy V6',
+                    4.20,
+                    6.80,
+                    4.0,
+                    6.4,
+                    12,
+                    21,
+                    3.0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO product_prices(id, productId, type, price, effectiveAt, source, note, createdAt)
+                VALUES
+                    (1, 1, 'PURCHASE', 4.0, '2026-03-01 08:00:00', 'IMPORT_PREV', NULL, '2026-03-01 08:00:00'),
+                    (2, 1, 'PURCHASE', 4.2, '2026-03-02 08:00:00', 'IMPORT', NULL, '2026-03-02 08:00:00'),
+                    (3, 1, 'RETAIL', 6.4, '2026-03-01 08:00:00', 'IMPORT_PREV', NULL, '2026-03-01 08:00:00'),
+                    (4, 1, 'RETAIL', 6.8, '2026-03-02 08:00:00', 'IMPORT', NULL, '2026-03-02 08:00:00')
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openMigratedDatabase(migratedName)
+        val fresh = openFreshDatabase(freshName)
+
+        assertEquals("7", querySingleValue(migrated, "PRAGMA user_version"))
+
+        val product = migrated.productDao().findByBarcode("8050000000077")
+        assertNotNull(product)
+        assertEquals("ITM-V6", product!!.itemNumber)
+        assertEquals("Released Product", product.productName)
+        assertEquals("Legacy V6", product.secondProductName)
+        assertEquals(4.20, product.purchasePrice!!, 0.0001)
+        assertEquals(6.80, product.retailPrice!!, 0.0001)
+        assertEquals(4.0, product.oldPurchasePrice!!, 0.0001)
+        assertEquals(6.4, product.oldRetailPrice!!, 0.0001)
+        assertEquals(12L, product.supplierId)
+        assertEquals(21L, product.categoryId)
+        assertEquals(3.0, product.stockQuantity!!, 0.0001)
+
+        assertEquals(columnShape(fresh, "products"), columnShape(migrated, "products"))
+        assertEquals(indexInfo(fresh, "product_prices"), indexInfo(migrated, "product_prices"))
+        assertEquals(viewSql(fresh, "product_price_summary"), viewSql(migrated, "product_price_summary"))
+
+        val viewRow = querySingleRow(
+            migrated,
+            """
+            SELECT lastPurchase, prevPurchase, lastRetail, prevRetail
+            FROM product_price_summary
+            WHERE productId = 1
+            """.trimIndent()
+        )
+        assertEquals(4.2, viewRow["lastPurchase"]!!.toDouble(), 0.0001)
+        assertEquals(4.0, viewRow["prevPurchase"]!!.toDouble(), 0.0001)
+        assertEquals(6.8, viewRow["lastRetail"]!!.toDouble(), 0.0001)
+        assertEquals(6.4, viewRow["prevRetail"]!!.toDouble(), 0.0001)
+
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+        assertTrue(viewExists(migrated, "product_price_summary"))
+    }
+
+    private fun createLegacyDatabase(
+        name: String,
+        version: Int,
+        seed: (SQLiteDatabase) -> Unit
+    ) {
+        resetDatabase(name)
+        val dbFile = app.getDatabasePath(name)
+        dbFile.parentFile?.mkdirs()
+        SQLiteDatabase.openOrCreateDatabase(dbFile, null).use { db ->
+            seed(db)
+            db.version = version
+        }
+    }
+
+    private fun openMigratedDatabase(name: String): AppDatabase =
+        openDatabase(name) {
+            addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7
+            )
+        }
+
+    private fun openFreshDatabase(name: String): AppDatabase =
+        openDatabase(name, resetBeforeOpen = true) {}
+
+    private fun openDatabase(
+        name: String,
+        resetBeforeOpen: Boolean = false,
+        configure: androidx.room.RoomDatabase.Builder<AppDatabase>.() -> Unit
+    ): AppDatabase {
+        if (resetBeforeOpen) {
+            resetDatabase(name)
+        } else {
+            trackDatabase(name)
+        }
+        val db = Room.databaseBuilder(app, AppDatabase::class.java, name)
+            .allowMainThreadQueries()
+            .apply(configure)
+            .build()
+        openedDatabases += db
+        db.openHelper.writableDatabase
+        return db
+    }
+
+    private fun resetDatabase(name: String) {
+        trackDatabase(name)
+        app.deleteDatabase(name)
+        deleteSidecar("${name}-wal")
+        deleteSidecar("${name}-shm")
+    }
+
+    private fun trackDatabase(name: String) {
+        databaseNames += name
+    }
+
+    private fun deleteSidecar(fileName: String) {
+        val file = File(app.getDatabasePath(fileName).path)
+        if (file.exists()) {
+            file.delete()
+        }
+    }
+
+    private fun tableExists(db: AppDatabase, table: String): Boolean =
+        queryCount(
+            db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table'"
+        ) == 1
+
+    private fun viewExists(db: AppDatabase, view: String): Boolean =
+        queryCount(
+            db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = '$view'"
+        ) == 1
+
+    private fun viewSql(db: AppDatabase, view: String): String =
+        querySingleValue(
+            db,
+            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = '$view'"
+        )
+
+    private fun queryCount(db: AppDatabase, sql: String): Int =
+        db.openHelper.writableDatabase.query(sql).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+
+    private fun querySingleValue(db: AppDatabase, sql: String): String =
+        db.openHelper.writableDatabase.query(sql).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getString(0)
+        }
+
+    private fun querySingleRow(db: AppDatabase, sql: String): Map<String, String> =
+        db.openHelper.writableDatabase.query(sql).use { cursor ->
+            cursor.moveToFirst()
+            buildMap {
+                repeat(cursor.columnCount) { index ->
+                    put(cursor.getColumnName(index), cursor.getString(index) ?: "")
+                }
+            }
+        }
+
+    private fun tableInfo(db: AppDatabase, table: String): List<ColumnSnapshot> =
+        db.openHelper.writableDatabase.query("PRAGMA table_info(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(
+                        ColumnSnapshot(
+                            name = cursor.getString(cursor.getColumnIndexOrThrow("name")),
+                            type = cursor.getString(cursor.getColumnIndexOrThrow("type")),
+                            notNull = cursor.getInt(cursor.getColumnIndexOrThrow("notnull")) == 1,
+                            defaultValue = cursor.getString(cursor.getColumnIndexOrThrow("dflt_value")),
+                            pk = cursor.getInt(cursor.getColumnIndexOrThrow("pk"))
+                        )
+                    )
+                }
+            }
+        }
+
+    private fun columnShape(db: AppDatabase, table: String): List<ColumnShape> =
+        tableInfo(db, table)
+            .map { ColumnShape(name = it.name, type = it.type, notNull = it.notNull, pk = it.pk) }
+            .sortedBy { it.name }
+
+    private fun indexInfo(db: AppDatabase, table: String): List<IndexSnapshot> =
+        db.openHelper.writableDatabase.query("PRAGMA index_list(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val indexName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    add(
+                        IndexSnapshot(
+                            name = indexName,
+                            unique = cursor.getInt(cursor.getColumnIndexOrThrow("unique")) == 1,
+                            columns = db.openHelper.writableDatabase
+                                .query("PRAGMA index_info(`$indexName`)")
+                                .use { indexCursor ->
+                                    buildList {
+                                        while (indexCursor.moveToNext()) {
+                                            add(indexCursor.getString(indexCursor.getColumnIndexOrThrow("name")))
+                                        }
+                                    }
+                                }
+                        )
+                    )
+                }
+            }.sortedBy { it.name }
+        }
+
+    private data class ColumnSnapshot(
+        val name: String,
+        val type: String,
+        val notNull: Boolean,
+        val defaultValue: String?,
+        val pk: Int
+    )
+
+    private data class ColumnShape(
+        val name: String,
+        val type: String,
+        val notNull: Boolean,
+        val pk: Int
+    )
+
+    private data class IndexSnapshot(
+        val name: String,
+        val unique: Boolean,
+        val columns: List<String>
+    )
+}

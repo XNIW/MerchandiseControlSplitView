@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class],
     views = [ProductPriceSummary::class],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -36,6 +36,7 @@ abstract class AppDatabase : RoomDatabase() {
             db.execSQL("ALTER TABLE HistoryEntry ADD COLUMN category TEXT NOT NULL DEFAULT ''")
         } }
         val MIGRATION_4_5 = object : Migration(4, 5) { override fun migrate(db: SupportSQLiteDatabase) {
+            db.normalizeHistoryEntriesTableName()
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS product_prices(
                     id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -49,52 +50,26 @@ abstract class AppDatabase : RoomDatabase() {
                     FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
                 )
             """.trimIndent())
-            db.execSQL("""CREATE UNIQUE INDEX IF NOT EXISTS idx_prices_unique ON product_prices(productId,type,effectiveAt)""")
-            db.execSQL("""CREATE INDEX IF NOT EXISTS idx_prices_lookup ON product_prices(productId,type,createdAt)""")
+            db.execSQL("""CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)""")
+            db.execSQL("""CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)""")
         } }
 
-        // 🚀 5 → 6: rimuovi le colonne old*, ricrea indici e crea la view
+        // 5 → 6: ricrea products con FK/indici coerenti e mantiene i campi old* attesi da schema/entity
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // 1) Ricostruisci products senza le colonne old*
-                db.execSQL("""
-                    CREATE TABLE IF NOT EXISTS products_new (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                        barcode TEXT NOT NULL,
-                        itemNumber TEXT,
-                        productName TEXT,
-                        secondProductName TEXT,
-                        purchasePrice REAL,
-                        retailPrice REAL,
-                        supplierId INTEGER,
-                        categoryId INTEGER,
-                        stockQuantity REAL,
-                        FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
-                        FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
-                    )
-                """.trimIndent())
-                db.execSQL("""
-                    INSERT INTO products_new (id, barcode, itemNumber, productName, secondProductName, purchasePrice, retailPrice, supplierId, categoryId, stockQuantity)
-                    SELECT id, barcode, itemNumber, productName, secondProductName, purchasePrice, retailPrice, supplierId, categoryId, stockQuantity
-                    FROM products
-                """.trimIndent())
-                db.execSQL("DROP TABLE products")
-                db.execSQL("ALTER TABLE products_new RENAME TO products")
-                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
-                db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+                db.rebuildProductsToCurrentSchema()
+                db.normalizeProductPricesIndices()
+                db.recreateProductPriceSummaryView()
+            }
+        }
 
-                // 2) Crea (o ricrea) la view dei riassunti prezzo
-                db.execSQL("""
-                    CREATE VIEW IF NOT EXISTS product_price_summary AS
-                    SELECT 
-                      p.id AS productId,
-                      (SELECT price FROM product_prices pr WHERE pr.productId=p.id AND pr.type='PURCHASE' ORDER BY pr.effectiveAt DESC LIMIT 1) AS lastPurchase,
-                      (SELECT price FROM product_prices pr WHERE pr.productId=p.id AND pr.type='PURCHASE' AND pr.effectiveAt < (SELECT MAX(effectiveAt) FROM product_prices pr3 WHERE pr3.productId=p.id AND pr3.type='PURCHASE') ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevPurchase,
-                      (SELECT price FROM product_prices pr WHERE pr.productId=p.id AND pr.type='RETAIL' ORDER BY pr.effectiveAt DESC LIMIT 1) AS lastRetail,
-                      (SELECT price FROM product_prices pr WHERE pr.productId=p.id AND pr.type='RETAIL' AND pr.effectiveAt < (SELECT MAX(effectiveAt) FROM product_prices pr3 WHERE pr3.productId=p.id AND pr3.type='RETAIL') ORDER BY pr.effectiveAt DESC LIMIT 1) AS prevRetail
-                    FROM products p
-                """.trimIndent())
+        // 6 → 7: formalizza lo schema Room aggiornato e riallinea i DB v6 esistenti senza fallback distruttivi
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.normalizeHistoryEntriesTableName()
+                db.rebuildProductsToCurrentSchema()
+                db.normalizeProductPricesIndices()
+                db.recreateProductPriceSummaryView()
             }
         }
 
@@ -106,10 +81,106 @@ abstract class AppDatabase : RoomDatabase() {
                     "app_database"
                 )
                     .addMigrations(
-                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7
                     )
-                    .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                    .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }
             }
+
+        private fun SupportSQLiteDatabase.hasTable(name: String): Boolean =
+            query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '$name' LIMIT 1").use { cursor ->
+                cursor.moveToFirst()
+            }
+
+        private fun SupportSQLiteDatabase.hasColumn(tableName: String, columnName: String): Boolean =
+            query("PRAGMA table_info(`$tableName`)").use { cursor ->
+                while (cursor.moveToNext()) {
+                    if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == columnName) {
+                        return@use true
+                    }
+                }
+                false
+            }
+
+        private fun SupportSQLiteDatabase.normalizeHistoryEntriesTableName() {
+            if (hasTable("HistoryEntry") && !hasTable("history_entries")) {
+                execSQL("ALTER TABLE HistoryEntry RENAME TO history_entries")
+            }
+        }
+
+        private fun SupportSQLiteDatabase.rebuildProductsToCurrentSchema() {
+            val oldPurchasePriceSelect =
+                if (hasColumn("products", "oldPurchasePrice")) "oldPurchasePrice" else "NULL"
+            val oldRetailPriceSelect =
+                if (hasColumn("products", "oldRetailPrice")) "oldRetailPrice" else "NULL"
+            val categoryIdSelect =
+                if (hasColumn("products", "categoryId")) "categoryId" else "NULL"
+
+            execSQL("""
+                CREATE TABLE IF NOT EXISTS products_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL,
+                    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
+                    FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
+                )
+            """.trimIndent())
+            execSQL("""
+                INSERT INTO products_new (
+                    id,
+                    barcode,
+                    itemNumber,
+                    productName,
+                    secondProductName,
+                    purchasePrice,
+                    retailPrice,
+                    oldPurchasePrice,
+                    oldRetailPrice,
+                    supplierId,
+                    categoryId,
+                    stockQuantity
+                )
+                SELECT
+                    id,
+                    barcode,
+                    itemNumber,
+                    productName,
+                    secondProductName,
+                    purchasePrice,
+                    retailPrice,
+                    $oldPurchasePriceSelect,
+                    $oldRetailPriceSelect,
+                    supplierId,
+                    $categoryIdSelect,
+                    stockQuantity
+                FROM products
+            """.trimIndent())
+            execSQL("DROP TABLE products")
+            execSQL("ALTER TABLE products_new RENAME TO products")
+            execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+        }
+
+        private fun SupportSQLiteDatabase.normalizeProductPricesIndices() {
+            execSQL("DROP INDEX IF EXISTS idx_prices_unique")
+            execSQL("DROP INDEX IF EXISTS idx_prices_lookup")
+            execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+        }
+
+        private fun SupportSQLiteDatabase.recreateProductPriceSummaryView() {
+            execSQL("DROP VIEW IF EXISTS product_price_summary")
+            execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+        }
     }
 }

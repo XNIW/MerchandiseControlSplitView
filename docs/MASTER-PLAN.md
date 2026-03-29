@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**Tracking globale:** **TASK-021** — **Export DB** — **`DONE`** (2026-03-29: implementazione, build/lint/baseline JVM, smoke manuale finale utente **positivo**; conferma chiusura). Follow-up **TASK-007** (`DONE`). File: `docs/TASKS/TASK-021-export-full-db-memoria-streaming-ux.md`. **Nessun** task **`ACTIVE`** al momento — prossima attivazione su **conferma utente / planner**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Tracking globale:** **TASK-009** — **Migrazioni DB — safety e recovery** — **`DONE`** (2026-03-29: review planner APPROVED, tutti criteri ✅). File: `docs/TASKS/TASK-009-migrazione-database-safety-e-recovery.md`. **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -24,13 +24,13 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **Nessuno** — **TASK-021** chiuso **`DONE`** (2026-03-29) |
-| Fase task attivo     | — *(nessun `ACTIVE`; ultimo chiuso: **TASK-021**)* |
-| Milestone            | **TASK-021** **`DONE`** (export DB streaming/selettivo/UX). **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
-| Prossimo passo operativo | **Planner / utente:** scegliere e attivare il prossimo task `ACTIVE` (es. smoke **TASK-006** / **TASK-011**, o altro da backlog) — **nessuna** attivazione automatica. |
-| Ultimo aggiornamento | 2026-03-29 — **TASK-021** → **`DONE`**; smoke manuale export confermato positivo; tracking allineato al file task. |
+| Task attivo          | **Nessuno** — TASK-009 chiuso; prossimo da attivare su conferma utente |
+| Fase task attivo     | — |
+| Milestone            | **TASK-009** **`DONE`** (2026-03-29). **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
+| Prossimo passo operativo | Utente sceglie il prossimo task da attivare. Candidati: **TASK-015** (backlog), **TASK-006** / **TASK-011** (blocked, richiedono smoke manuali), **TASK-014** (backlog, dipende da TASK-002 blocked). |
+| Ultimo aggiornamento | 2026-03-29 — **TASK-009** → **`DONE`**; review planner APPROVED, tutti i criteri ✅, check rieseguiti indipendentemente. |
 
-**Promemoria antiambiguità (governance):** **Nessun** task **`ACTIVE`** dopo chiusura **TASK-021** — non confondere con **TASK-015** `BACKLOG`. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Promemoria antiambiguità (governance):** **Nessun** task **`ACTIVE`** al momento. **TASK-009** **`DONE`** (2026-03-29). **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -40,7 +40,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente **nessun** task **`ACTIVE`**: **TASK-021** è **`DONE`** (2026-03-29 — export DB). **TASK-006** e **TASK-011** restano **`BLOCKED`** (smoke manuali). **TASK-012** è **`DONE`** (2026-03-29). **Ultimo task chiuso:** **TASK-021** (2026-03-29).
+Il task attivo è sempre **uno solo**. Attualmente **nessun task `ACTIVE`**. **TASK-009** è **`DONE`** (2026-03-29). **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**. **Ultimo task chiuso:** **TASK-009** (2026-03-29).
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -61,13 +61,14 @@ Il task attivo è sempre **uno solo**. Attualmente **nessun** task **`ACTIVE`**:
 11. **TASK-012** → **`DONE`** (2026-03-29) — review planner APPROVED, conferma utente; dettaglio: `docs/TASKS/TASK-012-ci-cd-setup-base.md`.
 12. **TASK-006** → **`BLOCKED`** (2026-03-29) — execution + review tecnica OK; **smoke manuali / criteri M** non eseguiti; **non** `DONE`. Dettaglio: `docs/TASKS/TASK-006-validazione-robustezza-import-excel.md`.
 13. **TASK-021** → **`DONE`** (2026-03-29) — follow-up **TASK-007**; export unificato + smoke manuale positivo; conferma utente. Dettaglio: `docs/TASKS/TASK-021-export-full-db-memoria-streaming-ux.md`.
-14. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+14. **TASK-009** → **`DONE`** (2026-03-29) — review planner APPROVED; bump v6→v7, MIGRATION_6_7, test Robolectric MVC 3/3 verdi, build/lint OK. Dettaglio: `docs/TASKS/TASK-009-migrazione-database-safety-e-recovery.md`.
+15. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-006 / TASK-010 / TASK-011 / TASK-012 / TASK-021:** **TASK-021** è **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** backlog TASK-021 → **`DONE`**; nessun **`ACTIVE`** obbligatorio; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
+**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-021:** **TASK-009** è **`DONE`** (2026-03-29). **TASK-021** è **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** backlog TASK-009 → **`DONE`**; TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**. **Nessun task `ACTIVE`.**
 
 ---
 
@@ -315,11 +316,13 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-009 — Migrazione database — safety e recovery
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `ACTIVE` *(fase **`EXECUTION`** nel file task; un solo ACTIVE)* |
 | Priorità    | `ALTA`                                                  |
 | Area        | Database / Room                                         |
-| Dipendenze  | TASK-004                                                |
+| Dipendenze  | TASK-004 (`DONE`)                                       |
+| File task   | `docs/TASKS/TASK-009-migrazione-database-safety-e-recovery.md` |
 | Descrizione | Verificare che le migrazioni Room (v1→v6) siano sicure per tutti i percorsi di upgrade. Valutare se servono fallback, backup pre-migrazione, o test di migrazione automatizzati. |
+| Note tracking | **`ACTIVE`** / **`EXECUTION`** dal 2026-03-29 — review planning vs repo + transizione fase; **C1–C6** prima del primo commit codice; `room-testing` solo con approvazione **C6**; log in file task § **Execution**. |
 
 ### TASK-010 — History screen — filtri e performance
 | Campo       | Valore                                                  |
@@ -438,7 +441,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | Export / Database / Stabilità / UX locale DatabaseScreen |
 | Dipendenze  | TASK-007 (`DONE`), TASK-004 (`DONE`)                    |
 | Descrizione | **(1)** Stabilità: **SXSSF** / **chunked** + **cleanup** (`dispose`, temp in `finally`). **(2)** **Fetch:** repository/DAO **solo** per fogli selezionati (niente precarico inutile). **(3)** **Fogli vuoti:** export con header-only + **success** se ≥1 foglio selezionato; **no** regressione `error_no_products` se Products non selezionato. **(4)** Dialog M3: multi-selezione + **preset** + **copy** full/parziale. **(5)** Filename `Database_*.xlsx` / `Database_partial_*`. **(6)** Guard export + writer **OutputStream** JVM. **(7)** Round-trip solo **4 fogli**. **Non** TASK-015. File: `docs/TASKS/TASK-021-export-full-db-memoria-streaming-ux.md`. |
-| Note tracking | **`DONE`** 2026-03-29 — review/conferma utente; build/lint/baseline JVM + **smoke manuale export positivo** (criterio **#14**). **Nessun** `ACTIVE` residuo. |
+| Note tracking | **`DONE`** 2026-03-29 — review/conferma utente; build/lint/baseline JVM + **smoke manuale export positivo** (criterio **#14**). Successivo **`ACTIVE`:** **TASK-009** (2026-03-29). |
 
 ---
 
@@ -446,17 +449,18 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** **TASK-021** **`DONE`** (2026-03-29). **Nessun** task **`ACTIVE`** — attivazione prossimo task su conferma utente. **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** dipende da TASK-002. Ordine suggerito:
+**Focus immediato:** **TASK-009** **`ACTIVE`** / **`EXECUTION`** (2026-03-29) — migrazioni DB safety/recovery (implementazione in corso). **TASK-021** **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** dipende da TASK-002. Ordine suggerito:
 
-1. **TASK-006** — smoke manuali su device/emulator → poi **REVIEW** / conferma utente → `DONE`.
-2. **Parallelo:** quando possibile, eseguire **smoke TASK-011** per portare **TASK-011** da **`BLOCKED`** verso chiusura **`DONE`** (vedi file task).
-3. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
-4. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
-5. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-6. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
-7. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
-8. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
-9. **TASK-011 (`BLOCKED`):** completare smoke manuali e validazione M per sblocco verso **DONE** (vedi file task).
+1. **TASK-009** — `EXECUTION` → test migrazione MVC / fix schema / evidenze #1–#12 / recovery documentato → `REVIEW` → conferma utente → `DONE`.
+2. **TASK-006** — smoke manuali su device/emulator → poi **REVIEW** / conferma utente → `DONE` *(non `ACTIVE` finché TASK-009 è `ACTIVE`)*.
+3. **Parallelo (senza altro `ACTIVE`):** quando possibile, eseguire **smoke TASK-011** per portare **TASK-011** da **`BLOCKED`** verso chiusura **`DONE`** (vedi file task).
+4. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
+5. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
+6. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+7. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
+8. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
+9. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
+10. **TASK-011 (`BLOCKED`):** completare smoke manuali e validazione M per sblocco verso **DONE** (vedi file task).
 
 ### Priorità tecnica / qualità
 
@@ -464,7 +468,7 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 
 1. **TASK-001 (CRITICA):** Bootstrap governance — DONE (chiuso 2026-03-27).
 2. **TASK-004, TASK-005 (ALTA):** Test unitari — **TASK-004** **`DONE`** (2026-03-28); **TASK-005** **`DONE`** (2026-03-28); copertura utility/import analysis completata, con fix lint autorizzato applicato.
-3. **TASK-009 (ALTA):** Migrazioni database — toccano dati utente, rischio alto.
+3. **TASK-009 (ALTA):** Migrazioni database — **`ACTIVE`** / **`EXECUTION`** (2026-03-29); toccano dati utente, rischio alto — vedere file task per log e criteri.
 4. **TASK-003 (MEDIA, DONE):** Decomposizione `DatabaseScreen` — chiuso 2026-03-27. **TASK-002 (MEDIA, BLOCKED):** Decomposizione `GeneratedScreen`.
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
 6. **TASK-006 (MEDIA, BLOCKED):** Robustezza import Excel — dip. TASK-005 `DONE`; **BLOCKED** (2026-03-29) per smoke manuali; implementazione e test JVM OK.
@@ -483,6 +487,6 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 | OOM su import DB completo (XLSX / POI) | Alto | Mitigato | **TASK-017** **DONE**; monitorare hotspot RAM residui (analyzer / `getAllProducts`) su file enormi |
 | OOM / fallimenti tardivi su **export** DB (`XSSFWorkbook` + liste intere + `groupBy` PriceHistory) | Alto | Mitigato (implementazione **TASK-021** `DONE`) | **TASK-021** **`DONE`** (2026-03-29): SXSSF/chunked, cleanup, **fetch condizionale**, dialog selettivo, round-trip 4 fogli; monitorare regressioni su dataset estremi |
 | Copertura test ancora parziale sulle utility/import analysis | Medio | Mitigato (perimetro TASK-005) | **TASK-004** `DONE`; **TASK-005** `DONE` (ExcelUtils/ImportAnalyzer) |
-| Migrazioni DB non testate automaticamente   | Alto    | Possibile   | TASK-009 nel backlog                |
+| Migrazioni DB non testate automaticamente   | Alto    | Possibile   | **TASK-009** `ACTIVE`/`EXECUTION` (2026-03-29) — mitigazione in corso nel file task |
 | Nessuna CI/CD                              | Mitigato | Risolto   | **TASK-012** `DONE` (2026-03-29) — pipeline CI base operativa (`assembleDebug`/`lint`/`test`); follow-up: branch protection |
 | File grandi con molte responsabilità        | Medio   | Mitigato su DB screen | **TASK-003** `DONE` (DatabaseScreen modularizzato); **TASK-002** **BLOCKED** (`GeneratedScreen`) |
