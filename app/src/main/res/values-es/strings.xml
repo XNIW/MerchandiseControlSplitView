@@ -329,6 +329,14 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="tab_purchase">Compra</string>
     <string name="tab_retail">Venta</string>
     <string name="price_history">Historial de precios</string>
+    <string name="price_history_empty_for_tab">No hay historial de precios para %1$s.</string>
+    <string name="price_history_source_manual">Manual</string>
+    <string name="price_history_source_import">Importación</string>
+    <string name="price_history_source_import_prev">Antes de importar</string>
+    <string name="price_history_source_backfill">De la ficha</string>
+    <string name="price_history_source_sheet">Desde archivo</string>
+    <string name="price_history_source_unspecified">Sin especificar</string>
+    <string name="price_history_source_custom">Otro: %1$s</string>
     <string name="price_last">Último: %1$s</string>
     <string name="price_previous">Anterior: %1$s</string>
     <string name="import_applying_changes">Aplicando cambios…</string>

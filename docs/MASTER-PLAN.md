@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**Tracking globale — task attivo (unico):** al momento **nessun task è `ACTIVE`**. **TASK-010** — **History screen — filtri e performance** è stato chiuso in **`DONE`** il 2026-03-29 dopo execution, review completa e fix mirati. Dettaglio: `docs/TASKS/TASK-010-history-screen-filtri-e-performance.md`. Il prossimo task resta da attivare esplicitamente su richiesta utente.
+**Tracking globale — task attivo (unico):** **TASK-012** — **CI/CD — setup base** è **`ACTIVE`** con fase workflow **`PLANNING`** (2026-03-29). Dettaglio: `docs/TASKS/TASK-012-ci-cd-setup-base.md`. **TASK-011** — storico prezzi — è **`BLOCKED`** (execution + review tecnica completate; **smoke manuali / validazione M** non ancora eseguiti; **non** `DONE`). **TASK-010** è **`DONE`** (2026-03-29).
 
 ---
 
@@ -24,13 +24,13 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | Nessuno (`nessun task ACTIVE`) |
-| Fase task attivo     | — |
-| Milestone            | **TASK-010** **`DONE`** (2026-03-29 — execution + review chiuse; lite list sicura per History, fix su `currentEntryName`/Generated title e micro-UX filtro attivo). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** **`DONE`** (2026-03-28). **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
-| Prossimo passo operativo | Nessun task attivato automaticamente. Prossimo passo: scegliere esplicitamente dal backlog il task successivo da portare in `ACTIVE` (es. `TASK-015` o altro), mantenendo la regola di un solo task attivo per volta. |
-| Ultimo aggiornamento | 2026-03-29 — **TASK-010** chiuso in **`DONE`** dopo review/fix; `MASTER-PLAN` riallineato; nessun task `ACTIVE`. |
+| Task attivo          | **TASK-012** (`ACTIVE` — unico) |
+| Fase task attivo     | **PLANNING** (TASK-012 — CI/CD GitHub Actions) |
+| Milestone            | **TASK-012** **`ACTIVE`** / fase **PLANNING** (2026-03-29). **TASK-011** **`BLOCKED`** (smoke manuali pendenti; non `DONE`). **TASK-010** **`DONE`** (2026-03-29). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** **`DONE`** (2026-03-28). **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
+| Prossimo passo operativo | Approvare il Planning di **TASK-012**; poi **EXECUTION** (workflow `.github/workflows`, `assembleDebug`, `lint`, `test`). Parallelamente: quando possibile, **smoke manuali TASK-011** per sbloccare verso **DONE** (task resta `BLOCKED` finché non eseguiti). |
+| Ultimo aggiornamento | 2026-03-29 — riallineamento tracking: **TASK-011** `ACTIVE` → **`BLOCKED`** (smoke pendenti); **TASK-012** **`BACKLOG` → `ACTIVE`**, fase **PLANNING**; file task `TASK-012-ci-cd-setup-base.md` creato. |
 
-**Promemoria antiambiguità (governance):** al momento **non esiste alcun task con stato backlog `ACTIVE`**. **TASK-010** è **`DONE`**, non `ACTIVE` e non `BACKLOG`. La prossima attivazione deve essere esplicita e unica.
+**Promemoria antiambiguità (governance):** **TASK-012** è l’**unico** task con stato backlog **`ACTIVE`**. Fase workflow nel file task: **PLANNING** finché l’utente non approva **EXECUTION**. **TASK-011** è **`BLOCKED`** (non `ACTIVE`, non `DONE`). **TASK-010** è **`DONE`**. Nessun altro task deve essere `ACTIVE` in parallelo.
 
 ---
 
@@ -40,7 +40,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente **nessun task è `ACTIVE`**; l’ultimo task chiuso è **TASK-010** in **`DONE`** (2026-03-29).
+Il task attivo è sempre **uno solo**. Attualmente **TASK-012** è **`ACTIVE`** in fase **PLANNING** (dal 2026-03-29). **TASK-011** è **`BLOCKED`** (smoke manuali pendenti). L’ultimo task chiuso in precedenza in ordine di lavoro feature è **TASK-010** in **`DONE`** (2026-03-29).
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -57,13 +57,15 @@ Il task attivo è sempre **uno solo**. Attualmente **nessun task è `ACTIVE`**; 
 7. **TASK-007** → **`DONE`** (2026-03-28 — review **APPROVED**, conferma utente).
 8. **TASK-008** → **`DONE`** (2026-03-28) — review APPROVED, fix applicati.
 9. **TASK-010** → **`DONE`** (2026-03-29) — execution, review e fix chiusi; dettaglio in `docs/TASKS/TASK-010-history-screen-filtri-e-performance.md`.
-10. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+10. **TASK-011** → **`BLOCKED`** (2026-03-29) — execution + review tecnica completate; **smoke manuali / criteri M** non eseguiti; **non** `DONE`. Dettaglio: `docs/TASKS/TASK-011-storico-prezzi-visualizzazione-e-completezza.md`.
+11. **TASK-012** → **`ACTIVE`** — **unico** task attivo; fase **PLANNING** nel file task; dettaglio: `docs/TASKS/TASK-012-ci-cd-setup-base.md`.
+12. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-010:** nel backlog, **TASK-010** è **`DONE`**; nessun task deve risultare `ACTIVE` finché non viene attivato esplicitamente il prossimo. **Verifica rapida:** tabella *Stato globale* → *Task attivo* = nessuno; in backlog, riga TASK-010 → *Stato* = **`DONE`**.
+**Coerenza TASK-010 / TASK-011 / TASK-012:** **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`** (smoke pendenti). **TASK-012** è l’unico **`ACTIVE`**, fase **PLANNING**. **Verifica rapida:** *Task attivo* = **TASK-012**; backlog TASK-011 → **`BLOCKED`**; backlog TASK-012 → **`ACTIVE`**.
 
 ---
 
@@ -328,20 +330,22 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-011 — Storico prezzi — visualizzazione e completezza
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `BLOCKED`                                               |
 | Priorità    | `BASSA`                                                 |
-| Area        | Price History                                           |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Verificare completezza della visualizzazione storico prezzi nella DatabaseScreen. Valutare se serve un grafico o una vista dedicata. |
+| Area        | Price History / DatabaseScreen (UI)                     |
+| Dipendenze  | TASK-001 (`DONE`)                                       |
+| Descrizione | Verificare completezza visualizzazione storico prezzi in DatabaseScreen; rifinitura bottom sheet (source + empty + data). **File task:** `docs/TASKS/TASK-011-storico-prezzi-visualizzazione-e-completezza.md`. |
+| Note tracking | **`BLOCKED`** 2026-03-29 — execution + review tecnica completate; **smoke manuali / validazione M (M1–M15)** non eseguiti; task **sospeso**, **non** `DONE`. Sblocco: smoke poi **REVIEW/DONE** come da file task. |
 
 ### TASK-012 — CI/CD — setup base
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `ACTIVE`                                                |
 | Priorità    | `BASSA`                                                 |
 | Area        | Infrastruttura                                          |
-| Dipendenze  | TASK-004, TASK-005                                      |
-| Descrizione | Configurare una pipeline CI base (GitHub Actions): build, lint, test unitari. Solo se l'utente lo richiede. |
+| Dipendenze  | TASK-004 (`DONE`), TASK-005 (`DONE`)                    |
+| Descrizione | Pipeline CI base (**GitHub Actions**): `assembleDebug`, `lint`, `test` JVM. **File task:** `docs/TASKS/TASK-012-ci-cd-setup-base.md`. |
+| Note tracking | **Unico task `ACTIVE`**. Fase **PLANNING** (2026-03-29). **EXECUTION** solo dopo approvazione Planning nel file task. |
 
 ### TASK-013 — UX polish FilePicker + PreGenerate
 | Campo       | Valore                                                  |
@@ -428,15 +432,18 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** nessun task è attualmente **`ACTIVE`**. **TASK-010** è **`DONE`** (2026-03-29). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** `DONE` (2026-03-28). **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
+**Focus immediato:** **TASK-012** è l’unico task **`ACTIVE`** (fase **PLANNING**, dal 2026-03-29). **TASK-011** è **`BLOCKED`** (smoke manuali TASK-011 pendenti). **TASK-010** è **`DONE`** (2026-03-29). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** `DONE` (2026-03-28). **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **Prossimo step su richiesta utente:** attivare dal backlog un solo task alla volta (es. **TASK-015** o altro).
-2. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
-3. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
-4. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-5. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
-6. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
-7. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
+1. **In corso:** approvare Planning **TASK-012** → **EXECUTION** (CI GitHub Actions).
+2. **Parallelo (non blocca TASK-012):** quando possibile, eseguire **smoke TASK-011** per portare **TASK-011** da **`BLOCKED`** verso chiusura **`DONE`** (vedi file task).
+3. **Dopo chiusura TASK-012:** attivare dal backlog un solo task alla volta (es. **TASK-015** o altro).
+4. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
+5. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
+6. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+7. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
+8. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
+9. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
+10. **TASK-011 (`BLOCKED`):** completare smoke manuali e validazione M per sblocco verso **DONE** (vedi file task).
 
 ### Priorità tecnica / qualità
 
@@ -449,8 +456,8 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
 6. **TASK-006 (MEDIA, BACKLOG):** Robustezza import Excel generica — dip. TASK-005 `DONE`.
 7. **TASK-007 (MEDIA):** Round-trip export full DB — **`DONE`** (2026-03-28).
-8. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010 (BASSA):** **`DONE`** (2026-03-29) — History filtri e performance. **TASK-011 (BASSA):** miglioramenti incrementali in backlog.
-9. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
+8. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010 (BASSA):** **`DONE`** (2026-03-29) — History filtri e performance. **TASK-011 (BASSA):** **`BLOCKED`** (2026-03-29) — storico prezzi; smoke manuali pendenti.
+9. **TASK-012 (BASSA):** CI/CD — **`ACTIVE`** / fase **PLANNING** (2026-03-29); unico task attivo.
 
 ---
 
@@ -462,5 +469,5 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 | OOM su import DB completo (XLSX / POI) | Alto | Mitigato | **TASK-017** **DONE**; monitorare hotspot RAM residui (analyzer / `getAllProducts`) su file enormi |
 | Copertura test ancora parziale sulle utility/import analysis | Medio | Mitigato (perimetro TASK-005) | **TASK-004** `DONE`; **TASK-005** `DONE` (ExcelUtils/ImportAnalyzer) |
 | Migrazioni DB non testate automaticamente   | Alto    | Possibile   | TASK-009 nel backlog                |
-| Nessuna CI/CD                              | Medio   | Certo       | TASK-012, bassa priorità per ora    |
+| Nessuna CI/CD                              | Medio   | In corso    | **TASK-012** `ACTIVE` — setup pipeline in Planning/Execution    |
 | File grandi con molte responsabilità        | Medio   | Mitigato su DB screen | **TASK-003** `DONE` (DatabaseScreen modularizzato); **TASK-002** **BLOCKED** (`GeneratedScreen`) |

@@ -343,6 +343,14 @@
     <string name="tab_purchase">Acquisto</string>
     <string name="tab_retail">Vendita</string>
     <string name="price_history">Storico prezzi</string>
+    <string name="price_history_empty_for_tab">Nessuno storico prezzi per %1$s.</string>
+    <string name="price_history_source_manual">Manuale</string>
+    <string name="price_history_source_import">Importazione</string>
+    <string name="price_history_source_import_prev">Prima dell\'import</string>
+    <string name="price_history_source_backfill">Da anagrafica</string>
+    <string name="price_history_source_sheet">Da file</string>
+    <string name="price_history_source_unspecified">Non indicato</string>
+    <string name="price_history_source_custom">Altro: %1$s</string>
     <string name="price_last">Ultimo: %1$s</string>
     <string name="price_previous">Precedente: %1$s</string>
     <string name="import_applying_changes">Applicazione modifiche…</string>

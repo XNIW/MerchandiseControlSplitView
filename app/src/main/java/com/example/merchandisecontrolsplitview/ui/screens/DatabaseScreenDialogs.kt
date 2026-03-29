@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,17 +33,30 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.os.ConfigurationCompat
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
+
+private val priceHistoryStorageFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
+private const val PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH = 24
+private const val PRICE_HISTORY_ELLIPSIS = "\u2026"
 
 @Composable
 internal fun LoadingDialog(loading: UiState.Loading) {
@@ -144,6 +156,14 @@ internal fun PriceHistoryBottomSheet(
     onDismiss: () -> Unit
 ) {
     var tab by remember { mutableIntStateOf(0) }
+    val configuration = LocalConfiguration.current
+    val locale = remember(configuration) {
+        ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault()
+    }
+    val dateTimeFormatter = remember(locale) {
+        DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+            .withLocale(locale)
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -153,18 +173,103 @@ internal fun PriceHistoryBottomSheet(
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(stringResource(R.string.tab_retail)) })
             }
             val list = if (tab == 0) purchase else retail
-            LazyColumn {
-                items(list) { pt ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(pt.effectiveAt)
-                        Text(formatNumberAsRoundedString(pt.price))
+            if (list.isEmpty()) {
+                Text(
+                    text = stringResource(
+                        R.string.price_history_empty_for_tab,
+                        stringResource(if (tab == 0) R.string.tab_purchase else R.string.tab_retail)
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp)
+                )
+            } else {
+                LazyColumn {
+                    items(list) { pt ->
+                        PriceHistoryRow(
+                            pricePoint = pt,
+                            dateTimeFormatter = dateTimeFormatter
+                        )
                     }
-                    HorizontalDivider()
                 }
             }
         }
     }
+}
+
+@Composable
+private fun PriceHistoryRow(
+    pricePoint: ProductPrice,
+    dateTimeFormatter: DateTimeFormatter
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp)
+    ) {
+        Text(
+            text = formatNumberAsRoundedString(pricePoint.price),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = formatPriceHistoryDateTime(
+                rawEffectiveAt = pricePoint.effectiveAt,
+                dateTimeFormatter = dateTimeFormatter
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+        Text(
+            text = priceHistorySourceLabel(pricePoint.source),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+    HorizontalDivider()
+}
+
+private fun formatPriceHistoryDateTime(
+    rawEffectiveAt: String,
+    dateTimeFormatter: DateTimeFormatter
+): String = runCatching {
+    LocalDateTime.parse(rawEffectiveAt, priceHistoryStorageFormatter).format(dateTimeFormatter)
+}.getOrDefault(rawEffectiveAt)
+
+@Composable
+private fun priceHistorySourceLabel(source: String?): String {
+    val raw = source?.trim().orEmpty()
+    if (raw.isEmpty()) {
+        return stringResource(R.string.price_history_source_unspecified)
+    }
+
+    return when (raw) {
+        "MANUAL" -> stringResource(R.string.price_history_source_manual)
+        "IMPORT" -> stringResource(R.string.price_history_source_import)
+        "IMPORT_PREV" -> stringResource(R.string.price_history_source_import_prev)
+        "BACKFILL_CURR" -> stringResource(R.string.price_history_source_backfill)
+        "IMPORT_SHEET" -> stringResource(R.string.price_history_source_sheet)
+        else -> stringResource(
+            R.string.price_history_source_custom,
+            raw.toPriceHistoryCustomDisplaySegment()
+        )
+    }
+}
+
+private fun String.toPriceHistoryCustomDisplaySegment(): String {
+    if (length <= PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH) {
+        return this
+    }
+
+    return take(PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH) + PRICE_HISTORY_ELLIPSIS
 }

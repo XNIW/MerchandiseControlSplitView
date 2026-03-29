@@ -11,12 +11,22 @@
 | Priorità             | ALTA                       |
 | Area                 | Test / Qualità             |
 | Creato               | 2026-03-27                 |
-| Ultimo aggiornamento | 2026-03-28 (execution completata: audit wiring runtime, completamento suite test, verifiche finali) |
+| Ultimo aggiornamento | 2026-03-29 — editing Planning: separazione storico/operativo, dedup §1a, gerarchie primario/ripiego, Obbl./Opz., lint, razionale _(task resta `DONE`)_ |
 | Tracking `MASTER-PLAN` | **`DONE`** (chiusura esecutiva completata; nessun nuovo task attivato dall’executor) |
 
 **Nota tracking:** nel `MASTER-PLAN` questo task risulta chiuso in **`DONE`** dopo completamento codice + test + verifiche. Nessun nuovo task è stato attivato in questa esecuzione.
 
-**Nota cronologia:** eventuali date di planning **anteriorsi** a **`Creato` (2026-03-27)** in bozze intermedie erano incoerenti e **non** valgono come timeline del task. **2026-03-30** = factory runtime + allineamento (**Decisione 6–7**). **2026-03-31** = micro-ottimizzazioni owner unico, regola timestamp, preferenza D8 POI (**`Ultimo aggiornamento`**).
+**Nota cronologia:** eventuali date di planning **anteriorsi** a **`Creato` (2026-03-27)** in bozze intermedie erano incoerenti e **non** valgono come timeline del task. **2026-03-30** = factory runtime + allineamento (**Decisione 6**). **2026-03-31** = micro-ottimizzazioni owner unico, regola timestamp, preferenza D8 POI (**`Ultimo aggiornamento`**).
+
+### Come leggere questo file (governance)
+
+| Sezione | Natura |
+|---------|--------|
+| **Fino a «Criteri di accettazione»** | Contratto e contesto del task (ancora validi come riferimento). |
+| **§ Planning operativo (Claude)** | Piano **congelato**: era l’istruzione per Execution; **non** è planning «attivo» — il task è **`DONE`**. |
+| **§ Execution in poi** | **Storico** dell’esecuzione (audit, file toccati, evidenze, chiusura). |
+
+Per baseline regressione post-task successivi, usare **`MASTER-PLAN`** + suite effettiva in `app/src/test/...`; il Planning qui sotto documenta **perché** e **come** è stata concepita la suite, non un work item aperto.
 
 ---
 
@@ -52,7 +62,7 @@ La repo ha oggi soprattutto test template di default; **TASK-004** e **TASK-005*
 - Copertura completa di ogni ramo di `ExcelUtils` / `ImportAnalysis` → **TASK-005**.
 - Modifiche funzionali a prodotti, schema Room, API pubbliche repository **salvo** minimo indispensabile per testabilità **documentato** e approvato.
 - CI/CD → **TASK-012**.
-- Esecuzione in questo turno: **nessun** avvio **EXECUTION** finché il planning non è approvato.
+_(Voce storica pre-chiusura; il task è **`DONE`**.)_
 
 ---
 
@@ -76,7 +86,7 @@ La repo ha oggi soprattutto test template di default; **TASK-004** e **TASK-005*
 |---|----------|---------------|-------|
 | 1 | Test unitari eseguibili con `./gradlew test` (o task Gradle concordato) per le tre aree (`DefaultInventoryRepository`, `DatabaseViewModel`, `ExcelViewModel`) con almeno un caso significativo per area | B | ESEGUITO |
 | 2 | Nessuna regressione: `./gradlew assembleDebug` OK | B | ESEGUITO |
-| 3 | `./gradlew lint` senza nuovi warning introdotti dal task | S | ESEGUITO |
+| 3 | **Lint (perimetro task):** nessun **nuovo** errore o warning di lint **nei file toccati da TASK-004** (sorgenti test + eventuali sorgenti `main` modificati per testabilità). **`./gradlew lint` globale** può restare **rosso** per debito **preesistente** fuori perimetro — da documentare, non da «sistemare» allargando TASK-004 | S | ESEGUITO |
 | 4 | Documentazione in Execution: elenco test aggiunti, dipendenze test se aggiunte, limiti noti (es. parti non coperte) | S | ESEGUITO |
 
 Legenda: B=Build, S=Static, M=Manual
@@ -92,44 +102,34 @@ Legenda: B=Build, S=Static, M=Manual
 | 3 | **TASK-004** rimesso in **`BACKLOG`**; **TASK-020** diventa unico **`ACTIVE`** | Decisione utente: cleanup analisi statica prima dei test unitari | 2026-03-27 |
 | 4 | **TASK-020** → **`DONE`**; **TASK-004** → unico **`ACTIVE`** nel `MASTER-PLAN` | Sequenza post-cleanup; chiusura **TASK-020** su decisione utente (2026-03-28) | 2026-03-28 |
 | 5 | Strategia test **TASK-004** = Room in-memory reale (Robolectric) per repository + seam injection repository sui ViewModel + coroutine test / Turbine | Piano operativo vincolante sotto (2026-03-29) | 2026-03-29 |
-| 6 | Runtime **TASK-004:** creazione `DatabaseViewModel` / `ExcelViewModel` = **factory esplicita centralizzata** (`viewModel(factory = …)` o helper unico in `NavGraph`); **nessuna** dipendenza da reflection sul ctor «solo Application». Costruttore con `repository` iniettabile resta **seam per test**, non meccanismo primario di produzione. | §1a; obiettivi: stabilità runtime, una sola factory, stesso comportamento funzionale | 2026-03-30 |
-| 7 | Cronologia decisioni: **Decisione 6** (2026-03-30) **sostituisce** la formulazione precedente basata su «ctor default + `viewModel()` invariato» (date intermedie incoerenti con **Creato** 2026-03-27). | Tracking coerente con il ciclo reale del task | 2026-03-30 |
-| 8 | **Owner runtime unico** per `DatabaseViewModel` / `ExcelViewModel` = livello top `AppNavGraph()` in **`NavGraph.kt`** (già oggi, righe 29–30); **`DatabaseScreen`** perde il default `= viewModel()` (riga 47) per eliminare il path parallelo di creazione. | Evitare doppi `ViewModelStore` / scope incoerenti (§1a) | 2026-03-28 |
+| 6 | **Wiring ViewModel (fonte di verità unica = §1a):** factory esplicita + **`viewModel(factory = …)` solo nell’owner top** (`NavGraph` / `AppNavGraph`); **nessun** secondo path (`DatabaseScreen` **senza** default `viewModel()`). Ctor con `repository` = **seam test**, non creazione runtime implicita. *(Sostituisce ogni bozza precedente «ctor + viewModel() reflection».)* | Stabilità, un solo store, stesso comportamento funzionale | 2026-03-28 → 2026-03-30 |
 
 ---
 
-## Planning (Claude)
+## Planning operativo (Claude) — **congelato**
 
-### 1a) Seam ViewModel, **factory runtime** e `viewModel()` — **strategia vincolante per EXECUTION**
+> **TASK-004 è `DONE`.** Questa sezione è il **piano approvato** usato in Execution (riferimento storico + contratto di design). Non sostituisce il log in **§ Execution** per evidenze puntuali.  
+> **Fonte di verità unica — factory / owner ViewModel:** tutto ciò che riguarda creazione runtime delle due VM è definito **solo** in **§1a**; altre sezioni **rimandano a §1a** senza ripetere la strategia.
 
-**Contesto attuale (verificato sul codice 2026-03-28):** `NavGraph.kt` crea entrambe le VM al livello top di `AppNavGraph()` (righe 29–30: `val excelViewModel: ExcelViewModel = viewModel()` / `val dbViewModel: DatabaseViewModel = viewModel()`) **senza factory**, poi le passa a tutte le route. `DatabaseScreen.kt` ha ancora un default `viewModel: DatabaseViewModel = viewModel()` (riga 47) che crea un path di creazione parallelo: il fix è **rimuovere il default** (il call-site `NavGraph.kt:170` già passa `dbViewModel`). La risoluzione via **`DefaultViewModelProviderFactory`** / reflection sul costruttore `(Application)` è **esplicitamente non** la strategia primaria di questo task (fragilità e dipendenza da dettagli Kotlin/JVM).
+### 1a) Seam ViewModel, factory runtime e `viewModel()` — strategia vincolante
 
-**Strategia primaria (runtime, produzione):**
+**Contesto (2026-03-28):** `AppNavGraph()` deve restare **unico owner** delle VM; `DatabaseScreen` **non** deve avere default `viewModel()` parallelo. Reflection sul ctor «solo `Application`» **non** è strategia accettata.
 
-1. **Una sola factory centralizzata per tipo** — forma ammessa (sceglierne **una** in EXECUTION, documentare):
-   - **`companion object Factory : ViewModelProvider.Factory`** su ciascun ViewModel + `viewModel(factory = DatabaseViewModel.Factory)` / `ExcelViewModel.Factory`, **oppure**
-   - **Object / file helper** (es. `ViewModelFactories` o funzioni in `NavGraph`) che incapsula **la stessa** `ViewModelProvider.Factory` riusata ovunque.
-2. **Un solo owner reale della creazione runtime (vincolante):** le istanze `DatabaseViewModel` e `ExcelViewModel` in produzione devono essere create **in un unico luogo di wiring** — oggi già al **livello top** di `AppNavGraph()` (righe 29–30 di `NavGraph.kt`), **prima** del `NavHost`. In EXECUTION il refactor aggiunge `viewModel(factory = …)` **nello stesso punto** (o equivalente documentato). **È vietato** lasciare **`DatabaseScreen`** (o altre schermate) con capacità parallela di creare **da sole** `DatabaseViewModel` via default `viewModel()` o seconda chiamata `viewModel(factory = …)` sullo stesso tipo: se la schermata serve la VM, la riceve **come parametro** dalla composable chiamante (NavGraph / parent). Obiettivo: **nessun** doppio store, **nessun** scope incoerente, **nessun** wiring duplicato. Inventario obbligatorio in EXECUTION: `grep` su `DatabaseViewModel` / `ExcelViewModel` / `viewModel(` — dopo il refactor deve restare **una sola** coppia di creazioni (o equivalente esplicitamente documentato se una VM non serve su una route).
-3. Il corpo della factory di produzione istanzia **`DefaultInventoryRepository(AppDatabase.getDatabase(application))`** e passa al costruttore del ViewModel — **identico al comportamento odierno**, solo reso esplicito e non dipendente da reflection.
+**Runtime (produzione) — tre regole:**
 
-**Seam costruttore (test e componibilità, non primario runtime):**
+1. **Una factory per tipo** (`companion Factory` **o** helper unico in `NavGraph` che incapsula la stessa `ViewModelProvider.Factory`) — una forma sola, documentata in Execution.
+2. **Un solo punto di creazione:** `viewModel(factory = …)` **solo** nell’owner top (oggi `NavGraph` / `AppNavGraph`); le schermate ricevono la VM **solo per parametro**. Dopo refactor: `grep` su `viewModel(` / `DatabaseViewModel` / `ExcelViewModel` → **nessuna** doppia creazione.
+3. La factory di produzione costruisce **`DefaultInventoryRepository(AppDatabase.getDatabase(application))`** come oggi — comportamento invariato.
 
-- Resta ammesso un costruttore del tipo  
-  `DatabaseViewModel(app: Application, repository: InventoryRepository)` / `ExcelViewModel(application: Application, repository: InventoryRepository)`  
-  eventualmente con **default** Kotlin sul secondo argomento **solo** per comodità di compilazione o chiamate interne — ma **la creazione in app** non deve affidarvisi tramite `viewModel()` implicito: passa **sempre** dalla factory §1a.
-- **Test:** istanziare **direttamente** `DatabaseViewModel(robolectricApp, mockRepo)` / `ExcelViewModel(robolectricApp, mockRepo)` **senza** usare la factory di produzione, così da iniettare MockK / repository Room in-memory senza toccare il wiring Compose.
-
-**Produzione vs test (chiarezza):**
+**Test:** ctor diretto `ViewModel(app, mockRepo)` **senza** factory di produzione.
 
 | Contesto | Meccanismo | Repository |
 |----------|------------|------------|
-| **Produzione** | Factory + `viewModel(factory = …)` **solo** nell’**owner** top-level `AppNavGraph()` (**`NavGraph.kt`** righe 29–30); le schermate ricevono le VM **per parametro** (§1a punto 2) | `DefaultInventoryRepository(AppDatabase.getDatabase(app))` come oggi |
-| **Test unitari** | Costruttore diretto | MockK o `DefaultInventoryRepository` su DB in-memory |
-| **Comportamento funzionale** | Invariato rispetto all’attuale app | Stessa logica business nel ViewModel |
+| **Produzione** | Factory + `viewModel(factory = …)` solo owner top | `DefaultInventoryRepository(…)` |
+| **Test** | Ctor diretto | MockK **o** repository su Room in-memory |
+| **Deprecato** | Ctor default + `viewModel()` implicito (reflection) | — |
 
-**Perché questa è la scelta primaria:** nessuna dipendenza da reflection fragile; factory **esplicita** e ispezionabile; **un solo owner** di creazione (no doppi store); **una** definizione di factory riusata (no proliferazione); refactor **locale** (ViewModel + `NavGraph` + firme schermate), non architetturale.
-
-**Esplicitamente deprecato come primario per questo task:** «ctor con default + `viewModel()` invariato» affidato alla reflection AndroidX.
+*(Dettaglio narrativo originale conservato in **§ Execution** se serviva audit wiring.)*
 
 ---
 
@@ -149,21 +149,24 @@ Legenda: B=Build, S=Static, M=Manual
 
 #### `DatabaseViewModel`
 
-- **Problema attuale:** istanzia `private val repository = DefaultInventoryRepository(AppDatabase.getDatabase(app))` nel corpo del costruttore — **non** testabile in isolamento senza seam.
-- **Strategia mista (vincolata):**
-  1. **Refactor minimo obbligatorio:** come in **§1a** — parametro `repository` sul costruttore (seam test) + **factory** usata **solo** dall’**owner** **`NavGraph`**; schermate senza creazione locale della VM.
-  2. **Doppio del repository — preferenza MockK:** per la **maggior parte** dei casi della matrice §3.D usare **`mockk<InventoryRepository>(relaxed = true)`** con `coEvery { … }` / `coVerify` solo sui metodi toccati da quel test. **Non** introdurre un `FakeInventoryRepository` monolitico che implementa tutta `InventoryRepository`. Per **`SQLiteConstraintException`** su `addProduct`/`updateProduct`, usare `coEvery { addProduct(any()) } throws SQLiteConstraintException(...)` (o equivalente) senza fake.
-  3. **Test di integrazione leggera (opzionale, 1–2 casi):** Robolectric + DB in-memory + **`DefaultInventoryRepository` reale** iniettato nel ViewModel (es. `exportToExcel` con DB vuoto vs righe presenti) — **nessun** fake condiviso richiesto.
-- **Non** spostare logica business dal ViewModel al mock; il mock risponde, non decide i flussi.
+- **Seam / wiring:** **§1a** (ctor `repository` + factory solo owner; schermate senza `viewModel()` locale).
+- **Doppio `InventoryRepository` nei test:**
+
+| Livello | Scelta | Note |
+|---------|--------|------|
+| **Primario** | **MockK** `relaxed` + `coEvery` / `coVerify` mirati | Matrice §3 (D1–D14) |
+| **Ripiego** | 1–2 test con **`DefaultInventoryRepository`** + Room in-memory | Es. export con DB vuoto/popolato |
+| **Non fare** | `FakeInventoryRepository` monolitico su tutta l’interfaccia | Drift e costo di manutenzione |
+
+- Errori tipo **`SQLiteConstraintException`:** `coEvery { … throws … }` — niente fake dedicato.
+- Il mock **non** sostituisce la logica nel ViewModel.
 
 #### `ExcelViewModel`
 
-- **Problema attuale:** `AndroidViewModel`, stato **Compose Runtime** (`mutableStateListOf`, …), `repository` hardcoded come `DatabaseViewModel`.
-- **Strategia:**
-  1. **Stessa seam §1a:** costruttore con `repository` iniettabile + **factory** usata solo da **`NavGraph`** per `ExcelViewModel` (non creazione implicita via reflection nelle schermate).
-  2. **Repository in test — MockK per default, fake micro solo se utile:** per E4–E8 preferire **`mockk<InventoryRepository>(relaxed = true)`** con stub mirati (`insertHistoryEntry`, `getHistoryEntryByUid`, `updateHistoryEntry`, `deleteHistoryEntry`, `getPreviousPricesForBarcodes`, …). Usare un **fake/minimal stub** (pochi metodi, stesso file o inner class nel test) **solo** se un caso (es. stato `Flow` history) risulta più chiaro con comportamento reale minimale — **mai** una «seconda implementazione» completa di `InventoryRepository`.
-  3. **Test su JVM** con **Robolectric** (`Application`/`Context` di test) per istanziare il ViewModel e mutare stato griglia/history **senza** Compose UI test.
-  4. Per **`exportToUri`:** **non** testare stream su file reale; vedere §5 (seam su writer / `ContentResolver`) e §3 (caso minimo).
+- **Seam / wiring:** **§1a** (stesso modello di `DatabaseViewModel`).
+- **Repository in test:** tabella sopra — **MockK** primario; **stub minimo locale** (inner class / object nello stesso file test) **solo** se un `Flow`/stato risulta più leggibile — **mai** implementazione completa parallela di `InventoryRepository`.
+- **Ambiente:** Robolectric + JVM, **senza** UI test Compose.
+- **`exportToUri`:** vedi **gerarchia §3** (tabella sotto) e §5 — **nessun** file reale obbligatorio su disco host in CI.
 
 ---
 
@@ -171,74 +174,89 @@ Legenda: B=Build, S=Static, M=Manual
 
 | Componente | Uso | Motivo |
 |------------|-----|--------|
-| **Robolectric** (`@RunWith(RobolectricTestRunner::class)` o AndroidX test runner equivalente) | `Application`/`Context`, `AppDatabase` in-memory | `AndroidViewModel` e Room richiedono stack Android; resta su **JVM** (`test` source set), coerente con `./gradlew test`. |
-| **Room in-memory** (`Room.inMemoryDatabaseBuilder`) | Test `DefaultInventoryRepository` e (se usati) integrazione VM | Copre SQL, vincoli UNIQUE, `insertIfChanged`, transazioni effettive dei DAO. |
+| **Robolectric** | `Application`/`Context`, DB in-memory, **`ExcelViewModel`** | Stack Android su **JVM** (`test`); runner tipo `RobolectricTestRunner` / AndroidX equivalente; coerente con `./gradlew test`. |
+| **Room in-memory** | `DefaultInventoryRepository` e integrazione VM opzionale | SQL reale, vincoli, `insertIfChanged`, transazioni DAO. |
 | **`kotlinx-coroutines-test`** | `runTest`, **`StandardTestDispatcher`**, eventuale **`UnconfinedTestDispatcher`** per regole semplici | Tutti i metodi pubblici critici sono `suspend` o `viewModelScope.launch`. |
 | **`MainDispatcherRule`** (o equivalente) | Allineare `Dispatchers.Main` nei test dove il codice posta su Main (es. parti di `ExcelViewModel`) | Evita flaky / «Module with Main dispatcher» errors. |
 | **Turbine** | Assert su `StateFlow` / `Flow` (`uiState`, `filter`, `historyEntries` dove esposto) | API stabile per aspettative temporali sui flussi. |
-| **MockK** (preferito in Kotlin) **o** Mockito | **Strumento principale** per `InventoryRepository` nei test ViewModel (`relaxed` + `coEvery`/`coVerify` mirati) | Evita fake monolitici; vedi §1 `DatabaseViewModel` / `ExcelViewModel`. |
-| **Robolectric** (ripetuto) | `ExcelViewModel` | Accesso a `Application` senza device. |
+| **MockK** (preferito in Kotlin) **o** Mockito | `InventoryRepository` nei test ViewModel (`relaxed` + `coEvery`/`coVerify`) | Vedi tabella primario/ripiego §1 `DatabaseViewModel`. |
 
 **Esplicitamente escluso in questa fase (salvo bloccante tecnico documentato):** suite che richieda **refactor ampio** solo per testare (es. estrarre metà `DatabaseViewModel` in use case); **instrumented `androidTest`** per logica che può restare in `test` con Robolectric.
 
 ---
 
-### 3) Matrice minima obbligatoria di casi (per classe)
+### 3) Matrice minima di casi (per classe)
 
-Ogni riga = almeno **un** `@Test` (o scenario parametrizzato) da implementare in **EXECUTION**.
+**Legenda**
 
-#### `DefaultInventoryRepository` (target **≥ 8** test)
+| Tag | Significato |
+|-----|-------------|
+| **Obbl.** | Almeno un `@Test` atteso per la chiusura TASK-004 (salvo sostituzione documentata in Execution). |
+| **Opz.** | Facoltativo se già coperto da altro caso della stessa classe. |
+| **Gap OK** | Non implementare se **documentato** in §4 — **senza** allargare scope. |
 
-| # | Caso | Atteso (alto livello) |
-|---|------|------------------------|
-| R1 | `addProduct` con prezzi purchase/retail | Inserimento prodotto + righe `ProductPrice` iniziali con source `MANUAL` e timestamp **validato per pattern/ordine** (blocco «Assert su timestamp» sotto `DefaultInventoryRepository` §1) |
-| R2 | `updateProduct` con prezzi modificati | Update prodotto + nuove righe price history via `insertIfChanged` (stessa regola sui timestamp) |
-| R3 | `applyImport` con `newProducts` + `updatedProducts` con `old*` e nuovi prezzi | Persistenza prodotti + righe `IMPORT_PREV` / `IMPORT` con **ordine relativo** `prev` vs `current` e source corretti (non uguaglianza wall-clock esatta) |
-| R4 | `addSupplier` due volte stesso nome | Seconda chiamata restituisce lo **stesso** fornitore (idempotenza) |
-| R5 | `addCategory` due volte stesso nome | Idempotenza come sopra |
-| R6 | `getFilteredHistoryFlow` o `getPriceSeries` (scegliere **uno** dei due flussi) | Dati coerenti dopo inserimento history/prezzi (senza coprire tutte le date filter) |
-| R7 | `getCurrentPriceSnapshot` o `getCurrentPricesForBarcodes` (scegliere **uno**) | Snapshot/barcode map coerente dopo `addProduct`/`updateProduct` |
-| R8 | (facoltativo se già coperto da R3) `recordPriceIfChanged` / `getLastPrice` | Coerenza lettura ultimo prezzo dopo scrittura |
+**Gerarchia primario / ripiego / ultima ratio** (import file, analyzer, export):
 
-#### `DatabaseViewModel` (target **≥ 11** test)
+| Tema | **Primario** | **Ripiego** | **Ultima ratio / evitare** |
+|------|--------------|-------------|----------------------------|
+| D8 `startImportAnalysis` felice | POI in-test + `cacheDir` + `Uri` | `.xlsx` in `test/resources` | Micro-seam §5; **no** `androidTest` UI; **no** blob opaco |
+| D6–D7 `analyzeGridData` / errori | MockK repository + percorso stabile | — | `mockkObject` static **solo** se seam impraticabile **e** documentato |
+| E9 `exportToUri` | Shadow/mock `ContentResolver` + `Uri` | Lambda/writer §5 (1–2 righe) | File host CI; layer use-case |
 
-Usare **repository iniettato** tramite **costruttore diretto** nei test (§1a); **`runTest` + Turbine** su `uiState` dove applicabile. La matrice D1–D13 **non** richiede la factory di produzione.
+Ogni riga delle tabelle R/D/E = almeno un `@Test` (salvo **Opz.** / **Gap OK**).
 
-| # | Caso | Atteso |
-|---|------|--------|
-| D1 | `addProduct` success | `UiState.Success` (messaggio coerente con stringhe o pattern) |
-| D2 | `addProduct` → repository lancia `SQLiteConstraintException` | `UiState.Error` con messaggio barcode duplicato (`R.string.error_barcode_already_exists`) |
-| D3 | `updateProduct` success | `UiState.Success` |
-| D4 | `updateProduct` → constraint / errore generico | `UiState.Error` (duplicato o generico secondo ramo) |
-| D5 | `deleteProduct` success | `UiState.Success` |
-| D6 | `analyzeGridData` con repository che restituisce lista DB fissa + analyzer che non fallisce | Completamento con `UiState.Idle` e `_importAnalysisResult` valorizzato (accesso test-only o osservazione effetti se esposto) — se lo stato interno non è leggibile, documentare in Execution e usare **MockK** su repository + verifica `uiState` finale **Idle** |
-| D7 | `analyzeGridData` con eccezione da `ImportAnalyzer` / repository | `UiState.Error` (eccezione simulata via **micro-seam** §5 **oppure** `mockkObject` static solo se accettato in Execution come ultima ratio) |
-| D8 | `startImportAnalysis` **success** (percorso felice) | **Preferenza operativa vincolata:** generare nel test un workbook **minimo** con **Apache POI** (`XSSFWorkbook`: header + poche righe dati allineate a quanto si aspetta `readAndAnalyzeExcel` / import), scriverlo su file sotto **`applicationContext.cacheDir`** (o `createTempFile` equivalente in ambiente Robolectric) e passare un **`Uri` da file** (`Uri.fromFile` o API supportata dal runner). **Perché:** stesso stack POI già usato dall’app (classpath modulo `test` eredita le dipendenze `main` — verificare in Execution se necessario), **nessun blob binario** opaco in `test/resources`, struttura **leggibile nel sorgente** del test e più semplice da aggiornare se cambiano colonne attese. **Alternativa secondaria:** file `.xlsx` statico in `app/src/test/resources/` **solo** se la generazione POI risultasse più fragile del previsto (formato rifiutato dalla pipeline reale): documentare in Execution il motivo dello scarto. Se entrambi falliscono → **micro-seam** §5. |
-| D9 | `startImportAnalysis` **errore** | **Strategia vincolata:** `Uri` che non apre stream **oppure** file vuoto/invalido tale che `validateImportFile` fallisca (`error_file_empty_or_invalid`) **oppure** eccezione durante analisi → `UiState.Error` (`error_data_analysis` o stringa validazione) verificata con Turbine |
-| D10 | `exportToExcel` con `getAllProductsWithDetails()` vuoto | `UiState.Error` (`error_no_products_to_export`) |
-| D11 | `exportToExcel` con lista non vuota + `ContentResolver` che non fallisce | `UiState.Success` — usare shadow Robolectric / mock resolver |
-| D12 | `consumeUiState()` | `uiState` torna `Idle` |
-| D13 | `clearImportAnalysis()` | Stato import/analysis resettato coerentemente (verificabile via effetto su stato esposto o su prossima chiamata) |
-| D14 | `importProducts` (success) | Verifica invocazione `repository.applyImport` e scrittura log history (via `insertHistoryEntry` / `updateHistoryEntry`). Risultato finale `UiState.Success` |
+#### `DefaultInventoryRepository` (target **≥ 8** test, di cui **≥ 7 Obbl.**)
 
-*Nota D8/D9:* il percorso file reale è accoppiato a `readAndAnalyzeExcel`; ordine preferito: **workbook minimo generato in-test con POI** (§3 D8) → **file statico** in `test/resources` solo come ripiego documentato → **micro-seam** reader/analyzer (§5). Documentare in Execution quale ramo è attivo (non ampliare oltre).
+| Tag | # | Caso | Atteso (alto livello) |
+|-----|---|------|------------------------|
+| Obbl. | R1 | `addProduct` con prezzi purchase/retail | Inserimento prodotto + righe `ProductPrice` `MANUAL`; timestamp per **pattern/ordine**, non wall-clock (blocco «Assert su timestamp» sotto **`DefaultInventoryRepository`** in §1) |
+| Obbl. | R2 | `updateProduct` con prezzi modificati | Update + nuove righe price history via `insertIfChanged` |
+| Obbl. | R3 | `applyImport` con `newProducts` + `updatedProducts` con `old*` e nuovi prezzi | Righe `IMPORT_PREV` / `IMPORT`; ordine relativo `prev` vs `current`; no wall-clock esatto |
+| Obbl. | R4 | `addSupplier` due volte stesso nome | Idempotenza (stesso fornitore) |
+| Obbl. | R5 | `addCategory` due volte stesso nome | Idempotenza |
+| Obbl. | R6 | `getFilteredHistoryFlow` **oppure** `getPriceSeries` (**uno**) | Coerenza dopo insert; **non** matrice completa filtri data |
+| Obbl. | R7 | `getCurrentPriceSnapshot` **oppure** `getCurrentPricesForBarcodes` (**uno**) | Snapshot/map coerenti dopo CRUD prezzi |
+| Opz. | R8 | `recordPriceIfChanged` / `getLastPrice` | Solo se **non** già implicito in R2/R3 — altrimenti omettere e annotare |
 
-#### `ExcelViewModel` (target **≥ 10** test)
+#### `DatabaseViewModel` (target **≥ 11** test, tutti **Obbl.** salvo nota)
 
-Istanziazione nei test: **costruttore** con `Application` Robolectric + repository mock/in-memory (§1a); stessa matrice E1–E10.
+**Setup test:** ctor + repository iniettato (**§1a**); **`runTest` + Turbine** dove serve; **nessuna** factory di produzione nei test.
 
-| # | Caso | Atteso |
-|---|------|--------|
-| E1 | `toggleColumnSelection` su colonna **essenziale** (`barcode` / `productName` / `purchasePrice`) | Nessun cambio selezione |
-| E2 | `toggleColumnSelection` su colonna non essenziale | Toggle |
-| E3 | `toggleSelectAll` | Essenziali sempre `true`; le altre si comportano come «select all / deselect all» |
-| E4 | `generateFilteredWithOldPrices` | `repository.insertHistoryEntry` chiamato; stato griglia/`generated`/supplier/category/`currentEntryStatus` coerenti; callback `onResult` con `uid` > 0 |
-| E5 | `loadHistoryEntry` | `excelData`, `editableValues`, `completeStates`, `supplier`/`category`, flag `generated` allineati all’entry |
-| E6 | `updateHistoryEntry(uid)` | `repository.updateHistoryEntry` con `data`/`editable`/`complete`/`paymentTotal`/`missingItems` aggiornati |
-| E7 | `renameHistoryEntry(entry, newName, newSupplier?, newCategory?)` | `repository.updateHistoryEntry` chiamato con `id = newName`, `supplier`/`category` aggiornati se forniti |
-| E8 | `deleteHistoryEntry` | `repository.deleteHistoryEntry` invocato |
-| E9 | `exportToUri` | **Seam minima:** estrarre interfaccia interna tipo `ExcelExportSink` o parametro default `writer: (OutputStream) -> Unit` **solo** per test, oppure mock `ContentResolver` + Uri Robolectric — **nessun** file reale sul disco host nei test CI |
-| E10 | Flusso manuale (`createManualEntry` / `addManualRow`) | Verifica creazione di una `HistoryEntry` con `isManualEntry = true` e il corretto popolamento delle liste interne `excelData` / `editableValues` senza lettura file |
+| Tag | # | Caso | Atteso |
+|-----|---|------|--------|
+| Obbl. | D1 | `addProduct` success | `UiState.Success` |
+| Obbl. | D2 | `addProduct` → `SQLiteConstraintException` | `UiState.Error` barcode duplicato |
+| Obbl. | D3 | `updateProduct` success | `UiState.Success` |
+| Obbl. | D4 | `updateProduct` → errore | `UiState.Error` |
+| Obbl. | D5 | `deleteProduct` success | `UiState.Success` |
+| Obbl. | D6 | `analyzeGridData` happy path | `Idle` + risultato analysis (se interno opaco → MockK + `Idle`, documentare) |
+| Obbl. | D7 | `analyzeGridData` errore | `UiState.Error` — preferire seam §5; **`mockkObject` static** solo **ultima ratio** documentata |
+| Obbl. | D8 | `startImportAnalysis` success | Seguire **tabella gerarchica** in cima a §3: **POI in-test** → ripiego **XLSX statico** → **micro-seam** §5 |
+| Obbl. | D9 | `startImportAnalysis` errore | `Uri` invalido / validazione / eccezione analisi → `UiState.Error` (Turbine) |
+| Obbl. | D10 | `exportToExcel` DB vuoto | `UiState.Error` `error_no_products_to_export` |
+| Obbl. | D11 | `exportToExcel` con dati | `UiState.Success` — shadow/mock resolver |
+| Obbl. | D12 | `consumeUiState()` | `Idle` |
+| Obbl. | D13 | `clearImportAnalysis()` | Reset coerente |
+| Obbl. | D14 | `importProducts` success | `applyImport` + history; `Success` |
+
+**Gap OK (solo con nota §4):** happy path D8 **non** stabile dopo tentativi POI + statico → coprire **D9** + validazione e delegare parsing profondo a **TASK-005**.
+
+#### `ExcelViewModel` (target **≥ 10** test, tutti **Obbl.**)
+
+Istanziazione: **§1a** + Robolectric.
+
+| Tag | # | Caso | Atteso |
+|-----|---|------|--------|
+| Obbl. | E1 | `toggleColumnSelection` su colonna essenziale | Nessun cambio |
+| Obbl. | E2 | `toggleColumnSelection` non essenziale | Toggle |
+| Obbl. | E3 | `toggleSelectAll` | Essenziali sempre selezionate; altre all/select-none |
+| Obbl. | E4 | `generateFilteredWithOldPrices` | `insertHistoryEntry`; stato griglia/coerente; `uid` > 0 |
+| Obbl. | E5 | `loadHistoryEntry` | Stato allineato all’entry |
+| Obbl. | E6 | `updateHistoryEntry(uid)` | `updateHistoryEntry` con campi aggiornati |
+| Obbl. | E7 | `renameHistoryEntry` | `updateHistoryEntry` con nuovo nome/supplier/category |
+| Obbl. | E8 | `deleteHistoryEntry` | `deleteHistoryEntry` invocato |
+| Obbl. | E9 | `exportToUri` | **Tabella gerarchica §3** (resolver/Uri **primario**; seam §5 **ripiego**) — **no** file host CI |
+| Obbl. | E10 | `createManualEntry` / `addManualRow` | `HistoryEntry` manuale; liste interne popolate |
 
 ---
 
@@ -279,30 +297,28 @@ Istanziazione nei test: **costruttore** con `Application` Robolectric + reposito
 
 #### File di test previsti (nomi target)
 
-- `app/src/test/java/.../data/DefaultInventoryRepositoryTest.kt`
-- `app/src/test/java/.../viewmodel/DatabaseViewModelTest.kt`
-- `app/src/test/java/.../viewmodel/ExcelViewModelTest.kt`
-- **Nessun** `FakeInventoryRepository.kt` obbligatorio: **MockK** copre il grosso dei test ViewModel. Se un file stub/fake condiviso risulta comunque utile, deve essere **minimale** (solo firme/metodi referenziati dai test esistenti, niente implementazione «completa» da produzione parallela); preferire **inner class / object nel file di test** prima di un file condiviso.
+| Obbl. / Opz. | Deliverable |
+|--------------|-------------|
+| **Obbl.** | `DefaultInventoryRepositoryTest.kt`, `DatabaseViewModelTest.kt`, `ExcelViewModelTest.kt` |
+| **Opz.** | `FakeInventoryRepository.kt` **non** richiesto. Stub/fake condiviso solo se **minimale** (pochi metodi); preferire **inner class** nel file test. |
 
-#### Dipendenze test da aggiungere (in `app/build.gradle.kts` + eventuale `libs.versions.toml`)
+#### Dipendenze test (in `app/build.gradle.kts` + `libs.versions.toml`)
 
-- `testImplementation` **Robolectric** (versione compatibile AGP 9 / API 36)
-- `testImplementation` **kotlinx-coroutines-test**
-- `testImplementation` **Turbine**
-- `testImplementation` **MockK** (o Mockito + `mockito-kotlin`)
-- `testImplementation` **androidx.arch.core:core-testing** (se necessario per executor)
-- `testImplementation` **AndroidX Test** (`core`, `runner`/`rules` se richiesti da Robolectric)
+| Obbl. / Opz. | Pacchetti |
+|--------------|-----------|
+| **Obbl.** (se mancanti al momento dell’Execution) | Robolectric, `kotlinx-coroutines-test`, Turbine, MockK (o Mockito-Kotlin), `androidx.arch.core:core-testing` se serve, AndroidX Test core/runner se richiesto da Robolectric |
+| **Opz.** | Estensioni aggiuntive **solo** se necessità tecnica documentata |
 
-*Oggi presente solo `junit = "4.13.2"` in `testImplementation` (+ AndroidTest: `espresso-core`, `ext:junit`, `ui-test-junit4`). Le nuove dipendenze test vanno aggiunte sia in `gradle/libs.versions.toml` (versions + libraries) sia in `app/build.gradle.kts` (`testImplementation`).*
+*Allineamento versioni: congelare in Execution.*
 
-#### Numero minimo target (casi `@Test` conteggiati)
+#### Numero minimo target (`@Test`)
 
-| Classe | Minimo |
-|--------|--------|
-| `DefaultInventoryRepository` | **8** |
-| `DatabaseViewModel` | **11** |
-| `ExcelViewModel` | **10** |
-| **Totale** | **≥ 29** |
+| Classe | Minimo | Note |
+|--------|--------|------|
+| `DefaultInventoryRepository` | **8** | **≥ 7 Obbl.** (R1–R7); R8 **Opz.** |
+| `DatabaseViewModel` | **≥ 11** | Matrice §3 (D1–D14); conteggio effettivo in **§ Execution** |
+| `ExcelViewModel` | **10** | E1–E10 tutti **Obbl.** |
+| **Totale** | **≥ 29** | Gap D8 documentato → conteggio ridotto ammesso con **Gap OK** §4 |
 
 #### Rischi residui (post-planning)
 
@@ -310,41 +326,37 @@ Istanziazione nei test: **costruttore** con `Application` Robolectric + reposito
 - `ExcelViewModel` accoppiato a Compose Runtime: possibili warning o necessità di inizializzazione composition (se emergono, documentare; non espandere scope).
 - **`analyzeGridData` / `ImportAnalyzer`:** preferire **workbook POI in-test** (§3 D8) + **MockK** su repository; **micro-seam** §5 solo se fragile; **mockk static** su object Kotlin solo se la seam è esplicitamente respinta e documentata come ultima ratio.
 
-#### Planning «pronto per EXECUTION» (checklist)
+#### Checklist pre-Execution _(storico — completata 2026-03-28)_
 
-- [ ] Congelate le voci in **§ Decisioni tecniche ancora da congelare** (sotto).
-- [ ] **Owner unico:** `viewModel(factory = …)` **solo** in **`NavGraph`** (o unico entrypoint route documentato); **`DatabaseScreen`** (e analoghi) ricevono le VM **solo** via parametri — **nessuna** creazione parallela.
-- [ ] `./gradlew assembleDebug` OK + **smoke** navigazione sulle rotte che usano `DatabaseViewModel` / `ExcelViewModel` (nessuna regressione runtime).
-- [ ] Robolectric verificato su macchina sviluppo (`./gradlew test` verde dopo scaffold vuoto).
-- [ ] Elenco dipendenze test congelato in **Execution** (versioni).
-- [ ] Matrice §3 coperta da elenco test implementati o da gap documentati con motivazione.
+- [x] Voci tecniche congelate (vedi **§ Execution** per esito: factory + owner, D8 POI, MockK, 34 test).
+- [x] Owner unico VM; `DatabaseScreen` senza default `viewModel()` (verificato in audit Execution).
+- [x] `assembleDebug` + suite `./gradlew test` verde.
+- [x] Dipendenze test presenti (`libs` / `build.gradle.kts`).
+- [x] Matrice §3 coperta o gap §4 documentati.
 
 ---
 
-### Decisioni tecniche ancora da congelare prima della EXECUTION
+### Congelamento tecnico _(chiuso in Execution; non è un backlog aperto)_
 
-Da chiudere con evidenza (build/run o prova ctor) **prima** di scrivere la suite completa:
-
-| Decisione | Opzioni / output atteso |
-|-----------|-------------------------|
-| **Forma della factory runtime** | **Primario (TASK-004):** factory esplicita + `viewModel(factory = …)` **solo** nell’**owner** route (**`NavGraph`**). **`DatabaseScreen`:** rimozione `viewModel()` default, solo parametro. Output: forma factory + elenco file (`NavGraph`, `DatabaseScreen`, altri da grep). |
-| **Costruttore con `repository`** | Resta **seam per test** e per uso interno dalla factory; **non** è il meccanismo primario di creazione runtime via `viewModel()` implicito. Output: firma finale documentata in Execution. |
-| **Import D8: POI in-test vs XLSX statico vs micro-seam** | **Primario:** workbook **generato in test con POI** + file in `cacheDir` + `Uri`. **Ripiego:** `.xlsx` in `test/resources`. **Fallback:** micro-seam §5. Output: ramo scelto per D6–D9. |
-| **`DatabaseViewModel` tests: mock vs fake** | **Default pianificato:** **MockK** per tutti i casi §3.D salvo 1–2 integrazione con repo reale. Output: elenco test che usano mock vs DB reale. |
-| **`ExcelViewModel` tests: mock vs fake micro** | **Default pianificato:** **MockK**; fake/stub **solo** locale e minimale se un test lo rende più leggibile. Output: se esiste file fake condiviso, elenco metodi implementati (deve restare corto). |
+| Tema | Esito documentato (riferimento) |
+|------|----------------------------------|
+| Factory + owner | **§1a** + audit **§ Execution** (wiring già coerente). |
+| Ctor `repository` | Seam test; produzione via factory. |
+| D8 / import | **POI in-test** (Execution); gerarchia §3 per eventuali iterazioni future. |
+| MockK vs repo reale | MockK predominante; integrazione leggera opzionale. |
 
 ---
 
 ### Analisi (sintesi)
 
-Le tre classi dipendono da **Room** e/o **`AndroidViewModel`**: la combinazione **Robolectric + Room in-memory + coroutine test + Turbine** è la più adatta **senza** `androidTest` di massa e **senza** spostare business logic. `InventoryRepository` è già interfaccia: **in produzione** wiring via **factory** + **owner unico** (`NavGraph`); **nei test** injection diretta sul costruttore del ViewModel.
+Room + `AndroidViewModel` → stack **§2**; wiring produzione vs test → **§1a**; motivazioni condensate → **§ Razionale sintetico**.
 
 ### Piano di esecuzione (ordine)
 
 1. Aggiungere dipendenze test (Robolectric, coroutines-test, Turbine, MockK).
 2. Implementare **costruttore** con `repository` + **factory** §1a; **`NavGraph`** = unico owner `viewModel(factory = …)`; **`DatabaseScreen`** = solo parametro VM (niente creazione locale); inventario `grep` per altri siti; **smoke** navigazione + `assembleDebug`.
 3. Implementare `DefaultInventoryRepositoryTest` con DB in-memory (matrice §3.R).
-4. Implementare `DatabaseViewModelTest` con **MockK** (+ Turbine) e integrazione leggera opzionale (matrice §3.D).
+4. Implementare `DatabaseViewModelTest` con **MockK** (+ Turbine) e integrazione leggera opzionale (matrice §3).
 5. Implementare `ExcelViewModelTest` con Robolectric e **MockK** su repository (matrice §3.E).
 6. `./gradlew test` + `assembleDebug` + `lint`; log **Execution** con gap §4 se applicabile.
 
@@ -354,6 +366,16 @@ Le tre classi dipendono da **Room** e/o **`AndroidViewModel`**: la combinazione 
 - **Scope VM:** mitigato da **owner unico** §1a (NavGraph); se emergono route annidate che richiedono scope diverso, documentare in Execution (fuori dal default pianificato).
 - Accoppiamento statico `ImportAnalyzer` / `readAndAnalyzeExcel`: mitigare con gap documentati o micro-seam **solo** se necessario.
 - **Scope creep:** mitigare rispettando §3–§5 e delegando parsing a **TASK-005**.
+
+---
+
+### Razionale sintetico (perché questa strategia)
+
+1. **Niente fake repository monolitico:** `InventoryRepository` ha molte operazioni; un fake completo duplica la semantica di produzione, va in drift e costa più dei **MockK mirati** che verificano solo i metodi toccati da ogni test.
+2. **Niente instrumented UI test come spina dorsale:** la logica di repository/ViewModel è verificabile su **JVM** con Robolectric + Room in-memory; `androidTest` Compose/Espresso sarebbe più lento, più fragile in CI e **fuori perimetro** TASK-004.
+3. **Niente refactor architetturale non richiesto:** use case layer / estrazioni ampie solo per test allargano il rischio di regressioni funzionali; **seam minime** (ctor, factory, eventuale lambda §5) massimizzano testabilità con **diff piccolo**.
+4. **Robolectric + Room in-memory + MockK + coroutine test (+ Turbine):** copre `AndroidViewModel`, SQL reale, `viewModelScope`/`suspend` e `Flow` in un unico **task** `./gradlew test`, allineato al backlog e alla baseline regressione citata nel `MASTER-PLAN`.
+5. **Factory + owner unico (§1a):** evita doppi `ViewModelStore` e rende il wiring **ispezionabile** senza reflection — stesso comportamento runtime, migliore governabilità.
 
 ---
 
@@ -401,7 +423,7 @@ Le tre classi dipendono da **Room** e/o **`AndroidViewModel`**: la combinazione 
 |---|----------|----------|-------|----------|
 | 1 | Test unitari eseguibili per repository + due ViewModel | `./gradlew test` | ESEGUITO | `BUILD SUCCESSFUL`; 34 test verdi distribuiti su 3 suite |
 | 2 | Nessuna regressione build | `./gradlew assembleDebug` | ESEGUITO | `BUILD SUCCESSFUL` |
-| 3 | Nessun warning nuovo introdotto dal task | `./gradlew lint` + audit report | ESEGUITO | Report lint senza occorrenze sui file modificati da TASK-004; errori/warning residui già presenti fuori scope |
+| 3 | Nessun **nuovo** errore/warning lint **nei file toccati da TASK-004**; lint **globale** può restare rosso per debito preesistente | `./gradlew lint` + audit report | ESEGUITO | Report: nessuna issue sui file del task; residui fuori scope (es. `GeneratedScreen`, `ImportAnalysisScreen`) |
 | 4 | Documentazione execution completa | Ispezione file task | ESEGUITO | Audit, file modificati, verifiche e limiti residui riportati in questa sezione |
 
 **Incertezze:**

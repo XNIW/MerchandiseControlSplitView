@@ -331,6 +331,14 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="tab_purchase">Purchase</string>
     <string name="tab_retail">Retail</string>
     <string name="price_history">Price history</string>
+    <string name="price_history_empty_for_tab">No price history for %1$s.</string>
+    <string name="price_history_source_manual">Manual</string>
+    <string name="price_history_source_import">Import</string>
+    <string name="price_history_source_import_prev">Before import</string>
+    <string name="price_history_source_backfill">From product record</string>
+    <string name="price_history_source_sheet">From file</string>
+    <string name="price_history_source_unspecified">Unspecified</string>
+    <string name="price_history_source_custom">Other: %1$s</string>
     <string name="price_last">Last: %1$s</string>
     <string name="price_previous">Previous: %1$s</string>
     <string name="import_applying_changes">Applying changes…</string>

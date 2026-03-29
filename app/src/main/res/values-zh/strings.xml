@@ -330,6 +330,14 @@
     <string name="tab_purchase">售价</string>
     <string name="tab_retail">零售价</string>
     <string name="price_history">价格历史</string>
+    <string name="price_history_empty_for_tab">%1$s暂无价格历史。</string>
+    <string name="price_history_source_manual">手动</string>
+    <string name="price_history_source_import">导入</string>
+    <string name="price_history_source_import_prev">导入前</string>
+    <string name="price_history_source_backfill">来自商品资料</string>
+    <string name="price_history_source_sheet">来自文件</string>
+    <string name="price_history_source_unspecified">未指定</string>
+    <string name="price_history_source_custom">其他: %1$s</string>
     <string name="price_last">最新：%1$s</string>
     <string name="price_previous">上一次：%1$s</string>
     <string name="import_applying_changes">正在应用更改…</string>
