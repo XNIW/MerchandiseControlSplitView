@@ -45,6 +45,10 @@ android {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    jvmArgs("-Djdk.attach.allowAttachSelf=true")
+}
+
 dependencies {
     // BOM
     implementation(platform(libs.androidx.compose.bom))
