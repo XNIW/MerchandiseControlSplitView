@@ -100,12 +100,21 @@ fun GeneratedScreen(
     val notFoundText = stringResource(R.string.not_found)
     val noScannerResultText = stringResource(R.string.no_scanner_result)
     val fileExportedSuccessfullyText = stringResource(R.string.file_exported_successfully)
+    val exportFailedText = stringResource(R.string.error_export_generic)
+    val appNameText = stringResource(R.string.app_name)
     val shareXlsxText = stringResource(R.string.share_xlsx)
+    val shareExportMessageText = stringResource(
+        R.string.share_export_message,
+        appNameText
+    )
     val scanPromptText = stringResource(R.string.scan_prompt)
     val supplierManualText = stringResource(R.string.supplier_manual)
     val syncAnalysisStartedText = stringResource(R.string.sync_analysis_started)
     val noValidRowsToSyncText = stringResource(R.string.no_valid_rows_to_sync)
     val openDatabaseText = stringResource(R.string.open_database)
+    val exportDatabaseFilenamePrefix = stringResource(R.string.export_database_filename_prefix)
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+    val historyActionMessage by excelViewModel.historyActionMessage
 
     DisposableEffect(Unit) {
         onDispose {
@@ -286,29 +295,37 @@ fun GeneratedScreen(
     ) { uri ->
         uri?.let {
             scope.launch {
-                excelViewModel.exportToUri(context, it)
-                excelViewModel.markCurrentEntryAsExported(entryUid)
-                Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
+                try {
+                    excelViewModel.exportToUri(context, it)
+                    excelViewModel.markCurrentEntryAsExported(entryUid)
+                    Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                    Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
     fun shareXlsx() {
         scope.launch {
-            val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-            val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
-            val file = File(dir, "Database_${ts}.xlsx")
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-            excelViewModel.exportToUri(context, uri)
-            val share = Intent(Intent.ACTION_SEND).apply {
-                type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                putExtra(Intent.EXTRA_SUBJECT, "Inventario")
-                putExtra(Intent.EXTRA_TEXT, "File generato dall’app 对货")
+            try {
+                val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+                val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
+                val file = File(dir, "${exportDatabaseFilenamePrefix}${ts}.xlsx")
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                excelViewModel.exportToUri(context, uri)
+                val share = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    putExtra(Intent.EXTRA_SUBJECT, appNameText)
+                    putExtra(Intent.EXTRA_TEXT, shareExportMessageText)
+                }
+                context.startActivity(Intent.createChooser(share, shareXlsxText))
+                excelViewModel.markCurrentEntryAsExported(entryUid)
+            } catch (_: Exception) {
+                Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
             }
-            context.startActivity(Intent.createChooser(share, shareXlsxText))
-            excelViewModel.markCurrentEntryAsExported(entryUid)
         }
     }
 
@@ -453,6 +470,17 @@ fun GeneratedScreen(
                 databaseViewModel.consumeUiState()
             }
             is UiState.Idle, is UiState.Loading -> Unit
+        }
+    }
+
+    LaunchedEffect(historyActionMessage) {
+        historyActionMessage?.let { message ->
+            snackbarHostState.showSnackbar(
+                message = message,
+                withDismissAction = true,
+                duration = SnackbarDuration.Short
+            )
+            excelViewModel.consumeHistoryActionMessage()
         }
     }
 

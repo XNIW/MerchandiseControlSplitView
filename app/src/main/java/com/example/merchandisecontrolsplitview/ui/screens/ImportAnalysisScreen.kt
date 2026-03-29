@@ -48,6 +48,7 @@ fun ImportAnalysisScreen(
 ) {
     val context = LocalContext.current
     val errorFileExportedText = stringResource(R.string.error_file_exported)
+    val errorExportFailedText = stringResource(R.string.error_export_generic)
 
     val editableNewProducts = remember { importAnalysis.newProducts.map { it.copy() }.toMutableStateList() }
     val editableUpdatedProducts = remember { importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList() }
@@ -64,8 +65,9 @@ fun ImportAnalysisScreen(
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ) { uri ->
         uri?.let {
-            ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
-            Toast.makeText(context, errorFileExportedText, Toast.LENGTH_SHORT).show()
+            val exported = ErrorExporter.exportErrorsToXlsx(importAnalysis.errors, context, it)
+            val message = if (exported) errorFileExportedText else errorExportFailedText
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
         }
     }
 

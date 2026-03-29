@@ -177,6 +177,50 @@ class DatabaseViewModel(
     private val sheetCategories = "Categories"
     private val sheetPriceHistory = "PriceHistory"
 
+    private fun knownUserFacingFileMessage(context: Context, throwable: Throwable): String? {
+        val message = throwable.message?.trim().orEmpty()
+        if (message.isEmpty()) return null
+
+        val knownMessages = setOf(
+            context.getString(R.string.error_different_columns),
+            context.getString(R.string.error_incompatible_file_structure),
+            context.getString(R.string.error_file_empty_or_invalid),
+            context.getString(R.string.error_main_file_needed),
+            context.getString(R.string.error_first_file_empty_or_invalid)
+        )
+
+        return message.takeIf { it in knownMessages }
+    }
+
+    private fun analysisErrorMessage(context: Context, throwable: Throwable): String {
+        return knownUserFacingFileMessage(context, throwable)
+            ?: when (throwable) {
+                is OutOfMemoryError -> context.getString(R.string.error_file_too_large_or_complex)
+                is SecurityException, is IOException ->
+                    context.getString(R.string.error_file_access_denied)
+                else -> context.getString(R.string.error_data_analysis_generic)
+            }
+    }
+
+    private fun importErrorMessage(context: Context, throwable: Throwable): String {
+        return knownUserFacingFileMessage(context, throwable)
+            ?: when (throwable) {
+                is OutOfMemoryError -> context.getString(R.string.error_file_too_large_or_complex)
+                is SecurityException, is IOException ->
+                    context.getString(R.string.error_file_access_denied)
+                else -> context.getString(R.string.error_import_generic)
+            }
+    }
+
+    private fun exportErrorMessage(context: Context, throwable: Throwable): String {
+        return when (throwable) {
+            is OutOfMemoryError -> context.getString(R.string.error_file_too_large_or_complex)
+            is SecurityException, is IOException ->
+                context.getString(R.string.error_file_access_denied)
+            else -> context.getString(R.string.error_export_generic)
+        }
+    }
+
     fun setFilter(text: String) {
         _filter.value = text.ifBlank { null }
     }
@@ -196,8 +240,7 @@ class DatabaseViewModel(
             } catch (e: OutOfMemoryError) {
                 e.printStackTrace()
                 _importAnalysisResult.value = null
-                val errorMessage = e.message ?: "Not enough memory to analyze this file"
-                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
+                _uiState.value = UiState.Error(analysisErrorMessage(context, e))
             } catch (e: Exception) {
                 handleImportAnalysisError(context, e)
             }
@@ -225,8 +268,7 @@ class DatabaseViewModel(
             } catch (e: OutOfMemoryError) {
                 e.printStackTrace()
                 _importAnalysisResult.value = null
-                val errorMessage = e.message ?: "Not enough memory to analyze this file"
-                _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
+                _uiState.value = UiState.Error(analysisErrorMessage(context, e))
             } catch (e: Exception) {
                 handleImportAnalysisError(context, e)
             }
@@ -288,8 +330,7 @@ class DatabaseViewModel(
 
     private fun handleImportAnalysisError(context: Context, e: Exception) {
         e.printStackTrace()
-        val errorMessage = e.message ?: context.getString(R.string.unknown)
-        _uiState.value = UiState.Error(context.getString(R.string.error_data_analysis, errorMessage))
+        _uiState.value = UiState.Error(analysisErrorMessage(context, e))
     }
 
     fun clearImportAnalysis() {
@@ -342,9 +383,9 @@ class DatabaseViewModel(
                 Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS uid=$applyLogUid")
                 _uiState.value = UiState.Success(context.getString(R.string.import_success))
             } catch (e: Exception) {
-                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(context.getString(R.string.import_error, errorMessage))
-                appendHistoryLog(applyLogUid, "FAILED", "Errore durante apply: ${e.message}")
+                val userMessage = importErrorMessage(context, e)
+                _uiState.value = UiState.Error(userMessage)
+                appendHistoryLog(applyLogUid, "FAILED", userMessage)
                 Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
             } finally {
                 resetPendingImportState(clearAnalysisResult = false)
@@ -474,8 +515,7 @@ class DatabaseViewModel(
                 }
                 _uiState.value = UiState.Success(context.getString(R.string.export_success))
             } catch (e: Exception) {
-                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(context.getString(R.string.export_error, errorMessage))
+                _uiState.value = UiState.Error(exportErrorMessage(context, e))
             }
         }
     }
@@ -566,6 +606,7 @@ class DatabaseViewModel(
             }
             try {
                 context.contentResolver.openOutputStream(uri)?.use { workbook.write(it) }
+                    ?: throw IOException("Unable to open output stream for $uri")
             } catch (e: IOException) {
                 e.printStackTrace()
                 throw e
@@ -588,8 +629,7 @@ class DatabaseViewModel(
                 _importAnalysisResult.value = analysis
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
-                val msg = e.message ?: appContext.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_data_analysis, msg))
+                _uiState.value = UiState.Error(analysisErrorMessage(appContext, e))
             }
         }
     }
@@ -727,6 +767,7 @@ class DatabaseViewModel(
                         }
 
                         context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
+                            ?: throw IOException("Unable to open output stream for $uri")
                     }
                 }
 
@@ -734,12 +775,9 @@ class DatabaseViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {
-                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(
-                    context.getString(R.string.export_error, errorMessage)
-                )
+                _uiState.value = UiState.Error(exportErrorMessage(context, e))
             } catch (e: Exception) {
-                _uiState.value = UiState.Error(context.getString(R.string.export_error, e.message ?: context.getString(R.string.unknown_error)))
+                _uiState.value = UiState.Error(exportErrorMessage(context, e))
             }
         }
     }
@@ -817,23 +855,20 @@ class DatabaseViewModel(
 
             } catch (e: OutOfMemoryError) {
                 resetPendingImportState(clearAnalysisResult = true)
-                val errorMessage = e.message ?: context.getString(R.string.unknown_error)
-                _uiState.value = UiState.Error(
-                    context.getString(R.string.error_data_analysis, errorMessage)
-                )
+                val userMessage = analysisErrorMessage(context, e)
+                _uiState.value = UiState.Error(userMessage)
                 currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "FAILED", "Analisi fallita per memoria insufficiente: $errorMessage")
+                    appendHistoryLog(uid, "FAILED", userMessage)
                     Log.e("DB_IMPORT", "FULL_IMPORT OOM uid=$uid", e)
                 }
                 currentImportLogUid = null
 
             } catch (e: Exception) {
                 resetPendingImportState(clearAnalysisResult = true)
-                _uiState.value = UiState.Error(
-                    context.getString(R.string.error_data_analysis, e.message ?: context.getString(R.string.unknown_error))
-                )
+                val userMessage = analysisErrorMessage(context, e)
+                _uiState.value = UiState.Error(userMessage)
                 currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "FAILED", "Analisi fallita: ${e.message}")
+                    appendHistoryLog(uid, "FAILED", userMessage)
                     Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", e)
                 }
                 currentImportLogUid = null

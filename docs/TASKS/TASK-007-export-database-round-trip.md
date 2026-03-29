@@ -472,5 +472,5 @@ Round-trip export full DB verificato con suite JVM **FullDbExportImportRoundTrip
 
 ## Handoff
 
-- **TASK-008** (`Gestione errori e UX feedback`) è il nuovo task **ACTIVE** in **PLANNING** — vedi `docs/MASTER-PLAN.md` e `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`.
+- **TASK-008** (`Gestione errori e UX feedback`) — successore **`DONE`** (2026-03-28); vedi `docs/MASTER-PLAN.md` e `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`.
 - Per coprire il residuo **#5** in futuro: smoke manuale/emulatore export full DB + SAF + dataset realistico, oppure harness dedicato (fuori da questo task).

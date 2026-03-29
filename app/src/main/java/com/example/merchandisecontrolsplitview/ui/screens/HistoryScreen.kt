@@ -12,7 +12,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.FilterList // NUOVA ICONA
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.SyncStatus
-import com.example.merchandisecontrolsplitview.viewmodel.DateFilter // NUOVO IMPORT
+import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -37,10 +37,12 @@ import java.util.Locale
 @Composable
 fun HistoryScreen(
     historyList: List<HistoryEntry>,
+    historyActionMessage: String?,
     onSelect: (HistoryEntry) -> Unit,
     onRename: (HistoryEntry, String) -> Unit,
     onDelete: (HistoryEntry) -> Unit,
-    onSetFilter: (DateFilter) -> Unit, // <-- NUOVO: Callback per impostare il filtro
+    onHistoryActionMessageConsumed: () -> Unit,
+    onSetFilter: (DateFilter) -> Unit,
     onBack: () -> Unit
 ) {
     // Stati per i dialog di rename/delete (invariati)
@@ -50,14 +52,26 @@ fun HistoryScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var entryToDelete by remember { mutableStateOf<HistoryEntry?>(null) }
 
-    // --- NUOVA GESTIONE STATI PER FILTRI ---
     var showFilterMenu by remember { mutableStateOf(false) }
     var showDatePickerDialog by remember { mutableStateOf(false) }
     var datePickerTargetIsStart by remember { mutableStateOf(true) } // true = data inizio, false = data fine
     var customStartDate by remember { mutableStateOf<LocalDate?>(null) }
     var customEndDate by remember { mutableStateOf<LocalDate?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(historyActionMessage) {
+        historyActionMessage?.let { message ->
+            snackbarHostState.showSnackbar(
+                message = message,
+                withDismissAction = true,
+                duration = SnackbarDuration.Short
+            )
+            onHistoryActionMessageConsumed()
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.history_title)) },
@@ -66,7 +80,6 @@ fun HistoryScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
-                // --- NUOVA SEZIONE ACTIONS PER IL FILTRO ---
                 actions = {
                     Box {
                         IconButton(onClick = { showFilterMenu = true }) {

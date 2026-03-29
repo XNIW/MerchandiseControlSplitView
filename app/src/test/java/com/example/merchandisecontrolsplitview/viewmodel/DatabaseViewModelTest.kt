@@ -213,8 +213,10 @@ class DatabaseViewModelTest {
         waitForCondition { viewModel.uiState.value is UiState.Error }
 
         val state = viewModel.uiState.value
-        assertTrue(state is UiState.Error)
-        assertTrue((state as UiState.Error).message.startsWith(app.getString(R.string.error_data_analysis, "")))
+        assertEquals(
+            UiState.Error(app.getString(R.string.error_data_analysis_generic)),
+            state
+        )
     }
 
     @Test
@@ -251,9 +253,10 @@ class DatabaseViewModelTest {
         waitForCondition { viewModel.uiState.value is UiState.Error }
 
         assertNull(viewModel.importAnalysisResult.value)
-        val state = viewModel.uiState.value
-        assertTrue(state is UiState.Error)
-        assertTrue((state as UiState.Error).message.startsWith(app.getString(R.string.error_data_analysis, "")))
+        assertEquals(
+            UiState.Error(app.getString(R.string.error_file_access_denied)),
+            viewModel.uiState.value
+        )
     }
 
     @Test
@@ -313,10 +316,9 @@ class DatabaseViewModelTest {
         waitForCondition { viewModel.uiState.value is UiState.Error }
 
         val state = viewModel.uiState.value
-        assertTrue(state is UiState.Error)
         assertEquals(
-            app.getString(R.string.export_error, "heap exhausted"),
-            (state as UiState.Error).message
+            UiState.Error(app.getString(R.string.error_file_too_large_or_complex)),
+            state
         )
     }
 
@@ -393,6 +395,36 @@ class DatabaseViewModelTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `importProducts repository failure emits generic error and safe history log`() = runTest {
+        val insertedHistory = slot<HistoryEntry>()
+        val updatedHistory = slot<HistoryEntry>()
+        val pendingEntry = historyEntry().copy(uid = 91L)
+
+        coEvery { repository.insertHistoryEntry(capture(insertedHistory)) } returns 91L
+        coEvery { repository.getHistoryEntryByUid(91L) } returns pendingEntry
+        coEvery { repository.updateHistoryEntry(capture(updatedHistory)) } just runs
+        coEvery { repository.applyImport(any(), any()) } throws IllegalStateException("db offline")
+
+        viewModel.importProducts(
+            newProducts = listOf(sampleProduct(barcode = "33333333", productName = "Broken")),
+            updatedProducts = emptyList(),
+            context = app
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.uiState.value is UiState.Error }
+
+        assertEquals(
+            UiState.Error(app.getString(R.string.error_import_generic)),
+            viewModel.uiState.value
+        )
+        assertEquals("FAILED", updatedHistory.captured.data.last()[0])
+        assertEquals(
+            app.getString(R.string.error_import_generic),
+            updatedHistory.captured.data.last()[1]
+        )
     }
 
     private fun sampleProduct(

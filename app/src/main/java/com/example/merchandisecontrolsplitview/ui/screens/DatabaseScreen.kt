@@ -54,6 +54,8 @@ fun DatabaseScreen(
     val scope = rememberCoroutineScope()
     val exportProductsBaseName = stringResource(R.string.sheet_name_products)
         .replace(Regex("""[\\/:*?"<>|]"""), "_")
+    val exportDatabaseFilenamePrefix = stringResource(R.string.export_database_filename_prefix)
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
     val scanPromptText = stringResource(R.string.scan_prompt)
 
     var itemToEdit by remember { mutableStateOf<Product?>(null) }
@@ -155,7 +157,7 @@ fun DatabaseScreen(
                 onExportFullDb = {
                     showExportMenu = false
                     val ts = DateTimeFormatter.ofPattern("yyyy_MM_dd_HH-mm-ss").format(LocalDateTime.now())
-                    downloadFullDbLauncher.launch("Database_${ts}.xlsx")
+                    downloadFullDbLauncher.launch("${exportDatabaseFilenamePrefix}${ts}.xlsx")
                 }
             )
         },

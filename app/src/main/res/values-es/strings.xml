@@ -176,6 +176,8 @@
     <string name="correct_errors">Corregir</string>
     <string name="edit_update">Editar Actualización</string>
     <string name="error_file_exported">Archivo de errores exportado.</string>
+    <string name="import_error_export_sheet_name">Errores de importación</string>
+    <string name="import_error_export_column_reason">Error</string>
     <string name="collapse">Colapsar</string>
     <string name="expand">Expandir</string>
     <string name="row_prefix">Fila</string>
@@ -221,6 +223,11 @@
     <string name="error_file_empty_or_invalid">El archivo Excel está vacío o no tiene un encabezado válido.</string>
     <string name="error_no_products_to_export">No hay productos para exportar.</string>
     <string name="error_data_analysis">Error durante el análisis de datos: %1$s</string>
+    <string name="error_data_analysis_generic">No se pudo analizar el archivo seleccionado.</string>
+    <string name="error_import_generic">No se pudo completar la importación.</string>
+    <string name="error_export_generic">No se pudo completar la exportación.</string>
+    <string name="error_file_access_denied">No se pudo acceder al archivo seleccionado.</string>
+    <string name="error_file_too_large_or_complex">El archivo es demasiado grande o complejo para procesarlo.</string>
     <string name="success_product_added">Producto añadido correctamente.</string>
     <string name="error_product_added">Error al añadir el producto.</string>
     <string name="success_product_updated">Producto actualizado correctamente.</string>
@@ -327,9 +334,14 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="export_in_progress">Exportación en curso…</string>
     <string name="open_database">Abrir base de datos</string>
     <string name="share_xlsx">Compartir</string>
+    <string name="share_export_message">Archivo Excel generado por %1$s.</string>
     <string name="more_actions">Más acciones</string>
     <string name="untitled">Sin título</string>
     <string name="exported_short">Exportado</string>
+    <string name="history_entry_renamed">Archivo renombrado.</string>
+    <string name="history_entry_deleted">Archivo eliminado.</string>
+    <string name="error_history_entry_rename">No se pudo renombrar el archivo.</string>
+    <string name="error_history_entry_delete">No se pudo eliminar el archivo.</string>
 
     <!-- Menú / acciones -->
     <string name="import_products_single_sheet">Importar productos (hoja única)</string>
@@ -339,21 +351,6 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
 
     <!-- Prefijo de nombre de archivo para exportación completa -->
     <string name="export_database_filename_prefix">BaseDeDatos_</string>
-
-    <!-- Nombres de hojas -->
-    <string name="sheet_name_suppliers">Proveedores</string>
-    <string name="sheet_name_categories">Categorías</string>
-    <string name="sheet_name_price_history">HistorialPrecios</string>
-
-    <!-- Encabezados de columnas de hojas extra (canónicos para compatibilidad de importación) -->
-    <string name="excel_header_id">id</string>
-    <string name="excel_header_name">name</string>
-    <string name="excel_header_product_barcode">productBarcode</string>
-    <string name="excel_header_timestamp">timestamp</string>
-    <string name="excel_header_type">type</string>
-    <string name="excel_header_old_price">oldPrice</string>
-    <string name="excel_header_new_price">newPrice</string>
-    <string name="excel_header_source">source</string>
 
     <string name="manual_add_suffix">Añadido_Manual</string>
     <string name="supplier_manual">Manual</string>

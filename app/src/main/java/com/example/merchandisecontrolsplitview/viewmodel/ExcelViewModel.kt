@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import org.apache.poi.ss.usermodel.FillPatternType
 import org.apache.poi.ss.usermodel.IndexedColors
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -61,6 +62,7 @@ class ExcelViewModel(
     val generated = mutableStateOf(false)
     val isLoading = mutableStateOf(false)
     val loadError = mutableStateOf<String?>(null)
+    val historyActionMessage = mutableStateOf<String?>(null)
 
     val loadingProgress = mutableStateOf<Int?>(null)
 
@@ -94,6 +96,38 @@ class ExcelViewModel(
 
     private suspend fun postProgress(p: Int?) = withContext(Dispatchers.Main) {
         loadingProgress.value = p?.coerceIn(0, 100)
+    }
+
+    fun consumeHistoryActionMessage() {
+        historyActionMessage.value = null
+    }
+
+    private fun knownUserFacingFileMessage(context: Context, throwable: Throwable): String? {
+        val message = throwable.message?.trim().orEmpty()
+        if (message.isEmpty()) return null
+
+        val knownMessages = setOf(
+            context.getString(R.string.error_different_columns),
+            context.getString(R.string.error_incompatible_file_structure),
+            context.getString(R.string.error_main_file_needed),
+            context.getString(R.string.error_first_file_empty_or_invalid),
+            context.getString(R.string.error_file_empty_or_invalid)
+        )
+
+        return message.takeIf { it in knownMessages }
+    }
+
+    private fun fileLoadErrorMessage(
+        context: Context,
+        throwable: Throwable,
+        genericResId: Int
+    ): String {
+        return knownUserFacingFileMessage(context, throwable)
+            ?: when (throwable) {
+                is SecurityException, is IOException ->
+                    context.getString(R.string.error_file_access_denied)
+                else -> context.getString(genericResId)
+            }
     }
 
     // Removed repository instantiation as it is now injected via constructor
@@ -260,7 +294,11 @@ class ExcelViewModel(
                 headerTypes.addAll(headerSource)
                 initPreGenerateState()
             } catch (e: Exception) {
-                loadError.value = e.message ?: context.getString(R.string.error_unknown_file_analysis)
+                loadError.value = fileLoadErrorMessage(
+                    context,
+                    e,
+                    R.string.error_unknown_file_analysis
+                )
             } finally {
                 isLoading.value = false
                 postProgress(null) // finito
@@ -297,7 +335,11 @@ class ExcelViewModel(
                     // ... append alle tue strutture esistenti ...
                 }
             } catch (e: Exception) {
-                loadError.value = e.message ?: context.getString(R.string.error_adding_files)
+                loadError.value = fileLoadErrorMessage(
+                    context,
+                    e,
+                    R.string.error_adding_files
+                )
             } finally {
                 isLoading.value = false
                 postProgress(null)
@@ -485,20 +527,37 @@ class ExcelViewModel(
         newCategory: String? = null
     ) {
         viewModelScope.launch {
-            if (!newSupplier.isNullOrBlank()) currentSupplierName = newSupplier
-            if (!newCategory.isNullOrBlank()) currentCategoryName = newCategory
-
-            val updated = entry.copy(
-                id = newName,
-                supplier = currentSupplierName,
-                category = currentCategoryName
-            )
-            repository.updateHistoryEntry(updated)
+            try {
+                val updatedSupplier = newSupplier?.takeIf { it.isNotBlank() } ?: currentSupplierName
+                val updatedCategory = newCategory?.takeIf { it.isNotBlank() } ?: currentCategoryName
+                val updated = entry.copy(
+                    id = newName,
+                    supplier = updatedSupplier,
+                    category = updatedCategory
+                )
+                repository.updateHistoryEntry(updated)
+                currentSupplierName = updatedSupplier
+                currentCategoryName = updatedCategory
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.history_entry_renamed)
+            } catch (_: Exception) {
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.error_history_entry_rename)
+            }
         }
     }
 
     fun deleteHistoryEntry(entry: HistoryEntry) {
-        viewModelScope.launch { repository.deleteHistoryEntry(entry) }
+        viewModelScope.launch {
+            try {
+                repository.deleteHistoryEntry(entry)
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.history_entry_deleted)
+            } catch (_: Exception) {
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.error_history_entry_delete)
+            }
+        }
     }
 
     fun updateHistoryEntry(entryUid: Long) {
@@ -822,7 +881,10 @@ private fun saveExcelFileInternal(
         fillPattern = FillPatternType.SOLID_FOREGROUND
     }
 
-    val originalHeader = data.firstOrNull() ?: return
+    val originalHeader = data.firstOrNull() ?: run {
+        wb.close()
+        return
+    }
     val headerWithIndices = originalHeader.mapIndexedNotNull { index, header ->
         if (header != "complete") index to header else null
     }
@@ -924,7 +986,11 @@ private fun saveExcelFileInternal(
 
     onProgress(95)
     sheet.defaultColumnWidth = 15
-    context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
-    wb.close()
+    try {
+        context.contentResolver.openOutputStream(uri)?.use { wb.write(it) }
+            ?: throw IOException("Unable to open output stream for $uri")
+    } finally {
+        wb.close()
+    }
     onProgress(100)
 }

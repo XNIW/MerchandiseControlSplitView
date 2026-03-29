@@ -176,6 +176,8 @@
     <string name="correct_errors">纠正</string>
     <string name="edit_update">编辑更新</string>
     <string name="error_file_exported">错误文件已导出。</string>
+    <string name="import_error_export_sheet_name">导入错误</string>
+    <string name="import_error_export_column_reason">错误</string>
     <string name="collapse">收起</string>
     <string name="expand">展开</string>
     <string name="row_prefix">行</string>
@@ -221,6 +223,11 @@
     <string name="error_file_empty_or_invalid">Excel文件为空或没有有效的表头。</string>
     <string name="error_no_products_to_export">没有可导出的产品。</string>
     <string name="error_data_analysis">数据分析时出错：%1$s</string>
+    <string name="error_data_analysis_generic">无法分析所选文件。</string>
+    <string name="error_import_generic">无法完成导入。</string>
+    <string name="error_export_generic">无法完成导出。</string>
+    <string name="error_file_access_denied">无法访问所选文件。</string>
+    <string name="error_file_too_large_or_complex">该文件过大或过于复杂，无法处理。</string>
     <string name="success_product_added">产品添加成功。</string>
     <string name="error_product_added">添加产品时出错。</string>
     <string name="success_product_updated">产品更新成功。</string>
@@ -328,9 +335,14 @@
     <string name="export_in_progress">正在导出…</string>
     <string name="open_database">打开数据库</string>
     <string name="share_xlsx">分享</string>
+    <string name="share_export_message">%1$s 生成的 Excel 文件。</string>
     <string name="more_actions">更多操作</string>
     <string name="untitled">未命名</string>
     <string name="exported_short">已导出</string>
+    <string name="history_entry_renamed">文件已重命名。</string>
+    <string name="history_entry_deleted">文件已删除。</string>
+    <string name="error_history_entry_rename">无法重命名该文件。</string>
+    <string name="error_history_entry_delete">无法删除该文件。</string>
 
     <!-- 菜单 / 操作 -->
     <string name="import_products_single_sheet">导入商品（单个工作表）</string>
@@ -340,21 +352,6 @@
 
     <!-- 完整数据库导出文件名前缀 -->
     <string name="export_database_filename_prefix">数据库_</string>
-
-    <!-- 工作表名称 -->
-    <string name="sheet_name_suppliers">供应商</string>
-    <string name="sheet_name_categories">分类</string>
-    <string name="sheet_name_price_history">价格历史</string>
-
-    <!-- 额外工作表的列标题（为保持导入兼容性，这里保持英文规范） -->
-    <string name="excel_header_id">id</string>
-    <string name="excel_header_name">name</string>
-    <string name="excel_header_product_barcode">productBarcode</string>
-    <string name="excel_header_timestamp">timestamp</string>
-    <string name="excel_header_type">type</string>
-    <string name="excel_header_old_price">oldPrice</string>
-    <string name="excel_header_new_price">newPrice</string>
-    <string name="excel_header_source">source</string>
 
     <string name="manual_add_suffix">手动添加</string>
     <string name="supplier_manual">手动</string>

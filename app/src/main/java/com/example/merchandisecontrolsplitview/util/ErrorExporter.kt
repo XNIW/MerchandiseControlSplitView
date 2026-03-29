@@ -2,11 +2,15 @@ package com.example.merchandisecontrolsplitview.util
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
+import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.RowImportError
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.IOException
 
 object ErrorExporter {
+    private const val errorReasonColumnKey = "__import_error_reason__"
+    private const val tag = "ErrorExporter"
 
     /**
      * Esporta una lista di errori di importazione in un file XLSX.
@@ -19,52 +23,56 @@ object ErrorExporter {
         errors: List<RowImportError>,
         context: Context,
         fileUri: Uri
-    ) {
-        if (errors.isEmpty()) return // Non fare nulla se non ci sono errori
+    ): Boolean {
+        if (errors.isEmpty()) return false
 
-        val workbook = XSSFWorkbook()
-        val sheet = workbook.createSheet("Errori di Importazione")
+        return try {
+            XSSFWorkbook().use { workbook ->
+                val sheet = workbook.createSheet(
+                    context.getString(R.string.import_error_export_sheet_name)
+                )
 
-        try {
-            // --- 1. Creazione dell'Intestazione (Header) ---
-            // Prende le chiavi dalla mappa del primo errore per creare le colonne.
-            // Aggiunge la colonna finale "Errore".
-            val headers = errors.first().rowContent.keys.toList() + "Errore"
-            val headerRow = sheet.createRow(0)
-            headers.forEachIndexed { index, headerText ->
-                headerRow.createCell(index).setCellValue(getLocalizedHeader(context, headerText))
-            }
-
-            // --- 2. Scrittura delle Righe di Errore ---
-            errors.forEachIndexed { rowIndex, error ->
-                val dataRow = sheet.createRow(rowIndex + 1)
-                val rowDataMap = error.rowContent
-
-                // Scrive i dati di ogni colonna in base all'header
-                headers.forEachIndexed { colIndex, headerKey ->
-                    if (headerKey != "Errore") {
-                        val cellValue = rowDataMap[headerKey] ?: ""
-                        dataRow.createCell(colIndex).setCellValue(cellValue)
+                val headers = errors.first().rowContent.keys.toList() + errorReasonColumnKey
+                val headerRow = sheet.createRow(0)
+                headers.forEachIndexed { index, headerKey ->
+                    val headerText = if (headerKey == errorReasonColumnKey) {
+                        context.getString(R.string.import_error_export_column_reason)
+                    } else {
+                        getLocalizedHeader(context, headerKey)
                     }
+                    headerRow.createCell(index).setCellValue(headerText)
                 }
-                val reasonText = context.getString(error.errorReasonResId, *error.formatArgs.toTypedArray())
 
-                // Aggiunge il motivo dell'errore (ora correttamente recuperato) nell'ultima colonna.
-                dataRow.createCell(headers.size - 1).setCellValue(reasonText)
+                errors.forEachIndexed { rowIndex, error ->
+                    val dataRow = sheet.createRow(rowIndex + 1)
+                    val rowDataMap = error.rowContent
+
+                    headers.forEachIndexed { colIndex, headerKey ->
+                        if (headerKey != errorReasonColumnKey) {
+                            val cellValue = rowDataMap[headerKey] ?: ""
+                            dataRow.createCell(colIndex).setCellValue(cellValue)
+                        }
+                    }
+
+                    val reasonText = context.getString(
+                        error.errorReasonResId,
+                        *error.formatArgs.toTypedArray()
+                    )
+                    dataRow.createCell(headers.size - 1).setCellValue(reasonText)
+                }
+
+                sheet.defaultColumnWidth = 15
+                context.contentResolver.openOutputStream(fileUri)?.use { outputStream ->
+                    workbook.write(outputStream)
+                } ?: throw IOException("Unable to open output stream for $fileUri")
             }
-
-            // --- 3. Adatta la larghezza delle colonne al contenuto ---
-            sheet.defaultColumnWidth = 15
-
-            // --- 4. Scrittura del file ---
-            context.contentResolver.openOutputStream(fileUri)?.use { outputStream ->
-                workbook.write(outputStream)
-            }
+            true
         } catch (e: IOException) {
-            e.printStackTrace()
-            // Gestisci l'errore, magari con un Toast
-        } finally {
-            workbook.close()
+            Log.e(tag, "Failed to export import errors", e)
+            false
+        } catch (e: SecurityException) {
+            Log.e(tag, "Missing permission while exporting import errors", e)
+            false
         }
     }
 }

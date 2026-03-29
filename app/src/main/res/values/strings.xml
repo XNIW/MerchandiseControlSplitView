@@ -175,6 +175,8 @@
     <string name="correct_errors">Correggi</string>
     <string name="edit_update">Modifica Aggiornamento</string>
     <string name="error_file_exported">File errori esportato.</string>
+    <string name="import_error_export_sheet_name">Errori importazione</string>
+    <string name="import_error_export_column_reason">Errore</string>
     <string name="collapse">Comprimi</string>
     <string name="expand">Espandi</string>
     <string name="row_prefix">Riga</string>
@@ -227,6 +229,11 @@
     <string name="error_file_empty_or_invalid">Il file Excel è vuoto o non ha un\'intestazione valida.</string>
     <string name="error_no_products_to_export">Nessun prodotto da esportare.</string>
     <string name="error_data_analysis">Errore durante l\'analisi dei dati: %1$s</string>
+    <string name="error_data_analysis_generic">Impossibile analizzare il file selezionato.</string>
+    <string name="error_import_generic">Impossibile completare l\'importazione.</string>
+    <string name="error_export_generic">Impossibile completare l\'esportazione.</string>
+    <string name="error_file_access_denied">Impossibile accedere al file selezionato.</string>
+    <string name="error_file_too_large_or_complex">Il file è troppo grande o complesso da elaborare.</string>
 
     <string name="success_product_added">Prodotto aggiunto con successo.</string>
     <string name="error_product_added">Errore durante l\'aggiunta del prodotto.</string>
@@ -341,9 +348,14 @@
     <string name="export_in_progress">Esportazione in corso…</string>
     <string name="open_database">Apri database</string>
     <string name="share_xlsx">Condividi</string>
+    <string name="share_export_message">File Excel generato da %1$s.</string>
     <string name="more_actions">Altre azioni</string>
     <string name="untitled">Senza titolo</string>
     <string name="exported_short">Esportato</string>
+    <string name="history_entry_renamed">File rinominato.</string>
+    <string name="history_entry_deleted">File eliminato.</string>
+    <string name="error_history_entry_rename">Impossibile rinominare il file.</string>
+    <string name="error_history_entry_delete">Impossibile eliminare il file.</string>
 
     <!-- Menu / azioni -->
     <string name="import_products_single_sheet">Importa prodotti (foglio singolo)</string>
@@ -353,21 +365,6 @@
 
     <!-- Prefisso nome file export completo -->
     <string name="export_database_filename_prefix">Database_</string>
-
-    <!-- Nomi fogli -->
-    <string name="sheet_name_suppliers">Fornitori</string>
-    <string name="sheet_name_categories">Categorie</string>
-    <string name="sheet_name_price_history">StoricoPrezzi</string>
-
-    <!-- Intestazioni colonne fogli extra (canoniche per compatibilità import) -->
-    <string name="excel_header_id">id</string>
-    <string name="excel_header_name">name</string>
-    <string name="excel_header_product_barcode">productBarcode</string>
-    <string name="excel_header_timestamp">timestamp</string>
-    <string name="excel_header_type">type</string>
-    <string name="excel_header_old_price">oldPrice</string>
-    <string name="excel_header_new_price">newPrice</string>
-    <string name="excel_header_source">source</string>
 
     <string name="manual_add_suffix">Aggiunta_Manuale</string>
     <string name="supplier_manual">Manuale</string>

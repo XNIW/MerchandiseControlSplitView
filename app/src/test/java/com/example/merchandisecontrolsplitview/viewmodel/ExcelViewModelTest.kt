@@ -192,6 +192,10 @@ class ExcelViewModelTest {
         assertEquals("new_name.xlsx", updatedEntry.captured.id)
         assertEquals("New Supplier", updatedEntry.captured.supplier)
         assertEquals("New Category", updatedEntry.captured.category)
+        assertEquals(
+            app.getString(R.string.history_entry_renamed),
+            viewModel.historyActionMessage.value
+        )
     }
 
     @Test
@@ -202,6 +206,26 @@ class ExcelViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { repository.deleteHistoryEntry(entry) }
+        assertEquals(
+            app.getString(R.string.history_entry_deleted),
+            viewModel.historyActionMessage.value
+        )
+    }
+
+    @Test
+    fun `renameHistoryEntry failure emits localized feedback`() = runTest {
+        coEvery { repository.updateHistoryEntry(any()) } throws IllegalStateException("db unavailable")
+
+        viewModel.renameHistoryEntry(
+            entry = historyEntry(uid = 32L),
+            newName = "broken.xlsx"
+        )
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.error_history_entry_rename),
+            viewModel.historyActionMessage.value
+        )
     }
 
     @Test
@@ -228,6 +252,22 @@ class ExcelViewModelTest {
         assertTrue(targetFile.length() > 0)
         assertFalse(viewModel.isExporting.value)
         assertEquals(null, viewModel.exportProgress.value)
+    }
+
+    @Test
+    fun `loadFromMultipleUris invalid workbook uses generic localized error`() = runTest {
+        val invalidFile = File.createTempFile("invalid-load", ".xlsx", app.cacheDir).apply {
+            writeText("not an excel workbook")
+        }
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(invalidFile)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.loadError.value != null }
+
+        assertEquals(
+            app.getString(R.string.error_file_access_denied),
+            viewModel.loadError.value
+        )
     }
 
     @Test
