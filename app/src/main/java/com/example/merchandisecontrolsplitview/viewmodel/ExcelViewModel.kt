@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
@@ -37,6 +38,7 @@ import java.time.format.DateTimeFormatter
  */
 sealed class DateFilter {
     object All : DateFilter()
+    // Manteniamo il nome esistente per compatibilita, ma il filtro rappresenta il mese corrente.
     object LastMonth : DateFilter()
     object PreviousMonth : DateFilter()
     data class CustomRange(val startDate: LocalDate, val endDate: LocalDate) : DateFilter()
@@ -63,6 +65,7 @@ class ExcelViewModel(
     val isLoading = mutableStateOf(false)
     val loadError = mutableStateOf<String?>(null)
     val historyActionMessage = mutableStateOf<String?>(null)
+    val currentEntryName = mutableStateOf("")
 
     val loadingProgress = mutableStateOf<Int?>(null)
 
@@ -135,10 +138,28 @@ class ExcelViewModel(
 
     // Stato privato che mantiene il filtro corrente. Inizia con "Mostra tutto".
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
+    val dateFilter: StateFlow<DateFilter> = _dateFilter.asStateFlow()
 
-    // Flusso pubblico osservabile dalla UI.
-    // flatMapLatest assicura che se il filtro cambia, la vecchia query al DB viene cancellata
-    // e ne parte una nuova, prevenendo race conditions.
+    // Lista alleggerita per la schermata History: evita di caricare i blob della griglia
+    // nello scroll principale e lascia i fetch completi solo ai percorsi che ne hanno bisogno.
+    val historyListEntries: StateFlow<List<HistoryEntryListItem>> = _dateFilter
+        .flatMapLatest { filter ->
+            repository.getFilteredHistoryListFlow(filter)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = emptyList()
+        )
+
+    val hasHistoryEntries: StateFlow<Boolean> = repository.hasHistoryEntriesFlow()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = false
+        )
+
+    // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry.
     val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
         .flatMapLatest { filter ->
             repository.getFilteredHistoryFlow(filter)
@@ -216,6 +237,7 @@ class ExcelViewModel(
             repeat(cols) { selectedColumns.add(false) }
         }
         generated.value = true
+        currentEntryName.value = entry.id
         currentSupplierName = entry.supplier
         currentCategoryName = entry.category
         currentEntryStatus.value = Triple(entry.syncStatus, entry.wasExported, entry.uid)
@@ -253,6 +275,15 @@ class ExcelViewModel(
      */
     fun setDateFilter(filter: DateFilter) {
         _dateFilter.value = filter
+    }
+
+    fun loadHistoryEntry(entryUid: Long, onLoaded: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+                loadHistoryEntry(entry)
+                onLoaded?.invoke()
+            }
+        }
     }
 
     fun loadFromMultipleUris(context: Context, uris: List<Uri>) {
@@ -392,6 +423,7 @@ class ExcelViewModel(
                 filteredData,
                 newEditableValues,
                 newCompleteStates,
+                newEntry.id,
                 supplierName,
                 categoryName,
                 newUid,
@@ -496,6 +528,7 @@ class ExcelViewModel(
         filteredData: List<List<String>>,
         newEditableValues: SnapshotStateList<MutableList<MutableState<String>>>,
         newCompleteStates: SnapshotStateList<Boolean>,
+        entryName: String,
         supplierName: String,
         categoryName: String,
         newUid: Long,
@@ -512,6 +545,7 @@ class ExcelViewModel(
             filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
 
             generated.value = true
+            currentEntryName.value = entryName
             currentSupplierName = supplierName
             currentCategoryName = categoryName
             currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
@@ -528,19 +562,38 @@ class ExcelViewModel(
     ) {
         viewModelScope.launch {
             try {
-                val updatedSupplier = newSupplier?.takeIf { it.isNotBlank() } ?: currentSupplierName
-                val updatedCategory = newCategory?.takeIf { it.isNotBlank() } ?: currentCategoryName
+                val updatedSupplier = newSupplier?.takeIf { it.isNotBlank() } ?: entry.supplier
+                val updatedCategory = newCategory?.takeIf { it.isNotBlank() } ?: entry.category
                 val updated = entry.copy(
                     id = newName,
                     supplier = updatedSupplier,
                     category = updatedCategory
                 )
                 repository.updateHistoryEntry(updated)
-                currentSupplierName = updatedSupplier
-                currentCategoryName = updatedCategory
+                if (updated.uid == currentEntryStatus.value.third) {
+                    currentEntryName.value = updated.id
+                    currentSupplierName = updatedSupplier
+                    currentCategoryName = updatedCategory
+                }
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.history_entry_renamed)
             } catch (_: Exception) {
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.error_history_entry_rename)
+            }
+        }
+    }
+
+    fun renameHistoryEntry(
+        entryUid: Long,
+        newName: String,
+        newSupplier: String? = null,
+        newCategory: String? = null
+    ) {
+        viewModelScope.launch {
+            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+                renameHistoryEntry(entry, newName, newSupplier, newCategory)
+            } ?: run {
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.error_history_entry_rename)
             }
@@ -554,6 +607,17 @@ class ExcelViewModel(
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.history_entry_deleted)
             } catch (_: Exception) {
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.error_history_entry_delete)
+            }
+        }
+    }
+
+    fun deleteHistoryEntry(entryUid: Long) {
+        viewModelScope.launch {
+            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+                deleteHistoryEntry(entry)
+            } ?: run {
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.error_history_entry_delete)
             }
@@ -614,6 +678,7 @@ class ExcelViewModel(
         generated.value = false
         isLoading.value = false
         loadError.value = null
+        currentEntryName.value = ""
         currentSupplierName = ""
         currentCategoryName = ""
         headerTypes.clear()
@@ -633,13 +698,15 @@ class ExcelViewModel(
         }
     }
 
-    fun markCurrentEntryAsExported(entryUid: Long) { // <-- Cambia firma
-        historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
-            if (!entry.wasExported) {
-                val updatedEntry = entry.copy(wasExported = true)
-                viewModelScope.launch { repository.updateHistoryEntry(updatedEntry) }
-                if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
-                    currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
+    fun markCurrentEntryAsExported(entryUid: Long) {
+        viewModelScope.launch {
+            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+                if (!entry.wasExported) {
+                    val updatedEntry = entry.copy(wasExported = true)
+                    repository.updateHistoryEntry(updatedEntry)
+                    if (entry.uid == currentEntryStatus.value.third) {
+                        currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
+                    }
                 }
             }
         }
@@ -653,13 +720,15 @@ class ExcelViewModel(
         updateSyncStatus(entryUid, SyncStatus.ATTEMPTED_WITH_ERRORS)
     }
 
-    private fun updateSyncStatus(entryUid: Long, newStatus: SyncStatus) { // <-- Cambia firma
-        historyEntries.value.find { it.uid == entryUid }?.let { entry -> // <-- Cerca per uid
-            if (entry.syncStatus != newStatus) {
-                val updatedEntry = entry.copy(syncStatus = newStatus)
-                viewModelScope.launch { repository.updateHistoryEntry(updatedEntry) }
-                if (entry.uid == currentEntryStatus.value.third) { // <-- Confronta per uid
-                    currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
+    private fun updateSyncStatus(entryUid: Long, newStatus: SyncStatus) {
+        viewModelScope.launch {
+            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+                if (entry.syncStatus != newStatus) {
+                    val updatedEntry = entry.copy(syncStatus = newStatus)
+                    repository.updateHistoryEntry(updatedEntry)
+                    if (entry.uid == currentEntryStatus.value.third) {
+                        currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
+                    }
                 }
             }
         }

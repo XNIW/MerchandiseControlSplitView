@@ -53,6 +53,8 @@ interface InventoryRepository {
 
     // History methods
     fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>>
+    fun getFilteredHistoryListFlow(filter: DateFilter): Flow<List<HistoryEntryListItem>>
+    fun hasHistoryEntriesFlow(): Flow<Boolean>
     suspend fun getHistoryEntryByUid(uid: Long): HistoryEntry?
     suspend fun insertHistoryEntry(entry: HistoryEntry): Long
     suspend fun updateHistoryEntry(entry: HistoryEntry)
@@ -227,30 +229,49 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     }
 
     // --- History Implementations ---
-    override fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>> {
+    private fun historyRangeFor(filter: DateFilter): Pair<String, String>? {
         val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         return when (filter) {
-            is DateFilter.All -> historyDao.getAllFlow()
+            is DateFilter.All -> null
             is DateFilter.LastMonth -> {
                 val today = LocalDate.now()
                 val startOfMonth = today.withDayOfMonth(1).atStartOfDay().format(formatter)
                 val endOfMonth = today.withDayOfMonth(today.lengthOfMonth()).atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startOfMonth, endOfMonth)
+                startOfMonth to endOfMonth
             }
             is DateFilter.PreviousMonth -> {
                 val previousMonth = YearMonth.from(LocalDate.now()).minusMonths(1)
                 val startOfPreviousMonth = previousMonth.atDay(1).atStartOfDay().format(formatter)
                 val endOfPreviousMonth = previousMonth.atEndOfMonth().atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startOfPreviousMonth, endOfPreviousMonth)
+                startOfPreviousMonth to endOfPreviousMonth
             }
             is DateFilter.CustomRange -> {
                 val startDateString = filter.startDate.atStartOfDay().format(formatter)
                 val endDateString = filter.endDate.atTime(23, 59, 59).format(formatter)
-                historyDao.getEntriesBetweenDatesFlow(startDateString, endDateString)
+                startDateString to endDateString
             }
         }
     }
 
+    override fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>> {
+        val range = historyRangeFor(filter)
+        return if (range == null) {
+            historyDao.getAllFlow()
+        } else {
+            historyDao.getEntriesBetweenDatesFlow(range.first, range.second)
+        }
+    }
+
+    override fun getFilteredHistoryListFlow(filter: DateFilter): Flow<List<HistoryEntryListItem>> {
+        val range = historyRangeFor(filter)
+        return if (range == null) {
+            historyDao.getAllListItemsFlow()
+        } else {
+            historyDao.getListItemsBetweenDatesFlow(range.first, range.second)
+        }
+    }
+
+    override fun hasHistoryEntriesFlow(): Flow<Boolean> = historyDao.hasEntriesFlow()
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }

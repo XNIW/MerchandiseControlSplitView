@@ -151,24 +151,29 @@ fun AppNavGraph() {
         }
 
         composable(Screen.History.route) {
-            val historyList by excelViewModel.historyEntries.collectAsState()
+            val historyList by excelViewModel.historyListEntries.collectAsState()
             val historyActionMessage by excelViewModel.historyActionMessage
+            val currentDateFilter by excelViewModel.dateFilter.collectAsState()
+            val hasHistoryEntries by excelViewModel.hasHistoryEntries.collectAsState()
 
             HistoryScreen(
                 historyList = historyList,
+                currentFilter = currentDateFilter,
+                hasAnyHistoryEntries = hasHistoryEntries,
                 historyActionMessage = historyActionMessage,
                 onSelect = { entry ->
-                    excelViewModel.loadHistoryEntry(entry)
-                    navController.navigate(
-                        Screen.Generated.createRoute(
-                            entryUid = entry.uid,
-                            isNew = false,
-                            isManualEntry = entry.isManualEntry
+                    excelViewModel.loadHistoryEntry(entry.uid) {
+                        navController.navigate(
+                            Screen.Generated.createRoute(
+                                entryUid = entry.uid,
+                                isNew = false,
+                                isManualEntry = entry.isManualEntry
+                            )
                         )
-                    )
+                    }
                 },
-                onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry, newName) },
-                onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry) },
+                onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry.uid, newName) },
+                onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry.uid) },
                 onHistoryActionMessageConsumed = { excelViewModel.consumeHistoryActionMessage() },
                 onSetFilter = { filter -> excelViewModel.setDateFilter(filter) },
                 onBack = { navController.popBackStack() }

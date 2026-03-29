@@ -156,16 +156,15 @@ fun GeneratedScreen(
         }
     }
 
-    val historyEntries by excelViewModel.historyEntries.collectAsState()
+    val currentEntryName by excelViewModel.currentEntryName
 
     var showManualEntryDialog by remember { mutableStateOf(false) }
     var productToEditIndex by remember { mutableStateOf<Int?>(null) }
 
     var productDataToPrefill by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
-    LaunchedEffect(entryUid, historyEntries) {
-        val entry = historyEntries.find { it.uid == entryUid }
-        if (entry != null) {
-            titleText = entry.id
+    LaunchedEffect(entryUid, currentEntryName) {
+        if (currentEntryName.isNotBlank()) {
+            titleText = currentEntryName
         }
     }
 
@@ -557,10 +556,7 @@ fun GeneratedScreen(
                         showExitDialog = false
                         scope.launch {
                             isSavingOrReverting = true
-                            excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                                ?.let { entryToDelete ->
-                                    excelViewModel.deleteHistoryEntry(entryToDelete)
-                                }
+                            excelViewModel.deleteHistoryEntry(entryUid)
                             excelViewModel.revertToPreGenerateState()
                             isSavingOrReverting = false
                             onBackToStart()
@@ -580,10 +576,7 @@ fun GeneratedScreen(
                         scope.launch {
                             isSavingOrReverting = true
                             excelViewModel.revertDatabaseToOriginalState()
-                            excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                                ?.let {
-                                    excelViewModel.loadHistoryEntry(it)
-                                }
+                            excelViewModel.loadHistoryEntry(entryUid)
                             isSavingOrReverting = false
                             onBackToStart()
                         }
@@ -766,15 +759,13 @@ fun GeneratedScreen(
             onConfirm = {
                 supplierExpanded = false
                 categoryExpanded = false
-                val entry = excelViewModel.historyEntries.value.find { it.uid == entryUid }
-                if (entry != null && renameText.isNotBlank()) {
+                if (renameText.isNotBlank()) {
                     excelViewModel.renameHistoryEntry(
-                        entry = entry,
+                        entryUid = entryUid,
                         newName = renameText,
                         newSupplier = supplierNameForRename,
                         newCategory = categoryNameForRename
                     )
-                    titleText = renameText
                     showRenameDialog = false
                 }
             },

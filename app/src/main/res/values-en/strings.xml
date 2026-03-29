@@ -275,6 +275,12 @@
     <string name="filter_current_month">Current month</string>
     <string name="filter_previous_month">Previous month</string>
     <string name="filter_custom_range">Custom range…</string>
+    <string name="history_filter_active">Active filter: %1$s</string>
+    <string name="history_filter_custom_range_value">%1$s - %2$s</string>
+    <string name="history_empty_title">No history yet</string>
+    <string name="history_empty_message">Saved imports and manual entries will appear here.</string>
+    <string name="history_filtered_empty_title">No results</string>
+    <string name="history_filtered_empty_message">Try a different filter or widen the date range.</string>
 
     <string name="next">Next</string>
     <string name="select_start_date">Select start date</string>

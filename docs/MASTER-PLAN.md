@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**TASK-008** — **Gestione errori e UX feedback** — **`DONE`** (2026-03-28). Audit user-visible completo, fix share/export hardcoded, raw exception rimossi da UI, silent failure corretti, feedback rename/delete cronologia aggiunto. Review: bug `untitled`/`exported_short` in EN corretto; dead resources rimossi. Tutti i check ✅. **Nessun task ACTIVE**: prossimo task da attivare su decisione utente (candidati: **TASK-015** `BACKLOG`, altri dal backlog).
+**Tracking globale — task attivo (unico):** al momento **nessun task è `ACTIVE`**. **TASK-010** — **History screen — filtri e performance** è stato chiuso in **`DONE`** il 2026-03-29 dopo execution, review completa e fix mirati. Dettaglio: `docs/TASKS/TASK-010-history-screen-filtri-e-performance.md`. Il prossimo task resta da attivare esplicitamente su richiesta utente.
 
 ---
 
@@ -24,11 +24,13 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **Nessuno** — **TASK-008** **`DONE`** (2026-03-28) |
+| Task attivo          | Nessuno (`nessun task ACTIVE`) |
 | Fase task attivo     | — |
-| Milestone            | **TASK-008** **`DONE`** (2026-03-28 — review **APPROVED**, fix applicati). **TASK-007** **`DONE`** (2026-03-28). **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
-| Prossimo passo operativo | Nessun task ACTIVE. Planner propone prossimo task dal backlog su decisione utente (candidato: **TASK-015** o altro dal backlog). |
-| Ultimo aggiornamento | 2026-03-28 — **TASK-008** **`DONE`**: review APPROVED, fix bug `untitled`/`exported_short` EN + rimozione dead resources; tutti i check ✅ |
+| Milestone            | **TASK-010** **`DONE`** (2026-03-29 — execution + review chiuse; lite list sicura per History, fix su `currentEntryName`/Generated title e micro-UX filtro attivo). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** **`DONE`** (2026-03-28). **TASK-003** **`DONE`** (2026-03-27). **TASK-017** **`DONE`**. **TASK-020** **`DONE`** (2026-03-28). **TASK-004** **`DONE`** (2026-03-28). **TASK-005** **`DONE`** (2026-03-28). **TASK-002** **`BLOCKED`**. **TASK-015** **`BACKLOG`** |
+| Prossimo passo operativo | Nessun task attivato automaticamente. Prossimo passo: scegliere esplicitamente dal backlog il task successivo da portare in `ACTIVE` (es. `TASK-015` o altro), mantenendo la regola di un solo task attivo per volta. |
+| Ultimo aggiornamento | 2026-03-29 — **TASK-010** chiuso in **`DONE`** dopo review/fix; `MASTER-PLAN` riallineato; nessun task `ACTIVE`. |
+
+**Promemoria antiambiguità (governance):** al momento **non esiste alcun task con stato backlog `ACTIVE`**. **TASK-010** è **`DONE`**, non `ACTIVE` e non `BACKLOG`. La prossima attivazione deve essere esplicita e unica.
 
 ---
 
@@ -38,7 +40,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente **nessun task ACTIVE**: **TASK-008** è **`DONE`** (2026-03-28).
+Il task attivo è sempre **uno solo**. Attualmente **nessun task è `ACTIVE`**; l’ultimo task chiuso è **TASK-010** in **`DONE`** (2026-03-29).
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -53,12 +55,15 @@ Il task attivo è sempre **uno solo**. Attualmente **nessun task ACTIVE**: **TAS
 5. **TASK-014** → **`BACKLOG`** (non attivare finché dipende da **TASK-002** `BLOCKED`).
 6. **TASK-005** → **`DONE`** (2026-03-28 — conferma utente; vedi file task **Chiusura**).
 7. **TASK-007** → **`DONE`** (2026-03-28 — review **APPROVED**, conferma utente).
-8. **TASK-008** → **`DONE`** (2026-03-28) — review APPROVED, fix applicati. Nessun task ACTIVE.
-9. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+8. **TASK-008** → **`DONE`** (2026-03-28) — review APPROVED, fix applicati.
+9. **TASK-010** → **`DONE`** (2026-03-29) — execution, review e fix chiusi; dettaglio in `docs/TASKS/TASK-010-history-screen-filtri-e-performance.md`.
+10. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** dipende da **TASK-002**: non attivarlo finché **TASK-002** resta bloccato.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
+
+**Coerenza TASK-010:** nel backlog, **TASK-010** è **`DONE`**; nessun task deve risultare `ACTIVE` finché non viene attivato esplicitamente il prossimo. **Verifica rapida:** tabella *Stato globale* → *Task attivo* = nessuno; in backlog, riga TASK-010 → *Stato* = **`DONE`**.
 
 ---
 
@@ -299,7 +304,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | UX / Error handling                                     |
 | Dipendenze  | TASK-001 (DONE)                                         |
 | Descrizione | Audit **tutti** i feedback user-visible (Snackbar, dialog, Toast, inline, progress, share/Intent, export, feedback perso/duplicato-replay, raw eccezione §1bis); **matrice di audit** obbligatoria in Execution; priorità; regole intervento §6; utility user-visible; confine log/interni; smoke mirata. Android fonte primaria; iOS solo tono/gerarchia. Vincoli: no redesign, no refactor architetturale, no DAO/repository/navigation salvo emergenza; non assorbire **TASK-006** / **TASK-019**. Dettaglio: `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. |
-| Note tracking | **`DONE`** 2026-03-28 — Execution Codex + review; fix EN `untitled`/`exported_short` + rimozione dead resources; review finale pulizia `NavGraph`/`HistoryScreen`; test `DatabaseViewModelTest`/`ExcelViewModelTest`, `assembleDebug`, `lint` ✅. **Nessun task ACTIVE** dopo chiusura. |
+| Note tracking | **`DONE`** 2026-03-28 — Execution Codex + review; fix EN `untitled`/`exported_short` + rimozione dead resources; review finale pulizia `NavGraph`/`HistoryScreen`; test `DatabaseViewModelTest`/`ExcelViewModelTest`, `assembleDebug`, `lint` ✅. Successore operativo completato: **TASK-010** **`DONE`** (2026-03-29). |
 
 ### TASK-009 — Migrazione database — safety e recovery
 | Campo       | Valore                                                  |
@@ -313,11 +318,12 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-010 — History screen — filtri e performance
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `DONE`                                                  |
 | Priorità    | `BASSA`                                                 |
 | Area        | History                                                 |
-| Dipendenze  | TASK-001                                                |
-| Descrizione | Valutare performance della HistoryScreen con molte entry. Verificare filtri data (custom range). Valutare paginazione se necessario. |
+| Dipendenze  | TASK-001 (`DONE`)                                       |
+| Descrizione | History: filtri data; custom range (dialog + reset; **M7**); performance gate (lite + **consumatori `historyEntries`** / integrità `updateHistoryEntry`, **M13**). Micro-UX: filtro attivo, empty M8/M9. Schema/indici: **non** automatici; eccezione o **TASK-009**. **File task:** `docs/TASKS/TASK-010-history-screen-filtri-e-performance.md`. |
+| Note tracking | **`DONE`** 2026-03-29 — execution completata, review approvata con fix mirati; lite list sicura con fetch completo per `uid`, custom range robusto, micro-UX locali coerenti, baseline TASK-004 + `assembleDebug` + `lint` verdi. Nessun task successivo attivato automaticamente. |
 
 ### TASK-011 — Storico prezzi — visualizzazione e completezza
 | Campo       | Valore                                                  |
@@ -422,14 +428,14 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** **TASK-008** **`DONE`** (2026-03-28) — gestione errori e UX feedback; file `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. **TASK-007** `DONE` (2026-03-28). **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. **Nessun task ACTIVE** — prossimo su decisione utente. Ordine suggerito:
+**Focus immediato:** nessun task è attualmente **`ACTIVE`**. **TASK-010** è **`DONE`** (2026-03-29). **TASK-008** **`DONE`** (2026-03-28). **TASK-007** `DONE` (2026-03-28). **TASK-005** `DONE` (2026-03-28). **TASK-004** `DONE` (2026-03-28). **TASK-020** `DONE` (2026-03-28). **TASK-003** `DONE` (2026-03-27). **TASK-015** in **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. **TASK-014** non attivabile finché **TASK-002** resta bloccato. Ordine suggerito:
 
-1. **Prossimo task:** attivare dal backlog su richiesta utente (es. **TASK-015** o altro).
+1. **Prossimo step su richiesta utente:** attivare dal backlog un solo task alla volta (es. **TASK-015** o altro).
 2. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
 3. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
 4. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
 5. **TASK-014 (MEDIA):** UX modernization GeneratedScreen — dopo `DONE` o sblocco esplicito **TASK-002**.
-6. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid.
+6. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
 7. **TASK-018 / TASK-019 (BASSA / dip. TASK-017 DONE):** ottimizzazioni e i18n emerse da TASK-017 — su richiesta.
 
 ### Priorità tecnica / qualità
@@ -443,7 +449,7 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 5. **TASK-017 (CRITICA):** OOM full import DB — **`DONE`** (2026-03-27).
 6. **TASK-006 (MEDIA, BACKLOG):** Robustezza import Excel generica — dip. TASK-005 `DONE`.
 7. **TASK-007 (MEDIA):** Round-trip export full DB — **`DONE`** (2026-03-28).
-8. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010, TASK-011 (BASSA):** Miglioramenti incrementali.
+8. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010 (BASSA):** **`DONE`** (2026-03-29) — History filtri e performance. **TASK-011 (BASSA):** miglioramenti incrementali in backlog.
 9. **TASK-012 (BASSA):** CI/CD — desiderabile ma non bloccante.
 
 ---

@@ -23,3 +23,18 @@ data class HistoryEntry(
     val totalItems: Int = 0,
     val isManualEntry: Boolean = false
 )
+
+data class HistoryEntryListItem(
+    val uid: Long,
+    val id: String,
+    val timestamp: String,
+    val supplier: String = "",
+    val category: String = "",
+    val wasExported: Boolean = false,
+    val syncStatus: SyncStatus = SyncStatus.NOT_ATTEMPTED,
+    val orderTotal: Double = 0.0,
+    val paymentTotal: Double = 0.0,
+    val missingItems: Int = 0,
+    val totalItems: Int = 0,
+    val isManualEntry: Boolean = false
+)

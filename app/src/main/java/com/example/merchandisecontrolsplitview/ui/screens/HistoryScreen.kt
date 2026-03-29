@@ -21,43 +21,62 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
-    historyList: List<HistoryEntry>,
+    historyList: List<HistoryEntryListItem>,
+    currentFilter: DateFilter,
+    hasAnyHistoryEntries: Boolean,
     historyActionMessage: String?,
-    onSelect: (HistoryEntry) -> Unit,
-    onRename: (HistoryEntry, String) -> Unit,
-    onDelete: (HistoryEntry) -> Unit,
+    onSelect: (HistoryEntryListItem) -> Unit,
+    onRename: (HistoryEntryListItem, String) -> Unit,
+    onDelete: (HistoryEntryListItem) -> Unit,
     onHistoryActionMessageConsumed: () -> Unit,
     onSetFilter: (DateFilter) -> Unit,
     onBack: () -> Unit
 ) {
-    // Stati per i dialog di rename/delete (invariati)
     var showRenameDialog by remember { mutableStateOf(false) }
-    var entryToRename by remember { mutableStateOf<HistoryEntry?>(null) }
+    var entryToRename by remember { mutableStateOf<HistoryEntryListItem?>(null) }
     var renameText by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var entryToDelete by remember { mutableStateOf<HistoryEntry?>(null) }
+    var entryToDelete by remember { mutableStateOf<HistoryEntryListItem?>(null) }
 
     var showFilterMenu by remember { mutableStateOf(false) }
     var showDatePickerDialog by remember { mutableStateOf(false) }
-    var datePickerTargetIsStart by remember { mutableStateOf(true) } // true = data inizio, false = data fine
-    var customStartDate by remember { mutableStateOf<LocalDate?>(null) }
-    var customEndDate by remember { mutableStateOf<LocalDate?>(null) }
+    var datePickerTargetIsStart by remember { mutableStateOf(true) }
+    var customStartDate by remember { mutableStateOf(LocalDate.now()) }
+    var customEndDate by remember { mutableStateOf(LocalDate.now()) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val dateFormatter = remember {
+        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault())
+    }
+
+    fun resetCustomRangeDraft() {
+        val today = LocalDate.now()
+        datePickerTargetIsStart = true
+        customStartDate = today
+        customEndDate = today
+    }
+
+    fun dismissCustomRangePicker() {
+        showDatePickerDialog = false
+        resetCustomRangeDraft()
+    }
 
     LaunchedEffect(historyActionMessage) {
         historyActionMessage?.let { message ->
@@ -70,11 +89,34 @@ fun HistoryScreen(
         }
     }
 
+    val filterLabel = when (val filter = currentFilter) {
+        is DateFilter.All -> stringResource(R.string.filter_all)
+        is DateFilter.LastMonth -> stringResource(R.string.filter_current_month)
+        is DateFilter.PreviousMonth -> stringResource(R.string.filter_previous_month)
+        is DateFilter.CustomRange -> stringResource(
+            R.string.history_filter_custom_range_value,
+            filter.startDate.format(dateFormatter),
+            filter.endDate.format(dateFormatter)
+        )
+    }
+    val isFilterActive = currentFilter !is DateFilter.All
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.history_title)) },
+                title = {
+                    Column {
+                        Text(stringResource(R.string.history_title))
+                        if (isFilterActive) {
+                            Text(
+                                text = stringResource(R.string.history_filter_active, filterLabel),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
@@ -83,7 +125,15 @@ fun HistoryScreen(
                 actions = {
                     Box {
                         IconButton(onClick = { showFilterMenu = true }) {
-                            Icon(Icons.Default.FilterList, contentDescription = stringResource(R.string.filter))
+                            Icon(
+                                Icons.Default.FilterList,
+                                contentDescription = stringResource(R.string.filter),
+                                tint = if (isFilterActive) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    LocalContentColor.current
+                                }
+                            )
                         }
                         DropdownMenu(
                             expanded = showFilterMenu,
@@ -113,8 +163,7 @@ fun HistoryScreen(
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.filter_custom_range)) },
                                 onClick = {
-                                    customStartDate = LocalDate.now()
-                                    customEndDate = LocalDate.now()
+                                    resetCustomRangeDraft()
                                     showDatePickerDialog = true
                                     showFilterMenu = false
                                 }
@@ -125,72 +174,96 @@ fun HistoryScreen(
             )
         }
     ) { padding ->
-        // LazyColumn e Dialog sono invariati
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 8.dp)
         ) {
-            items(historyList, key = { it.uid }) { entry ->
-                HistoryRow(
-                    entry = entry,
-                    onClick = { onSelect(entry) },
-                    onRenameClick = {
-                        entryToRename = entry
-                        renameText = entry.id
-                        showRenameDialog = true
-                    },
-                    onDeleteClick = {
-                        entryToDelete = entry
-                        showDeleteDialog = true
-                    }
+            if (historyList.isEmpty()) {
+                HistoryEmptyState(
+                    title = stringResource(
+                        if (hasAnyHistoryEntries) {
+                            R.string.history_filtered_empty_title
+                        } else {
+                            R.string.history_empty_title
+                        }
+                    ),
+                    message = stringResource(
+                        if (hasAnyHistoryEntries) {
+                            R.string.history_filtered_empty_message
+                        } else {
+                            R.string.history_empty_message
+                        }
+                    )
                 )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 8.dp)
+                ) {
+                    items(historyList, key = { it.uid }) { entry ->
+                        HistoryRow(
+                            entry = entry,
+                            onClick = { onSelect(entry) },
+                            onRenameClick = {
+                                entryToRename = entry
+                                renameText = entry.id
+                                showRenameDialog = true
+                            },
+                            onDeleteClick = {
+                                entryToDelete = entry
+                                showDeleteDialog = true
+                            }
+                        )
+                    }
+                }
             }
         }
     }
 
-    // --- NUOVO DIALOG PER LA SELEZIONE DELLA DATA ---
     if (showDatePickerDialog) {
         val dateToSelect = if (datePickerTargetIsStart) customStartDate else customEndDate
 
-        // SOLUZIONE CORRETTA: Usa il Composable `key` per resettare lo stato.
-        val datePickerState = key(datePickerTargetIsStart) {
+        val datePickerState = key(datePickerTargetIsStart, dateToSelect) {
             rememberDatePickerState(
                 initialSelectedDateMillis = dateToSelect
-                    ?.atStartOfDay(ZoneId.systemDefault())
-                    ?.toInstant()
-                    ?.toEpochMilli()
+                    .atStartOfDay(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
             )
         }
 
-        // Il resto del codice del DatePickerDialog rimane invariato...
         DatePickerDialog(
-            onDismissRequest = { showDatePickerDialog = false },
+            onDismissRequest = { dismissCustomRangePicker() },
             confirmButton = {
-                TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let { millis ->
-                        val selectedDate = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalDate()
-                        if (datePickerTargetIsStart) {
-                            customStartDate = selectedDate
-                            // Passa automaticamente alla selezione della data di fine
-                            datePickerTargetIsStart = false
-                        } else {
-                            customEndDate = selectedDate
-                            // Una volta selezionata anche la data di fine, applica il filtro
-                            showDatePickerDialog = false
-                            if (customStartDate != null) {
-                                onSetFilter(DateFilter.CustomRange(customStartDate!!, customEndDate!!))
+                TextButton(
+                    enabled = datePickerState.selectedDateMillis != null,
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { millis ->
+                            val selectedDate = Instant.ofEpochMilli(millis)
+                                .atZone(ZoneId.systemDefault())
+                                .toLocalDate()
+                            if (datePickerTargetIsStart) {
+                                customStartDate = selectedDate
+                                customEndDate = selectedDate
+                                datePickerTargetIsStart = false
+                            } else {
+                                val rangeStart = minOf(customStartDate, selectedDate)
+                                val rangeEnd = maxOf(customStartDate, selectedDate)
+                                onSetFilter(DateFilter.CustomRange(rangeStart, rangeEnd))
+                                dismissCustomRangePicker()
                             }
                         }
                     }
-                }) {
-                    // Il testo del bottone cambia correttamente in base a `datePickerTargetIsStart`
+                ) {
                     Text(if (datePickerTargetIsStart) stringResource(R.string.next) else stringResource(R.string.confirm))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDatePickerDialog = false }) { Text(stringResource(R.string.cancel)) }
+                TextButton(onClick = { dismissCustomRangePicker() }) {
+                    Text(stringResource(R.string.cancel))
+                }
             }
         ) {
             DatePicker(
@@ -251,7 +324,7 @@ fun HistoryScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryRow(
-    entry: HistoryEntry,
+    entry: HistoryEntryListItem,
     onClick: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
@@ -287,17 +360,17 @@ private fun HistoryRow(
                 val color = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Color.DarkGray
                     SwipeToDismissBoxValue.EndToStart -> Color(0xFFB00020)
-                    else -> Color.Transparent
+                    SwipeToDismissBoxValue.Settled -> Color.Transparent
                 }
                 val icon = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Edit to stringResource(R.string.rename_file)
                     SwipeToDismissBoxValue.EndToStart -> Icons.Default.Delete to stringResource(R.string.delete)
-                    else -> null
+                    SwipeToDismissBoxValue.Settled -> null
                 }
                 val align = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
                     SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
-                    else -> Alignment.Center
+                    SwipeToDismissBoxValue.Settled -> Alignment.Center
                 }
 
                 Box(
@@ -411,6 +484,34 @@ private fun HistoryRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HistoryEmptyState(
+    title: String,
+    message: String
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 

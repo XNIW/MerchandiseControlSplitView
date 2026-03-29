@@ -53,6 +53,8 @@ class ExcelViewModelTest {
         repository = mockk(relaxed = true)
 
         every { repository.getFilteredHistoryFlow(any()) } returns flowOf(emptyList())
+        every { repository.getFilteredHistoryListFlow(any()) } returns flowOf(emptyList())
+        every { repository.hasHistoryEntriesFlow() } returns flowOf(false)
         coEvery { repository.getPreviousPricesForBarcodes(any(), any()) } returns emptyMap()
 
         viewModel = ExcelViewModel(app, repository)
@@ -121,6 +123,7 @@ class ExcelViewModelTest {
         assertEquals("Supplier A", viewModel.supplierName)
         assertEquals("Category A", viewModel.categoryName)
         assertEquals(77L, viewModel.currentEntryStatus.value.third)
+        assertEquals(insertedEntry.captured.id, viewModel.currentEntryName.value)
         assertEquals("2", insertedEntry.captured.data[1][4])
         assertEquals("5", insertedEntry.captured.data[1][5])
     }
@@ -145,6 +148,7 @@ class ExcelViewModelTest {
         assertEquals("10", viewModel.editableValues[1][0].value)
         assertTrue(viewModel.completeStates[1])
         assertTrue(viewModel.generated.value)
+        assertEquals("history-44", viewModel.currentEntryName.value)
         assertEquals("Supplier", viewModel.supplierName)
         assertEquals("Category", viewModel.categoryName)
         assertEquals(44L, viewModel.currentEntryStatus.value.third)
@@ -199,6 +203,29 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `renameHistoryEntry by uid fetches full entry before update`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(33L) } returns historyEntry(
+            uid = 33L,
+            supplier = "Stored Supplier",
+            category = "Stored Category"
+        )
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.renameHistoryEntry(
+            entryUid = 33L,
+            newName = "renamed.xlsx"
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(33L) }
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+        assertEquals("renamed.xlsx", updatedEntry.captured.id)
+        assertEquals("Stored Supplier", updatedEntry.captured.supplier)
+        assertEquals("Stored Category", updatedEntry.captured.category)
+    }
+
+    @Test
     fun `deleteHistoryEntry delegates delete to repository`() = runTest {
         val entry = historyEntry(uid = 31L)
 
@@ -226,6 +253,61 @@ class ExcelViewModelTest {
             app.getString(R.string.error_history_entry_rename),
             viewModel.historyActionMessage.value
         )
+    }
+
+    @Test
+    fun `markCurrentEntryAsExported fetches full entry before update`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(51L) } returns historyEntry(uid = 51L)
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.markCurrentEntryAsExported(51L)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(51L) }
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+        assertTrue(updatedEntry.captured.wasExported)
+        assertEquals(listOf(listOf("barcode")), updatedEntry.captured.data)
+    }
+
+    @Test
+    fun `markCurrentEntryAsSyncedSuccessfully fetches full entry before update`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(52L) } returns historyEntry(uid = 52L)
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.markCurrentEntryAsSyncedSuccessfully(52L)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(52L) }
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, updatedEntry.captured.syncStatus)
+        assertEquals(listOf(listOf("barcode")), updatedEntry.captured.data)
+    }
+
+    @Test
+    fun `loadHistoryEntry by uid restores state and invokes callback`() = runTest {
+        val callback = mockk<() -> Unit>(relaxed = true)
+        coEvery { repository.getHistoryEntryByUid(44L) } returns historyEntry(
+            uid = 44L,
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("12345678", "4", "2")
+            ),
+            editable = listOf(listOf("", ""), listOf("10", "12")),
+            complete = listOf(false, true),
+            supplier = "Supplier",
+            category = "Category"
+        )
+
+        viewModel.loadHistoryEntry(44L, callback)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(44L) }
+        verify(exactly = 1) { callback.invoke() }
+        assertEquals("10", viewModel.editableValues[1][0].value)
+        assertEquals("Supplier", viewModel.supplierName)
+        assertEquals("Category", viewModel.categoryName)
     }
 
     @Test

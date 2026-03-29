@@ -190,6 +190,72 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `getFilteredHistoryFlow all returns every entry ordered descending`() = runTest {
+        repository.insertHistoryEntry(historyEntry(id = "OLD", timestamp = "2026-01-10 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "NEW", timestamp = "2026-02-15 10:00:00"))
+
+        val entries = repository.getFilteredHistoryFlow(DateFilter.All).first()
+
+        assertEquals(listOf("NEW", "OLD"), entries.map { it.id })
+    }
+
+    @Test
+    fun `getFilteredHistoryFlow current month includes both month boundaries`() = runTest {
+        val today = LocalDate.now()
+        val firstDay = today.withDayOfMonth(1)
+        val lastDay = today.withDayOfMonth(today.lengthOfMonth())
+        val beforeMonth = firstDay.minusDays(1)
+
+        repository.insertHistoryEntry(historyEntry(id = "BEFORE", timestamp = "${beforeMonth} 23:59:59"))
+        repository.insertHistoryEntry(historyEntry(id = "FIRST", timestamp = "${firstDay} 00:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "LAST", timestamp = "${lastDay} 23:59:59"))
+
+        val entries = repository.getFilteredHistoryFlow(DateFilter.LastMonth).first()
+
+        assertEquals(listOf("LAST", "FIRST"), entries.map { it.id })
+    }
+
+    @Test
+    fun `getFilteredHistoryFlow previous month keeps previous boundary and excludes current month start`() = runTest {
+        val currentMonthStart = LocalDate.now().withDayOfMonth(1)
+        val previousMonthStart = currentMonthStart.minusMonths(1).withDayOfMonth(1)
+        val previousMonthEnd = currentMonthStart.minusDays(1)
+
+        repository.insertHistoryEntry(historyEntry(id = "PREV_END", timestamp = "${previousMonthEnd} 23:59:59"))
+        repository.insertHistoryEntry(historyEntry(id = "CURR_START", timestamp = "${currentMonthStart} 00:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "PREV_START", timestamp = "${previousMonthStart} 00:00:00"))
+
+        val entries = repository.getFilteredHistoryFlow(DateFilter.PreviousMonth).first()
+
+        assertEquals(listOf("PREV_END", "PREV_START"), entries.map { it.id })
+    }
+
+    @Test
+    fun `getFilteredHistoryListFlow respects custom date range`() = runTest {
+        repository.insertHistoryEntry(historyEntry(id = "JAN", timestamp = "2026-01-10 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "FEB", timestamp = "2026-02-15 10:00:00"))
+
+        val januaryEntries = repository.getFilteredHistoryListFlow(
+            DateFilter.CustomRange(
+                startDate = LocalDate.of(2026, 1, 1),
+                endDate = LocalDate.of(2026, 1, 31)
+            )
+        ).first()
+
+        assertEquals(1, januaryEntries.size)
+        assertEquals("JAN", januaryEntries.single().id)
+    }
+
+    @Test
+    fun `hasHistoryEntriesFlow reports whether history exists`() = runTest {
+        assertEquals(false, repository.hasHistoryEntriesFlow().first())
+
+        repository.insertHistoryEntry(historyEntry(id = "ONLY", timestamp = "2026-03-28 10:00:00"))
+
+        assertEquals(true, repository.hasHistoryEntriesFlow().first())
+    }
+
+    @Test
     fun `getCurrentPricesForBarcodes returns current prices for requested barcodes`() = runTest {
         repository.addProduct(
             Product(

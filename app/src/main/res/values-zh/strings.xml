@@ -274,6 +274,12 @@
     <string name="filter_current_month">本月</string>
     <string name="filter_previous_month">上月</string>
     <string name="filter_custom_range">自定义范围…</string>
+    <string name="history_filter_active">当前筛选：%1$s</string>
+    <string name="history_filter_custom_range_value">%1$s - %2$s</string>
+    <string name="history_empty_title">还没有历史记录</string>
+    <string name="history_empty_message">已保存的导入和手动记录会显示在这里。</string>
+    <string name="history_filtered_empty_title">没有结果</string>
+    <string name="history_filtered_empty_message">请尝试其他筛选条件或扩大日期范围。</string>
 
     <string name="next">下一步</string>
     <string name="select_start_date">选择开始日期</string>
