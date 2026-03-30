@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -168,6 +169,91 @@ class FullDbExportImportRoundTripTest {
     }
 
     @Test
+    fun `SMART-FULL stages workbook once and cleans temp after analyze`() = runTest {
+        val sourceDb = createInMemoryDb()
+        val sourceRepository = DefaultInventoryRepository(sourceDb)
+        seedStandardRoundTripFixture(sourceDb, sourceRepository)
+        val workbookFile = exportFullDatabase(app, sourceRepository, "rt-smart-full")
+
+        val targetDb = createInMemoryDb()
+        val targetRepository = DefaultInventoryRepository(targetDb)
+        val stagedFiles = mutableListOf<File>()
+        var currentDbLoads = 0
+        val previousHook = FullDbImportStreamingTestHooks.onWorkbookStaged
+
+        try {
+            FullDbImportStreamingTestHooks.onWorkbookStaged = { _, stagedFile ->
+                stagedFiles += stagedFile
+            }
+
+            val outcome = analyzeSmartImportWorkbook(
+                context = app,
+                uri = Uri.fromFile(workbookFile),
+                repository = targetRepository,
+                loadCurrentDbProducts = {
+                    currentDbLoads++
+                    targetRepository.getAllProducts()
+                }
+            )
+
+            assertTrue(outcome is SmartImportWorkbookOutcome.FullDatabaseAnalyzed)
+            assertEquals(1, stagedFiles.size)
+            assertEquals(1, currentDbLoads)
+            assertFalse(stagedFiles.single().exists())
+            assertTrue(
+                (outcome as SmartImportWorkbookOutcome.FullDatabaseAnalyzed)
+                    .result
+                    .analysis
+                    .analysis
+                    .errors
+                    .isEmpty()
+            )
+        } finally {
+            FullDbImportStreamingTestHooks.onWorkbookStaged = previousHook
+        }
+    }
+
+    @Test
+    fun `SMART-SINGLE skips db fetch and cleans temp after route inspect`() = runTest {
+        val workbookFile = createSingleSheetWorkbook(
+            name = "rt-smart-single",
+            rows = listOf(
+                listOf("Barcode", "Product Name"),
+                listOf("00000001", "Single Sheet Product")
+            )
+        )
+
+        val sourceDb = createInMemoryDb()
+        val sourceRepository = DefaultInventoryRepository(sourceDb)
+        val stagedFiles = mutableListOf<File>()
+        var currentDbLoads = 0
+        val previousHook = FullDbImportStreamingTestHooks.onWorkbookStaged
+
+        try {
+            FullDbImportStreamingTestHooks.onWorkbookStaged = { _, stagedFile ->
+                stagedFiles += stagedFile
+            }
+
+            val outcome = analyzeSmartImportWorkbook(
+                context = app,
+                uri = Uri.fromFile(workbookFile),
+                repository = sourceRepository,
+                loadCurrentDbProducts = {
+                    currentDbLoads++
+                    sourceRepository.getAllProducts()
+                }
+            )
+
+            assertEquals(SmartImportWorkbookOutcome.SingleSheet, outcome)
+            assertEquals(1, stagedFiles.size)
+            assertEquals(0, currentDbLoads)
+            assertFalse(stagedFiles.single().exists())
+        } finally {
+            FullDbImportStreamingTestHooks.onWorkbookStaged = previousHook
+        }
+    }
+
+    @Test
     fun `EX-SIGNIFICANT export full DB succeeds on realistic fixture and produces openable workbook`() =
         runTest {
             val sourceDb = createInMemoryDb()
@@ -215,6 +301,27 @@ class FullDbExportImportRoundTripTest {
         val configuration = Configuration(app.resources.configuration)
         configuration.setLocale(locale)
         return app.createConfigurationContext(configuration)
+    }
+
+    private fun createSingleSheetWorkbook(
+        name: String,
+        rows: List<List<Any>>
+    ): File {
+        val file = File.createTempFile(name, ".xlsx", app.cacheDir)
+        XSSFWorkbook().use { workbook ->
+            val sheet = workbook.createSheet("Sheet1")
+            rows.forEachIndexed { rowIndex, values ->
+                val row = sheet.createRow(rowIndex)
+                values.forEachIndexed { cellIndex, value ->
+                    when (value) {
+                        is Number -> row.createCell(cellIndex).setCellValue(value.toDouble())
+                        else -> row.createCell(cellIndex).setCellValue(value.toString())
+                    }
+                }
+            }
+            file.outputStream().use(workbook::write)
+        }
+        return file
     }
 
     private suspend fun exportFullDatabase(

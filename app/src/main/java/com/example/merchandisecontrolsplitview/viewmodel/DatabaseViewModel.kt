@@ -16,11 +16,11 @@ import com.example.merchandisecontrolsplitview.util.DatabaseExportContent
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
+import com.example.merchandisecontrolsplitview.util.SmartImportWorkbookOutcome
+import com.example.merchandisecontrolsplitview.util.analyzeSmartImportWorkbook
 import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
 import com.example.merchandisecontrolsplitview.util.applyFullDbPriceHistoryStreaming
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
-import com.example.merchandisecontrolsplitview.util.detectImportWorkbookRoute
-import com.example.merchandisecontrolsplitview.util.ImportWorkbookRoute
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.writeDatabaseExport
 import java.io.IOException
@@ -128,6 +128,8 @@ private data class ResolvedImportPayload(
     val newProducts: List<Product>,
     val updatedProducts: List<Product>
 )
+
+private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(
@@ -310,21 +312,135 @@ class DatabaseViewModel(
 
     fun startSmartImport(context: Context, uri: Uri) {
         viewModelScope.launch {
+            var fullImportLockAcquired = false
             try {
-                when (withContext(Dispatchers.IO) { detectImportWorkbookRoute(context, uri) }) {
-                    ImportWorkbookRoute.FULL_DATABASE -> startFullDbImport(context, uri)
-                    ImportWorkbookRoute.SINGLE_SHEET -> startImportAnalysis(context, uri)
+                when (val outcome = withContext(Dispatchers.IO) {
+                    analyzeSmartImportWorkbook(
+                        context = context,
+                        uri = uri,
+                        repository = repository,
+                        loadCurrentDbProducts = {
+                            if (!importMutex.tryLock()) {
+                                throw FullImportAlreadyInProgressException()
+                            }
+                            fullImportLockAcquired = true
+                            prepareSmartFullImportAnalysis(context, uri)
+                        }
+                    )
+                }) {
+                    SmartImportWorkbookOutcome.SingleSheet -> startImportAnalysis(context, uri)
+                    is SmartImportWorkbookOutcome.FullDatabaseAnalyzed ->
+                        finalizeFullImportAnalysisSuccess(uri, outcome.result)
                 }
+            } catch (_: FullImportAlreadyInProgressException) {
+                return@launch
             } catch (e: CancellationException) {
+                if (fullImportLockAcquired) {
+                    handleSmartFullImportCancelled()
+                }
                 throw e
             } catch (e: OutOfMemoryError) {
-                e.printStackTrace()
-                _importAnalysisResult.value = null
-                _uiState.value = UiState.Error(analysisErrorMessage(context, e))
+                if (fullImportLockAcquired) {
+                    handleSmartFullImportFailure(context, e)
+                } else {
+                    e.printStackTrace()
+                    _importAnalysisResult.value = null
+                    _uiState.value = UiState.Error(analysisErrorMessage(context, e))
+                }
             } catch (e: Exception) {
-                handleImportAnalysisError(context, e)
+                if (fullImportLockAcquired) {
+                    handleSmartFullImportFailure(context, e)
+                } else {
+                    handleImportAnalysisError(context, e)
+                }
+            } finally {
+                if (fullImportLockAcquired) {
+                    importMutex.unlock()
+                }
             }
         }
+    }
+
+    private suspend fun prepareSmartFullImportAnalysis(
+        context: Context,
+        uri: Uri
+    ): List<Product> {
+        resetPendingImportState(clearAnalysisResult = true)
+        withContext(Dispatchers.Main) {
+            _uiState.value = UiState.Loading(
+                message = context.getString(R.string.import_loading_file),
+                progress = 5
+            )
+        }
+
+        currentImportLogUid = startHistoryLog("FULL_IMPORT", "Analisi file avviata: $uri")
+        Log.d("DB_IMPORT", "FULL_IMPORT START uri=$uri")
+
+        withContext(Dispatchers.Main) {
+            _uiState.value = UiState.Loading(
+                message = context.getString(R.string.import_fetching_db),
+                progress = 55
+            )
+        }
+        val currentDbProducts = repository.getAllProducts()
+
+        withContext(Dispatchers.Main) {
+            _uiState.value = UiState.Loading(
+                message = context.getString(R.string.import_analyzing),
+                progress = 85
+            )
+        }
+
+        return currentDbProducts
+    }
+
+    private suspend fun finalizeFullImportAnalysisSuccess(
+        uri: Uri,
+        importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult
+    ) {
+        _importAnalysisResult.value = importResult.analysis.analysis
+        pendingPriceHistory = emptyList()
+        pendingSupplierNames = importResult.pendingSupplierNames
+        pendingCategoryNames = importResult.pendingCategoryNames
+        pendingTempSuppliers = importResult.analysis.pendingSuppliers
+        pendingTempCategories = importResult.analysis.pendingCategories
+        pendingFullImportUri = uri
+        hasPendingPriceHistorySheet = importResult.hasPriceHistorySheet
+
+        _uiState.value = UiState.Idle
+        currentImportLogUid?.let { uid ->
+            appendHistoryLog(
+                uid,
+                "SUCCESS",
+                "Analisi completata. Products=${importResult.productsRowCount}, Suppliers=${importResult.supplierRowCount}, Categories=${importResult.categoryRowCount}, PriceHistory=${importResult.hasPriceHistorySheet}."
+            )
+            Log.d("DB_IMPORT", "FULL_IMPORT SUCCESS uid=$uid")
+        }
+        currentImportLogUid = null
+    }
+
+    private suspend fun handleSmartFullImportCancelled() {
+        resetPendingImportState(clearAnalysisResult = true)
+        _uiState.value = UiState.Idle
+        currentImportLogUid?.let { uid ->
+            appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
+            Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED uid=$uid")
+        }
+        currentImportLogUid = null
+    }
+
+    private suspend fun handleSmartFullImportFailure(
+        context: Context,
+        throwable: Throwable
+    ) {
+        resetPendingImportState(clearAnalysisResult = true)
+        val userMessage = analysisErrorMessage(context, throwable)
+        _uiState.value = UiState.Error(userMessage)
+        currentImportLogUid?.let { uid ->
+            appendHistoryLog(uid, "FAILED", userMessage)
+            Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", throwable)
+        }
+        currentImportLogUid = null
     }
 
     fun startImportAnalysis(context: Context, uri: Uri) {

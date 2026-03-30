@@ -29,6 +29,18 @@ enum class ImportWorkbookRoute {
     FULL_DATABASE
 }
 
+internal sealed interface SmartImportWorkbookOutcome {
+    data object SingleSheet : SmartImportWorkbookOutcome
+    data class FullDatabaseAnalyzed(
+        val result: FullDbImportStreamingResult
+    ) : SmartImportWorkbookOutcome
+}
+
+internal object FullDbImportStreamingTestHooks {
+    @Volatile
+    var onWorkbookStaged: ((uri: Uri, stagedFile: File) -> Unit)? = null
+}
+
 data class FullDbImportStreamingResult(
     val analysis: ImportAnalyzer.DeferredRelationImportAnalysis,
     val pendingSupplierNames: Set<String>,
@@ -57,6 +69,31 @@ private data class PriceHistoryHeaderIndexes(
 
 private class StopAfterFirstParsedRow : RuntimeException(null, null, false, false)
 
+internal suspend fun analyzeSmartImportWorkbook(
+    context: Context,
+    uri: Uri,
+    repository: InventoryRepository,
+    loadCurrentDbProducts: suspend () -> List<Product>
+): SmartImportWorkbookOutcome {
+    if (!looksLikeXlsxWorkbook(context, uri)) {
+        return SmartImportWorkbookOutcome.SingleSheet
+    }
+
+    return withStagedWorkbook(context, uri) { stagedFile ->
+        when (detectImportWorkbookRoute(stagedFile)) {
+            ImportWorkbookRoute.SINGLE_SHEET -> SmartImportWorkbookOutcome.SingleSheet
+            ImportWorkbookRoute.FULL_DATABASE -> SmartImportWorkbookOutcome.FullDatabaseAnalyzed(
+                result = analyzeFullDbImportStreaming(
+                    context = context,
+                    stagedFile = stagedFile,
+                    currentDbProducts = loadCurrentDbProducts(),
+                    repository = repository
+                )
+            )
+        }
+    }
+}
+
 suspend fun detectImportWorkbookRoute(
     context: Context,
     uri: Uri
@@ -65,7 +102,13 @@ suspend fun detectImportWorkbookRoute(
         return ImportWorkbookRoute.SINGLE_SHEET
     }
 
-    val normalizedSheetNames = inspectWorkbookSheetNames(context, uri)
+    return withStagedWorkbook(context, uri) { stagedFile ->
+        detectImportWorkbookRoute(stagedFile)
+    }
+}
+
+private fun detectImportWorkbookRoute(stagedFile: File): ImportWorkbookRoute {
+    val normalizedSheetNames = inspectWorkbookSheetNames(stagedFile)
         .map(::normalizeExcelHeader)
         .filter { it.isNotBlank() }
 
@@ -82,7 +125,21 @@ suspend fun analyzeFullDbImportStreaming(
     uri: Uri,
     currentDbProducts: List<Product>,
     repository: InventoryRepository
-): FullDbImportStreamingResult = withWorkbookReader(context, uri) { reader, styles, sharedStrings ->
+): FullDbImportStreamingResult = withStagedWorkbook(context, uri) { stagedFile ->
+    analyzeFullDbImportStreaming(
+        context = context,
+        stagedFile = stagedFile,
+        currentDbProducts = currentDbProducts,
+        repository = repository
+    )
+}
+
+private suspend fun analyzeFullDbImportStreaming(
+    context: Context,
+    stagedFile: File,
+    currentDbProducts: List<Product>,
+    repository: InventoryRepository
+): FullDbImportStreamingResult = withWorkbookReader(stagedFile) { reader, styles, sharedStrings ->
     var productsAnalysis: ImportAnalyzer.DeferredRelationImportAnalysis? = null
     var productsRowCount = 0
     var supplierRowCount = 0
@@ -182,7 +239,7 @@ suspend fun applyFullDbPriceHistoryStreaming(
                 return@parseSheetRows
             }
 
-            val indexes = headerIndexes ?: return@parseSheetRows
+            val indexes = requireNotNull(headerIndexes)
             val barcode = row.getOrNull(indexes.barcodeIndex)?.trim().orEmpty()
             val timestamp = row.getOrNull(indexes.timestampIndex)?.trim().orEmpty()
             val rawType = row.getOrNull(indexes.typeIndex)?.trim()?.lowercase(Locale.ROOT).orEmpty()
@@ -246,7 +303,7 @@ private suspend fun analyzeProductsSheet(
                 return@parseSheetRows
             }
 
-            val normalizedHeader = header ?: return@parseSheetRows
+            val normalizedHeader = requireNotNull(header)
             val mappedRow = normalizedHeader.mapIndexed { index, key ->
                 key to (row.getOrNull(index) ?: "")
             }.toMap()
@@ -279,7 +336,7 @@ private fun parseEntityNamesSheet(
             return@parseSheetRows
         }
 
-        val idx = nameIndex ?: return@parseSheetRows
+        val idx = requireNotNull(nameIndex)
         row.getOrNull(idx)
             ?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -352,15 +409,30 @@ private suspend inline fun <T> withWorkbookReader(
     context: Context,
     uri: Uri,
     block: suspend (reader: XSSFReader, styles: StylesTable, sharedStrings: ReadOnlySharedStringsTable) -> T
+): T = withStagedWorkbook(context, uri) { stagedFile ->
+    withWorkbookReader(stagedFile, block)
+}
+
+private suspend inline fun <T> withWorkbookReader(
+    stagedFile: File,
+    block: suspend (reader: XSSFReader, styles: StylesTable, sharedStrings: ReadOnlySharedStringsTable) -> T
+): T {
+    OPCPackage.open(stagedFile, PackageAccess.READ).use { pkg ->
+        val reader = XSSFReader(pkg)
+        val styles = reader.stylesTable
+        val sharedStrings = ReadOnlySharedStringsTable(pkg)
+        return block(reader, styles, sharedStrings)
+    }
+}
+
+private suspend inline fun <T> withStagedWorkbook(
+    context: Context,
+    uri: Uri,
+    block: suspend (stagedFile: File) -> T
 ): T {
     val stagedFile = stageWorkbookToCache(context, uri)
     try {
-        OPCPackage.open(stagedFile, PackageAccess.READ).use { pkg ->
-            val reader = XSSFReader(pkg)
-            val styles = reader.stylesTable
-            val sharedStrings = ReadOnlySharedStringsTable(pkg)
-            return block(reader, styles, sharedStrings)
-        }
+        return block(stagedFile)
     } finally {
         stagedFile.delete()
     }
@@ -378,6 +450,7 @@ private fun stageWorkbookToCache(context: Context, uri: Uri): File {
         tempFile.delete()
         throw t
     }
+    FullDbImportStreamingTestHooks.onWorkbookStaged?.invoke(uri, tempFile)
     return tempFile
 }
 
@@ -393,24 +466,19 @@ private fun looksLikeXlsxWorkbook(context: Context, uri: Uri): Boolean {
     } ?: throw IOException("Unable to open input stream for $uri")
 }
 
-private fun inspectWorkbookSheetNames(context: Context, uri: Uri): List<String> {
-    val stagedFile = stageWorkbookToCache(context, uri)
-    try {
-        OPCPackage.open(stagedFile, PackageAccess.READ).use { pkg ->
-            val reader = XSSFReader(pkg)
-            val iterator = reader.sheetsData as XSSFReader.SheetIterator
-            val sheetNames = mutableListOf<String>()
+private fun inspectWorkbookSheetNames(stagedFile: File): List<String> {
+    OPCPackage.open(stagedFile, PackageAccess.READ).use { pkg ->
+        val reader = XSSFReader(pkg)
+        val iterator = reader.sheetsData as XSSFReader.SheetIterator
+        val sheetNames = mutableListOf<String>()
 
-            while (iterator.hasNext()) {
-                iterator.next().use {
-                    sheetNames += iterator.sheetName
-                }
+        while (iterator.hasNext()) {
+            iterator.next().use {
+                sheetNames += iterator.sheetName
             }
-
-            return sheetNames
         }
-    } finally {
-        stagedFile.delete()
+
+        return sheetNames
     }
 }
 
