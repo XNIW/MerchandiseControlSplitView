@@ -200,6 +200,7 @@
     <string name="exit_confirmation_message">Are you sure you want to exit? Progress has been saved to history.</string>
     <string name="calculate_new_value">Calculate new value</string>
     <string name="status_completed">Completed</string>
+    <string name="status_incomplete">Incomplete</string>
     <string name="status_warning">Warning</string>
     <string name="preview_file_title">File Preview</string>
     <string name="analysis_in_progress">Analysis in progress…</string>

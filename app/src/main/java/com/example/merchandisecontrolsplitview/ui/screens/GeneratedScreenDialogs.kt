@@ -7,19 +7,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -38,7 +41,8 @@ import kotlinx.coroutines.delay
 
 /**
  * Dialoghi estratti da [GeneratedScreen] (TASK-002). Ordine di chiamata nel parent = ordine
- * nella composition (z-order); nessun polish UX.
+ * nella composition (z-order). TASK-014 applica solo polish locale, senza cambiare callback
+ * o semantica dei flussi.
  */
 @Composable
 fun GeneratedScreenDiscardDraftDialog(
@@ -51,8 +55,20 @@ fun GeneratedScreenDiscardDraftDialog(
     if (!visible) return
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(stringResource(R.string.discard_and_exit_title)) },
-        text = { Text(stringResource(R.string.discard_and_exit_message)) },
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Text(
+                text = stringResource(R.string.discard_and_exit_title),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.discard_and_exit_message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
         confirmButton = {
             TextButton(
                 onClick = onConfirmDiscard,
@@ -87,7 +103,13 @@ fun GeneratedScreenExitFromHistoryDialog(
     if (!visible) return
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(stringResource(R.string.exit_confirmation_title)) },
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Text(
+                text = stringResource(R.string.exit_confirmation_title),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
         text = {
             if (isSavingOrReverting) {
                 Column(
@@ -96,10 +118,17 @@ fun GeneratedScreenExitFromHistoryDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     CircularProgressIndicator()
-                    Text(stringResource(R.string.saving_changes))
+                    Text(
+                        text = stringResource(R.string.saving_changes),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             } else {
-                Text(stringResource(R.string.exit_changes_question))
+                Text(
+                    text = stringResource(R.string.exit_changes_question),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         },
         confirmButton = {
@@ -147,8 +176,20 @@ fun GeneratedScreenExitToHomeDialog(
     if (!visible) return
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(stringResource(R.string.dialog_title_return_home)) },
-        text = { Text(stringResource(R.string.dialog_message_save_and_return_home)) },
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Text(
+                text = stringResource(R.string.dialog_title_return_home),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.dialog_message_save_and_return_home),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
         confirmButton = {
             Button(
                 onClick = onSaveAndExitToHome,
@@ -196,21 +237,33 @@ fun GeneratedScreenSearchDialog(
             keyboardController?.hide()
             onDismiss()
         },
-        title = { Text(stringResource(R.string.search_number)) },
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Text(
+                text = stringResource(R.string.search_number),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
         text = {
-            Column {
-                Button(
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalButton(
                     onClick = onLaunchScanner,
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.scanner))
                 }
-                TextField(
+                OutlinedTextField(
                     value = searchText,
                     onValueChange = onSearchTextChange,
                     label = { Text(stringResource(R.string.insert_number)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Search,
+                            contentDescription = null
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Ascii,
@@ -229,7 +282,7 @@ fun GeneratedScreenSearchDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = {
+            Button(onClick = {
                 keyboardController?.hide()
                 onPerformSearch()
             }) { Text(stringResource(R.string.search_number)) }

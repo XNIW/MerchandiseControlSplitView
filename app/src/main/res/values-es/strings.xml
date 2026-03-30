@@ -199,6 +199,7 @@
     <string name="exit_confirmation_message">¿Estás seguro de que deseas salir? El progreso se ha guardado en el historial.</string>
     <string name="calculate_new_value">Calcular nuevo valor</string>
     <string name="status_completed">Completado</string>
+    <string name="status_incomplete">Incompleto</string>
     <string name="status_warning">Aviso</string>
     <string name="preview_file_title">Vista Previa del Archivo</string>
     <string name="analysis_in_progress">Análisis en curso…</string>

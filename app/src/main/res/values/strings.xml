@@ -200,6 +200,7 @@
     <string name="exit_confirmation_message">Sei sicuro di voler uscire? I progressi inseriti sono stati salvati nella cronologia.</string>
     <string name="calculate_new_value">Calcola nuovo valore</string>
     <string name="status_completed">Completato</string>
+    <string name="status_incomplete">Incompleto</string>
     <string name="status_warning">Avviso</string>
     <string name="preview_file_title">Anteprima File</string>
     <string name="analysis_in_progress">Analisi in corso…</string>

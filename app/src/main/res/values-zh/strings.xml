@@ -199,6 +199,7 @@
     <string name="exit_confirmation_message">你确定要退出吗？进度已保存到历史记录。</string>
     <string name="calculate_new_value">计算新值</string>
     <string name="status_completed">已完成</string>
+    <string name="status_incomplete">未完成</string>
     <string name="status_warning">警告</string>
     <string name="preview_file_title">文件预览</string>
     <string name="analysis_in_progress">正在分析…</string>
