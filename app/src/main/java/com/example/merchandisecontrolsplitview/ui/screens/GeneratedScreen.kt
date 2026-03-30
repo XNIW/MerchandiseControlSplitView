@@ -80,6 +80,21 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.ui.text.style.TextOverflow
 
+/**
+ * Whether auxiliary "old purchase price" UI should show: old is non-blank and not equal to current
+ * (trimmed string match; if both parse as numbers, numeric equality hides the old value).
+ */
+private fun oldPurchasePriceDiffersFromCurrent(current: String, old: String): Boolean {
+    val c = current.trim()
+    val o = old.trim()
+    if (o.isEmpty()) return false
+    if (c == o) return false
+    val cd = c.replace(',', '.').toDoubleOrNull()
+    val od = o.replace(',', '.').toDoubleOrNull()
+    if (cd != null && od != null && cd == od) return false
+    return true
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneratedScreen(
@@ -1398,6 +1413,103 @@ private fun GeneratedScreenInfoDialog(
                     BoxWithConstraints {
                         val useSideBySideEditors = maxWidth >= 260.dp
 
+                        val purchaseBlock: @Composable () -> Unit = {
+                            if (isInfoDialogInEditMode) {
+                                GeneratedScreenCompactInputField(
+                                    label = stringResource(R.string.header_purchase_price),
+                                    value = purchasePriceState.value,
+                                    onValueChange = { purchasePriceState.value = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    supportingText = {
+                                        if (oldPurchasePriceDiffersFromCurrent(
+                                                purchasePriceState.value.text,
+                                                oldPurchasePriceState.value.text
+                                            )
+                                        ) {
+                                            Text(
+                                                text = "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                textDecoration = TextDecoration.LineThrough
+                                            )
+                                        }
+                                    },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = { onOpenPurchaseCalculator(purchasePriceState.value.text) }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Calculate,
+                                                contentDescription = stringResource(R.string.calculate_new_value)
+                                            )
+                                        }
+                                    },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                )
+                            } else {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(
+                                                start = 12.dp,
+                                                end = 4.dp,
+                                                top = 10.dp,
+                                                bottom = 10.dp
+                                            ),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Text(
+                                                    text = stringResource(R.string.header_purchase_price),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(
+                                                        alpha = 0.75f
+                                                    )
+                                                )
+                                                Text(
+                                                    text = purchasePriceState.value.text.ifBlank { "—" },
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { onOpenPurchaseCalculator(purchasePriceState.value.text) }
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Calculate,
+                                                    contentDescription = stringResource(R.string.calculate_new_value),
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (oldPurchasePriceDiffersFromCurrent(
+                                            purchasePriceState.value.text,
+                                            oldPurchasePriceState.value.text
+                                        )
+                                    ) {
+                                        Text(
+                                            text = "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textDecoration = TextDecoration.LineThrough
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         val countedField: @Composable (Modifier) -> Unit = { modifier ->
                             GeneratedScreenCompactInputField(
                                 label = getLocalizedHeader(context, "realQuantity"),
@@ -1422,133 +1534,58 @@ private fun GeneratedScreenInfoDialog(
                             )
                         }
 
-                        val purchaseReference: @Composable () -> Unit = {
-                            if (isInfoDialogInEditMode) {
-                                GeneratedScreenCompactInputField(
-                                    label = stringResource(R.string.header_purchase_price),
-                                    value = purchasePriceState.value,
-                                    onValueChange = { purchasePriceState.value = it },
-                                    supportingText = {
-                                        if (oldPurchasePriceState.value.text.isNotBlank()) {
-                                            Text(
-                                                "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}"
-                                            )
-                                        }
-                                    },
-                                    trailingIcon = {
-                                        IconButton(
-                                            onClick = { onOpenPurchaseCalculator(purchasePriceState.value.text) }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Calculate,
-                                                contentDescription = stringResource(R.string.calculate_new_value)
-                                            )
-                                        }
-                                    },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                                )
-                            } else {
-                                Surface(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(16.dp),
-                                    color = MaterialTheme.colorScheme.secondaryContainer
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.weight(1f),
-                                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                                        ) {
-                                            Text(
-                                                text = stringResource(R.string.header_purchase_price),
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f)
-                                            )
-                                            Text(
-                                                text = purchasePriceState.value.text.ifBlank { "—" },
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { onOpenPurchaseCalculator(purchasePriceState.value.text) }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Filled.Calculate,
-                                                contentDescription = stringResource(R.string.calculate_new_value),
-                                                tint = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
-                                    }
-                                }
-
-                                if (oldPurchasePriceState.value.text.isNotBlank()) {
-                                    Text(
-                                        text = "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        textDecoration = TextDecoration.LineThrough
-                                    )
-                                }
-                            }
-                        }
-
                         val retailField: @Composable (Modifier) -> Unit = { modifier ->
-                            Column(
+                            GeneratedScreenCompactInputField(
+                                label = getLocalizedHeader(context, "retailPrice"),
+                                value = priceTf,
+                                onValueChange = { newValue ->
+                                    priceTf = newValue
+                                    editableValues[infoRowIndex][1].value = newValue.text
+                                    excelViewModel.updateHistoryEntry(entryUid)
+                                },
                                 modifier = modifier,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                GeneratedScreenCompactInputField(
-                                    label = getLocalizedHeader(context, "retailPrice"),
-                                    value = priceTf,
-                                    onValueChange = { newValue ->
-                                        priceTf = newValue
-                                        editableValues[infoRowIndex][1].value = newValue.text
-                                        excelViewModel.updateHistoryEntry(entryUid)
-                                    },
-                                    supportingText = {
-                                        if (oldRetailPriceState.value.text.isNotBlank()) {
-                                            Text("${stringResource(R.string.header_old_retail_price)}: ${oldRetailPriceState.value.text}")
-                                        }
-                                    },
-                                    fieldModifier = Modifier.focusRequester(priceReq),
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Number,
-                                        imeAction = ImeAction.Done
-                                    ),
-                                    keyboardActions = KeyboardActions(
-                                        onDone = {
-                                            val countedQtyString = editableValues[infoRowIndex][0].value
-                                            val originalQtyString = quantityState.value.text
-                                            val countedQty = countedQtyString.toDoubleOrNull()
-                                            val originalQty = originalQtyString.toDoubleOrNull()
+                                supportingText = {
+                                    if (oldRetailPriceState.value.text.isNotBlank()) {
+                                        Text("${stringResource(R.string.header_old_retail_price)}: ${oldRetailPriceState.value.text}")
+                                    }
+                                },
+                                fieldModifier = Modifier.focusRequester(priceReq),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onDone = {
+                                        val countedQtyString = editableValues[infoRowIndex][0].value
+                                        val originalQtyString = quantityState.value.text
+                                        val countedQty = countedQtyString.toDoubleOrNull()
+                                        val originalQty = originalQtyString.toDoubleOrNull()
 
-                                            if (countedQty != null && countedQty == originalQty) {
-                                                completeStates[infoRowIndex] = true
-                                                excelViewModel.updateHistoryEntry(entryUid)
-                                            }
-                                            onDismiss()
+                                        if (countedQty != null && countedQty == originalQty) {
+                                            completeStates[infoRowIndex] = true
+                                            excelViewModel.updateHistoryEntry(entryUid)
                                         }
-                                    )
+                                        onDismiss()
+                                    }
                                 )
-                                purchaseReference()
-                            }
+                            )
                         }
 
-                        if (useSideBySideEditors) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalAlignment = Alignment.Top
-                            ) {
-                                countedField(Modifier.weight(1f))
-                                retailField(Modifier.weight(1f))
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            purchaseBlock()
+                            if (useSideBySideEditors) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    countedField(Modifier.weight(1f))
+                                    retailField(Modifier.weight(1f))
+                                }
+                            } else {
                                 countedField(Modifier.fillMaxWidth())
                                 retailField(Modifier.fillMaxWidth())
                             }
