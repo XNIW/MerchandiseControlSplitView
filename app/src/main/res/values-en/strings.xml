@@ -167,9 +167,9 @@
 
     <string name="import_analysis_title">Import Review</string>
     <string name="confirm_import">Confirm Import</string>
-    <string name="new_products_to_add">New products to add: %1$d</string>
+    <string name="new_products_to_add">New products to add: %1$s</string>
     <string name="no_new_products">No new products.</string>
-    <string name="products_to_update">Products to update: %1$d</string>
+    <string name="products_to_update">Products to update: %1$s</string>
     <string name="no_products_to_update">No products to update.</string>
     <string name="errors_found">Errors found: %1$d</string>
     <string name="no_critical_errors_found">No critical errors found.</string>
@@ -293,7 +293,7 @@
     <string name="row_updated">Row Updated</string>
     <string name="scan_barcode_for_editing">Scan barcode</string>
 
-    <string name="duplicate_warnings_found">Duplicate warnings found (%d)</string>
+    <string name="duplicate_warnings_found">Duplicate warnings found (%1$s)</string>
     <string name="warning_duplicate_barcode">Barcode: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Found in rows: %1$s</string>
     <string name="warning_duplicate_resolution">The data from the last row will be used and the quantities will be summed.</string>

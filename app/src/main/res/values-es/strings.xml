@@ -166,9 +166,9 @@
 
     <string name="import_analysis_title">Revisión de Importación</string>
     <string name="confirm_import">Confirmar Importación</string>
-    <string name="new_products_to_add">Nuevos productos a agregar: %1$d</string>
+    <string name="new_products_to_add">Nuevos productos a agregar: %1$s</string>
     <string name="no_new_products">No hay nuevos productos.</string>
-    <string name="products_to_update">Productos a actualizar: %1$d</string>
+    <string name="products_to_update">Productos a actualizar: %1$s</string>
     <string name="no_products_to_update">No hay productos para actualizar.</string>
     <string name="errors_found">Errores encontrados: %1$d</string>
     <string name="no_critical_errors_found">No se encontraron errores críticos.</string>
@@ -292,7 +292,7 @@
     <string name="row_updated">Fila actualizada</string>
     <string name="scan_barcode_for_editing">Escanear código de barras</string>
 
-    <string name="duplicate_warnings_found">Avisos de duplicados encontrados (%d)</string>
+    <string name="duplicate_warnings_found">Avisos de duplicados encontrados (%1$s)</string>
     <string name="warning_duplicate_barcode">Código de barras: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Encontrado en las filas: %1$s</string>
     <string name="warning_duplicate_resolution">Se utilizarán los datos de la última fila y las cantidades se sumarán.</string>

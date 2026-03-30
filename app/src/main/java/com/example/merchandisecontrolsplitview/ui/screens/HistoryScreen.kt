@@ -20,23 +20,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.core.os.ConfigurationCompat
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
-import java.text.NumberFormat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-import java.util.Currency
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -332,16 +330,6 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    val configuration = LocalConfiguration.current
-    val currentLocale = remember(configuration) {
-        ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault()
-    }
-    val currencyFormat = remember(currentLocale) {
-        NumberFormat.getCurrencyInstance(currentLocale).apply {
-            currency = Currency.getInstance("CLP")
-            maximumFractionDigits = 0
-        }
-    }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
@@ -444,23 +432,22 @@ private fun HistoryRow(
 
                     if (entry.totalItems > 0) {
                         Text(
-                            text = "${stringResource(R.string.summary_label)}: ${entry.totalItems} ${stringResource(R.string.products_label)}",
+                            text = "${stringResource(R.string.summary_label)}: ${formatClCount(entry.totalItems)} ${stringResource(R.string.products_label)}",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
-                            text = "${stringResource(R.string.order_value_label)}: ${currencyFormat.format(entry.orderTotal)}",
+                            text = "${stringResource(R.string.order_value_label)}: ${formatClSummaryMoney(entry.orderTotal)}",
                             style = MaterialTheme.typography.bodyMedium
                         )
-                        // ✅ NUOVA RIGA PER I PRODOTTI MANCANTI
                         if (entry.missingItems > 0) {
                             Text(
-                                text = "${stringResource(R.string.missing_items_label)}: ${entry.missingItems}", // Aggiungi stringa "Prodotti mancanti"
+                                text = "${stringResource(R.string.missing_items_label)}: ${formatClCount(entry.missingItems)}",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error // Evidenzia in rosso
+                                color = MaterialTheme.colorScheme.error
                             )
                         }
                         Text(
-                            text = "${stringResource(R.string.payment_total_label)}: ${currencyFormat.format(entry.paymentTotal)}",
+                            text = "${stringResource(R.string.payment_total_label)}: ${formatClSummaryMoney(entry.paymentTotal)}",
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Bold
                         )

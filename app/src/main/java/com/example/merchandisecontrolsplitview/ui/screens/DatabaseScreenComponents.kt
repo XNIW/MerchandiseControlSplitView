@@ -55,7 +55,8 @@ import androidx.paging.compose.LazyPagingItems
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
+import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
+import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -242,7 +243,7 @@ private fun PriceColumn(
             Spacer(Modifier.height(8.dp))
             Text(text = labelOld, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = formatNumberAsRoundedString(priceOldValue),
+                text = formatClPricePlainDisplay(priceOldValue),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textDecoration = TextDecoration.LineThrough
@@ -292,14 +293,14 @@ internal fun ProductRow(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 PriceColumn(
                     labelNew = stringResource(R.string.product_purchase_price_new_short),
-                    priceNew = formatNumberAsRoundedString(product.purchasePrice ?: productDetails.lastPurchase),
+                    priceNew = formatClPricePlainDisplay(product.purchasePrice ?: productDetails.lastPurchase),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
                     priceOldValue = productDetails.prevPurchase,
                     horizontalAlignment = Alignment.Start
                 )
                 PriceColumn(
                     labelNew = stringResource(R.string.product_retail_price_new_short),
-                    priceNew = formatNumberAsRoundedString(product.retailPrice ?: productDetails.lastRetail),
+                    priceNew = formatClPricePlainDisplay(product.retailPrice ?: productDetails.lastRetail),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
                     priceOldValue = productDetails.prevRetail,
                     horizontalAlignment = Alignment.End
@@ -330,7 +331,7 @@ internal fun ProductRow(
 
                 Row {
                     Text(text = "${stringResource(R.string.header_stock_quantity)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(text = formatNumberAsRoundedString(product.stockQuantity), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    Text(text = formatClQuantityDisplayReadOnly(product.stockQuantity), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                 }
             }
         }

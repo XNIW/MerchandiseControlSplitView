@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -50,10 +51,17 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatClPriceInput
+import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
+import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
+import com.example.merchandisecontrolsplitview.util.normalizeClPriceInput
+import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
+import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
+import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
+import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
-import java.util.Locale
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Home
@@ -89,8 +97,8 @@ private fun oldPurchasePriceDiffersFromCurrent(current: String, old: String): Bo
     val o = old.trim()
     if (o.isEmpty()) return false
     if (c == o) return false
-    val cd = c.replace(',', '.').toDoubleOrNull()
-    val od = o.replace(',', '.').toDoubleOrNull()
+    val cd = parseUserPriceInput(c)
+    val od = parseUserPriceInput(o)
     if (cd != null && od != null && cd == od) return false
     return true
 }
@@ -727,7 +735,7 @@ fun GeneratedScreen(
                         value = calcInput,
                         onValueChange = { calcInput = it },
                         onResult = { res ->
-                            val formattedRes = formatDecimal(res)
+                            val formattedRes = normalizeClPriceInput(res)
                             // Aggiorna sia lo stato del dialogo che i dati reali del ViewModel
                             purchasePriceState.value = TextFieldValue(formattedRes)
                             val idx = excelViewModel.excelData.first().indexOf("purchasePrice")
@@ -1038,6 +1046,7 @@ private fun GeneratedScreenGridHost(
                 onRowCellClick = { row ->
                     if (isManualEntry) onManualRowClick(row) else onGeneratedRowClick(row)
                 },
+                columnKeys = excelData.firstOrNull(),
                 onHeaderClick = onHeaderDialogRequest,
                 isColumnEssential = { false },
                 onHeaderEditClick = onHeaderDialogRequest,
@@ -1420,6 +1429,7 @@ private fun GeneratedScreenInfoDialog(
                                     value = purchasePriceState.value,
                                     onValueChange = { purchasePriceState.value = it },
                                     modifier = Modifier.fillMaxWidth(),
+                                    normalizeOnBlur = ::normalizeClPriceInput,
                                     supportingText = {
                                         if (oldPurchasePriceDiffersFromCurrent(
                                                 purchasePriceState.value.text,
@@ -1427,7 +1437,7 @@ private fun GeneratedScreenInfoDialog(
                                             )
                                         ) {
                                             Text(
-                                                text = "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}",
+                                                text = "${stringResource(R.string.header_old_purchase_price_short)}: ${formatClPricePlainDisplay(parseUserPriceInput(oldPurchasePriceState.value.text))}",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 textDecoration = TextDecoration.LineThrough
@@ -1444,7 +1454,7 @@ private fun GeneratedScreenInfoDialog(
                                             )
                                         }
                                     },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                                 )
                             } else {
                                 Column(
@@ -1478,7 +1488,9 @@ private fun GeneratedScreenInfoDialog(
                                                     )
                                                 )
                                                 Text(
-                                                    text = purchasePriceState.value.text.ifBlank { "—" },
+                                                    text = parseUserPriceInput(purchasePriceState.value.text)
+                                                        ?.let(::formatClPricePlainDisplay)
+                                                        ?: purchasePriceState.value.text.ifBlank { "—" },
                                                     style = MaterialTheme.typography.bodyLarge,
                                                     fontWeight = FontWeight.Bold
                                                 )
@@ -1500,7 +1512,7 @@ private fun GeneratedScreenInfoDialog(
                                         )
                                     ) {
                                         Text(
-                                            text = "${stringResource(R.string.header_old_purchase_price_short)}: ${oldPurchasePriceState.value.text}",
+                                            text = "${stringResource(R.string.header_old_purchase_price_short)}: ${formatClPricePlainDisplay(parseUserPriceInput(oldPurchasePriceState.value.text))}",
                                             style = MaterialTheme.typography.labelMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             textDecoration = TextDecoration.LineThrough
@@ -1521,13 +1533,14 @@ private fun GeneratedScreenInfoDialog(
                                 },
                                 modifier = modifier,
                                 fieldModifier = Modifier.focusRequester(qtyReq),
+                                normalizeOnBlur = ::normalizeClQuantityInput,
                                 supportingText = {
                                     if (quantityState.value.text.isNotBlank()) {
-                                        Text("${stringResource(R.string.header_quantity)}: ${quantityState.value.text}")
+                                        Text("${stringResource(R.string.header_quantity)}: ${formatClQuantityDisplayReadOnly(parseUserQuantityInput(quantityState.value.text))}")
                                     }
                                 },
                                 keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
+                                    keyboardType = KeyboardType.Decimal,
                                     imeAction = ImeAction.Next
                                 ),
                                 keyboardActions = KeyboardActions(onNext = { priceReq.requestFocus() })
@@ -1544,22 +1557,31 @@ private fun GeneratedScreenInfoDialog(
                                     excelViewModel.updateHistoryEntry(entryUid)
                                 },
                                 modifier = modifier,
+                                normalizeOnBlur = ::normalizeClPriceInput,
                                 supportingText = {
                                     if (oldRetailPriceState.value.text.isNotBlank()) {
-                                        Text("${stringResource(R.string.header_old_retail_price)}: ${oldRetailPriceState.value.text}")
+                                        Text("${stringResource(R.string.header_old_retail_price)}: ${formatClPricePlainDisplay(parseUserPriceInput(oldRetailPriceState.value.text))}")
                                     }
                                 },
                                 fieldModifier = Modifier.focusRequester(priceReq),
                                 keyboardOptions = KeyboardOptions(
-                                    keyboardType = KeyboardType.Number,
+                                    keyboardType = KeyboardType.Decimal,
                                     imeAction = ImeAction.Done
                                 ),
                                 keyboardActions = KeyboardActions(
                                     onDone = {
-                                        val countedQtyString = editableValues[infoRowIndex][0].value
+                                        val normalizedCountedQty = normalizeClQuantityInput(editableValues[infoRowIndex][0].value)
+                                        qtyTf = TextFieldValue(normalizedCountedQty, TextRange(normalizedCountedQty.length))
+                                        editableValues[infoRowIndex][0].value = normalizedCountedQty
+
+                                        val normalizedRetailPrice = normalizeClPriceInput(editableValues[infoRowIndex][1].value)
+                                        priceTf = TextFieldValue(normalizedRetailPrice, TextRange(normalizedRetailPrice.length))
+                                        editableValues[infoRowIndex][1].value = normalizedRetailPrice
+
+                                        val countedQtyString = normalizedCountedQty
                                         val originalQtyString = quantityState.value.text
-                                        val countedQty = countedQtyString.toDoubleOrNull()
-                                        val originalQty = originalQtyString.toDoubleOrNull()
+                                        val countedQty = parseUserQuantityInput(countedQtyString)
+                                        val originalQty = parseUserQuantityInput(originalQtyString)
 
                                         if (countedQty != null && countedQty == originalQty) {
                                             completeStates[infoRowIndex] = true
@@ -1611,11 +1633,11 @@ private fun GeneratedScreenInfoDialog(
                 ) {
                     GeneratedScreenDetailValueRow(
                         label = stringResource(R.string.header_quantity),
-                        value = quantityState.value.text
+                        value = formatClQuantityDisplayReadOnly(parseUserQuantityInput(quantityState.value.text))
                     )
                     GeneratedScreenDetailValueRow(
                         label = stringResource(R.string.header_total_price),
-                        value = totalPriceState.value.text
+                        value = formatClPricePlainDisplay(parseUserPriceInput(totalPriceState.value.text))
                     )
                 }
 
@@ -1691,6 +1713,7 @@ private fun GeneratedScreenCompactInputField(
     onValueChange: (TextFieldValue) -> Unit,
     modifier: Modifier = Modifier,
     fieldModifier: Modifier = Modifier,
+    normalizeOnBlur: ((String) -> String)? = null,
     supportingText: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
@@ -1709,7 +1732,16 @@ private fun GeneratedScreenCompactInputField(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            modifier = fieldModifier.fillMaxWidth(),
+            modifier = fieldModifier
+                .fillMaxWidth()
+                .onFocusChanged { state ->
+                    if (!state.isFocused && normalizeOnBlur != null) {
+                        val normalized = normalizeOnBlur(value.text)
+                        if (normalized != value.text) {
+                            onValueChange(TextFieldValue(normalized, TextRange(normalized.length)))
+                        }
+                    }
+                },
             placeholder = { Text("—") },
             supportingText = supportingText,
             trailingIcon = trailingIcon,
@@ -2088,7 +2120,7 @@ fun CalculatorDialog(
                 val errorText = stringResource(R.string.error_label)
                 Text(
                     text = if (result.isNotBlank() && result != errorText) {
-                        stringResource(R.string.result) + " ${result.toDoubleOrNull()?.let { formatDecimal(it) } ?: result}"
+                        stringResource(R.string.result) + " ${parseUserNumericInput(result)?.let(::formatClQuantityDisplayReadOnly) ?: result}"
                     } else stringResource(R.string.result),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier
@@ -2352,8 +2384,8 @@ fun ManualEntryDialog(
                         originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                             barcode = barcode,
                             productName = productName,
-                            retailPrice = retailPrice.text.replace(",", ".").toDoubleOrNull(),
-                            stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
+                            retailPrice = parseUserPriceInput(retailPrice.text),
+                            stockQuantity = parseUserQuantityInput(quantity.text),
                             categoryId = foundCategory.id
                         )
                         return@launch
@@ -2363,8 +2395,8 @@ fun ManualEntryDialog(
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = barcode,
                     productName = productName,
-                    retailPrice = retailPrice.text.replace(",", ".").toDoubleOrNull(),
-                    stockQuantity = quantity.text.replace(",", ".").toDoubleOrNull(),
+                    retailPrice = parseUserPriceInput(retailPrice.text),
+                    stockQuantity = parseUserQuantityInput(quantity.text),
                     categoryId = null
                 )
             }
@@ -2373,7 +2405,7 @@ fun ManualEntryDialog(
             val initialBarcode = productToPrefill.barcode
             val initialProductName = productToPrefill.productName ?: ""
             val initialRetailPrice =
-                formatNumberAsRoundedStringForInput(productToPrefill.retailPrice)
+                formatClPriceInput(productToPrefill.retailPrice)
             val initialQuantity = "1"
 
             barcode = initialBarcode
@@ -2390,8 +2422,8 @@ fun ManualEntryDialog(
                     originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                         barcode = initialBarcode,
                         productName = initialProductName,
-                        retailPrice = initialRetailPrice.replace(",", ".").toDoubleOrNull(),
-                        stockQuantity = initialQuantity.replace(",", ".").toDoubleOrNull(),
+                        retailPrice = parseUserPriceInput(initialRetailPrice),
+                        stockQuantity = parseUserQuantityInput(initialQuantity),
                         categoryId = category?.id,
                         id = productToPrefill.id
                     )
@@ -2400,8 +2432,8 @@ fun ManualEntryDialog(
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = initialBarcode,
                     productName = initialProductName,
-                    retailPrice = initialRetailPrice.replace(",", ".").toDoubleOrNull(),
-                    stockQuantity = initialQuantity.replace(",", ".").toDoubleOrNull(),
+                    retailPrice = parseUserPriceInput(initialRetailPrice),
+                    stockQuantity = parseUserQuantityInput(initialQuantity),
                     categoryId = null,
                     id = productToPrefill.id
                 )
@@ -2480,7 +2512,7 @@ fun ManualEntryDialog(
 
     val basicValid = barcode.isNotBlank() &&
             barcodeError == null &&
-            (retailPrice.text.replace(",", ".").toDoubleOrNull() ?: 0.0) > 0.0
+            (parseUserPriceInput(retailPrice.text) ?: 0.0) > 0.0
 
     val passChangesGate = when {
         // Prodotto esiste in DB → consenti solo se diverso dal DB
@@ -2597,8 +2629,14 @@ fun ManualEntryDialog(
                         value = purchasePrice,
                         onValueChange = { purchasePrice = it },
                         label = { Text(stringResource(R.string.header_purchase_price)) },
-                        modifier = Modifier.weight(1f),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    purchasePrice = normalizeClPriceInput(purchasePrice)
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
                     )
                     OutlinedTextField(
@@ -2607,16 +2645,30 @@ fun ManualEntryDialog(
                         label = { Text(stringResource(R.string.header_retail_price) + "*") },
                         modifier = Modifier
                             .weight(1f)
-                            .focusRequester(priceFocusRequester),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                            .focusRequester(priceFocusRequester)
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    val normalized = normalizeClPriceInput(retailPrice.text)
+                                    retailPrice = TextFieldValue(normalized, TextRange(normalized.length))
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
                     )
                     OutlinedTextField(
                         value = quantity,
                         onValueChange = { quantity = it },
                         label = { Text(stringResource(R.string.header_quantity)) },
-                        modifier = Modifier.weight(1f).focusRequester(quantityFocusRequester),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(quantityFocusRequester)
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    val normalized = normalizeClQuantityInput(quantity.text)
+                                    quantity = TextFieldValue(normalized, TextRange(normalized.length))
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
                         keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() })
                     )
                 }
@@ -2634,7 +2686,8 @@ fun ManualEntryDialog(
                     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
-                            val formattedPrice = formatNumberAsRoundedStringForInput(productFromDb?.retailPrice)
+                            val formattedPrice = formatClPricePlainDisplay(productFromDb?.retailPrice)
+                            val retailPriceInput = formatClPriceInput(productFromDb?.retailPrice)
                             val databaseProductName = productFromDb?.productName?.takeIf { it.isNotBlank() }
                                 ?: stringResource(R.string.untitled)
                             Text(
@@ -2645,7 +2698,7 @@ fun ManualEntryDialog(
                                 )
                             )
                             TextButton(onClick = {
-                                retailPrice = TextFieldValue(formattedPrice, TextRange(formattedPrice.length))
+                                retailPrice = TextFieldValue(retailPriceInput, TextRange(retailPriceInput.length))
                                 productName = productFromDb?.productName ?: ""
                             }) { Text(stringResource(R.string.copy_data)) }
                         }
@@ -2659,12 +2712,12 @@ fun ManualEntryDialog(
                     "barcode" -> barcode
                     "productName" -> productName.ifBlank { selectedCategory?.name ?: manualEntryDefaultCategoryText }
                     "purchasePrice" -> {
-                        val rp = retailPrice.text.replace(",", ".").toDoubleOrNull()
-                        val pp = purchasePrice.replace(",", ".").toDoubleOrNull() ?: (rp?.div(2.0))
-                        pp?.let { formatNumberAsRoundedStringForInput(it) }.orEmpty()
+                        val rp = parseUserPriceInput(retailPrice.text)
+                        val pp = parseUserPriceInput(purchasePrice) ?: (rp?.div(2.0))
+                        pp?.let(::formatClPriceInput).orEmpty()
                     }
-                    "retailPrice" -> retailPrice.text
-                    "quantity" -> quantity.text
+                    "retailPrice" -> normalizeClPriceInput(retailPrice.text)
+                    "quantity" -> normalizeClQuantityInput(quantity.text)
                     "category" -> selectedCategory?.name ?: manualEntryDefaultCategoryText
                     else -> ""
                 }
@@ -2724,12 +2777,11 @@ fun toNormalizedProduct(
     qtyStr: String,
     categoryId: Long?
 ): com.example.merchandisecontrolsplitview.data.Product {
-    fun strToD(s: String) = s.replace(",", ".").trim().toDoubleOrNull()
     return com.example.merchandisecontrolsplitview.data.Product(
         barcode = barcode,
         productName = name.ifBlank { null },
-        retailPrice = strToD(retailPriceStr),
-        stockQuantity = strToD(qtyStr),
+        retailPrice = parseUserPriceInput(retailPriceStr),
+        stockQuantity = parseUserQuantityInput(qtyStr),
         categoryId = categoryId
     )
 }
@@ -2763,12 +2815,6 @@ private fun equalProductsForDb(
             almostEqual(a.retailPrice, b.retailPrice) &&
             a.categoryId == b.categoryId
 }
-fun formatDecimal(num: Double, digits: Int = 2): String =
-    String.format(Locale.getDefault(), "%.${digits}f", num)
-
-fun formatDecimal(num: String, digits: Int = 2): String =
-    num.toDoubleOrNull()?.let { formatDecimal(it, digits) } ?: num
-
 @Composable
 private fun MenuIconWithTick(
     base: ImageVector,
@@ -2810,7 +2856,7 @@ private fun TopInfoChipsBar(
     ) {
         supplier?.let { InfoChip(it) }
         category?.let { InfoChip(it) }
-        InfoChip("$completed/$total")
+        InfoChip("${formatClCount(completed)}/${formatClCount(total)}")
         if (exported) InfoChip(stringResource(R.string.exported_short), tonal = true)
     }
 }

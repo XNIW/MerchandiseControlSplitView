@@ -54,7 +54,7 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
+import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -380,7 +380,7 @@ private fun PriceHistoryRow(
             .padding(vertical = 12.dp)
     ) {
         Text(
-            text = formatNumberAsRoundedString(pricePoint.price),
+            text = formatClPricePlainDisplay(pricePoint.price),
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,

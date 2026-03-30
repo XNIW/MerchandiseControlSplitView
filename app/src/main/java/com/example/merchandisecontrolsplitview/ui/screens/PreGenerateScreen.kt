@@ -189,6 +189,7 @@ fun PreGenerateScreen(
                             onPriceCellClick = {},
                             onRowCellClick = { },
                             headerTypes = headerTypes,
+                            columnKeys = excelData.firstOrNull(),
                             isColumnEssential = { colIdx -> excelViewModel.isColumnEssential(colIdx) },
                             onHeaderClick = { colIdx -> excelViewModel.toggleColumnSelection(colIdx) },
                             onHeaderEditClick = { colIdx -> headerDialogIndex = colIdx },

@@ -55,8 +55,13 @@ import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.Supplier
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
+import com.example.merchandisecontrolsplitview.util.formatClPriceInput
+import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
+import com.example.merchandisecontrolsplitview.util.formatClQuantityInput
+import com.example.merchandisecontrolsplitview.util.normalizeClPriceInput
+import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
+import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
+import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -75,9 +80,9 @@ internal fun EditProductDialog(
     var productName by remember { mutableStateOf(product.productName ?: "") }
     var secondProductName by remember { mutableStateOf(product.secondProductName ?: "") }
     var itemNumber by remember { mutableStateOf(product.itemNumber ?: "") }
-    var purchasePrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.purchasePrice)) }
-    var retailPrice by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.retailPrice)) }
-    var stockQuantity by remember { mutableStateOf(formatNumberAsRoundedStringForInput(product.stockQuantity)) }
+    var purchasePrice by remember { mutableStateOf(formatClPriceInput(product.purchasePrice)) }
+    var retailPrice by remember { mutableStateOf(formatClPriceInput(product.retailPrice)) }
+    var stockQuantity by remember { mutableStateOf(formatClQuantityInput(product.stockQuantity)) }
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
     var productNameError by remember { mutableStateOf<String?>(null) }
@@ -104,11 +109,17 @@ internal fun EditProductDialog(
         mutableStateOf(TextFieldValue(retailPrice, TextRange(retailPrice.length)))
     }
 
+    fun normalizeRetailPriceField() {
+        val normalized = normalizeClPriceInput(retailPriceTf.text)
+        retailPrice = normalized
+        retailPriceTf = TextFieldValue(normalized, TextRange(normalized.length))
+    }
+
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
         productNameError = if (productName.isBlank() && secondProductName.isBlank()) productNameRequiredAtLeastOneErrorText else null
 
-        val retailPriceValue = retailPrice.replace(',', '.').toDoubleOrNull()
+        val retailPriceValue = parseUserPriceInput(retailPrice)
         retailPriceError = if (retailPriceValue == null || retailPriceValue <= 0) {
             retailPriceErrorText
         } else {
@@ -244,13 +255,21 @@ internal fun EditProductDialog(
                     value = purchasePrice,
                     onValueChange = { purchasePrice = it },
                     label = { Text(stringResource(R.string.purchase_price_label)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { state ->
+                            if (!state.isFocused) {
+                                purchasePrice = normalizeClPriceInput(purchasePrice)
+                            }
+                        },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
                     supportingText = {
                         if (lastPurchase != null || prevPurchase != null) {
                             Text(
                                 listOfNotNull(
-                                    lastPurchase?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
-                                    prevPurchase?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
+                                    lastPurchase?.let { stringResource(R.string.price_last, formatClPricePlainDisplay(it)) },
+                                    prevPurchase?.let { stringResource(R.string.price_previous, formatClPricePlainDisplay(it)) }
                                 ).joinToString("  •  ")
                             )
                         }
@@ -272,17 +291,20 @@ internal fun EditProductDialog(
                             if (state.isFocused && !askedKeyboard) {
                                 askedKeyboard = true
                                 keyboardController?.show()
+                            } else if (!state.isFocused) {
+                                normalizeRetailPriceField()
                             }
                         },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
                     isError = retailPriceError != null,
                     supportingText = {
                         retailPriceError?.let { Text(it) } ?: run {
                             if (lastRetail != null || prevRetail != null) {
                                 Text(
                                     listOfNotNull(
-                                        lastRetail?.let { stringResource(R.string.price_last, formatNumberAsRoundedString(it)) },
-                                        prevRetail?.let { stringResource(R.string.price_previous, formatNumberAsRoundedString(it)) }
+                                        lastRetail?.let { stringResource(R.string.price_last, formatClPricePlainDisplay(it)) },
+                                        prevRetail?.let { stringResource(R.string.price_previous, formatClPricePlainDisplay(it)) }
                                     ).joinToString("  •  ")
                                 )
                             }
@@ -296,7 +318,20 @@ internal fun EditProductDialog(
                     TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
                 }
 
-                OutlinedTextField(value = stockQuantity, onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } }, label = { Text(stringResource(R.string.header_stock_quantity)) }, modifier = Modifier.fillMaxWidth(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                OutlinedTextField(
+                    value = stockQuantity,
+                    onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                    label = { Text(stringResource(R.string.header_stock_quantity)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { state ->
+                            if (!state.isFocused) {
+                                stockQuantity = normalizeClQuantityInput(stockQuantity)
+                            }
+                        },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true
+                )
 
                 Box(modifier = Modifier
                     .fillMaxWidth()
@@ -335,11 +370,11 @@ internal fun EditProductDialog(
                                 productName = productName.trim(),
                                 secondProductName = secondProductName.trim().takeIf { it.isNotBlank() },
                                 itemNumber = itemNumber.trim().takeIf { it.isNotBlank() },
-                                purchasePrice = purchasePrice.replace(',', '.').toDoubleOrNull(),
-                                retailPrice = retailPrice.replace(',', '.').toDoubleOrNull(),
+                                purchasePrice = parseUserPriceInput(purchasePrice),
+                                retailPrice = parseUserPriceInput(retailPrice),
                                 supplierId = supplierId,
                                 categoryId = categoryId,
-                                stockQuantity = stockQuantity.replace(',', '.').toDoubleOrNull()
+                                stockQuantity = parseUserQuantityInput(stockQuantity)
                             )
                             onSave(productToSave)
                         }

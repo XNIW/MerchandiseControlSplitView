@@ -24,6 +24,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.util.formatGridNumericDisplay
 
 @Composable
 fun ZoomableExcelGrid(
@@ -43,6 +44,7 @@ fun ZoomableExcelGrid(
     onPriceCellClick: (Int) -> Unit,
     onRowCellClick: (Int) -> Unit,
     headerTypes: List<String>? = null,
+    columnKeys: List<String>? = null,
     onHeaderClick: ((colIndex: Int) -> Unit)?,
     // --- NUOVO: Parametri per gestire le colonne essenziali ---
     isColumnEssential: (colIndex: Int) -> Boolean,
@@ -116,9 +118,13 @@ fun ZoomableExcelGrid(
                     Row {
                         row.forEachIndexed { ci, cell ->
                             val isMatch = searchMatches.contains(r to ci)
+                            val formattedCell = formatGridNumericDisplay(
+                                rawValue = cell,
+                                columnKey = columnKeys?.getOrNull(ci)
+                            )
                             if (!generated || isManualEntry) {
                                 TableCell(
-                                    text = cell,
+                                    text = formattedCell,
                                     width = cellWidth,
                                     height = cellHeight,
                                     isSelectedColumn = selectedColumns.getOrElse(ci) { false },
@@ -146,14 +152,20 @@ fun ZoomableExcelGrid(
                                         )
                                     }
                                     hasEditable && ci == indexQuantita -> TableCell(
-                                        text = editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty(),
+                                        text = formatGridNumericDisplay(
+                                            rawValue = editableValues.getOrNull(r)?.getOrNull(0)?.value.orEmpty(),
+                                            columnKey = columnKeys?.getOrNull(ci)
+                                        ),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onQuantityCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
                                     hasEditable && ci == indexPrezzo -> TableCell(
-                                        text = editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty(),
+                                        text = formatGridNumericDisplay(
+                                            rawValue = editableValues.getOrNull(r)?.getOrNull(1)?.value.orEmpty(),
+                                            columnKey = columnKeys?.getOrNull(ci)
+                                        ),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onPriceCellClick(r) },
@@ -185,7 +197,7 @@ fun ZoomableExcelGrid(
                                         }
                                     }
                                     else -> TableCell(
-                                        text = cell, width = cellWidth, height = cellHeight,
+                                        text = formattedCell, width = cellWidth, height = cellHeight,
                                         isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onRowCellClick(r) },
                                         overrideBackgroundColor = highlightColor

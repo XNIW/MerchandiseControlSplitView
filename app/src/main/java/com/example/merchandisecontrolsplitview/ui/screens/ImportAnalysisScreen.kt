@@ -33,7 +33,9 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedString
+import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
+import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 
@@ -124,7 +126,10 @@ fun ImportAnalysisScreen(
             if (importAnalysis.warnings.isNotEmpty()) {
                 item {
                     ExpandableSection(
-                        title = stringResource(R.string.duplicate_warnings_found, importAnalysis.warnings.size),
+                        title = stringResource(
+                            R.string.duplicate_warnings_found,
+                            formatClCount(importAnalysis.warnings.size)
+                        ),
                         isExpanded = warningsExpanded,
                         onToggle = { warningsExpanded = !warningsExpanded }
                     ) {
@@ -139,7 +144,10 @@ fun ImportAnalysisScreen(
             }
             item {
                 ExpandableSection(
-                    title = stringResource(R.string.new_products_to_add, editableNewProducts.size),
+                    title = stringResource(
+                        R.string.new_products_to_add,
+                        formatClCount(editableNewProducts.size)
+                    ),
                     isExpanded = newProductsExpanded,
                     onToggle = { newProductsExpanded = !newProductsExpanded }
                 ) {
@@ -160,7 +168,10 @@ fun ImportAnalysisScreen(
 
             item {
                 ExpandableSection(
-                    title = stringResource(R.string.products_to_update, editableUpdatedProducts.size),
+                    title = stringResource(
+                        R.string.products_to_update,
+                        formatClCount(editableUpdatedProducts.size)
+                    ),
                     isExpanded = updatedProductsExpanded,
                     onToggle = { updatedProductsExpanded = !updatedProductsExpanded }
                 ) {
@@ -311,11 +322,11 @@ private fun DisplayProductRow(
                     Text("${stringResource(R.string.category_label)}: $categoryName", style = MaterialTheme.typography.bodySmall)
                 }
 
-                Text("${stringResource(R.string.counted_quantity_label)}: ${formatNumberAsRoundedString(product.stockQuantity)}", style = MaterialTheme.typography.bodySmall)
+                Text("${stringResource(R.string.counted_quantity_label)}: ${formatClQuantityDisplayReadOnly(product.stockQuantity)}", style = MaterialTheme.typography.bodySmall)
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("${stringResource(R.string.purchase_prefix)} ${formatNumberAsRoundedString(product.purchasePrice)}", style = MaterialTheme.typography.bodyMedium)
-                Text("${stringResource(R.string.sell_prefix)} ${formatNumberAsRoundedString(product.retailPrice)}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.purchase_prefix)} ${formatClPricePlainDisplay(product.purchasePrice)}", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.sell_prefix)} ${formatClPricePlainDisplay(product.retailPrice)}", style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onEditClick) {
                 Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_product))
@@ -373,11 +384,11 @@ private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
         R.string.field_product_name -> old.productName to new.productName
         R.string.field_second_product_name -> old.secondProductName to new.secondProductName
         R.string.header_item_number -> old.itemNumber to new.itemNumber
-        R.string.purchase_price_label -> formatNumberAsRoundedString(old.purchasePrice) to formatNumberAsRoundedString(new.purchasePrice)
-        R.string.retail_price_label -> formatNumberAsRoundedString(old.retailPrice) to formatNumberAsRoundedString(new.retailPrice)
+        R.string.purchase_price_label -> formatClPricePlainDisplay(old.purchasePrice) to formatClPricePlainDisplay(new.purchasePrice)
+        R.string.retail_price_label -> formatClPricePlainDisplay(old.retailPrice) to formatClPricePlainDisplay(new.retailPrice)
         R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString()
         R.string.field_category -> old.categoryId?.toString() to new.categoryId?.toString() // Ora usa categoryId e lo converte in String
-        R.string.field_stock_quantity -> formatNumberAsRoundedString(old.stockQuantity) to formatNumberAsRoundedString(new.stockQuantity)
+        R.string.field_stock_quantity -> formatClQuantityDisplayReadOnly(old.stockQuantity) to formatClQuantityDisplayReadOnly(new.stockQuantity)
         else -> "" to ""
     }
 

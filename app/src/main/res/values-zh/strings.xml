@@ -166,9 +166,9 @@
 
     <string name="import_analysis_title">导入审核</string>
     <string name="confirm_import">确认导入</string>
-    <string name="new_products_to_add">新增产品：%1$d</string>
+    <string name="new_products_to_add">新增产品：%1$s</string>
     <string name="no_new_products">没有新产品。</string>
-    <string name="products_to_update">待更新产品：%1$d</string>
+    <string name="products_to_update">待更新产品：%1$s</string>
     <string name="no_products_to_update">没有要更新的产品。</string>
     <string name="errors_found">发现错误：%1$d</string>
     <string name="no_critical_errors_found">未发现严重错误。</string>
@@ -292,7 +292,7 @@
     <string name="row_updated">行已更新</string>
     <string name="scan_barcode_for_editing">扫描条码</string>
 
-    <string name="duplicate_warnings_found">发现重复警告（%d）</string>
+    <string name="duplicate_warnings_found">发现重复警告（%1$s）</string>
     <string name="warning_duplicate_barcode">条码：%1$s</string>
     <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
     <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>

@@ -16,7 +16,9 @@
 
 ## Obiettivo attuale
 
-**Tracking globale:** nessun task **`ACTIVE`** dopo la chiusura di **TASK-022**. **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30: review repo-grounded finale, `assembleDebug`/`lint` OK, conferma utente). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Stato corrente:** nessun task in `EXECUTION` dopo la chiusura di **TASK-023**. **TASK-023** — numeri Cile — è **`DONE`** (2026-03-30: review repo-grounded finale, fix mirato parser quantità, `assembleDebug`/`lint`/`testDebugUnitTest` OK).
+
+**Tracking globale:** nessun task corrente in lavorazione. **TASK-023** — **Audit / coerenza visualizzazione numerica fissa (Cile / CLP)** — è **`DONE`** (2026-03-30). **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-015** **`BACKLOG`**.
 
 ---
 
@@ -24,13 +26,14 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | Nessuno — in attesa della prossima assegnazione utente/planner |
+| Task attivo          | Nessuno |
 | Fase task attivo     | — |
-| Milestone            | **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
-| Prossimo passo operativo | **Planner/utente:** selezionare il prossimo task `ACTIVE`. Candidati naturali: smoke manuali per sbloccare **TASK-006** / **TASK-011**, oppure attivare un task backlog come **TASK-015**. |
-| Ultimo aggiornamento | 2026-03-30 — **TASK-022** chiuso in `DONE` dopo review repo-grounded, `assembleDebug`, `lint` e conferma utente. |
+| Backlog documentale  | — |
+| Milestone            | **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
+| Prossimo passo operativo | **Planner/utente:** scegliere il prossimo task. Candidati naturali: smoke per sbloccare **TASK-006** / **TASK-011**, oppure attivare **TASK-015**. |
+| Ultimo aggiornamento | 2026-03-30 — review finale di **TASK-023** completata; fix quantity parser applicato; `assembleDebug`/`lint`/`testDebugUnitTest` verdi; task chiuso in **`DONE`** e tracking globale riallineato. |
 
-**Promemoria antiambiguità (governance):** al momento non c’è alcun task **`ACTIVE`**. **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Promemoria antiambiguità (governance):** al momento non c’è alcun task in **`EXECUTION`**. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -40,7 +43,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task **`ACTIVE`**: **TASK-022** (GeneratedScreen — dettaglio riga / blocco prezzo acquisto) è stato chiuso in **`DONE`** il 2026-03-30 dopo review repo-grounded, build/lint OK e conferma utente. **TASK-019** (audit localizzazione) è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
+Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`EXECUTION`**: **TASK-023** (numeri Cile) è stato chiuso in **`DONE`** il 2026-03-30 dopo review repo-grounded finale, fix mirato sull’ambiguità `1.234` nelle quantità e check completi verdi. **TASK-022** è **`DONE`**. **TASK-019** è **`DONE`**. **TASK-018** è **`DONE`**. **TASK-014** è **`DONE`**. **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -48,7 +51,7 @@ Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task **`ACTI
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
-1. Sezione **Backlog**: **TASK-019** → **`DONE`** (2026-03-30); **TASK-018** → **`DONE`** (2026-03-29); **TASK-021** → **`DONE`** (2026-03-29); **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**; **TASK-020** → **`DONE`** (2026-03-28).
+1. Sezione **Backlog**: **TASK-023** → **`DONE`** (2026-03-30 — review finale repo-grounded, fix parser quantità, build/lint/test JVM verdi; vedi file task); **TASK-019** → **`DONE`** (2026-03-30); **TASK-018** → **`DONE`** (2026-03-29); **TASK-021** → **`DONE`** (2026-03-29); **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**; **TASK-020** → **`DONE`** (2026-03-28).
 2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
 3. **TASK-004** → **`DONE`** (2026-03-28 — suite test completata, verifiche eseguite, lint globale fuori scope documentato).
 4. **TASK-015** → **`BACKLOG`** (UX modernization DatabaseScreen — ripresa possibile dopo **TASK-003** `DONE` o su decisione utente).
@@ -65,13 +68,14 @@ Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task **`ACTI
 15. **TASK-018** → **`DONE`** (2026-03-29) — double staging full-import; file: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. **Non** confondere con **TASK-021** (export DB, **`DONE`**).
 16. **TASK-019** → **`DONE`** (2026-03-30) — audit+fix L10n chiusi con review repo-grounded, build/lint/test mirati OK; file: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`.
 17. **TASK-022** → **`DONE`** (2026-03-30) — follow-up UX dettaglio riga GeneratedScreen chiuso dopo review repo-grounded, `assembleDebug`/`lint` OK e conferma utente; file: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`.
-18. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+18. **TASK-023** → **`DONE`** (2026-03-30) — review finale repo-grounded completata; policy numerica CL centralizzata; fix review sull’ambiguità quantità `1.234`; `assembleDebug`/`lint`/`testDebugUnitTest` OK; file: `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md`.
+19. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** è stato comunque autorizzato esplicitamente dall’utente il 2026-03-29 per la sola modernizzazione UX sul perimetro già decomposto.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021 / TASK-022:** nessun task **`ACTIVE`** al momento. **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
+**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021 / TASK-022 / TASK-023:** nessun task è in **`EXECUTION`** al momento. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-023 → **`DONE`**; TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
 
 ---
 
@@ -88,6 +92,7 @@ Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task **`ACTI
 | Build config                | `app/build.gradle.kts`, `gradle/libs.versions.toml`            |
 | Database schema             | Room entities in `data/`, `AppDatabase.kt`                     |
 | Risorse / localizzazione    | `app/src/main/res/values*/`                                    |
+| Numeri Cile (TASK-023) | `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md` — stato **`DONE`** (review finale chiusa 2026-03-30) |
 
 ---
 
@@ -452,6 +457,17 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Descrizione | Nel bottom sheet dettaglio riga: prezzo acquisto **sopra** quantità contata / prezzo vendita, **full width**; “Acq. vecchio” solo se diverso dall’attuale (trim/vuoti/eq. numerica). Nessun cambio business logic / ViewModel. |
 | Note tracking | **`DONE`** (2026-03-30) — follow-up mirato post-TASK-014 chiuso con review repo-grounded, `assembleDebug`/`lint` OK e conferma utente. |
 
+### TASK-023 — Audit / coerenza visualizzazione numerica fissa (Cile / CLP)
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `DONE`                                                  |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX numerica / formattazione / coerenza prodotto         |
+| Dipendenze  | Nessuna bloccante; **TASK-019** `DONE` (ortogonale: L10n testi ≠ formato numeri) |
+| File task   | `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md` |
+| Descrizione | Audit progettuale: convenzione **cilena fissa** (indipendente da lingua app) solo per **importi, quantità, percentuali sconto, contatori UX** — **non** per **barcode / itemNumber / ID tecnici** (guardrail in file task). Prezzi plain; totali con **`$`**; quantità frazionarie in **sola lettura** = migliaia `.` + decimali `,`, max 3 dec, no zeri finali; `discountPercent` max 2 dec; `discountedPrice` = prezzo normale; null/blank e totali come in file task. Griglia display-only; Excel file neutro in scope. Matrice + rischi input. **Hotspot `ExcelViewModel`:** `calculateInitialSummary` / `calculateFinalSummary` → **orderTotal** / **paymentTotal**; `saveExcelFileInternal` + **`numericTypes`** → non mescolare presentation e dato file (**nessun** cambio business/export nel task). Coordinare **TASK-016**. |
+| Note tracking | **`DONE`** (2026-03-30) — review finale repo-grounded completata: centralizzazione formatter confermata, fix sull’ambiguità quantità `1.234` applicato, `assembleDebug`/`lint`/`testDebugUnitTest` OK, tracking task + master plan riallineati. |
+
 ### TASK-021 — Export DB: memoria/streaming, fogli selettivi, dialog M3 (follow-up TASK-007)
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
@@ -468,16 +484,15 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** nessun task **`ACTIVE`**. **TASK-022** è **`DONE`** (2026-03-30) dopo review repo-grounded finale. **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine suggerito:
+**Focus immediato:** nessun task in **`EXECUTION`**. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine suggerito:
 
-1. **TASK-006** — smoke manuali su device/emulator → poi **REVIEW** / conferma utente → `DONE`.
-2. **TASK-011** — smoke manuali e validazione M per sblocco verso **`DONE`**.
-3. **TASK-015** — backlog naturale se si vuole ripartire con un task di miglioramento UI/UX non bloccato.
+1. **TASK-006** — smoke → sblocco **`BLOCKED`** verso **`DONE`**.
+2. **TASK-011** — smoke → sblocco verso **`DONE`**.
+3. **TASK-015** (`BACKLOG`) — UX Database quando prioritaria.
 4. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i warning lint preesistenti fuori scope emersi da `./gradlew lint`.
-5. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
 6. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
 7. **TASK-009 (ALTA, DONE):** mantenere chiusura coerente; nessuna riattivazione implicita.
-8. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
+8. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sugli stessi file.
 9. **TASK-018 (`DONE`):** chiuso 2026-03-29; nessuna riattivazione implicita.
 10. **TASK-019 (`DONE`):** chiuso 2026-03-30; nessuna riattivazione implicita.
 
