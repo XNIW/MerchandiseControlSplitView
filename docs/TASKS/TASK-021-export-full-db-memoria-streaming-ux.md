@@ -50,7 +50,7 @@ Nomi foglio tecnici invariati a livello funzionale: `Products`, `Suppliers`, `Ca
 - **TASK-015** (modernization globale DatabaseScreen).
 - Redesign fuori dal flusso **export**.
 - Modifiche import full DB **salvo** necessità reale.
-- **TASK-018**.
+- **TASK-018** (ora **`DONE`** — fuori scope export; solo contesto storico).
 
 ---
 

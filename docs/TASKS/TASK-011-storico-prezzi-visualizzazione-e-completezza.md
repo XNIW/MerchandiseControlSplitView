@@ -73,7 +73,7 @@ Verificare la **completezza percepita** dello **storico prezzi** nel bottom shee
 - **Grafico andamento prezzi** (richiederebbe libreria grafica o implementazione custom non banale) — **escluso** da TASK-011; eventuale **TASK futuro** se il prodotto lo richiede e si accettano nuove dipendenze o complessità.
 - Modifiche a **DAO**, **repository**, **entity**, **migrazioni**, **navigation**, **ViewModel business** — **vietate** salvo necessità reale scoperta in esecuzione e documentata (eccezione motivata).
 - Porting 1:1 da SwiftUI / iOS.
-- Assorbire **TASK-019** (localizzazione messaggi hardcoded su foglio PriceHistory in full-import) — resta task separato.
+- **TASK-019** (audit i18n app completa; include messaggi PriceHistory/full-import) — **resta task separato**; non assorbire.
 - Redesign completo **DatabaseScreen** — vedi **TASK-015** per modernization ampia; TASK-011 resta **locale** allo storico prezzi.
 - **Redesign del bottom sheet storico prezzi** — vedi § **o-non-redesign**: nessun cambio strutturale a sheet / tab / header / summary / azioni.
 - Modifiche a **`EditProductDialog.kt`** — **escluse** salvo eccezione documentata in Execution (§ **r**).

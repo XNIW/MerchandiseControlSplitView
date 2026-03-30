@@ -20,10 +20,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.os.ConfigurationCompat
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
@@ -34,6 +36,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.util.Currency
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -329,10 +332,13 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    // Il codice di HistoryRow rimane invariato
-    val currencyFormat = remember {
-        val chileLocale = Locale.Builder().setLanguage("es").setRegion("CL").build()
-        NumberFormat.getCurrencyInstance(chileLocale).apply {
+    val configuration = LocalConfiguration.current
+    val currentLocale = remember(configuration) {
+        ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault()
+    }
+    val currencyFormat = remember(currentLocale) {
+        NumberFormat.getCurrencyInstance(currentLocale).apply {
+            currency = Currency.getInstance("CLP")
             maximumFractionDigits = 0
         }
     }

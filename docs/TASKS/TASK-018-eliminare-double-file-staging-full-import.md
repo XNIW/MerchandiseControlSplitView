@@ -7,12 +7,12 @@
 | Campo                | Valore                     |
 |----------------------|----------------------------|
 | ID                   | TASK-018                   |
-| Stato                | **REVIEW**                 |
+| Stato                | **DONE**                   |
 | Priorità             | BASSA                      |
 | Area                 | Import / Performance       |
 | Creato               | 2026-03-29                 |
-| Ultimo aggiornamento | 2026-03-29 — review completata: nessun bug bloccante nel perimetro; aggiunto test mirato ramo `SingleSheet`; task resta in **REVIEW**. |
-| Tracking `MASTER-PLAN` | **`ACTIVE`** — fase **`REVIEW`**. File: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. |
+| Ultimo aggiornamento | 2026-03-29 — chiusura **`DONE`**: review planner **APPROVED** + conferma utente; successore **`ACTIVE`:** **TASK-019** (fase **PLANNING**). |
+| Tracking `MASTER-PLAN` | **`DONE`** (2026-03-29). File: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. |
 
 ---
 
@@ -25,7 +25,7 @@
 | Task | Rapporto |
 |------|----------|
 | **TASK-021** | **`DONE`** — export full/partial DB (SXSSF, dialog, fetch selettivo). **Non** riaprire; **non** è lo stesso perimetro di TASK-018. |
-| **TASK-019** | Backlog — i18n messaggi PriceHistory nel full-import; **fuori scope** salvo coordinamento esplicito. |
+| **TASK-019** | **`ACTIVE`** / **PLANNING** — audit localizzazione **intera app** (en/it/es/zh); include anche PriceHistory/full-import; file: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. |
 
 ---
 
@@ -62,7 +62,7 @@ Ridurre **IO e tempo** sul percorso **smart import → full database**: oggi il 
 ## Non incluso
 
 - Modifiche al **formato** XLSX, ai nomi foglio, alla semantica di `ImportWorkbookRoute`, al flusso **single-sheet** (`startImportAnalysis` / `readAndAnalyzeExcel`) salvo incidenza tecnica minima documentata.
-- **TASK-021** (export), **TASK-019** (stringhe PriceHistory).
+- **TASK-021** (export), **TASK-019** (audit i18n app completa — vedi file dedicato).
 - **Redesign UI/UX:** nessun cambiamento visuale o di flussi schermata richiesto; task **tecnico, locale, a basso rischio** (solo IO/staging vicino a POI).
 - Cambi a DAO/entity/schema **non** motivati da questo staging.
 
@@ -326,7 +326,7 @@ Sequenza garantita dall’orchestratore per il percorso che oggi implica **due**
 - Nessuna sul perimetro implementato.
 
 **Handoff notes:**
-- TASK-018 è pronto per **REVIEW**.
+- Chiusura **`DONE`** 2026-03-29; dettaglio in **Chiusura / Handoff**.
 - Il terzo staging lato apply `PriceHistory` resta deliberatamente fuori scope, come da planning e criterio #3.
 
 ---
@@ -370,5 +370,7 @@ Sequenza garantita dall’orchestratore per il percorso che oggi implica **due**
 
 ## Chiusura / Handoff
 
-- Stato corrente: **REVIEW**.
-- Review attesa su coerenza del wiring minimo in `DatabaseViewModel.startSmartImport` e sull’uso del seam `internal` di test per validare il single staging.
+- Stato corrente: **`DONE`** (2026-03-29).
+- **Review:** sezione **Review — 2026-03-29** — verdetto **APPROVED** (Codex); fix review: test aggiuntivo ramo `SingleSheet`.
+- **Conferma utente:** ottenuta nel turno di riallineamento governance 2026-03-29 per chiusura formale e attivazione **TASK-019**.
+- **Handoff:** unico task **`ACTIVE`:** **TASK-019** — audit completo localizzazione; fase **`PLANNING`**; nessuna execution TASK-019 avviata in questo passaggio.

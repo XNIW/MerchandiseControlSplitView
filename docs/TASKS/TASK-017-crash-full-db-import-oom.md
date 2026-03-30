@@ -449,7 +449,7 @@ Checklist obbligatoria al termine dell’implementazione (tutti i rami, non solo
 
 ## Riepilogo finale
 
-Full-import DB da XLSX: rimosso `XSSFWorkbook` dal path critico, parser streaming + boundary `OutOfMemoryError` / `CancellationException`, state hygiene e history coerenti. Build/lint OK; review/fix completati; **test manuali utente con esito positivo**; chiusura **`DONE`** su conferma utente. Follow-up opzionali in backlog: **TASK-018** (doppio staging file), **TASK-019** (stringhe PriceHistory).
+Full-import DB da XLSX: rimosso `XSSFWorkbook` dal path critico, parser streaming + boundary `OutOfMemoryError` / `CancellationException`, state hygiene e history coerenti. Build/lint OK; review/fix completati; **test manuali utente con esito positivo**; chiusura **`DONE`** su conferma utente. Follow-up: **TASK-018** **`DONE`** (doppio staging); **TASK-019** **`ACTIVE`** / **PLANNING** — audit localizzazione **intera app** (`docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`).
 
 ---
 

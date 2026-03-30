@@ -384,8 +384,8 @@ fun GeneratedScreen(
 
                 map["realQuantity"] = finalQuantityStr
                 map["retailPrice"] = finalPriceStr
-                map["supplier"] = excelViewModel.supplierName.ifBlank { "unknown" }
-                map["category"] = excelViewModel.categoryName.ifBlank { "unknown" }
+                map["supplier"] = excelViewModel.supplierName.trim()
+                map["category"] = excelViewModel.categoryName.trim()
                 map.toMap()
             }
         }
@@ -2051,7 +2051,7 @@ fun CalculatorDialog(
                 val errorText = stringResource(R.string.error_label)
                 Text(
                     text = if (result.isNotBlank() && result != errorText) {
-                        stringResource(R.string.result) + " ${result.toDoubleOrNull()?.let { String.format(Locale.US, "%.2f", it) } ?: result}"
+                        stringResource(R.string.result) + " ${result.toDoubleOrNull()?.let { formatDecimal(it) } ?: result}"
                     } else stringResource(R.string.result),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier
@@ -2239,8 +2239,9 @@ fun ManualEntryDialog(
     var originalBarcodeForEdit by remember { mutableStateOf<String?>(null) }
 
     val isEditMode = rowIndexToEdit != null
+    val manualEntryDefaultCategoryText = stringResource(R.string.manual_entry_default_category)
     val header = viewModel.excelData.firstOrNull() ?: return
-    val catName = selectedCategory?.name ?: "variedades"
+    val catName = selectedCategory?.name ?: manualEntryDefaultCategoryText
 
     val (barIdx, nameIdx, priceIdx, qtyIdx, catIdx) = remember(header) {
         listOf("barcode", "productName", "retailPrice", "quantity", "category").map { header.indexOf(it) }
@@ -2536,7 +2537,10 @@ fun ManualEntryDialog(
                             }
                             dialogScanLauncher.launch(options)
                         }) {
-                            Icon(Icons.Default.CameraAlt, contentDescription = "Scan Barcode")
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = stringResource(R.string.scan_barcode)
+                            )
                         }
                     },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
@@ -2594,7 +2598,15 @@ fun ManualEntryDialog(
                         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
                             val formattedPrice = formatNumberAsRoundedStringForInput(productFromDb?.retailPrice)
-                            Text("${productFromDb?.productName} - Prezzo: $formattedPrice")
+                            val databaseProductName = productFromDb?.productName?.takeIf { it.isNotBlank() }
+                                ?: stringResource(R.string.untitled)
+                            Text(
+                                stringResource(
+                                    R.string.database_lookup_price_summary,
+                                    databaseProductName,
+                                    formattedPrice
+                                )
+                            )
                             TextButton(onClick = {
                                 retailPrice = TextFieldValue(formattedPrice, TextRange(formattedPrice.length))
                                 productName = productFromDb?.productName ?: ""
@@ -2608,7 +2620,7 @@ fun ManualEntryDialog(
             val newRowData = header.map { key ->
                 when (key) {
                     "barcode" -> barcode
-                    "productName" -> productName.ifBlank { selectedCategory?.name ?: "variedades" }
+                    "productName" -> productName.ifBlank { selectedCategory?.name ?: manualEntryDefaultCategoryText }
                     "purchasePrice" -> {
                         val rp = retailPrice.text.replace(",", ".").toDoubleOrNull()
                         val pp = purchasePrice.replace(",", ".").toDoubleOrNull() ?: (rp?.div(2.0))
@@ -2616,7 +2628,7 @@ fun ManualEntryDialog(
                     }
                     "retailPrice" -> retailPrice.text
                     "quantity" -> quantity.text
-                    "category" -> selectedCategory?.name ?: "variedades"
+                    "category" -> selectedCategory?.name ?: manualEntryDefaultCategoryText
                     else -> ""
                 }
             }
@@ -2715,7 +2727,7 @@ private fun equalProductsForDb(
             a.categoryId == b.categoryId
 }
 fun formatDecimal(num: Double, digits: Int = 2): String =
-    String.format(Locale.US, "%.${digits}f", num)
+    String.format(Locale.getDefault(), "%.${digits}f", num)
 
 fun formatDecimal(num: String, digits: Int = 2): String =
     num.toDoubleOrNull()?.let { formatDecimal(it, digits) } ?: num

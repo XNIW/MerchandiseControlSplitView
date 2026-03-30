@@ -317,12 +317,14 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="error_barcode_already_exists">Error: Ya existe un producto con este código de barras.</string>
     <string name="add_products_manually">Agregar productos manualmente</string>
     <string name="manual_entry_indicator">Entrada añadida manualmente</string>
+    <string name="manual_entry_default_category">Varios</string>
     <string name="no_products_add_new">No hay productos. ¡Agrega un nuevo producto!</string>
 
     <string name="product_already_in_list">Producto ya en la lista. Modifica los datos.</string>
     <string name="data_from_database">Datos desde la base de datos:</string>
     <string name="copy_data">Copiar datos</string>
-    <string name="add_and_next">Agregar y siguiente</string>
+    <string name="database_lookup_price_summary">%1$s - Precio de venta: %2$s</string>
+    <string name="add_and_next">Agregar y continuar</string>
     <string name="product_found_in_db">El producto ya existe en la base de datos</string>
 
     <string name="mark_as_complete">Marcar completo</string>

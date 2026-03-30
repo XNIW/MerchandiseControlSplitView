@@ -16,7 +16,7 @@
 
 ## Obiettivo attuale
 
-**Tracking globale:** **TASK-018** — **Eliminare double file staging nel full-import** — **`ACTIVE`** / fase **`REVIEW`** (2026-03-29: execution completata; orchestratore `internal`, single staging smart→full, build/lint/test mirati verdi). File: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB — safety e recovery** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Tracking globale:** nessun task **`ACTIVE`** dopo la chiusura di **TASK-019**. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30: review finale repo-grounded completata; fix dichiarati confermati nel codice reale, residui `HistoryScreen` / manual entry chiusi, build/lint/test mirati OK). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -24,13 +24,13 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **TASK-018** — double staging full-import (`docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`) |
-| Fase task attivo     | **REVIEW** (execution completata; in attesa review del planner) |
-| Milestone            | **TASK-018** **`ACTIVE`** / **`REVIEW`** (2026-03-29). **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
-| Prossimo passo operativo | **Planner/Reviewer:** verificare TASK-018 in review; se non emergono fix, attendere conferma utente per il loop successivo. **TASK-021** resta **`DONE`**. |
-| Ultimo aggiornamento | 2026-03-29 — **TASK-018** **`ACTIVE`** / **`REVIEW`**: execution completata con orchestratore `internal`, sealed outcome, test JVM mirato single-staging, `:app:assembleDebug`, `:app:lint`, baseline `DatabaseViewModelTest` in run isolato. |
+| Task attivo          | Nessuno — in attesa della prossima assegnazione utente/planner |
+| Fase task attivo     | — |
+| Milestone            | **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
+| Prossimo passo operativo | **Planner/utente:** selezionare il prossimo task `ACTIVE`. Candidati naturali: smoke manuali per sbloccare **TASK-006** / **TASK-011**, oppure attivare un task backlog come **TASK-015**. |
+| Ultimo aggiornamento | 2026-03-30 — TASK-019 chiuso in `DONE` dopo review repo-grounded, fix finali, `assembleDebug`, `lint` e test JVM mirati. |
 
-**Promemoria antiambiguità (governance):** **Un solo** task **`ACTIVE`:** **TASK-018** (fase **`REVIEW`** nel file task). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Promemoria antiambiguità (governance):** al momento non c’è alcun task **`ACTIVE`**. **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -40,7 +40,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente **`ACTIVE`:** **TASK-018** (full-import — eliminazione doppio staging), fase **`REVIEW`**. **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
+Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task **`ACTIVE`**: **TASK-019** (audit localizzazione app Android — en/it/es/zh) è stato chiuso in **`DONE`** il 2026-03-30. **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -48,7 +48,7 @@ Il task attivo è sempre **uno solo**. Attualmente **`ACTIVE`:** **TASK-018** (f
 
 **Verifica governance reale (obbligatoria pre-codice):**
 
-1. Sezione **Backlog**: **TASK-018** → **`ACTIVE`** (fase **`REVIEW`** nel file task); **TASK-021** → **`DONE`** (2026-03-29); **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**; **TASK-020** → **`DONE`** (2026-03-28).
+1. Sezione **Backlog**: **TASK-019** → **`DONE`** (2026-03-30); **TASK-018** → **`DONE`** (2026-03-29); **TASK-021** → **`DONE`** (2026-03-29); **TASK-013** → **`DONE`**; **TASK-017** → **`DONE`**; **TASK-003** → **`DONE`**; **TASK-020** → **`DONE`** (2026-03-28).
 2. **TASK-002** → **`BLOCKED`** (smoke manuale rimandato; nessun `DONE` formale).
 3. **TASK-004** → **`DONE`** (2026-03-28 — suite test completata, verifiche eseguite, lint globale fuori scope documentato).
 4. **TASK-015** → **`BACKLOG`** (UX modernization DatabaseScreen — ripresa possibile dopo **TASK-003** `DONE` o su decisione utente).
@@ -62,14 +62,15 @@ Il task attivo è sempre **uno solo**. Attualmente **`ACTIVE`:** **TASK-018** (f
 12. **TASK-006** → **`BLOCKED`** (2026-03-29) — execution + review tecnica OK; **smoke manuali / criteri M** non eseguiti; **non** `DONE`. Dettaglio: `docs/TASKS/TASK-006-validazione-robustezza-import-excel.md`.
 13. **TASK-021** → **`DONE`** (2026-03-29) — follow-up **TASK-007**; export unificato + smoke manuale positivo; conferma utente. Dettaglio: `docs/TASKS/TASK-021-export-full-db-memoria-streaming-ux.md`.
 14. **TASK-009** → **`DONE`** (2026-03-29) — file task chiuso con review planner APPROVED, criteri verificati e tracking locale coerente. Dettaglio: `docs/TASKS/TASK-009-migrazione-database-safety-e-recovery.md`.
-15. **TASK-018** → **`ACTIVE`** (2026-03-29) — fase **`REVIEW`**; file: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. **Non** confondere con **TASK-021** (export DB, **`DONE`**).
-16. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+15. **TASK-018** → **`DONE`** (2026-03-29) — double staging full-import; file: `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md`. **Non** confondere con **TASK-021** (export DB, **`DONE`**).
+16. **TASK-019** → **`DONE`** (2026-03-30) — audit+fix L10n chiusi con review repo-grounded, build/lint/test mirati OK; file: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`.
+17. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** è stato comunque autorizzato esplicitamente dall’utente il 2026-03-29 per la sola modernizzazione UX sul perimetro già decomposto.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-021:** **Un solo `ACTIVE`:** **TASK-018** (fase **`REVIEW`**). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** backlog TASK-018 → **`ACTIVE`** / **`REVIEW`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
+**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021:** nessun task **`ACTIVE`** al momento. **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** backlog TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
 
 ---
 
@@ -311,7 +312,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Priorità    | `BASSA`                                                 |
 | Area        | UX / Error handling                                     |
 | Dipendenze  | TASK-001 (DONE)                                         |
-| Descrizione | Audit **tutti** i feedback user-visible (Snackbar, dialog, Toast, inline, progress, share/Intent, export, feedback perso/duplicato-replay, raw eccezione §1bis); **matrice di audit** obbligatoria in Execution; priorità; regole intervento §6; utility user-visible; confine log/interni; smoke mirata. Android fonte primaria; iOS solo tono/gerarchia. Vincoli: no redesign, no refactor architetturale, no DAO/repository/navigation salvo emergenza; non assorbire **TASK-006** / **TASK-019**. Dettaglio: `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. |
+| Descrizione | Audit **tutti** i feedback user-visible (Snackbar, dialog, Toast, inline, progress, share/Intent, export, feedback perso/duplicato-replay, raw eccezione §1bis); **matrice di audit** obbligatoria in Execution; priorità; regole intervento §6; utility user-visible; confine log/interni; smoke mirata. Android fonte primaria; iOS solo tono/gerarchia. Vincoli: no redesign, no refactor architetturale, no DAO/repository/navigation salvo emergenza; non assorbire **TASK-006** / **TASK-019** (TASK-019 = audit **i18n 4 lingue** e organizzazione risorse — backlog dedicato, ora **`DONE`**). Dettaglio: `docs/TASKS/TASK-008-gestione-errori-e-ux-feedback.md`. |
 | Note tracking | **`DONE`** 2026-03-28 — Execution Codex + review; fix EN `untitled`/`exported_short` + rimozione dead resources; review finale pulizia `NavGraph`/`HistoryScreen`; test `DatabaseViewModelTest`/`ExcelViewModelTest`, `assembleDebug`, `lint` ✅. Successore operativo completato: **TASK-010** **`DONE`** (2026-03-29). |
 
 ### TASK-009 — Migrazione database — safety e recovery
@@ -415,27 +416,29 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Dipendenze  | TASK-001 (DONE)                                         |
 | Descrizione | Fix crash **OOM** durante **import completo** database da XLSX (`DatabaseViewModel.startFullDbImport`, `XSSFWorkbook`), preservando Suppliers / Categories / Products / PriceHistory. Chiusura **2026-03-27**: verifiche statiche OK, review/fix completati, **test manuali utente con esito positivo**. Dettaglio: `docs/TASKS/TASK-017-crash-full-db-import-oom.md`. |
 | File Android | `DatabaseViewModel.kt`, `DatabaseScreen.kt`, `FullDbImportStreaming.kt`, `ExcelUtils.kt`, ecc. (vedi file task) |
-| Note tracking | Follow-up backlog: **TASK-018** (double staging file), **TASK-019** (localizzazione errori PriceHistory). |
+| Note tracking | Follow-up chiusi: **TASK-018** **`DONE`** (2026-03-29); **TASK-019** **`DONE`** (2026-03-30) — audit i18n intera app completato (vedi file task). |
 
 ### TASK-018 — Eliminare double file staging nel full-import
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE`                                                |
+| Stato       | `DONE`                                                  |
 | Priorità    | `BASSA`                                                 |
 | Area        | Import / Performance                                    |
 | Dipendenze  | TASK-017 (`DONE`)                                       |
 | File task   | `docs/TASKS/TASK-018-eliminare-double-file-staging-full-import.md` |
 | Descrizione | `detectImportWorkbookRoute` → `inspectWorkbookSheetNames` usa `stageWorkbookToCache`; poi `analyzeFullDbImportStreaming` → `withWorkbookReader` ricopia via `stageWorkbookToCache`. Obiettivo: **una sola copia** per detection+analisi sul percorso full-import. **Distinto da TASK-021** (export DB, `DONE`). Emerso dalla review di TASK-017. |
-| Note tracking | **`ACTIVE`** / **`REVIEW`** (2026-03-29) — execution completata: orchestratore `internal`, sealed outcome, single staging smart→full, build/lint/test mirati verdi; unico task attivo in backlog. |
+| Note tracking | **`DONE`** (2026-03-29) — review **APPROVED** + conferma utente; orchestratore `internal`, single staging smart→full, test JVM mirati verdi. |
 
-### TASK-019 — Localizzare messaggi errore PriceHistory
+### TASK-019 — Audit completo localizzazione app Android (en / it / es / zh)
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
-| Priorità    | `BASSA`                                                 |
-| Area        | Import / Localizzazione                                 |
-| Dipendenze  | TASK-017                                                |
-| Descrizione | I messaggi di errore del foglio PriceHistory nel full-import streaming sono hardcoded in inglese ("PriceHistory sheet is empty or missing the header row.", "PriceHistory sheet missing required headers: ..."). Spostarli in `strings.xml` con traduzioni it/es/zh coerenti col pattern localizzato esistente. Emerso dalla review di TASK-017. |
+| Stato       | `DONE`                                                  |
+| Priorità    | `MEDIA`                                                 |
+| Area        | Localizzazione / Qualità i18n                           |
+| Dipendenze  | TASK-017 (`DONE`); TASK-018 (`DONE`)                    |
+| File task   | `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md` |
+| Descrizione | Audit **sistematico** dell’intera app: completezza e coerenza **it/en/es/zh** via `values` (default IT), `values-en`, `values-es`, `values-zh` — **non** `values-it`. Hardcoded, placeholder, duplicati, stringhe morte, organizzazione chiavi; dialog/snackbar/toast/errori/loading/empty; import/export/share/filename; `contentDescription` e testi ViewModel/util in UI. Include PriceHistory/full-import. Chiuso con review repo-grounded e fix finali sul codice reale. |
+| Note tracking | **`DONE`** (2026-03-30) — review finale repo-grounded completata: fix dichiarati confermati nel codice reale, residui `HistoryScreen`/manual entry chiusi, `ExcelUtils` allineato, `assembleDebug`/`lint`/test JVM mirati OK. |
 
 ### TASK-021 — Export DB: memoria/streaming, fogli selettivi, dialog M3 (follow-up TASK-007)
 | Campo       | Valore                                                  |
@@ -453,18 +456,18 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** **TASK-018** **`ACTIVE`** / **`REVIEW`** (2026-03-29) — execution chiusa; pending review su deduplicazione `stageWorkbookToCache` (orchestratore `internal`, sealed outcome, single staging smart→full); vedi file task. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine suggerito:
+**Focus immediato:** nessun task **`ACTIVE`**. **TASK-019** è **`DONE`** (2026-03-30) dopo review repo-grounded finale. **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-015** **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine suggerito:
 
-1. **TASK-018** — **`REVIEW`**: verificare execution Kotlin + test **`FullDbExportImportRoundTripTest`** + test JVM mirato single-staging + baseline `DatabaseViewModelTest` (vedi file task).
-2. **TASK-006** — smoke manuali su device/emulator → poi **REVIEW** / conferma utente → `DONE` *(non `ACTIVE` finché **TASK-018** è `ACTIVE`)*.
-3. **Parallelo (senza altro `ACTIVE`):** quando **TASK-018** non è più attivo, eseguire **smoke TASK-011** per sblocco verso **`DONE`** (vedi file task).
+1. **TASK-006** — smoke manuali su device/emulator → poi **REVIEW** / conferma utente → `DONE`.
+2. **TASK-011** — smoke manuali e validazione M per sblocco verso **`DONE`**.
+3. **TASK-015** — backlog naturale se si vuole ripartire con un task di miglioramento UI/UX non bloccato.
 4. **Task dedicato lint cleanup (nuovo solo su decisione planner/utente):** affrontare i 25 errori / 68 warning preesistenti fuori scope emersi da `./gradlew lint`.
 5. **TASK-015 (MEDIA, BACKLOG):** UX modernization DatabaseScreen — dopo **TASK-003** `DONE` o su richiesta utente.
 6. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
 7. **TASK-009 (ALTA, DONE):** mantenere chiusura coerente; nessuna riattivazione implicita.
 8. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — coordinare con **TASK-010** per non duplicare lavoro sulla History.
-9. **TASK-019 (BASSA / dip. TASK-017 DONE):** i18n messaggi PriceHistory full-import — dopo o in parallelo governance con **TASK-018** solo se utente attiva.
-10. **TASK-011 (`BLOCKED`):** completare smoke manuali e validazione M per sblocco verso **DONE** (vedi file task).
+9. **TASK-018 (`DONE`):** chiuso 2026-03-29; nessuna riattivazione implicita.
+10. **TASK-019 (`DONE`):** chiuso 2026-03-30; nessuna riattivazione implicita.
 
 ### Priorità tecnica / qualità
 

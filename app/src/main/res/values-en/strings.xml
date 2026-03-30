@@ -319,11 +319,13 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="add_products_manually">Add products manually</string>
     <string name="no_products_add_new">No products found. Add a new product!</string>
     <string name="manual_entry_indicator">Manually added entry</string>
+    <string name="manual_entry_default_category">Various</string>
 
     <string name="product_already_in_list">Product already in list. Edit the data.</string>
     <string name="data_from_database">Data from Database:</string>
     <string name="copy_data">Copy Data</string>
-    <string name="add_and_next">Add &amp; Next</string>
+    <string name="database_lookup_price_summary">%1$s - Retail price: %2$s</string>
+    <string name="add_and_next">Add and continue</string>
     <string name="product_found_in_db">Product already exists in the database</string>
 
     <string name="mark_as_complete">Mark Complete</string>

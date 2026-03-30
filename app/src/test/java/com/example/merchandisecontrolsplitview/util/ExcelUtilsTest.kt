@@ -111,6 +111,14 @@ class ExcelUtilsTest {
     }
 
     @Test
+    fun `getLocalizedHeader resolves legacy retail price alias`() {
+        assertEquals(
+            context.getString(R.string.header_retail_price),
+            getLocalizedHeader(context, "RetailPrice")
+        )
+    }
+
+    @Test
     fun `analyzePoiSheet maps localized aliases to canonical headers`() {
         withSheet(
             listOf("Código de barras", "Nombre del Producto", "prezzo acquisto", "Cantidad", "Importe"),

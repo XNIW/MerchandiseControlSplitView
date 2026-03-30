@@ -318,11 +318,13 @@
     <string name="add_products_manually">手动添加商品</string>
     <string name="no_products_add_new">没有商品。请添加新商品！</string>
     <string name="manual_entry_indicator">手动添加的记录</string>
+    <string name="manual_entry_default_category">杂项</string>
 
     <string name="product_already_in_list">商品已在列表中。请修改数据。</string>
     <string name="data_from_database">数据库数据：</string>
     <string name="copy_data">复制数据</string>
-    <string name="add_and_next">添加并下一个</string>
+    <string name="database_lookup_price_summary">%1$s - 零售价：%2$s</string>
+    <string name="add_and_next">添加并继续</string>
     <string name="product_found_in_db">该商品已存在于数据库中</string>
 
     <string name="mark_as_complete">标为完成</string>
@@ -330,7 +332,7 @@
     <string name="error_negative_quantity">数量不能为负数。</string>
     <string name="error_invalid_discount">折扣必须是介于 0 和 100 之间的数值。</string>
 
-    <string name="tab_purchase">售价</string>
+    <string name="tab_purchase">进价</string>
     <string name="tab_retail">零售价</string>
     <string name="price_history">价格历史</string>
     <string name="price_history_empty_for_tab">%1$s暂无价格历史。</string>

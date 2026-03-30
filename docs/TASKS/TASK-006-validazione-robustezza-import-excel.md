@@ -39,7 +39,7 @@ Rendere più **prevedibili e comprensibili** gli errori nel percorso di import E
 
 ## Non incluso
 
-- OOM / full DB import → **TASK-017**, **TASK-018**; i18n solo PriceHistory → **TASK-019**.
+- OOM / full DB import → **TASK-017**, **TASK-018** (`DONE`); audit i18n **intera app** (4 lingue, include PriceHistory) → **TASK-019** (`ACTIVE` / `PLANNING`).
 - Audit globale feedback → **TASK-008** `DONE`.
 - DAO, repository, modelli dati, `NavGraph`, integrazioni piattaforma salvo emergenza documentata.
 - Redesign UI, nuovi dialog complessi, refactor architetturale dei ViewModel.

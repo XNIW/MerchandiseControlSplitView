@@ -77,7 +77,15 @@ fun readAndAnalyzeExcel(
 
 
 fun getLocalizedHeader(context: Context, key: String): String {
-    return when (key) {
+    val rawKey = key.trim()
+    val resolvedKey = when (rawKey) {
+        "RetailPrice" -> "retailPrice"
+        "prevPurchase" -> "oldPurchasePrice"
+        "prevRetail" -> "oldRetailPrice"
+        else -> canonicalExcelHeaderKey(rawKey) ?: rawKey
+    }
+
+    return when (resolvedKey) {
         "barcode"      -> context.getString(R.string.header_barcode)
         "quantity"     -> context.getString(R.string.header_quantity)
         "purchasePrice"-> context.getString(R.string.header_purchase_price)
@@ -95,7 +103,10 @@ fun getLocalizedHeader(context: Context, key: String): String {
         "discountedPrice" -> context.getString(R.string.header_discounted_price)
         "realQuantity" -> context.getString(R.string.header_real_quantity)
         "category"     -> context.getString(R.string.header_category)
-        else           -> key // fallback: mostra la chiave originale
+        "supplierId" -> context.getString(R.string.header_supplier_id)
+        "categoryId" -> context.getString(R.string.header_category_id)
+        "stockQuantity" -> context.getString(R.string.header_stock_quantity)
+        else           -> resolvedKey // fallback: preserva header sconosciuti / interop custom
     }
 }
 
