@@ -123,26 +123,6 @@ fun parseNumber(value: String?): Double? {
     }
 }
 
-/**
- * Formatta un numero Double? in una stringa per la visualizzazione.
- * - Arrotonda il numero all'intero più vicino.
- * - Restituisce "-" se il numero è nullo, ideale per le viste di sola lettura.
- */
-fun formatNumberAsRoundedString(number: Double?): String {
-    if (number == null) return "-"
-    return number.roundToLong().toString()
-}
-
-/**
- * Formatta un numero Double? in una stringa per i campi di input.
- * - Arrotonda il numero all'intero più vicino.
- * - Restituisce una stringa vuota se il numero è nullo, ideale per i TextField.
- */
-fun formatNumberAsRoundedStringForInput(number: Double?): String {
-    if (number == null) return ""
-    return number.roundToLong().toString()
-}
-
 private fun looksLikeExcelHtml(bytes: ByteArray): Boolean {
     // Ispezione “leggera” dell’header
     val head = bytes.copyOfRange(0, minOf(4096, bytes.size))

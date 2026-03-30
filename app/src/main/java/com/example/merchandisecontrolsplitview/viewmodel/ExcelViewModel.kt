@@ -14,7 +14,7 @@ import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
-import com.example.merchandisecontrolsplitview.util.formatNumberAsRoundedStringForInput
+import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
@@ -498,8 +498,8 @@ class ExcelViewModel(
                 val original = row.filterIndexed { i, _ -> selectedColumns.getOrNull(i) == true }
                 val barcode = if (barcodeIdx != -1) row.getOrNull(barcodeIdx) else null
                 val prices = barcode?.let { previousPricesMap[it] }
-                val oldPurchase = formatNumberAsRoundedStringForInput(prices?.first)
-                val oldRetail = formatNumberAsRoundedStringForInput(prices?.second)
+                val oldPurchase = formatClPriceInput(prices?.first)
+                val oldRetail = formatClPriceInput(prices?.second)
 
                 original + listOf(
                     oldPurchase,

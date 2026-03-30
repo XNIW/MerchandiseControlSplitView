@@ -513,3 +513,4 @@ _(Da compilare solo a chiusura task dopo EXECUTION/REVIEW.)_
 
 - Nessun handoff operativo aperto: review completata, fix applicati, tracking globale allineato.
 - La policy CL resta centralizzata in `ClNumberFormatters.kt`; futuri cambi numerici dovranno preservare la separazione display / input / parsing / dominio introdotta qui.
+- Follow-up cleanup 2026-03-30: rimossi i formatter legacy `formatNumberAsRoundedString*` da `ExcelUtils.kt`; `ExcelViewModel` usa ora `formatClPriceInput`. `parseNumber` è stato mantenuto perché ancora usato dal parsing Excel/import (`ExcelUtils` / `ImportAnalysis`) e non va confuso con i formatter UI.

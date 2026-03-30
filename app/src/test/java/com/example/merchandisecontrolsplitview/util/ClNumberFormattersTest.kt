@@ -12,6 +12,13 @@ class ClNumberFormattersTest {
     }
 
     @Test
+    fun `formatClPriceInput keeps legacy prefill behavior without grouping`() {
+        assertEquals("", formatClPriceInput(null))
+        assertEquals("4", formatClPriceInput(3.6))
+        assertEquals("0", formatClPriceInput(0.0))
+    }
+
+    @Test
     fun `formatClSummaryMoney adds peso prefix`() {
         assertEquals("\$ 125.000", formatClSummaryMoney(125000.0))
     }

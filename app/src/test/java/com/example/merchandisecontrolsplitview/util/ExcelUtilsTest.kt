@@ -68,36 +68,6 @@ class ExcelUtilsTest {
     }
 
     @Test
-    fun `formatNumberAsRoundedString returns dash for null`() {
-        assertEquals("-", formatNumberAsRoundedString(null))
-    }
-
-    @Test
-    fun `formatNumberAsRoundedString rounds non integer values`() {
-        assertEquals("5", formatNumberAsRoundedString(4.6))
-    }
-
-    @Test
-    fun `formatNumberAsRoundedString keeps zero`() {
-        assertEquals("0", formatNumberAsRoundedString(0.0))
-    }
-
-    @Test
-    fun `formatNumberAsRoundedStringForInput returns empty string for null`() {
-        assertEquals("", formatNumberAsRoundedStringForInput(null))
-    }
-
-    @Test
-    fun `formatNumberAsRoundedStringForInput rounds non integer values`() {
-        assertEquals("4", formatNumberAsRoundedStringForInput(3.6))
-    }
-
-    @Test
-    fun `formatNumberAsRoundedStringForInput keeps zero`() {
-        assertEquals("0", formatNumberAsRoundedStringForInput(0.0))
-    }
-
-    @Test
     fun `getLocalizedHeader resolves known key from resources`() {
         assertEquals(
             context.getString(R.string.header_purchase_price),
