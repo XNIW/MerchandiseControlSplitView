@@ -10,7 +10,6 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -73,7 +72,6 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.platform.LocalFocusManager
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import android.content.Intent
 import androidx.compose.foundation.MarqueeAnimationMode
 import androidx.core.content.FileProvider
@@ -1577,9 +1575,8 @@ private fun GeneratedScreenInfoDialog(
                                         priceTf = TextFieldValue(normalizedRetailPrice, TextRange(normalizedRetailPrice.length))
                                         editableValues[infoRowIndex][1].value = normalizedRetailPrice
 
-                                        val countedQtyString = normalizedCountedQty
                                         val originalQtyString = quantityState.value.text
-                                        val countedQty = parseUserQuantityInput(countedQtyString)
+                                        val countedQty = parseUserQuantityInput(normalizedCountedQty)
                                         val originalQty = parseUserQuantityInput(originalQtyString)
 
                                         if (countedQty != null && countedQty == originalQty) {
