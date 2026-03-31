@@ -41,7 +41,7 @@ android {
 
     // CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
     kotlin {
-        jvmToolchain(11)
+        jvmToolchain(17)
     }
 }
 
