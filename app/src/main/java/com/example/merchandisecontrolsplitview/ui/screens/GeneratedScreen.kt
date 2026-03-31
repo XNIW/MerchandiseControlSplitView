@@ -99,8 +99,7 @@ private fun oldPurchasePriceDiffersFromCurrent(current: String, old: String): Bo
     if (c == o) return false
     val cd = parseUserPriceInput(c)
     val od = parseUserPriceInput(o)
-    if (cd != null && od != null && cd == od) return false
-    return true
+    return !(cd != null && od != null && cd == od)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

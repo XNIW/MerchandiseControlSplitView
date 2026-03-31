@@ -7,7 +7,7 @@ plugins {
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
-android {
+configure<com.android.build.api.dsl.ApplicationExtension> {
     namespace = "com.example.merchandisecontrolsplitview"
     compileSdk = 36
 
@@ -39,10 +39,11 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 
-    // CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
-    kotlin {
-        jvmToolchain(17)
-    }
+}
+
+// CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
+kotlin {
+    jvmToolchain(17)
 }
 
 tasks.withType<Test>().configureEach {

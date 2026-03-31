@@ -190,7 +190,7 @@ fun writeDatabaseExport(
     require(!selection.isEmpty) { "At least one sheet must be selected." }
 
     val workbook = SXSSFWorkbook(100)
-    workbook.setCompressTempFiles(true)
+    workbook.isCompressTempFiles = true
 
     try {
         selection.selectedSheetsInOrder().forEach { sheet ->

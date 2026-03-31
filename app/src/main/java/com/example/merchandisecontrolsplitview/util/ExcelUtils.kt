@@ -76,8 +76,7 @@ fun readAndAnalyzeExcel(
 
 
 fun getLocalizedHeader(context: Context, key: String): String {
-    val rawKey = key.trim()
-    val resolvedKey = when (rawKey) {
+    val resolvedKey = when (val rawKey = key.trim()) {
         "RetailPrice" -> "retailPrice"
         "prevPurchase" -> "oldPurchasePrice"
         "prevRetail" -> "oldRetailPrice"
