@@ -20,7 +20,7 @@ fun readAndAnalyzeExcel(
     val rows = mutableListOf<List<String>>()
     val emptyFileMessage = context.getString(R.string.error_file_empty_or_invalid)
     val inputStream = context.contentResolver.openInputStream(uri)
-        ?: throw IllegalArgumentException(emptyFileMessage)
+        ?: throw ExcelInputStreamUnavailableException()
 
     inputStream.use { inStream ->
         val bytes = inStream.readBytes()
@@ -33,8 +33,7 @@ fun readAndAnalyzeExcel(
             rows += parseExcelHtmlToRows(bytes)
         } else {
             // Flusso “buono”: BIFF8/XLSX con Apache POI
-            ByteArrayInputStream(bytes).use { stream ->
-                val wb = WorkbookFactory.create(stream)
+            createWorkbookWithLegacyFallback(bytes).use { wb ->
                 val sheet = wb.getSheetAt(0)
                 sheet.forEach { row ->
                     val temp = mutableListOf<String>()

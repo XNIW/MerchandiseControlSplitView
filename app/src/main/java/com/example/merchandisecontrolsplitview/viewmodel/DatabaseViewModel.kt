@@ -22,6 +22,7 @@ import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
 import com.example.merchandisecontrolsplitview.util.applyFullDbPriceHistoryStreaming
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
 import com.example.merchandisecontrolsplitview.util.writeDatabaseExport
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
@@ -247,39 +248,20 @@ class DatabaseViewModel(
     private var pendingFullImportUri: Uri? = null
     private var hasPendingPriceHistorySheet = false
 
-    private fun knownUserFacingFileMessage(context: Context, throwable: Throwable): String? {
-        val message = throwable.message?.trim().orEmpty()
-        if (message.isEmpty()) return null
-
-        val knownMessages = setOf(
-            context.getString(R.string.error_different_columns),
-            context.getString(R.string.error_incompatible_file_structure),
-            context.getString(R.string.error_file_empty_or_invalid),
-            context.getString(R.string.error_main_file_needed),
-            context.getString(R.string.error_first_file_empty_or_invalid)
-        )
-
-        return message.takeIf { it in knownMessages }
-    }
-
     private fun analysisErrorMessage(context: Context, throwable: Throwable): String {
-        return knownUserFacingFileMessage(context, throwable)
-            ?: when (throwable) {
-                is OutOfMemoryError -> context.getString(R.string.error_file_too_large_or_complex)
-                is SecurityException, is IOException ->
-                    context.getString(R.string.error_file_access_denied)
-                else -> context.getString(R.string.error_data_analysis_generic)
-            }
+        return resolveExcelFileErrorMessage(
+            context = context,
+            throwable = throwable,
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
     }
 
     private fun importErrorMessage(context: Context, throwable: Throwable): String {
-        return knownUserFacingFileMessage(context, throwable)
-            ?: when (throwable) {
-                is OutOfMemoryError -> context.getString(R.string.error_file_too_large_or_complex)
-                is SecurityException, is IOException ->
-                    context.getString(R.string.error_file_access_denied)
-                else -> context.getString(R.string.error_import_generic)
-            }
+        return resolveExcelFileErrorMessage(
+            context = context,
+            throwable = throwable,
+            unknownFallbackResId = R.string.error_import_generic
+        )
     }
 
     private fun exportErrorMessage(context: Context, throwable: Throwable): String {

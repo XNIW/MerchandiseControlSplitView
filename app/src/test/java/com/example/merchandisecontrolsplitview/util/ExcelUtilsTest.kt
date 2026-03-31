@@ -4,9 +4,14 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
+import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
 import io.mockk.every
 import io.mockk.mockk
+import java.io.IOException
 import org.apache.poi.ss.usermodel.Sheet
+import org.apache.poi.ooxml.POIXMLException
+import org.apache.poi.util.RecordFormatException
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -231,17 +236,16 @@ class ExcelUtilsTest {
     fun `readAndAnalyzeExcel null input stream throws localized empty file error`() {
         val resolver = mockk<ContentResolver>()
         val testContext = mockk<Context>()
-        val expectedMessage = "The Excel file is empty or has no valid header."
+        every { testContext.getString(R.string.error_file_empty_or_invalid) } returns "unused"
 
         every { testContext.contentResolver } returns resolver
-        every { testContext.getString(R.string.error_file_empty_or_invalid) } returns expectedMessage
         every { resolver.openInputStream(any()) } returns null
 
-        val error = assertThrows(IllegalArgumentException::class.java) {
+        val error = assertThrows(ExcelInputStreamUnavailableException::class.java) {
             readAndAnalyzeExcel(testContext, Uri.parse("content://test/null"))
         }
 
-        assertEquals(expectedMessage, error.message)
+        assertEquals("Excel input stream unavailable", error.message)
     }
 
     @Test
@@ -275,6 +279,108 @@ class ExcelUtilsTest {
         }
 
         assertEquals(context.getString(R.string.error_file_empty_or_invalid), error.message)
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel recovers malformed legacy xls obj records`() {
+        val malformedWorkbook = createMalformedLegacyObjWorkbookFile(
+            cacheDir = context.cacheDir,
+            name = "excel-malformed-legacy",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Total Price"),
+                listOf("12345678", "Recovered", 4.0, 2.0, 8.0)
+            )
+        )
+
+        val (header, rows, headerSource) = readAndAnalyzeExcel(context, Uri.fromFile(malformedWorkbook))
+
+        assertEquals(
+            listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),
+            header
+        )
+        assertEquals(listOf("12345678", "Recovered", "4", "2", "8"), rows.single())
+        assertEquals(header.size, headerSource.size)
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel recovers strict ooxml xlsx workbook`() {
+        val strictWorkbook = createStrictOoXmlWorkbookFile(
+            cacheDir = context.cacheDir,
+            name = "excel-strict-ooxml",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Total Price"),
+                listOf("12345678", "Strict Recovery", 4.0, 2.0, 8.0)
+            )
+        )
+
+        val (header, rows, headerSource) = readAndAnalyzeExcel(context, Uri.fromFile(strictWorkbook))
+
+        assertEquals(
+            listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),
+            header
+        )
+        assertEquals(listOf("12345678", "Strict Recovery", "4", "2", "8"), rows.single())
+        assertEquals(header.size, headerSource.size)
+    }
+
+    @Test
+    fun `resolveExcelFileErrorMessage maps strict ooxml to localized copy`() {
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = POIXMLException("Strict OOXML isn't currently supported, please see bug #57699"),
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.getString(R.string.error_strict_ooxml_not_supported), message)
+    }
+
+    @Test
+    fun `resolveExcelFileErrorMessage maps suppressed strict ooxml to localized copy`() {
+        val originalFailure = POIXMLException("Strict OOXML isn't currently supported, please see bug #57699")
+        val retryFailure = IOException("retry failed").apply {
+            addSuppressed(originalFailure)
+        }
+
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = retryFailure,
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.getString(R.string.error_strict_ooxml_not_supported), message)
+    }
+
+    @Test
+    fun `resolveExcelFileErrorMessage maps legacy hssf obj corruption to localized copy`() {
+        val error = RecordFormatException("Unexpected size (0)").apply {
+            stackTrace = arrayOf(
+                StackTraceElement(
+                    "org.apache.poi.hssf.record.FtCfSubRecord",
+                    "<init>",
+                    "FtCfSubRecord.java",
+                    73
+                )
+            )
+        }
+
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = error,
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.getString(R.string.error_legacy_xls_unreadable), message)
+    }
+
+    @Test
+    fun `resolveExcelFileErrorMessage maps io exception to read failure copy`() {
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = IOException("stream closed"),
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.getString(R.string.error_file_read_failed), message)
     }
 
     private fun withSheet(vararg rows: List<Any?>, block: (Sheet) -> Unit) {

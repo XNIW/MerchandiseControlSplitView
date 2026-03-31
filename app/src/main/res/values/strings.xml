@@ -235,7 +235,10 @@
     <string name="error_import_generic">Impossibile completare l\'importazione.</string>
     <string name="error_export_generic">Impossibile completare l\'esportazione.</string>
     <string name="error_file_access_denied">Impossibile accedere al file selezionato.</string>
+    <string name="error_file_read_failed">Impossibile leggere il file selezionato.</string>
     <string name="error_file_too_large_or_complex">Il file è troppo grande o complesso da elaborare.</string>
+    <string name="error_legacy_xls_unreadable">Il file Excel .xls selezionato contiene oggetti legacy non leggibili. Aprilo in Excel, salvalo di nuovo e riprova.</string>
+    <string name="error_strict_ooxml_not_supported">Il file Excel .xlsx selezionato usa Strict OOXML. Salvalo come cartella di lavoro Excel standard e riprova.</string>
 
     <string name="success_product_added">Prodotto aggiunto con successo.</string>
     <string name="error_product_added">Errore durante l\'aggiunta del prodotto.</string>

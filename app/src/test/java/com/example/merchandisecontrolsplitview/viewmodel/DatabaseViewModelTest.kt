@@ -13,7 +13,9 @@ import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
+import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
 import com.example.merchandisecontrolsplitview.util.DatabaseExportConstants
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import io.mockk.coEvery
@@ -257,9 +259,57 @@ class DatabaseViewModelTest {
 
         assertNull(viewModel.importAnalysisResult.value)
         assertEquals(
-            UiState.Error(app.getString(R.string.error_file_access_denied)),
+            UiState.Error(app.getString(R.string.error_file_read_failed)),
             viewModel.uiState.value
         )
+    }
+
+    @Test
+    fun `startImportAnalysis malformed legacy xls succeeds after fallback`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+        val malformedWorkbook = createMalformedLegacyObjWorkbookFile(
+            cacheDir = app.cacheDir,
+            name = "import-malformed-legacy",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf("12345678", "Recovered Import", 4.0, 6.0, 2.0)
+            )
+        )
+
+        viewModel.startImportAnalysis(app, Uri.fromFile(malformedWorkbook))
+        advanceUntilIdle()
+        waitForCondition {
+            viewModel.importAnalysisResult.value != null || viewModel.uiState.value is UiState.Error
+        }
+
+        val result = viewModel.importAnalysisResult.value
+        assertNotNull(result)
+        assertTrue(result!!.newProducts.any { it.barcode == "12345678" })
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+    }
+
+    @Test
+    fun `startImportAnalysis strict ooxml xlsx succeeds after fallback`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+        val strictWorkbook = createStrictOoXmlWorkbookFile(
+            cacheDir = app.cacheDir,
+            name = "import-strict-ooxml",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf("12345678", "Strict Import", 4.0, 6.0, 2.0)
+            )
+        )
+
+        viewModel.startImportAnalysis(app, Uri.fromFile(strictWorkbook))
+        advanceUntilIdle()
+        waitForCondition {
+            viewModel.importAnalysisResult.value != null || viewModel.uiState.value is UiState.Error
+        }
+
+        val result = viewModel.importAnalysisResult.value
+        assertNotNull(result)
+        assertTrue(result!!.newProducts.any { it.barcode == "12345678" })
+        assertEquals(UiState.Idle, viewModel.uiState.value)
     }
 
     @Test

@@ -230,7 +230,10 @@
     <string name="error_import_generic">Could not complete the import.</string>
     <string name="error_export_generic">Could not complete the export.</string>
     <string name="error_file_access_denied">Could not access the selected file.</string>
+    <string name="error_file_read_failed">Could not read the selected file.</string>
     <string name="error_file_too_large_or_complex">The file is too large or complex to process.</string>
+    <string name="error_legacy_xls_unreadable">The selected .xls file contains unreadable legacy objects. Open it in Excel, save it again, and try once more.</string>
+    <string name="error_strict_ooxml_not_supported">The selected .xlsx file uses Strict OOXML. Save it as a standard Excel workbook and try again.</string>
     <string name="success_product_added">Product added successfully.</string>
     <string name="error_product_added">Error adding product.</string>
     <string name="success_product_updated">Product updated successfully.</string>

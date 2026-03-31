@@ -17,6 +17,9 @@ import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.util.classifyExcelFileUserError
+import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
+import com.example.merchandisecontrolsplitview.util.ExcelFileUserError
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
@@ -105,32 +108,12 @@ class ExcelViewModel(
         historyActionMessage.value = null
     }
 
-    private fun knownUserFacingFileMessage(context: Context, throwable: Throwable): String? {
-        val message = throwable.message?.trim().orEmpty()
-        if (message.isEmpty()) return null
-
-        val knownMessages = setOf(
-            context.getString(R.string.error_different_columns),
-            context.getString(R.string.error_incompatible_file_structure),
-            context.getString(R.string.error_main_file_needed),
-            context.getString(R.string.error_first_file_empty_or_invalid),
-            context.getString(R.string.error_file_empty_or_invalid)
-        )
-
-        return message.takeIf { it in knownMessages }
-    }
-
     private fun fileLoadErrorMessage(
         context: Context,
         throwable: Throwable,
         genericResId: Int
     ): String {
-        return knownUserFacingFileMessage(context, throwable)
-            ?: when (throwable) {
-                is SecurityException, is IOException ->
-                    context.getString(R.string.error_file_access_denied)
-                else -> context.getString(genericResId)
-            }
+        return resolveExcelFileErrorMessage(context, throwable, genericResId)
     }
 
     // Removed repository instantiation as it is now injected via constructor
@@ -299,8 +282,8 @@ class ExcelViewModel(
                         readAndAnalyzeExcel(context, uris.first())
                     }
                 } catch (e: Exception) {
-                    val isFirstFileEmpty = knownUserFacingFileMessage(context, e) ==
-                        context.getString(R.string.error_file_empty_or_invalid)
+                    val isFirstFileEmpty =
+                        classifyExcelFileUserError(context, e) == ExcelFileUserError.EmptyOrInvalid
                     if (isFirstFileEmpty) {
                         throw IllegalArgumentException(
                             context.getString(R.string.error_first_file_empty_or_invalid)

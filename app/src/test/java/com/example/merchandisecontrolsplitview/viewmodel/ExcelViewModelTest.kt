@@ -9,6 +9,8 @@ import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
+import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
+import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -348,9 +350,55 @@ class ExcelViewModelTest {
         waitForCondition { viewModel.loadError.value != null }
 
         assertEquals(
-            app.getString(R.string.error_file_access_denied),
+            app.getString(R.string.error_file_read_failed),
             viewModel.loadError.value
         )
+    }
+
+    @Test
+    fun `loadFromMultipleUris malformed legacy xls loads preview rows`() = runTest {
+        val malformedWorkbook = createMalformedLegacyObjWorkbookFile(
+            cacheDir = app.cacheDir,
+            name = "load-malformed-legacy",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Total Price"),
+                listOf("12345678", "Recovered Item", 4.0, 2.0, 8.0)
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(malformedWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(
+            listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),
+            viewModel.excelData.first()
+        )
+        assertEquals(listOf("12345678", "Recovered Item", "4", "2", "8"), viewModel.excelData[1])
+    }
+
+    @Test
+    fun `loadFromMultipleUris strict ooxml xlsx loads preview rows`() = runTest {
+        val strictWorkbook = createStrictOoXmlWorkbookFile(
+            cacheDir = app.cacheDir,
+            name = "load-strict-ooxml",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Total Price"),
+                listOf("12345678", "Strict Item", 4.0, 2.0, 8.0)
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(strictWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(
+            listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),
+            viewModel.excelData.first()
+        )
+        assertEquals(listOf("12345678", "Strict Item", "4", "2", "8"), viewModel.excelData[1])
     }
 
     @Test

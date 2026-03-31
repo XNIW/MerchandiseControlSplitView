@@ -229,7 +229,10 @@
     <string name="error_import_generic">No se pudo completar la importación.</string>
     <string name="error_export_generic">No se pudo completar la exportación.</string>
     <string name="error_file_access_denied">No se pudo acceder al archivo seleccionado.</string>
+    <string name="error_file_read_failed">No se pudo leer el archivo seleccionado.</string>
     <string name="error_file_too_large_or_complex">El archivo es demasiado grande o complejo para procesarlo.</string>
+    <string name="error_legacy_xls_unreadable">El archivo .xls seleccionado contiene objetos heredados que no se pueden leer. Ábralo en Excel, guárdelo de nuevo y vuelva a intentarlo.</string>
+    <string name="error_strict_ooxml_not_supported">El archivo .xlsx seleccionado usa Strict OOXML. Guárdelo como un libro de Excel estándar y vuelva a intentarlo.</string>
     <string name="success_product_added">Producto añadido correctamente.</string>
     <string name="error_product_added">Error al añadir el producto.</string>
     <string name="success_product_updated">Producto actualizado correctamente.</string>

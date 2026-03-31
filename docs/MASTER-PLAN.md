@@ -16,9 +16,9 @@
 
 ## Obiettivo attuale
 
-**Stato corrente:** nessun task in `EXECUTION` dopo la chiusura di **TASK-023**. **TASK-023** — numeri Cile — è **`DONE`** (2026-03-30: review repo-grounded finale, fix mirato parser quantità, `assembleDebug`/`lint`/`testDebugUnitTest` OK).
+**Stato corrente:** **TASK-024** — compatibilità workbook POI (`.xls` legacy / `.xlsx` Strict OOXML) — è **`DONE`** (2026-03-30: review planner APPROVED; fix HSSF + Strict OOXML verificata su entrambi i file target; build/lint/test verdi). **TASK-023** — numeri Cile — è **`DONE`** (2026-03-30).
 
-**Tracking globale:** nessun task corrente in lavorazione. **TASK-023** — **Audit / coerenza visualizzazione numerica fissa (Cile / CLP)** — è **`DONE`** (2026-03-30). **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-015** **`BACKLOG`**.
+**Tracking globale:** **TASK-024** — **Compatibilità workbook POI** — **`DONE`** (2026-03-30). **TASK-023** — **Audit / coerenza visualizzazione numerica fissa (Cile / CLP)** — è **`DONE`** (2026-03-30). **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-015** **`BACKLOG`**.
 
 ---
 
@@ -26,14 +26,14 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | Nessuno |
+| Task attivo          | Nessuno — **TASK-024** chiuso |
 | Fase task attivo     | — |
 | Backlog documentale  | — |
-| Milestone            | **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
-| Prossimo passo operativo | **Planner/utente:** scegliere il prossimo task. Candidati naturali: smoke per sbloccare **TASK-006** / **TASK-011**, oppure attivare **TASK-015**. |
-| Ultimo aggiornamento | 2026-03-30 — review finale di **TASK-023** completata; fix quantity parser applicato; `assembleDebug`/`lint`/`testDebugUnitTest` verdi; task chiuso in **`DONE`** e tracking globale riallineato. |
+| Milestone            | **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-015** **`BACKLOG`**. |
+| Prossimo passo operativo | Selezione prossimo task dal backlog (decisione utente). |
+| Ultimo aggiornamento | 2026-03-30 — **TASK-024** chiuso in `DONE` dopo review planner APPROVED; fix HSSF + Strict OOXML su entrambi i file target; build/lint/test verdi. |
 
-**Promemoria antiambiguità (governance):** al momento non c’è alcun task in **`EXECUTION`**. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
+**Promemoria antiambiguità (governance):** **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**.
 
 ---
 
@@ -43,7 +43,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`EXECUTION`**: **TASK-023** (numeri Cile) è stato chiuso in **`DONE`** il 2026-03-30 dopo review repo-grounded finale, fix mirato sull’ambiguità `1.234` nelle quantità e check completi verdi. **TASK-022** è **`DONE`**. **TASK-019** è **`DONE`**. **TASK-018** è **`DONE`**. **TASK-014** è **`DONE`**. **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
+Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`EXECUTION`**: **TASK-024** (compatibilità workbook POI) è stato chiuso in **`DONE`** il 2026-03-30 dopo review planner APPROVED. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`**. **TASK-019** è **`DONE`**. **TASK-018** è **`DONE`**. **TASK-014** è **`DONE`**. **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -75,7 +75,7 @@ Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`E
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021 / TASK-022 / TASK-023:** nessun task è in **`EXECUTION`** al momento. **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-023 → **`DONE`**; TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
+**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021 / TASK-022 / TASK-023 / TASK-024:** nessun task è in **`EXECUTION`** al momento. **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-024 → **`DONE`**; TASK-023 → **`DONE`**; TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
 
 ---
 
@@ -467,6 +467,17 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | File task   | `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md` |
 | Descrizione | Audit progettuale: convenzione **cilena fissa** (indipendente da lingua app) solo per **importi, quantità, percentuali sconto, contatori UX** — **non** per **barcode / itemNumber / ID tecnici** (guardrail in file task). Prezzi plain; totali con **`$`**; quantità frazionarie in **sola lettura** = migliaia `.` + decimali `,`, max 3 dec, no zeri finali; `discountPercent` max 2 dec; `discountedPrice` = prezzo normale; null/blank e totali come in file task. Griglia display-only; Excel file neutro in scope. Matrice + rischi input. **Hotspot `ExcelViewModel`:** `calculateInitialSummary` / `calculateFinalSummary` → **orderTotal** / **paymentTotal**; `saveExcelFileInternal` + **`numericTypes`** → non mescolare presentation e dato file (**nessun** cambio business/export nel task). Coordinare **TASK-016**. |
 | Note tracking | **`DONE`** (2026-03-30) — review finale repo-grounded completata: centralizzazione formatter confermata, fix sull’ambiguità quantità `1.234` applicato, `assembleDebug`/`lint`/`testDebugUnitTest` OK, tracking task + master plan riallineati. |
+
+### TASK-024 — Compatibilità workbook Excel: .xls legacy (HSSF) e .xlsx Strict OOXML (POI)
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | **`ACTIVE`** (`EXECUTION`)                              |
+| Priorità    | `MEDIA`                                                 |
+| Area        | Import / Excel / Apache POI                             |
+| Dipendenze  | TASK-004 (`DONE`), TASK-005 (`DONE`)                    |
+| File task   | `docs/TASKS/TASK-024-excel-poi-workbook-legacy-strict-ooxml.md` |
+| Descrizione | Obbligo **apertura reale** in preview del file **`EROORE-Dreamdiy.xls`** (oggi errore) + classificazione/mapper condiviso per **(A)** `.xls` HSSF e **(B)** `.xlsx` Strict OOXML; preflight in Execution; confermato **L2** full-db; nessuna regressione su `.xls`/`.xlsx` già buoni né su multi-file; baseline TASK-004 se si tocca path import. |
+| Note tracking | 2026-03-30 — **`EXECUTION`** avviata dopo audit mirato: inventario esteso righe 7–9 (`startSmartImport`, `applyFullDbPriceHistoryStreaming`, `importErrorMessage`); confermato L2; contratto esteso a mapper apply-phase. |
 
 ### TASK-021 — Export DB: memoria/streaming, fogli selettivi, dialog M3 (follow-up TASK-007)
 | Campo       | Valore                                                  |
