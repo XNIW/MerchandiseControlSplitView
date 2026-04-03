@@ -10,10 +10,13 @@ import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
 import org.apache.poi.ss.usermodel.Sheet
+import org.apache.poi.ss.usermodel.Workbook
+import org.apache.poi.ss.util.CellRangeAddress
 import org.apache.poi.ooxml.POIXMLException
 import org.apache.poi.util.RecordFormatException
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
+import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -222,6 +225,71 @@ class ExcelUtilsTest {
     }
 
     @Test
+    fun `readAndAnalyzeExcel cleans no-header structural blanks without reconstructing merge or image columns`() {
+        val workbookFile = createWorkbookFile(
+            name = "excel-no-header-structural-cleanup",
+            rows = listOf(
+                listOf(null, "20034", "6871128200344", "Dream Item One", null, 12.0, 270.0, 3240.0),
+                listOf(null, "20089", "6871128200894", "Dream Item Two", null, 24.0, 480.0, 11520.0),
+                emptyList(),
+                emptyList()
+            )
+        ) { workbook, sheet ->
+            sheet.addMergedRegion(CellRangeAddress(0, 0, 3, 4))
+            sheet.addMergedRegion(CellRangeAddress(1, 1, 3, 4))
+
+            val pictureBytes = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j6bcAAAAASUVORK5CYII="
+            )
+            val pictureIndex = workbook.addPicture(pictureBytes, Workbook.PICTURE_TYPE_PNG)
+            val drawing = sheet.createDrawingPatriarch()
+            drawing.createPicture(workbook.creationHelper.createClientAnchor().apply {
+                setCol1(0)
+                setCol2(1)
+                setRow1(0)
+                setRow2(2)
+            }, pictureIndex)
+        }
+
+        val (header, rows, headerSource) = readAndAnalyzeExcel(context, Uri.fromFile(workbookFile))
+
+        assertEquals(
+            listOf("itemNumber", "barcode", "productName", "quantity", "purchasePrice", "totalPrice"),
+            header
+        )
+        assertEquals(
+            listOf(
+                listOf("20034", "6871128200344", "Dream Item One", "12", "270", "3240"),
+                listOf("20089", "6871128200894", "Dream Item Two", "24", "480", "11520")
+            ),
+            rows
+        )
+        assertEquals(listOf("pattern", "pattern", "pattern", "pattern", "pattern", "pattern"), headerSource)
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel and analyzePoiSheet stay aligned for no-header structural cleanup`() {
+        val workbookFile = createWorkbookFile(
+            name = "excel-no-header-shared-cleanup",
+            rows = listOf(
+                listOf(null, "30001", "9876543210123", "Aligned One", null, 6.0, 150.0, 900.0),
+                listOf(null, "30002", "9876543210456", "Aligned Two", null, 8.0, 125.0, 1000.0),
+                emptyList()
+            )
+        ) { _, sheet ->
+            sheet.addMergedRegion(CellRangeAddress(0, 0, 3, 4))
+            sheet.addMergedRegion(CellRangeAddress(1, 1, 3, 4))
+        }
+
+        val fromFile = readAndAnalyzeExcel(context, Uri.fromFile(workbookFile))
+
+        XSSFWorkbook(workbookFile.inputStream()).use { workbook ->
+            val fromSheet = analyzePoiSheet(context, workbook.getSheetAt(0))
+            assertEquals(fromSheet, fromFile)
+        }
+    }
+
+    @Test
     fun `readAndAnalyzeExcel empty byte file throws localized empty file error`() {
         val emptyFile = File.createTempFile("excel-empty-bytes", ".xlsx", context.cacheDir)
 
@@ -402,7 +470,8 @@ class ExcelUtilsTest {
 
     private fun createWorkbookFile(
         name: String,
-        rows: List<List<Any?>> = emptyList()
+        rows: List<List<Any?>> = emptyList(),
+        configure: (XSSFWorkbook, Sheet) -> Unit = { _, _ -> }
     ): File {
         val file = File.createTempFile(name, ".xlsx", context.cacheDir)
         XSSFWorkbook().use { workbook ->
@@ -417,6 +486,7 @@ class ExcelUtilsTest {
                     }
                 }
             }
+            configure(workbook, sheet)
             file.outputStream().use(workbook::write)
         }
         return file

@@ -417,6 +417,53 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `loadFromMultipleUris merges no-header files after structural cleanup without spurious rows or columns`() = runTest {
+        val firstWorkbook = createWorkbook(
+            name = "load-no-header-first",
+            rows = listOf(
+                listOf("", "20034", "6871128200344", "Dream Item One", "", 12.0, 270.0, 3240.0),
+                listOf("", "20089", "6871128200894", "Dream Item Two", "", 24.0, 480.0, 11520.0),
+                emptyList(),
+                emptyList()
+            )
+        )
+        val secondWorkbook = createWorkbook(
+            name = "load-no-header-second",
+            rows = listOf(
+                listOf("", "20102", "6871128201020", "Dream Item Three", "", 6.0, 550.0, 3300.0),
+                emptyList(),
+                emptyList(),
+                emptyList()
+            )
+        )
+
+        viewModel.loadFromMultipleUris(
+            app,
+            listOf(Uri.fromFile(firstWorkbook), Uri.fromFile(secondWorkbook))
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 4 && !viewModel.isLoading.value }
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(
+            listOf("itemNumber", "barcode", "productName", "quantity", "purchasePrice", "totalPrice"),
+            viewModel.excelData.first()
+        )
+        assertEquals(
+            listOf("20034", "6871128200344", "Dream Item One", "12", "270", "3240"),
+            viewModel.excelData[1]
+        )
+        assertEquals(
+            listOf("20102", "6871128201020", "Dream Item Three", "6", "550", "3300"),
+            viewModel.excelData.last()
+        )
+        assertEquals(
+            listOf("pattern", "pattern", "pattern", "pattern", "pattern", "pattern"),
+            viewModel.headerTypes.toList()
+        )
+    }
+
+    @Test
     fun `appendFromMultipleUris without base grid shows main file needed and keeps state`() = runTest {
         val validWorkbook = createWorkbook(
             name = "append-no-base",

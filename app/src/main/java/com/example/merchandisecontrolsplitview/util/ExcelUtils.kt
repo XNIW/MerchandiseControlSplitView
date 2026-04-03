@@ -29,35 +29,11 @@ fun readAndAnalyzeExcel(
 
         if (looksLikeExcelHtml(bytes)) {
             // Fallback HTML → righe
-            rows += parseExcelHtmlToRows(bytes)
+            rows += normalizeTabularRows(parseExcelHtmlToRows(bytes))
         } else {
             // Flusso “buono”: BIFF8/XLSX con Apache POI
             createWorkbookWithLegacyFallback(bytes).use { wb ->
-                val sheet = wb.getSheetAt(0)
-                sheet.forEach { row ->
-                    val temp = mutableListOf<String>()
-                    val last = row.lastCellNum.toInt()
-                    for (i in 0 until last) {
-                        val cell = row.getCell(i)
-                        val txt = when {
-                            cell == null -> ""
-                            cell.cellType == CellType.STRING -> {
-                                val rawValue = cell.stringCellValue ?: ""
-                                if (rawValue.trim().startsWith("$")) {
-                                    val cleanedValue = rawValue.trim().replace("$", "").replace(",", "")
-                                    cleanedValue.toDoubleOrNull()?.roundToLong()?.toString() ?: rawValue
-                                } else rawValue
-                            }
-                            cell.cellType == CellType.NUMERIC -> {
-                                val n = cell.numericCellValue
-                                if (n == n.toLong().toDouble()) n.toLong().toString() else n.toString()
-                            }
-                            else -> cell.toString()
-                        }
-                        temp.add(txt.trim())
-                    }
-                    rows.add(temp)
-                }
+                rows += readPoiRows(wb.getSheetAt(0))
             }
         }
     }
@@ -243,6 +219,74 @@ internal fun canonicalExcelHeaderKey(rawHeader: String): String? {
 
 private fun normalizeHeader(s: String) = normalizeExcelHeader(s)
 
+private data class PrunedColumnsResult(
+    val header: MutableList<String>,
+    val headerSource: MutableList<String>,
+    val dataRows: List<List<String>>,
+    val oldToNewIndex: Map<Int, Int>
+)
+
+private fun normalizeTabularRows(rows: List<List<String>>): List<List<String>> {
+    return rows.map { row -> row.dropLastWhile { it.isEmpty() } }
+        .filter { row -> row.any { it.isNotBlank() } }
+}
+
+private fun readPoiRows(sheet: Sheet): List<List<String>> {
+    val rows = mutableListOf<List<String>>()
+    sheet.forEach { row ->
+        val temp = mutableListOf<String>()
+        val last = row.lastCellNum.toInt().coerceAtLeast(0)
+        for (i in 0 until last) {
+            val cell = row.getCell(i)
+            val txt = when {
+                cell == null -> ""
+                cell.cellType == CellType.STRING -> {
+                    val rawValue = cell.stringCellValue ?: ""
+                    if (rawValue.trim().startsWith("$")) {
+                        val cleanedValue = rawValue.trim().replace("$", "").replace(",", "")
+                        cleanedValue.toDoubleOrNull()?.roundToLong()?.toString() ?: rawValue
+                    } else rawValue
+                }
+                cell.cellType == CellType.NUMERIC -> {
+                    val n = cell.numericCellValue
+                    if (n == n.toLong().toDouble()) n.toLong().toString() else n.toString()
+                }
+                else -> cell.toString()
+            }
+            temp.add(txt.trim())
+        }
+        rows.add(temp)
+    }
+    return normalizeTabularRows(rows)
+}
+
+private fun pruneTotallyEmptyColumns(
+    header: List<String>,
+    headerSource: List<String>,
+    dataRows: List<List<String>>
+): PrunedColumnsResult {
+    if (header.isEmpty()) {
+        return PrunedColumnsResult(
+            header = mutableListOf(),
+            headerSource = mutableListOf(),
+            dataRows = dataRows,
+            oldToNewIndex = emptyMap()
+        )
+    }
+
+    val nonEmptyCols = header.indices.filter { col ->
+        dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+    }
+    val oldToNewIndex = nonEmptyCols.withIndex().associate { it.value to it.index }
+
+    return PrunedColumnsResult(
+        header = nonEmptyCols.map { header[it] }.toMutableList(),
+        headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList(),
+        dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } },
+        oldToNewIndex = oldToNewIndex
+    )
+}
+
 private fun analyzeRows(
     context: Context,
     rows: List<List<String>>
@@ -305,33 +349,25 @@ private fun analyzeRows(
             }
         }
 
-        // Rimuovi colonne vuote dopo alias
-        val nonEmptyCols = header.indices.filter { col ->
-            dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
-        }
-        val emptyCols = header.indices.filter { col -> !nonEmptyCols.contains(col) }
-        val colToHeader = headerMap.entries.associate { it.value to it.key }
-        for (emptyCol in emptyCols) {
-            val assignedHeader = colToHeader[emptyCol]
-            if (assignedHeader != null) headerMap.remove(assignedHeader)
-            usedCols.remove(emptyCol)
-            headerSource[emptyCol] = "unknown"
-        }
-        val oldToNewIdx = nonEmptyCols.withIndex().associate { it.value to it.index }
-        header = nonEmptyCols.map { header[it] }.toMutableList()
-        headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList()
-        dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } }
-
         val newHeaderMap = mutableMapOf<String, Int>()
         val newUsedCols = mutableSetOf<Int>()
+        val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
+        header = prunedColumns.header
+        headerSource = prunedColumns.headerSource
+        dataRows = prunedColumns.dataRows
         for ((k, oldIdx) in headerMap) {
-            oldToNewIdx[oldIdx]?.let { newIdx ->
+            prunedColumns.oldToNewIndex[oldIdx]?.let { newIdx ->
                 newHeaderMap[k] = newIdx
                 newUsedCols.add(newIdx)
             }
         }
         headerMap.clear(); headerMap.putAll(newHeaderMap)
         usedCols.clear(); usedCols.addAll(newUsedCols)
+    } else {
+        val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
+        header = prunedColumns.header
+        headerSource = prunedColumns.headerSource
+        dataRows = prunedColumns.dataRows
     }
 
     val colCount = header.size
@@ -550,9 +586,7 @@ fun analyzePoiSheet(context: Context, sheet: Sheet)
     for (r in 0..sheet.lastRowNum) {
         val row = sheet.getRow(r) ?: continue
         val last = row.lastCellNum.toInt().coerceAtLeast(0)
-        val cells = (0 until last).map { c -> fmt.formatCellValue(row.getCell(c)).trim() }
-        val trimmed = cells.dropLastWhile { it.isEmpty() }
-        if (trimmed.any { it.isNotBlank() }) rows += trimmed
+        rows += (0 until last).map { c -> fmt.formatCellValue(row.getCell(c)).trim() }
     }
-    return analyzeRows(context, rows)
+    return analyzeRows(context, normalizeTabularRows(rows))
 }
