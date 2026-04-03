@@ -39,8 +39,8 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,8 +48,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import com.example.merchandisecontrolsplitview.R
@@ -57,6 +57,13 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
+
+private val DatabaseListContentPadding = PaddingValues(
+    start = 8.dp,
+    top = 8.dp,
+    end = 8.dp,
+    bottom = 152.dp
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,21 +77,28 @@ internal fun DatabaseScreenTopBar(
         title = { Text(stringResource(R.string.database_screen_title)) },
         navigationIcon = {
             IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back)
+                )
             }
         },
         actions = {
             IconButton(onClick = onImportClick) {
-                Icon(Icons.Default.FileDownload, contentDescription = stringResource(R.string.import_file))
+                Icon(
+                    Icons.Default.FileDownload,
+                    contentDescription = stringResource(R.string.import_file)
+                )
             }
 
-            Box {
-                IconButton(
-                    enabled = exportEnabled,
-                    onClick = onExportClick
-                ) {
-                    Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.export_file))
-                }
+            IconButton(
+                enabled = exportEnabled,
+                onClick = onExportClick
+            ) {
+                Icon(
+                    Icons.Default.FileUpload,
+                    contentDescription = stringResource(R.string.export_file)
+                )
             }
         }
     )
@@ -133,7 +147,10 @@ internal fun DatabaseProductListSection(
             trailingIcon = {
                 if (filter?.isNotEmpty() == true) {
                     IconButton(onClick = onClearFilter) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = stringResource(R.string.clear_text))
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.clear_text)
+                        )
                     }
                 }
             }
@@ -148,7 +165,10 @@ internal fun DatabaseProductListSection(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Icon(
                             imageVector = Icons.Default.SearchOff,
                             contentDescription = stringResource(R.string.no_products_found),
@@ -156,7 +176,11 @@ internal fun DatabaseProductListSection(
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                         Text(
-                            text = if (filter.isNullOrEmpty()) stringResource(R.string.no_products_in_db) else stringResource(R.string.no_results_for, filter),
+                            text = if (filter.isNullOrEmpty()) {
+                                stringResource(R.string.no_products_in_db)
+                            } else {
+                                stringResource(R.string.no_results_for, filter)
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                         )
@@ -172,7 +196,7 @@ internal fun DatabaseProductListSection(
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    contentPadding = DatabaseListContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(products.itemCount, key = { idx -> products[idx]?.product?.id ?: "placeholder-$idx" }) { idx ->
@@ -226,24 +250,35 @@ internal fun DatabaseProductListSection(
 @Composable
 private fun PriceColumn(
     labelNew: String,
+    currentPriceValue: Double?,
     priceNew: String?,
     labelOld: String,
     priceOldValue: Double?,
     horizontalAlignment: Alignment.Horizontal
 ) {
+    val visibleOldPrice = priceOldValue?.takeIf { shouldShowPreviousPrice(currentPriceValue, it) }
+
     Column(horizontalAlignment = horizontalAlignment) {
-        Text(text = labelNew, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            text = labelNew,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Text(
             text = priceNew ?: "-",
             style = MaterialTheme.typography.bodyLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
         )
-        if (priceOldValue != null) {
+        if (visibleOldPrice != null) {
             Spacer(Modifier.height(8.dp))
-            Text(text = labelOld, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                text = formatClPricePlainDisplay(priceOldValue),
+                text = labelOld,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = formatClPricePlainDisplay(visibleOldPrice),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textDecoration = TextDecoration.LineThrough
@@ -251,6 +286,11 @@ private fun PriceColumn(
         }
     }
 }
+
+private fun shouldShowPreviousPrice(
+    currentPriceValue: Double?,
+    previousPriceValue: Double
+): Boolean = currentPriceValue == null || currentPriceValue.compareTo(previousPriceValue) != 0
 
 @Composable
 internal fun ProductRow(
@@ -290,48 +330,109 @@ internal fun ProductRow(
             )
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val currentPurchasePrice = product.purchasePrice ?: productDetails.lastPurchase
+                val currentRetailPrice = product.retailPrice ?: productDetails.lastRetail
+
                 PriceColumn(
                     labelNew = stringResource(R.string.product_purchase_price_new_short),
-                    priceNew = formatClPricePlainDisplay(product.purchasePrice ?: productDetails.lastPurchase),
+                    currentPriceValue = currentPurchasePrice,
+                    priceNew = formatClPricePlainDisplay(currentPurchasePrice),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
                     priceOldValue = productDetails.prevPurchase,
                     horizontalAlignment = Alignment.Start
                 )
                 PriceColumn(
                     labelNew = stringResource(R.string.product_retail_price_new_short),
-                    priceNew = formatClPricePlainDisplay(product.retailPrice ?: productDetails.lastRetail),
+                    currentPriceValue = currentRetailPrice,
+                    priceNew = formatClPricePlainDisplay(currentRetailPrice),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
                     priceOldValue = productDetails.prevRetail,
                     horizontalAlignment = Alignment.End
                 )
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onShowHistory) {
-                    Icon(Icons.Default.History, contentDescription = stringResource(R.string.price_history))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.price_history))
-                }
-            }
             Spacer(Modifier.height(8.dp))
-            Row {
-                Text(text = "${stringResource(R.string.product_supplier_full)}: ")
-                Text(text = productDetails.supplierName ?: "-")
-            }
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                if (productDetails.categoryName != null) {
-                    Row {
-                        Text(text = "${stringResource(R.string.header_category)}: ")
-                        Text(text = productDetails.categoryName)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            text = stringResource(R.string.product_supplier_full),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = productDetails.supplierName ?: "-",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
-                } else {
-                    Spacer(modifier = Modifier)
+                    if (productDetails.categoryName != null) {
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                text = stringResource(R.string.header_category),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = productDetails.categoryName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
 
-                Row {
-                    Text(text = "${stringResource(R.string.header_stock_quantity)}: ", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(text = formatClQuantityDisplayReadOnly(product.stockQuantity), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row {
+                        Text(
+                            text = "${stringResource(R.string.header_stock_quantity)}: ",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatClQuantityDisplayReadOnly(product.stockQuantity),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Row(
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable(onClick = onShowHistory),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.price_history),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }

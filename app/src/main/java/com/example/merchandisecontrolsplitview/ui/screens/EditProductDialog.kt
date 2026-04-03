@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,10 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,8 +52,10 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category
@@ -207,13 +213,23 @@ internal fun EditProductDialog(
         )
     }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Card {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 24.dp)
+                .heightIn(max = 820.dp)
+                .imePadding()
+        ) {
             Column(
                 modifier = Modifier
-                    .padding(16.dp)
+                    .padding(horizontal = 20.dp, vertical = 20.dp)
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
@@ -242,7 +258,7 @@ internal fun EditProductDialog(
                         }
                     }
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = productName, onValueChange = { productName = it; validate() }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
                     if (showSecondNameField) {
                         OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it; validate() }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
@@ -251,112 +267,123 @@ internal fun EditProductDialog(
                     }
                 }
 
-                OutlinedTextField(
-                    value = purchasePrice,
-                    onValueChange = { purchasePrice = it },
-                    label = { Text(stringResource(R.string.purchase_price_label)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { state ->
-                            if (!state.isFocused) {
-                                purchasePrice = normalizeClPriceInput(purchasePrice)
-                            }
-                        },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    supportingText = {
-                        if (lastPurchase != null || prevPurchase != null) {
-                            Text(
-                                listOfNotNull(
-                                    lastPurchase?.let { stringResource(R.string.price_last, formatClPricePlainDisplay(it)) },
-                                    prevPurchase?.let { stringResource(R.string.price_previous, formatClPricePlainDisplay(it)) }
-                                ).joinToString("  •  ")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = purchasePrice,
+                        onValueChange = { purchasePrice = it },
+                        label = { CompactFieldLabel(R.string.purchase_price_label) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    purchasePrice = normalizeClPriceInput(purchasePrice)
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        supportingText = {
+                            PriceHistorySupportingText(
+                                lastPrice = lastPurchase,
+                                previousPrice = prevPurchase
                             )
                         }
-                    }
-                )
+                    )
 
-                OutlinedTextField(
-                    value = retailPriceTf,
-                    onValueChange = { tf ->
-                        retailPriceTf = tf
-                        retailPrice = tf.text
-                        validate()
-                    },
-                    label = { Text(stringResource(R.string.retail_price_label)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(retailFocusRequester)
-                        .onFocusChanged { state ->
-                            if (state.isFocused && !askedKeyboard) {
-                                askedKeyboard = true
-                                keyboardController?.show()
-                            } else if (!state.isFocused) {
-                                normalizeRetailPriceField()
-                            }
-                        },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    isError = retailPriceError != null,
-                    supportingText = {
-                        retailPriceError?.let { Text(it) } ?: run {
-                            if (lastRetail != null || prevRetail != null) {
-                                Text(
-                                    listOfNotNull(
-                                        lastRetail?.let { stringResource(R.string.price_last, formatClPricePlainDisplay(it)) },
-                                        prevRetail?.let { stringResource(R.string.price_previous, formatClPricePlainDisplay(it)) }
-                                    ).joinToString("  •  ")
-                                )
-                            }
-                        }
-                    }
-                )
-
-                if (showItemNumberField) {
-                    OutlinedTextField(value = itemNumber, onValueChange = { itemNumber = it }, label = { Text(stringResource(R.string.item_code_label)) }, modifier = Modifier.fillMaxWidth())
-                } else {
-                    TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
-                }
-
-                OutlinedTextField(
-                    value = stockQuantity,
-                    onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
-                    label = { Text(stringResource(R.string.header_stock_quantity)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { state ->
-                            if (!state.isFocused) {
-                                stockQuantity = normalizeClQuantityInput(stockQuantity)
-                            }
-                        },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true
-                )
-
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showSupplierSelectionDialog = true }) {
-                    OutlinedTextField(value = supplierName, onValueChange = {}, label = { Text(stringResource(R.string.supplier_label)) }, enabled = false, modifier = Modifier.fillMaxWidth(), trailingIcon = { Icon(Icons.Default.ArrowDropDown, stringResource(R.string.select_supplier)) }, colors = OutlinedTextFieldDefaults.colors(disabledTextColor = MaterialTheme.colorScheme.onSurface, disabledBorderColor = MaterialTheme.colorScheme.outline, disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant, disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant))
-                }
-
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showCategorySelectionDialog = true }) {
                     OutlinedTextField(
-                        value = categoryName,
-                        onValueChange = {},
-                        label = { Text(stringResource(R.string.category_label)) },
-                        enabled = false,
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, stringResource(R.string.select_category)) },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                            disabledBorderColor = MaterialTheme.colorScheme.outline,
-                            disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        value = retailPriceTf,
+                        onValueChange = { tf ->
+                            retailPriceTf = tf
+                            retailPrice = tf.text
+                            validate()
+                        },
+                        label = { CompactFieldLabel(R.string.retail_price_label) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(retailFocusRequester)
+                            .onFocusChanged { state ->
+                                if (state.isFocused && !askedKeyboard) {
+                                    askedKeyboard = true
+                                    keyboardController?.show()
+                                } else if (!state.isFocused) {
+                                    normalizeRetailPriceField()
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        isError = retailPriceError != null,
+                        supportingText = {
+                            retailPriceError?.let { Text(it) } ?: PriceHistorySupportingText(
+                                lastPrice = lastRetail,
+                                previousPrice = prevRetail
+                            )
+                        }
                     )
                 }
+
+                if (showItemNumberField) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = itemNumber,
+                            onValueChange = { itemNumber = it },
+                            label = { CompactFieldLabel(R.string.item_code_label) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true
+                        )
+
+                        OutlinedTextField(
+                            value = stockQuantity,
+                            onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                            label = { CompactFieldLabel(R.string.header_stock_quantity) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { state ->
+                                    if (!state.isFocused) {
+                                        stockQuantity = normalizeClQuantityInput(stockQuantity)
+                                    }
+                                },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true
+                        )
+                    }
+                } else {
+                    TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
+                    OutlinedTextField(
+                        value = stockQuantity,
+                        onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                        label = { CompactFieldLabel(R.string.header_stock_quantity) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { state ->
+                                if (!state.isFocused) {
+                                    stockQuantity = normalizeClQuantityInput(stockQuantity)
+                                }
+                            },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true
+                    )
+                }
+
+                SelectionTextField(
+                    value = supplierName,
+                    labelRes = R.string.supplier_label,
+                    contentDescriptionRes = R.string.select_supplier,
+                    onClick = { showSupplierSelectionDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                SelectionTextField(
+                    value = categoryName,
+                    labelRes = R.string.category_label,
+                    contentDescriptionRes = R.string.select_category,
+                    onClick = { showCategorySelectionDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 Row(modifier = Modifier
                     .fillMaxWidth()
@@ -386,6 +413,78 @@ internal fun EditProductDialog(
 }
 
 @Composable
+private fun CompactFieldLabel(labelRes: Int) {
+    Text(
+        text = stringResource(labelRes),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun PriceHistorySupportingText(
+    lastPrice: Double?,
+    previousPrice: Double?
+) {
+    if (lastPrice != null || previousPrice != null) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            lastPrice?.let {
+                Text(
+                    text = stringResource(R.string.price_last, formatClPricePlainDisplay(it)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            previousPrice?.let {
+                Text(
+                    text = stringResource(R.string.price_previous, formatClPricePlainDisplay(it)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelectionTextField(
+    value: String,
+    labelRes: Int,
+    contentDescriptionRes: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier.clickable(onClick = onClick)
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            label = { CompactFieldLabel(labelRes) },
+            enabled = false,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                Icon(
+                    Icons.Default.ArrowDropDown,
+                    stringResource(contentDescriptionRes)
+                )
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                disabledBorderColor = MaterialTheme.colorScheme.outline,
+                disabledTrailingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        )
+    }
+}
+
+@Composable
 private fun SupplierSelectionDialog(
     viewModel: DatabaseViewModel,
     onDismiss: () -> Unit,
@@ -401,7 +500,7 @@ private fun SupplierSelectionDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_supplier_title)) },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedTextField(
                     value = searchText,
                     onValueChange = { searchText = it; viewModel.onSupplierSearchQueryChanged(it) },
@@ -415,27 +514,24 @@ private fun SupplierSelectionDialog(
                         }
                     }
                 )
-                Spacer(Modifier.height(16.dp))
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     items(suppliers) { supplier ->
-                        Text(
+                        SelectionDialogRow(
                             text = supplier.name,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onSupplierSelected(supplier) }
-                                .padding(vertical = 14.dp)
+                            onClick = { onSupplierSelected(supplier) }
                         )
                     }
                     if (suppliers.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
                         item {
-                            Text(
+                            SelectionDialogRow(
                                 text = stringResource(R.string.add_new_supplier_prompt, searchText),
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onAddNewSupplier(searchText) }
-                                    .padding(vertical = 14.dp)
+                                onClick = { onAddNewSupplier(searchText) },
+                                highlighted = true
                             )
                         }
                     }
@@ -464,7 +560,7 @@ private fun CategorySelectionDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_category_title)) },
         text = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedTextField(
                     value = searchText,
                     onValueChange = {
@@ -488,29 +584,25 @@ private fun CategorySelectionDialog(
                         }
                     }
                 )
-                Spacer(Modifier.height(16.dp))
-
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     items(categories) { category ->
-                        Text(
+                        SelectionDialogRow(
                             text = category.name,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onCategorySelected(category) }
-                                .padding(vertical = 14.dp)
+                            onClick = { onCategorySelected(category) }
                         )
                     }
 
                     if (categories.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
                         item {
-                            Text(
+                            SelectionDialogRow(
                                 text = stringResource(R.string.add_new_category_prompt, searchText),
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onAddNewCategory(searchText) }
-                                    .padding(vertical = 14.dp)
+                                onClick = { onAddNewCategory(searchText) },
+                                highlighted = true
                             )
                         }
                     }
@@ -523,4 +615,45 @@ private fun CategorySelectionDialog(
             }
         }
     )
+}
+
+@Composable
+private fun SelectionDialogRow(
+    text: String,
+    onClick: () -> Unit,
+    highlighted: Boolean = false
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (highlighted) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (highlighted) {
+                MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (highlighted) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
 }

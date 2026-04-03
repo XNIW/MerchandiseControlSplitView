@@ -61,6 +61,15 @@ fun DatabaseScreen(
     var requestedExportSelection by remember { mutableStateOf(ExportSheetSelection.full()) }
 
     var showHistoryFor by remember { mutableStateOf<Product?>(null) }
+
+    fun openNewProductEditor(barcode: String = "") {
+        itemToEdit = Product(
+            id = 0L,
+            barcode = barcode,
+            productName = ""
+        )
+    }
+
     val uploadLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -90,11 +99,7 @@ fun DatabaseScreen(
                     viewModel.setFilter(code)
                 } else {
                     // Non trovato: apro dialog Nuovo Prodotto con barcode già compilato
-                    itemToEdit = Product(
-                        id = 0L,
-                        barcode = code,
-                        productName = "" // resta il comportamento attuale del + (campo editabile)
-                    )
+                    openNewProductEditor(code)
                 }
             }
         }
@@ -179,9 +184,7 @@ fun DatabaseScreen(
                     }
                     scanLauncher.launch(opts)
                 },
-                onAdd = {
-                    itemToEdit = Product(id = 0L, barcode = "", productName = "")
-                },
+                onAdd = { openNewProductEditor() },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 24.dp, bottom = 24.dp)
