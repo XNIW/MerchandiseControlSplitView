@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
@@ -32,10 +33,24 @@ import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+
+private val historyTimestampParser: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
+
+private fun formatHistoryTimestamp(timestamp: String, locale: Locale = Locale.getDefault()): String {
+    val outputFormatter = DateTimeFormatter
+        .ofLocalizedDateTime(FormatStyle.MEDIUM)
+        .withLocale(locale)
+
+    return runCatching {
+        LocalDateTime.parse(timestamp, historyTimestampParser).format(outputFormatter)
+    }.getOrElse { timestamp }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -330,6 +345,10 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    val currentLocale = Locale.getDefault()
+    val displayTimestamp = remember(entry.timestamp, currentLocale) {
+        formatHistoryTimestamp(entry.timestamp, currentLocale)
+    }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {
@@ -390,13 +409,16 @@ private fun HistoryRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp)
+                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = entry.id,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.weight(1f, fill = false) // Per non far espandere il testo
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                         // Controlla se è un'entry manuale basandosi sul nome
                         if (entry.isManualEntry) {
@@ -410,8 +432,8 @@ private fun HistoryRow(
                         }
                     }
                     Text(
-                        text = "${stringResource(R.string.date_label)}: ${entry.timestamp}",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = displayTimestamp,
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
@@ -422,35 +444,34 @@ private fun HistoryRow(
                     if(details.isNotEmpty()){
                         Text(
                             text = details.joinToString(" | "),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(top = 4.dp)
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
-                    Spacer(Modifier.height(8.dp))
-
                     if (entry.totalItems > 0) {
-                        Text(
-                            text = "${stringResource(R.string.summary_label)}: ${formatClCount(entry.totalItems)} ${stringResource(R.string.products_label)}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = "${stringResource(R.string.order_value_label)}: ${formatClSummaryMoney(entry.orderTotal)}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        if (entry.missingItems > 0) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = "${stringResource(R.string.missing_items_label)}: ${formatClCount(entry.missingItems)}",
+                                text = "${stringResource(R.string.summary_label)}: ${formatClCount(entry.totalItems)} ${stringResource(R.string.products_label)}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                text = "${stringResource(R.string.order_value_label)}: ${formatClSummaryMoney(entry.orderTotal)}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            if (entry.missingItems > 0) {
+                                Text(
+                                    text = "${stringResource(R.string.missing_items_label)}: ${formatClCount(entry.missingItems)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                            Text(
+                                text = "${stringResource(R.string.payment_total_label)}: ${formatClSummaryMoney(entry.paymentTotal)}",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                        Text(
-                            text = "${stringResource(R.string.payment_total_label)}: ${formatClSummaryMoney(entry.paymentTotal)}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold
-                        )
                     }
                 }
 

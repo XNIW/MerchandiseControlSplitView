@@ -16,9 +16,9 @@
 
 ## Obiettivo attuale
 
-**Stato corrente:** nessun task attivo. **TASK-029** — Toolchain warning cleanup e hygiene repo — **`DONE`** (2026-04-03: Review APPROVED, 5/5 criteri ✅, build/lint/test verdi). **TASK-028** — Large dataset import/export realmente bounded-memory — è **`DONE`** (2026-04-03: review tecnica finale repo-grounded, fix mirati su bounded-memory reale dei warning duplicati, `assembleDebug` / `lint` / baseline JVM mirata + `FullDbExportImportRoundTripTest` verdi). **TASK-027** — Allineamento parser summary numerici CL — è **`DONE`** (2026-04-03: review completa repo-grounded, micro-fix test-only, `assembleDebug` / `lint` / `testDebugUnitTest` verdi). **TASK-026** — Correttezza import — è **`DONE`** (2026-04-03: review planner APPROVED, 20/20 criteri ✅, nessun fix richiesto). **TASK-015** — UX modernization DatabaseScreen — è **`DONE`** (2026-04-03: review planner APPROVED, fix post-review, `assembleDebug` / `lint` verdi, conferma utente). **TASK-025** — Preview Excel senza header — **`DONE`** (2026-04-03). Audit repo-grounded completo del 2026-04-03 tradotto in backlog operativo: **TASK-026**, **TASK-027** e **TASK-028** chiusi; **TASK-029** resta in **`BACKLOG`**; **TASK-016** formalizzato con file task dedicato.
+**Stato corrente:** **nessun task attivo** (nessun ID in **`ACTIVE`** / **`EXECUTION`**). **TASK-016** — UX polish History / ImportAnalysis / grid readability — **`DONE`** (2026-04-05: `assembleDebug` / `lint` verdi, fix post-review ImportAnalysis, walkthrough matrice manuale positivo, conferma utente; file task aggiornato). **TASK-029** — Toolchain warning cleanup e hygiene repo — **`DONE`** (2026-04-03: Review APPROVED, 5/5 criteri ✅, build/lint/test verdi). **TASK-028** — Large dataset import/export realmente bounded-memory — è **`DONE`** (2026-04-03: review tecnica finale repo-grounded, fix mirati su bounded-memory reale dei warning duplicati, `assembleDebug` / `lint` / baseline JVM mirata + `FullDbExportImportRoundTripTest` verdi). **TASK-027** — Allineamento parser summary numerici CL — è **`DONE`** (2026-04-03: review completa repo-grounded, micro-fix test-only, `assembleDebug` / `lint` / `testDebugUnitTest` verdi). **TASK-026** — Correttezza import — è **`DONE`** (2026-04-03: review planner APPROVED, 20/20 criteri ✅, nessun fix richiesto). **TASK-015** — UX modernization DatabaseScreen — è **`DONE`** (2026-04-03: review planner APPROVED, fix post-review, `assembleDebug` / `lint` verdi, conferma utente). **TASK-025** — Preview Excel senza header — **`DONE`** (2026-04-03). Audit repo-grounded 2026-04-03: **TASK-026**, **TASK-027**, **TASK-028**, **TASK-029** chiusi; **TASK-016** era passato a **`EXECUTION`** il 2026-04-04 e risulta **`DONE`** il 2026-04-05.
 
-**Tracking globale:** **TASK-024** — **Compatibilità workbook POI** — **`DONE`** (2026-03-30). **TASK-023** — **Audit / coerenza visualizzazione numerica fissa (Cile / CLP)** — è **`DONE`** (2026-03-30). **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-015** **`DONE`** (2026-04-03). **TASK-016** **`BACKLOG`** (file task formalizzato il 2026-04-03). **TASK-026** **`DONE`**. **TASK-027** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-029** **`DONE`** (2026-04-03). **TASK-025** — **Preview Excel senza header: trimming righe/colonne vuote** — **`DONE`** (2026-04-03, review planner APPROVED, test manuali passati, conferma utente).
+**Tracking globale:** **TASK-024** — **Compatibilità workbook POI** — **`DONE`** (2026-03-30). **TASK-023** — **Audit / coerenza visualizzazione numerica fissa (Cile / CLP)** — è **`DONE`** (2026-03-30). **TASK-022** — **GeneratedScreen dettaglio riga — blocco prezzo acquisto (layout + vecchio prezzo)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`. **TASK-019** — **Audit completo localizzazione app Android (en / it / es / zh)** — **`DONE`** (2026-03-30). File: `docs/TASKS/TASK-019-audit-localizzazione-app-completa.md`. **TASK-018** — **Double staging full-import** — **`DONE`** (2026-03-29). **TASK-014** — **UX modernization GeneratedScreen** — **`DONE`** (2026-03-29). **TASK-009** — **Migrazioni DB** — **`DONE`** (2026-03-29). **TASK-021** — **Export DB** — **`DONE`** (2026-03-29). **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-015** **`DONE`** (2026-04-03). **TASK-016** **`DONE`** (2026-04-05). **TASK-026** **`DONE`**. **TASK-027** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-029** **`DONE`** (2026-04-03). **TASK-025** — **Preview Excel senza header: trimming righe/colonne vuote** — **`DONE`** (2026-04-03, review planner APPROVED, test manuali passati, conferma utente).
 
 ---
 
@@ -26,14 +26,14 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | Nessuno |
-| Fase task attivo     | — |
+| Task attivo          | **—** (nessuno; selezionare il prossimo task dal backlog con approvazione utente) |
+| Fase task attivo     | **—** |
 | Backlog documentale  | — |
-| Milestone            | **TASK-028** **`DONE`** (2026-04-03). **TASK-027** **`DONE`** (2026-04-03). **TASK-026** **`DONE`** (2026-04-03). **TASK-025** **`DONE`** (2026-04-03). **TASK-015** **`DONE`** (2026-04-03). **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. **TASK-016** **`BACKLOG`**. **TASK-029** **`DONE`** (2026-04-03). |
-| Prossimo passo operativo | Attivare **TASK-016** da backlog su decisione utente. Smoke **TASK-006** / **TASK-011** restano utili ma non sono backlog né il primo follow-up consigliato. |
-| Ultimo aggiornamento | 2026-04-03 — **TASK-029** **`DONE`** (Review APPROVED, 5/5 criteri ✅). |
+| Milestone            | **TASK-016** **`DONE`** (2026-04-05). **TASK-029** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-027** **`DONE`** (2026-04-03). **TASK-026** **`DONE`** (2026-04-03). **TASK-025** **`DONE`** (2026-04-03). **TASK-015** **`DONE`** (2026-04-03). **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. |
+| Prossimo passo operativo | Nessun task in corso. **Prossima azione:** scelta guidata dall’utente (es. smoke **TASK-006** / **TASK-011** per sblocco verso `DONE`, ripresa **TASK-002** `BLOCKED`, o altro task dal backlog). |
+| Ultimo aggiornamento | 2026-04-05 — **TASK-016** chiuso in **`DONE`**; `MASTER-PLAN` e file task sincronizzati. |
 
-**Promemoria antiambiguità (governance):** **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
+**Promemoria antiambiguità (governance):** **TASK-016** è **`DONE`** (2026-04-05). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
 
 ---
 
@@ -43,7 +43,7 @@
 PLANNING → EXECUTION → REVIEW → FIX → REVIEW → ... → conferma utente → DONE
 ```
 
-Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`EXECUTION`** né in **`REVIEW`**: **TASK-028** (large dataset import/export) è **`DONE`** il 2026-04-03 dopo review tecnica finale repo-grounded e verifiche verdi. **TASK-027** è **`DONE`** (2026-04-03). **TASK-026** (correttezza import) è stato chiuso in **`DONE`** il 2026-04-03 dopo review planner APPROVED (20/20 criteri). **TASK-025** (preview Excel senza header) è **`DONE`** (2026-04-03). **TASK-015** è **`DONE`** (2026-04-03). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`**. **TASK-019** è **`DONE`**. **TASK-018** è **`DONE`**. **TASK-014** è **`DONE`**. **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
+Il task attivo è sempre **uno solo**. Attualmente **nessun** task è **`ACTIVE`**: **TASK-016** è stato chiuso in **`DONE`** il 2026-04-05. **TASK-028** (large dataset import/export) è **`DONE`** il 2026-04-03 dopo review tecnica finale repo-grounded e verifiche verdi. **TASK-027** è **`DONE`** (2026-04-03). **TASK-026** (correttezza import) è stato chiuso in **`DONE`** il 2026-04-03 dopo review planner APPROVED (20/20 criteri). **TASK-025** (preview Excel senza header) è **`DONE`** (2026-04-03). **TASK-015** è **`DONE`** (2026-04-03). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`**. **TASK-019** è **`DONE`**. **TASK-018** è **`DONE`**. **TASK-014** è **`DONE`**. **TASK-009** è **`DONE`**. **TASK-021** è **`DONE`**. **TASK-006** e **TASK-011** restano **`BLOCKED`**. **TASK-012** è **`DONE`**.
 
 **TASK-004 — tracking:** chiuso in **`DONE`** il 2026-03-28. **TASK-005 — tracking:** chiuso in **`DONE`** il 2026-03-28 (conferma utente). **TASK-007 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**, conferma utente; round-trip JVM + fix `ExcelUtils` / export OOM. **TASK-008 — tracking:** **`DONE`** (2026-03-28) — review **APPROVED**; fix bug localizzazione EN (`untitled`/`exported_short`) + rimozione dead resources (`sheet_name_*`, `excel_header_*`) da tutti e 4 i file; tutti i check ✅.
 
@@ -70,13 +70,14 @@ Il task attivo è sempre **uno solo**. Attualmente non c’è alcun task in **`E
 17. **TASK-022** → **`DONE`** (2026-03-30) — follow-up UX dettaglio riga GeneratedScreen chiuso dopo review repo-grounded, `assembleDebug`/`lint` OK e conferma utente; file: `docs/TASKS/TASK-022-generated-row-detail-purchase-block-ux.md`.
 18. **TASK-023** → **`DONE`** (2026-03-30) — review finale repo-grounded completata; policy numerica CL centralizzata; fix review sull’ambiguità quantità `1.234`; `assembleDebug`/`lint`/`testDebugUnitTest` OK; file: `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md`.
 19. **TASK-025** → **`DONE`** (2026-04-03) — cleanup strutturale preview/import `readAndAnalyzeExcel`; review planner APPROVED; test manuali passati (conferma utente); file: `docs/TASKS/TASK-025-preview-excel-no-header-righe-colonne-vuote.md`.
-20. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
+20. **TASK-016** → **`DONE`** (2026-04-05) — UX polish History/ImportAnalysis/grid; build/lint verdi, walkthrough matrice manuale positivo, conferma utente; file: `docs/TASKS/TASK-016-ux-polish-history-importanalysis-grid-readability.md`.
+21. Incrociare con i file task corrispondenti; se disallineato, aggiornare subito questo file e i task — **stop** su codice finché non coincidono.
 
 **Nota TASK-002:** decomposizione `GeneratedScreen` — review **statica positiva** (build/lint documentati nel file task); stato **`BLOCKED`** per decisione utente (smoke non eseguiti). **TASK-014** è stato comunque autorizzato esplicitamente dall’utente il 2026-03-29 per la sola modernizzazione UX sul perimetro già decomposto.
 
 **Coerenza governance TASK-013 (fonte unica):** nel backlog sotto, **TASK-013** è `DONE`. **Non** deve comparire `TASK-013` come `ACTIVE`.
 
-**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-018 / TASK-019 / TASK-021 / TASK-022 / TASK-023 / TASK-024 / TASK-025:** nessun task è in **`EXECUTION`** al momento. **TASK-025** è **`DONE`** (2026-04-03). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-025 → **`DONE`**; TASK-024 → **`DONE`**; TASK-023 → **`DONE`**; TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
+**Coerenza TASK-006 / TASK-009 / TASK-010 / TASK-011 / TASK-012 / TASK-014 / TASK-016 / TASK-018 / TASK-019 / TASK-021 / TASK-022 / TASK-023 / TASK-024 / TASK-025:** nessun task è in **`EXECUTION`** o **`ACTIVE`** al momento. **TASK-016** è **`DONE`** (2026-04-05). **TASK-025** è **`DONE`** (2026-04-03). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`** (smoke pendenti). **TASK-010** è **`DONE`**. **TASK-011** è **`BLOCKED`**. **TASK-012** è **`DONE`** (2026-03-29). **Verifica rapida:** TASK-016 → **`DONE`**; TASK-025 → **`DONE`**; TASK-024 → **`DONE`**; TASK-023 → **`DONE`**; TASK-022 → **`DONE`**; TASK-019 → **`DONE`**; TASK-018 → **`DONE`**; TASK-014 → **`DONE`**; TASK-009 / TASK-021 → **`DONE`**; TASK-006 / TASK-011 → **`BLOCKED`**; TASK-012 → **`DONE`**.
 
 ---
 
@@ -405,7 +406,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-016 — UX polish History / ImportAnalysis / grid readability
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `DONE`                                                  |
 | Priorità    | `BASSA`                                                 |
 | Area        | UX / UI                                                 |
 | Dipendenze  | TASK-001                                                |
@@ -413,7 +414,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | File Android | `HistoryScreen.kt`, `ImportAnalysisScreen.kt`, `ZoomableExcelGrid.kt`, `TableCell.kt` |
 | Rif. iOS    | Schermate History / ImportAnalysis iOS come guida visiva (se presenti) |
 | Obiettivo UX | Leggibilità tabelle/griglie, empty/loading/error states chiari, spacing coerente |
-| Note tracking | Task formalizzato il 2026-04-03; file task attuale in **`PLANNING`** con tracking `MASTER-PLAN` **`BACKLOG`**. |
+| Note tracking | **`DONE`** 2026-04-05 — execution 2026-04-04, fix post-review ImportAnalysis 2026-04-04, `assembleDebug`/`lint` verdi, walkthrough matrice manuale positivo, conferma utente; dettaglio in file task. |
 
 ### TASK-017 — Crash full DB import (OOM)
 | Campo       | Valore                                                  |
@@ -467,7 +468,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | UX numerica / formattazione / coerenza prodotto         |
 | Dipendenze  | Nessuna bloccante; **TASK-019** `DONE` (ortogonale: L10n testi ≠ formato numeri) |
 | File task   | `docs/TASKS/TASK-023-audit-visualizzazione-numerica-cl-fissa.md` |
-| Descrizione | Audit progettuale: convenzione **cilena fissa** (indipendente da lingua app) solo per **importi, quantità, percentuali sconto, contatori UX** — **non** per **barcode / itemNumber / ID tecnici** (guardrail in file task). Prezzi plain; totali con **`$`**; quantità frazionarie in **sola lettura** = migliaia `.` + decimali `,`, max 3 dec, no zeri finali; `discountPercent` max 2 dec; `discountedPrice` = prezzo normale; null/blank e totali come in file task. Griglia display-only; Excel file neutro in scope. Matrice + rischi input. **Hotspot `ExcelViewModel`:** `calculateInitialSummary` / `calculateFinalSummary` → **orderTotal** / **paymentTotal**; `saveExcelFileInternal` + **`numericTypes`** → non mescolare presentation e dato file (**nessun** cambio business/export nel task). Coordinare **TASK-016**. |
+| Descrizione | Audit progettuale: convenzione **cilena fissa** (indipendente da lingua app) solo per **importi, quantità, percentuali sconto, contatori UX** — **non** per **barcode / itemNumber / ID tecnici** (guardrail in file task). Prezzi plain; totali con **`$`**; quantità frazionarie in **sola lettura** = migliaia `.` + decimali `,`, max 3 dec, no zeri finali; `discountPercent` max 2 dec; `discountedPrice` = prezzo normale; null/blank e totali come in file task. Griglia display-only; Excel file neutro in scope. Matrice + rischi input. **Hotspot `ExcelViewModel`:** `calculateInitialSummary` / `calculateFinalSummary` → **orderTotal** / **paymentTotal**; `saveExcelFileInternal` + **`numericTypes`** → non mescolare presentation e dato file (**nessun** cambio business/export nel task). **TASK-016** (UX polish griglia/preview) **`DONE`** (2026-04-05). |
 | Note tracking | **`DONE`** (2026-03-30) — review finale repo-grounded completata: centralizzazione formatter confermata, fix sull’ambiguità quantità `1.234` applicato, `assembleDebug`/`lint`/`testDebugUnitTest` OK, tracking task + master plan riallineati. |
 
 ### TASK-024 — Compatibilità workbook Excel: .xls legacy (HSSF) e .xlsx Strict OOXML (POI)
@@ -526,12 +527,12 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-029 — Toolchain warning cleanup e hygiene repo
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `BACKLOG`                                               |
+| Stato       | `DONE`                                                  |
 | Priorità    | `MEDIA`                                                 |
 | Area        | Build / Governance / Toolchain                          |
 | Dipendenze  | TASK-012 (`DONE`)                                       |
 | Descrizione | Ridurre il debito toolchain e di hygiene emerso dall’audit: flag AGP/Kotlin deprecati in `gradle.properties`, dipendenze tooling ridondanti, pulizia artefatti `.DS_Store` in `app/src`, aggiornando il tutto senza introdurre regressioni di build. File: `docs/TASKS/TASK-029-toolchain-warning-cleanup-e-hygiene-repo.md`. |
-| Note tracking | Nuovo task creato da audit repo-grounded 2026-04-03. Non blocca il prodotto oggi, ma va pianificato prima che il debito toolchain diventi un problema di upgrade. |
+| Note tracking | **`DONE`** 2026-04-03 — Review APPROVED, 5/5 criteri ✅, build/lint/test verdi. |
 
 ### TASK-021 — Export DB: memoria/streaming, fogli selettivi, dialog M3 (follow-up TASK-007)
 | Campo       | Valore                                                  |
@@ -549,14 +550,12 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** nessun task in **`EXECUTION`**. **TASK-028**, **TASK-027**, **TASK-026**, **TASK-025** e **TASK-015** sono tutti **`DONE`** (2026-04-03). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-016** / **TASK-029** sono **`BACKLOG`**. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine suggerito:
+**Focus immediato:** **TASK-016** è **`DONE`** (2026-04-05). **TASK-029**, **TASK-028**, **TASK-027**, **TASK-026**, **TASK-025** e **TASK-015** sono tutti **`DONE`** (2026-04-03). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine operativo:
 
-1. **TASK-029** (`BACKLOG`, priorità `MEDIA`) — cleanup warning toolchain / hygiene repo.
-2. **TASK-016** (`BACKLOG`) — UX polish History/ImportAnalysis/grid, coordinato con **TASK-010** e con i fix import correlati.
-3. **TASK-006** — smoke → eventuale sblocco **`BLOCKED`** verso **`DONE`** dopo i fix strutturali già chiusi.
-4. **TASK-011** — smoke → sblocco verso **`DONE`** quando utile; oggi non è il primo follow-up consigliato.
-5. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-6. **TASK-028 (`DONE`):** chiuso 2026-04-03 — large dataset import/export bounded-memory; file task `docs/TASKS/TASK-028-large-dataset-import-export-streaming-reale.md`.
+1. **TASK-006** — smoke → eventuale sblocco **`BLOCKED`** verso **`DONE`** dopo i fix strutturali già chiusi.
+2. **TASK-011** — smoke → sblocco verso **`DONE`** quando utile.
+3. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
+4. Selezionare un nuovo task attivo dal backlog con **approvazione esplicita utente** (nessun default automatico).
 
 ### Priorità tecnica / qualità
 
@@ -570,13 +569,14 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 6. **TASK-026 (CRITICA):** Correttezza import end-to-end — **`DONE`** (2026-04-03); preview side-effect-free, apply atomico, sync su esito reale.
 7. **TASK-027 (ALTA):** Allineare summary/totali ai parser numerici CL condivisi — **`DONE`** (2026-04-03).
 8. **TASK-015 (ALTA):** UX DatabaseScreen — **`DONE`** (2026-04-03); review planner APPROVED, fix post-review, `assembleDebug` / `lint` verdi, conferma utente.
-9. **TASK-006 (MEDIA, BLOCKED):** Robustezza import Excel — dip. TASK-005 `DONE`; **BLOCKED** (2026-03-29) per smoke manuali; implementazione e test JVM OK, ma non sostituisce il nuovo fix strutturale **TASK-026**.
-10. **TASK-028 (MEDIA):** Large dataset import/export — **`DONE`** (2026-04-03); export repository-driven a pagine, preview/import analyzer alleggeriti, build/lint/test/round-trip verdi.
-11. **TASK-029 (MEDIA):** Cleanup warning toolchain e hygiene repo — nuovo task post-audit.
-12. **TASK-007 (MEDIA):** Round-trip export full DB — **`DONE`** (2026-03-28); follow-up runtime grandi dataset → **TASK-021** **`DONE`** (2026-03-29).
-13. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010 (BASSA):** **`DONE`** (2026-03-29) — History filtri e performance. **TASK-011 (BASSA):** **`BLOCKED`** (2026-03-29) — storico prezzi; smoke manuali pendenti.
-14. **TASK-012 (BASSA):** CI/CD — **`DONE`** (2026-03-29).
-15. **TASK-021 (ALTA):** Export DB — **`DONE`** (2026-03-29) — streaming/selettivo, dialog M3, smoke manuale positivo.
+9. **TASK-016 (BASSA):** UX polish History/ImportAnalysis/grid — **`DONE`** (2026-04-05); walkthrough matrice manuale positivo, conferma utente.
+10. **TASK-006 (MEDIA, BLOCKED):** Robustezza import Excel — dip. TASK-005 `DONE`; **BLOCKED** (2026-03-29) per smoke manuali; implementazione e test JVM OK, ma non sostituisce il nuovo fix strutturale **TASK-026**.
+11. **TASK-028 (MEDIA):** Large dataset import/export — **`DONE`** (2026-04-03); export repository-driven a pagine, preview/import analyzer alleggeriti, build/lint/test/round-trip verdi.
+12. **TASK-029 (MEDIA):** Cleanup warning toolchain e hygiene repo — **`DONE`** (2026-04-03).
+13. **TASK-007 (MEDIA):** Round-trip export full DB — **`DONE`** (2026-03-28); follow-up runtime grandi dataset → **TASK-021** **`DONE`** (2026-03-29).
+14. **TASK-008 (BASSA):** Gestione errori / UX feedback — **`DONE`** (2026-03-28). **TASK-010 (BASSA):** **`DONE`** (2026-03-29) — History filtri e performance. **TASK-011 (BASSA):** **`BLOCKED`** (2026-03-29) — storico prezzi; smoke manuali pendenti.
+15. **TASK-012 (BASSA):** CI/CD — **`DONE`** (2026-03-29).
+16. **TASK-021 (ALTA):** Export DB — **`DONE`** (2026-03-29) — streaming/selettivo, dialog M3, smoke manuale positivo.
 
 ---
 
@@ -589,7 +589,7 @@ Task di qualità che riducono il rischio tecnico, attivabili su richiesta utente
 | OOM / fallimenti tardivi su **export** DB (`XSSFWorkbook` + liste intere + `groupBy` PriceHistory) | Alto | Mitigato | **TASK-021** **`DONE`** (2026-03-29) + **TASK-028** **`DONE`** (2026-04-03): SXSSF/chunked, cleanup, fetch condizionale e poi paginazione repository-driven reale per export DB; monitorare solo regressioni su dataset estremi |
 | Preview import che muta il DB prima della conferma / apply parziale non atomico | ~~Alto~~ Chiuso | ~~Reale~~ Risolto | **TASK-026** `DONE` (2026-04-03) — preview side-effect-free, apply atomico con `withTransaction`, sync su esito reale |
 | Totali ordine/pagamento incoerenti con parser numerici CL condivisi | ~~Medio-Alto~~ Chiuso | ~~Reale~~ Risolto | **TASK-027** `DONE` (2026-04-03) — `ExcelViewModel` riallineato ai parser centralizzati e copertura test golden estesa |
-| Warning AGP/Kotlin preesistenti e hygiene repo scadente (`.DS_Store`, flag deprecati) | Medio | Reale | **TASK-029** `BACKLOG` — cleanup toolchain/hygiene prima di futuri upgrade |
+| Warning AGP/Kotlin preesistenti e hygiene repo scadente (`.DS_Store`, flag deprecati) | ~~Medio~~ Mitigato | ~~Reale~~ Risolto | **TASK-029** `DONE` (2026-04-03) — cleanup toolchain/hygiene completato |
 | Copertura test ancora parziale sulle utility/import analysis | Medio | Mitigato (perimetro TASK-005) | **TASK-004** `DONE`; **TASK-005** `DONE` (ExcelUtils/ImportAnalyzer) |
 | Migrazioni DB non testate automaticamente   | Alto    | Mitigato    | **TASK-009** **`DONE`** (2026-03-29); nuove migrazioni → task dedicato |
 | Nessuna CI/CD                              | Mitigato | Risolto   | **TASK-012** `DONE` (2026-03-29) — pipeline CI base operativa (`assembleDebug`/`lint`/`test`); follow-up: branch protection |

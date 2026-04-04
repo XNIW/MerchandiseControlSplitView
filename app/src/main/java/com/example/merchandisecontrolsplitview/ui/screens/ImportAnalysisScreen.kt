@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.DuplicateWarning
@@ -260,6 +261,7 @@ fun ImportAnalysisScreen(
                     itemsIndexed(editableUpdatedProducts, key = { index, u -> "update-${u.oldProduct.id}-$index" }) { index, update ->
                         DisplayProductUpdateRow(
                             productUpdate = update,
+                            databaseViewModel = databaseViewModel,
                             editEnabled = !isApplying,
                             onEditClick = { updateToEdit = index to update }
                         )
@@ -356,21 +358,27 @@ private fun DisplayProductRow(
     editEnabled: Boolean,
     onEditClick: () -> Unit
 ) {
+    val noSupplierText = stringResource(R.string.no_supplier)
+    val noCategoryText = stringResource(R.string.no_category)
     var supplierName by remember { mutableStateOf<String?>(null) }
     var categoryName by remember { mutableStateOf<String?>(null) }
     val loadingEllipsisText = stringResource(R.string.loading_ellipsis)
     val notFoundShortText = stringResource(R.string.not_found_short)
 
     LaunchedEffect(product.supplierId) {
-        if (product.supplierId != null) {
-            if (supplierName == null) supplierName = loadingEllipsisText
+        if (product.supplierId == null) {
+            supplierName = noSupplierText
+        } else {
+            supplierName = loadingEllipsisText
             supplierName = databaseViewModel.getSupplierDisplayName(product.supplierId) ?: notFoundShortText
         }
     }
 
     LaunchedEffect(product.categoryId) {
-        if (product.categoryId != null) {
-            if (categoryName == null) categoryName = loadingEllipsisText
+        if (product.categoryId == null) {
+            categoryName = noCategoryText
+        } else {
+            categoryName = loadingEllipsisText
             categoryName = databaseViewModel.getCategoryDisplayName(product.categoryId) ?: notFoundShortText
         }
     }
@@ -398,12 +406,8 @@ private fun DisplayProductRow(
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
 
-                if (supplierName != null) {
-                    Text("${stringResource(R.string.supplier_label)}: $supplierName", style = MaterialTheme.typography.bodySmall)
-                }
-                if (categoryName != null) {
-                    Text("${stringResource(R.string.category_label)}: $categoryName", style = MaterialTheme.typography.bodySmall)
-                }
+                Text("${stringResource(R.string.supplier_label)}: ${supplierName ?: noSupplierText}", style = MaterialTheme.typography.bodySmall)
+                Text("${stringResource(R.string.category_label)}: ${categoryName ?: noCategoryText}", style = MaterialTheme.typography.bodySmall)
 
                 Text("${stringResource(R.string.counted_quantity_label)}: ${formatClQuantityDisplayReadOnly(product.stockQuantity)}", style = MaterialTheme.typography.bodySmall)
             }
@@ -421,6 +425,7 @@ private fun DisplayProductRow(
 @Composable
 private fun DisplayProductUpdateRow(
     productUpdate: ProductUpdate,
+    databaseViewModel: DatabaseViewModel,
     editEnabled: Boolean,
     onEditClick: () -> Unit
 ) {
@@ -452,39 +457,150 @@ private fun DisplayProductUpdateRow(
 
             Text("${stringResource(R.string.barcode_prefix)} ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            Row(Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.compare_field), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.5f))
-                Text(stringResource(R.string.compare_previous), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text(stringResource(R.string.compare_new), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.compare_field),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1.5f)
+                )
+                Text(
+                    text = stringResource(R.string.compare_previous),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = stringResource(R.string.compare_new),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
             }
             productUpdate.changedFields.forEach { fieldResId ->
-                CompareRow(fieldResId = fieldResId, old = productUpdate.oldProduct, new = productUpdate.newProduct)
+                CompareRow(
+                    fieldResId = fieldResId,
+                    old = productUpdate.oldProduct,
+                    new = productUpdate.newProduct,
+                    databaseViewModel = databaseViewModel
+                )
             }
         }
     }
 }
 
 @Composable
-private fun CompareRow(fieldResId: Int, old: Product, new: Product) {
-    // --- CORREZIONE: Assicura che tutti i rami del 'when' restituiscano Pair<String?, String?> ---
+private fun CompareRow(
+    fieldResId: Int,
+    old: Product,
+    new: Product,
+    databaseViewModel: DatabaseViewModel
+) {
+    val noSupplierText = stringResource(R.string.no_supplier)
+    val noCategoryText = stringResource(R.string.no_category)
+    val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
+    val categoryIdPrefix = stringResource(R.string.category_id_prefix)
+
     val (oldValue, newValue) = when (fieldResId) {
         R.string.field_product_name -> old.productName to new.productName
         R.string.field_second_product_name -> old.secondProductName to new.secondProductName
         R.string.header_item_number -> old.itemNumber to new.itemNumber
         R.string.purchase_price_label -> formatClPricePlainDisplay(old.purchasePrice) to formatClPricePlainDisplay(new.purchasePrice)
         R.string.retail_price_label -> formatClPricePlainDisplay(old.retailPrice) to formatClPricePlainDisplay(new.retailPrice)
-        R.string.field_supplier -> old.supplierId?.toString() to new.supplierId?.toString()
-        R.string.field_category -> old.categoryId?.toString() to new.categoryId?.toString() // Ora usa categoryId e lo converte in String
+        R.string.field_supplier -> {
+            val oldSupplier = rememberRelationDisplayValue(
+                relationId = old.supplierId,
+                emptyValue = noSupplierText,
+                technicalIdPrefix = supplierIdPrefix,
+                resolveName = { databaseViewModel.getSupplierDisplayName(it) }
+            )
+            val newSupplier = rememberRelationDisplayValue(
+                relationId = new.supplierId,
+                emptyValue = noSupplierText,
+                technicalIdPrefix = supplierIdPrefix,
+                resolveName = { databaseViewModel.getSupplierDisplayName(it) }
+            )
+            oldSupplier to newSupplier
+        }
+        R.string.field_category -> {
+            val oldCategory = rememberRelationDisplayValue(
+                relationId = old.categoryId,
+                emptyValue = noCategoryText,
+                technicalIdPrefix = categoryIdPrefix,
+                resolveName = { databaseViewModel.getCategoryDisplayName(it) }
+            )
+            val newCategory = rememberRelationDisplayValue(
+                relationId = new.categoryId,
+                emptyValue = noCategoryText,
+                technicalIdPrefix = categoryIdPrefix,
+                resolveName = { databaseViewModel.getCategoryDisplayName(it) }
+            )
+            oldCategory to newCategory
+        }
         R.string.field_stock_quantity -> formatClQuantityDisplayReadOnly(old.stockQuantity) to formatClQuantityDisplayReadOnly(new.stockQuantity)
         else -> "" to ""
     }
 
     val fieldName = stringResource(fieldResId)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(fieldName, modifier = Modifier.weight(1.5f), style = MaterialTheme.typography.bodyMedium)
-        Text(text = oldValue ?: "-", modifier = Modifier.weight(1f), textDecoration = TextDecoration.LineThrough, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = newValue ?: "-", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, color = Color(0xFF006400))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = fieldName,
+            modifier = Modifier.weight(1.5f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = oldValue ?: "-",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textDecoration = TextDecoration.LineThrough,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = newValue ?: "-",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
+}
+
+@Composable
+private fun rememberRelationDisplayValue(
+    relationId: Long?,
+    emptyValue: String,
+    technicalIdPrefix: String,
+    resolveName: suspend (Long?) -> String?
+): String {
+    val loadingEllipsisText = stringResource(R.string.loading_ellipsis)
+    val notFoundShortText = stringResource(R.string.not_found_short)
+    val displayValue by produceState(
+        initialValue = if (relationId == null) emptyValue else loadingEllipsisText,
+        relationId,
+        emptyValue,
+        technicalIdPrefix
+    ) {
+        value = if (relationId == null) {
+            emptyValue
+        } else {
+            resolveName(relationId) ?: "$notFoundShortText ($technicalIdPrefix $relationId)"
+        }
+    }
+    return displayValue
 }
 
 @Composable

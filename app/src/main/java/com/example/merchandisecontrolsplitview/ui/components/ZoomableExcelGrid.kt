@@ -113,7 +113,13 @@ fun ZoomableExcelGrid(
                     } else false
                     val isComplete = completeStates.getOrNull(r) == true
                     val isErrorRow = errorRowIndexes.contains(r)
-                    val highlightColor = if (isErrorRow) Color.Red.copy(alpha = 0.2f) else null
+                    val highlightColor = if (isErrorRow) {
+                        MaterialTheme.colorScheme.errorContainer.copy(
+                            alpha = if (isSystemInDarkTheme()) 0.7f else 0.45f
+                        )
+                    } else {
+                        null
+                    }
 
                     Row {
                         row.forEachIndexed { ci, cell ->
