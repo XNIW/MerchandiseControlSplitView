@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Edit
@@ -21,7 +20,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +36,7 @@ import com.example.merchandisecontrolsplitview.util.ErrorExporter
 import com.example.merchandisecontrolsplitview.util.formatClCount
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
+import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
@@ -52,6 +51,7 @@ fun ImportAnalysisScreen(
     onConfirm: (Long, List<Product>, List<ProductUpdate>) -> Unit,
     onClose: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     val context = LocalContext.current
     val errorFileExportedText = stringResource(R.string.error_file_exported)
     val errorExportFailedText = stringResource(R.string.error_export_generic)
@@ -133,8 +133,8 @@ fun ImportAnalysisScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
+                    .padding(spacing.lg),
+                horizontalArrangement = Arrangement.spacedBy(spacing.md, Alignment.End)
             ) {
                 Button(
                     onClick = {
@@ -157,8 +157,8 @@ fun ImportAnalysisScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(spacing.lg),
+            verticalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
             item {
                 Card(
@@ -167,8 +167,8 @@ fun ImportAnalysisScreen(
                     )
                 ) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.padding(spacing.lg),
+                        verticalArrangement = Arrangement.spacedBy(spacing.sm)
                     ) {
                         Text(
                             text = stringResource(R.string.preview_file_title),
@@ -180,7 +180,7 @@ fun ImportAnalysisScreen(
                             style = MaterialTheme.typography.bodyMedium
                         )
                         AnimatedVisibility(visible = isApplying) {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                 Text(
                                     text = stringResource(R.string.import_applying_changes),
@@ -228,7 +228,7 @@ fun ImportAnalysisScreen(
                     onToggle = { newProductsExpanded = !newProductsExpanded }
                 ) {
                     if (editableNewProducts.isEmpty()) {
-                        Text(stringResource(R.string.no_new_products), modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_new_products), modifier = Modifier.padding(spacing.md))
                     }
                 }
             }
@@ -253,7 +253,7 @@ fun ImportAnalysisScreen(
                     onToggle = { updatedProductsExpanded = !updatedProductsExpanded }
                 ) {
                     if (editableUpdatedProducts.isEmpty()) {
-                        Text(stringResource(R.string.no_products_to_update), modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_products_to_update), modifier = Modifier.padding(spacing.md))
                     }
                 }
             }
@@ -275,7 +275,7 @@ fun ImportAnalysisScreen(
                     onToggle = { errorsExpanded = !errorsExpanded }
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
                             val exportErrorsFilename = stringResource(R.string.default_error_export_filename)
                             Button(
                                 onClick = { exportErrorsLauncher.launch(exportErrorsFilename) },
@@ -291,7 +291,7 @@ fun ImportAnalysisScreen(
                             }
                         }
                     } else {
-                        Text(stringResource(R.string.no_critical_errors_found), modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.no_critical_errors_found), modifier = Modifier.padding(spacing.md))
                     }
                 }
             }
@@ -306,15 +306,16 @@ fun ImportAnalysisScreen(
 
 @Composable
 private fun WarningRow(warning: DuplicateWarning) {
+    val spacing = MaterialTheme.appSpacing
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-        modifier = Modifier.padding(bottom = 8.dp)
+        modifier = Modifier.padding(bottom = spacing.sm)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.xxs)
         ) {
             Text(
                 text = stringResource(R.string.warning_duplicate_barcode, warning.barcode),
@@ -323,7 +324,7 @@ private fun WarningRow(warning: DuplicateWarning) {
                 fontWeight = FontWeight.Bold
             )
             HorizontalDivider(
-                modifier = Modifier.padding(vertical = 4.dp),
+                modifier = Modifier.padding(vertical = spacing.xxs),
                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.5f)
             )
             Text(
@@ -358,6 +359,7 @@ private fun DisplayProductRow(
     editEnabled: Boolean,
     onEditClick: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     val noSupplierText = stringResource(R.string.no_supplier)
     val noCategoryText = stringResource(R.string.no_category)
     var supplierName by remember { mutableStateOf<String?>(null) }
@@ -387,9 +389,9 @@ private fun DisplayProductRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = spacing.md, vertical = spacing.sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
             Column(Modifier.weight(1f)) {
                 Text(product.productName ?: stringResource(R.string.unnamed_product), fontWeight = FontWeight.Bold)
@@ -402,7 +404,7 @@ private fun DisplayProductRow(
                     )
                 }
 
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(spacing.xxs))
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
 
@@ -429,12 +431,13 @@ private fun DisplayProductUpdateRow(
     editEnabled: Boolean,
     onEditClick: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .padding(spacing.md),
+            verticalArrangement = Arrangement.spacedBy(spacing.xxs)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -456,10 +459,10 @@ private fun DisplayProductUpdateRow(
             }
 
             Text("${stringResource(R.string.barcode_prefix)} ${productUpdate.oldProduct.barcode}", style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = spacing.xxs))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(spacing.md)
             ) {
                 Text(
                     text = stringResource(R.string.compare_field),
@@ -499,6 +502,7 @@ private fun CompareRow(
     new: Product,
     databaseViewModel: DatabaseViewModel
 ) {
+    val spacing = MaterialTheme.appSpacing
     val noSupplierText = stringResource(R.string.no_supplier)
     val noCategoryText = stringResource(R.string.no_category)
     val supplierIdPrefix = stringResource(R.string.supplier_id_prefix)
@@ -548,9 +552,9 @@ private fun CompareRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = spacing.xxs),
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(spacing.md)
     ) {
         Text(
             text = fieldName,
@@ -610,13 +614,14 @@ private fun ExpandableSection(
     onToggle: () -> Unit,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(0.dp)) {
-        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Column(modifier = Modifier.padding(vertical = spacing.xxs)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onToggle)
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = spacing.sm),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -633,13 +638,14 @@ private fun ExpandableSection(
 
 @Composable
 private fun ErrorRow(error: RowImportError) {
+    val spacing = MaterialTheme.appSpacing
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
         Column(modifier = Modifier
             .fillMaxWidth()
-            .padding(12.dp)) {
+            .padding(spacing.md)) {
             val errorReasonText = stringResource(error.errorReasonResId, *error.formatArgs.toTypedArray())
-            Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.onError.copy(alpha = 0.5f))
+            Text("${stringResource(R.string.row_prefix)} ${error.rowNumber}: $errorReasonText", color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            HorizontalDivider(modifier = Modifier.padding(vertical = spacing.sm), color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.5f))
 
             val problematicKey = when (error.errorReasonResId) {
                 R.string.error_invalid_retail_price -> "RetailPrice"
@@ -661,7 +667,7 @@ private fun ErrorRow(error: RowImportError) {
             ErrorDetailText(label = stringResource(R.string.header_barcode), value = barcode, isHighlighted = problematicKey == "barcode")
             ErrorDetailText(label = stringResource(R.string.header_product_name), value = productName, isHighlighted = highlightNames)
             ErrorDetailText(label = stringResource(R.string.header_second_product_name), value = secondProductName, isHighlighted = highlightNames)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(spacing.xxs))
             ErrorDetailText(label = stringResource(R.string.counted_quantity_label), value = quantity, isHighlighted = problematicKey == "quantity")
             ErrorDetailText(label = stringResource(R.string.new_retail_price_short_label), value = retailPrice, isHighlighted = problematicKey == "RetailPrice")
         }
@@ -670,15 +676,19 @@ private fun ErrorRow(error: RowImportError) {
 
 @Composable
 private fun ErrorDetailText(label: String, value: String, isHighlighted: Boolean) {
+    val spacing = MaterialTheme.appSpacing
     val rowModifier = if (isHighlighted) {
         Modifier
-            .background(color = Color.Red.copy(alpha = 0.25f), shape = RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .background(
+                color = MaterialTheme.colorScheme.error.copy(alpha = 0.25f),
+                shape = MaterialTheme.shapes.extraSmall
+            )
+            .padding(horizontal = spacing.xs, vertical = 2.dp)
     } else {
         Modifier
     }
     Row(modifier = rowModifier) {
-        Text(text = "$label: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onError)
-        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal, color = MaterialTheme.colorScheme.onError)
+        Text(text = "$label: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+        Text(text = value, style = MaterialTheme.typography.bodyMedium, fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal, color = MaterialTheme.colorScheme.onErrorContainer)
     }
 }

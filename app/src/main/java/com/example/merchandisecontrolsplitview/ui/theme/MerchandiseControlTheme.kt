@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.Typography
@@ -65,9 +66,15 @@ fun MerchandiseControlTheme(
     val isDark = darkTheme ?: isSystemInDarkTheme()
     val colors = if (isDark) DarkColors else LightColors
 
-    MaterialTheme(
-        colorScheme = colors,
-        typography = Typography(),
-        content = content
-    )
+    CompositionLocalProvider(
+        LocalAppColors provides appColors(isDark),
+        LocalAppSpacing provides AppSpacingDefaults
+    ) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = Typography(),
+            shapes = AppShapes,
+            content = content
+        )
+    }
 }

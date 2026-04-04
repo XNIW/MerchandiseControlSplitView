@@ -19,11 +19,11 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.util.formatGridNumericDisplay
 
 @Composable
@@ -52,6 +52,8 @@ fun ZoomableExcelGrid(
     isManualEntry: Boolean
 ) {
     if (data.isEmpty()) return
+
+    val appColors = MaterialTheme.appColors
 
     val columnCount = data[0].size
     if (selectedColumns.size != columnCount) {
@@ -82,8 +84,8 @@ fun ZoomableExcelGrid(
                             // --- MODIFICA: La logica dei colori ora include lo stato "essenziale" ---
                             val headerBgColor = when {
                                 isEssential -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)
-                                headerTypes?.getOrNull(ci) == "alias" -> if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
-                                headerTypes?.getOrNull(ci) == "pattern" -> if (isSystemInDarkTheme()) Color(0xFFFF9100).copy(alpha = 0.5f) else Color(0xFFFFD180)
+                                headerTypes?.getOrNull(ci) == "alias" -> appColors.gridAliasBackground
+                                headerTypes?.getOrNull(ci) == "pattern" -> appColors.gridPatternBackground
                                 else -> null
                             }
 
@@ -178,7 +180,7 @@ fun ZoomableExcelGrid(
                                         overrideBackgroundColor = highlightColor
                                     )
                                     hasEditable && ci == indexCompleto -> {
-                                        val completeColor = if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
+                                        val completeColor = appColors.successContainer
                                         Box(
                                             modifier = Modifier
                                                 .width(cellWidth)
@@ -197,7 +199,7 @@ fun ZoomableExcelGrid(
                                             Icon(
                                                 imageVector = Icons.Default.Check,
                                                 contentDescription = stringResource(R.string.header_complete),
-                                                tint = if (isComplete) Color.Black.copy(alpha = 0.8f)
+                                                tint = if (isComplete) appColors.onSuccessContainer
                                                 else MaterialTheme.colorScheme.outline
                                             )
                                         }

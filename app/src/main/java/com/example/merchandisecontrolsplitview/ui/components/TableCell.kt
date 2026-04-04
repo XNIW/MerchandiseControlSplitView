@@ -3,7 +3,6 @@ package com.example.merchandisecontrolsplitview.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.ui.theme.appColors
+import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 
 @Composable
 fun TableCell(
@@ -42,12 +43,14 @@ fun TableCell(
     onEditClick: (() -> Unit)? = null, // <-- NUOVO: Parametro per il click sull'icona
     overrideBackgroundColor: Color? = null
 ) {
+    val appColors = MaterialTheme.appColors
+    val spacing = MaterialTheme.appSpacing
     val defaultBackgroundColor = MaterialTheme.colorScheme.surface
 
     val finalBackgroundColor = overrideBackgroundColor ?: when {
         isHeader -> MaterialTheme.colorScheme.surfaceVariant
-        isRowComplete -> if (isSystemInDarkTheme()) Color(0xFF00C853).copy(alpha = 0.5f) else Color(0xFFB9F6CA)
-        isRowFilled -> if (isSystemInDarkTheme()) Color(0xFFFFD600).copy(alpha = 0.5f) else Color(0xFFFFF176)
+        isRowComplete -> appColors.successContainer
+        isRowFilled -> appColors.filledContainer
         isSearchMatch -> MaterialTheme.colorScheme.tertiaryContainer
         isSelectedColumn -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
         else -> defaultBackgroundColor
@@ -57,6 +60,8 @@ fun TableCell(
         isHeader -> MaterialTheme.colorScheme.onSurfaceVariant
         isSearchMatch -> MaterialTheme.colorScheme.onTertiaryContainer
         isSelectedColumn -> MaterialTheme.colorScheme.onPrimaryContainer
+        isRowComplete -> appColors.onSuccessContainer
+        isRowFilled -> appColors.onFilledContainer
         else -> MaterialTheme.colorScheme.onSurface
     }
 
@@ -76,8 +81,8 @@ fun TableCell(
         // --- INIZIO MODIFICA ---
         // Usiamo una Row per affiancare testo e icona
         Row(
-            modifier = Modifier.padding(horizontal = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(

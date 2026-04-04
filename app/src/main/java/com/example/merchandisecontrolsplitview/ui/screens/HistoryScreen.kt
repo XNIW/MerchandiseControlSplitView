@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.ui.theme.appColors
+import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.formatClCount
 import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
@@ -66,6 +68,7 @@ fun HistoryScreen(
     onSetFilter: (DateFilter) -> Unit,
     onBack: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     var showRenameDialog by remember { mutableStateOf(false) }
     var entryToRename by remember { mutableStateOf<HistoryEntryListItem?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -216,7 +219,7 @@ fun HistoryScreen(
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 8.dp)
+                        .padding(horizontal = spacing.sm)
                 ) {
                     items(historyList, key = { it.uid }) { entry ->
                         HistoryRow(
@@ -287,7 +290,11 @@ fun HistoryScreen(
                 title = {
                     Text(
                         text = if(datePickerTargetIsStart) stringResource(R.string.select_start_date) else stringResource(R.string.select_end_date),
-                        modifier = Modifier.padding(start = 24.dp, top = 16.dp, end = 24.dp)
+                        modifier = Modifier.padding(
+                            start = spacing.xxl,
+                            top = spacing.lg,
+                            end = spacing.xxl
+                        )
                     )
                 }
             )
@@ -345,6 +352,7 @@ private fun HistoryRow(
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     val currentLocale = Locale.getDefault()
     val displayTimestamp = remember(entry.timestamp, currentLocale) {
         formatHistoryTimestamp(entry.timestamp, currentLocale)
@@ -370,10 +378,15 @@ private fun HistoryRow(
         backgroundContent = {
             val direction = dismissState.targetValue
             if (direction != SwipeToDismissBoxValue.Settled) {
-                val color = when (direction) {
-                    SwipeToDismissBoxValue.StartToEnd -> Color.DarkGray
-                    SwipeToDismissBoxValue.EndToStart -> Color(0xFFB00020)
+                val containerColor = when (direction) {
+                    SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.inverseSurface
+                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.error
                     SwipeToDismissBoxValue.Settled -> Color.Transparent
+                }
+                val contentColor = when (direction) {
+                    SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.inverseOnSurface
+                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.onError
+                    SwipeToDismissBoxValue.Settled -> MaterialTheme.colorScheme.onSurface
                 }
                 val icon = when (direction) {
                     SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Edit to stringResource(R.string.rename_file)
@@ -389,11 +402,11 @@ private fun HistoryRow(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .background(color)
-                        .padding(horizontal = 20.dp),
+                        .background(containerColor)
+                        .padding(horizontal = spacing.xl),
                     contentAlignment = align
                 ) {
-                    icon?.let { (img, desc) -> Icon(img, contentDescription = desc, tint = Color.White) }
+                    icon?.let { (img, desc) -> Icon(img, contentDescription = desc, tint = contentColor) }
                 }
             }
         }
@@ -401,7 +414,7 @@ private fun HistoryRow(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp)
+                .padding(vertical = spacing.xxs)
                 .clickable(onClick = onClick),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
@@ -409,8 +422,8 @@ private fun HistoryRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 12.dp, bottom = 32.dp, start = 16.dp, end = 56.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        .padding(top = spacing.md, bottom = 32.dp, start = spacing.lg, end = 56.dp),
+                    verticalArrangement = Arrangement.spacedBy(spacing.xs)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -422,7 +435,7 @@ private fun HistoryRow(
                         )
                         // Controlla se è un'entry manuale basandosi sul nome
                         if (entry.isManualEntry) {
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(spacing.sm))
                             Icon(
                                 imageVector = Icons.Default.Edit,
                                 contentDescription = stringResource(R.string.manual_entry_indicator),
@@ -478,8 +491,8 @@ private fun HistoryRow(
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(end = spacing.md, bottom = spacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.sm)
                 ) {
                     StatusIcon(
                         baseIcon = Icons.Default.Sync,
@@ -506,10 +519,11 @@ private fun HistoryEmptyState(
     title: String,
     message: String
 ) {
+    val spacing = MaterialTheme.appSpacing
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp),
+            .padding(horizontal = spacing.xxl),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -519,7 +533,7 @@ private fun HistoryEmptyState(
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(spacing.sm))
         Text(
             text = message,
             style = MaterialTheme.typography.bodyMedium,
@@ -540,7 +554,8 @@ private fun StatusIcon(
     badgeType: BadgeType,
     contentDescription: String
 ) {
-    // Il codice di StatusIcon rimane invariato
+    val appColors = MaterialTheme.appColors
+    val spacing = MaterialTheme.appSpacing
     Box {
         Icon(
             imageVector = baseIcon,
@@ -556,8 +571,8 @@ private fun StatusIcon(
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
-                        .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFF00C853)
+                        .offset(x = spacing.xxs, y = -spacing.xxs),
+                    tint = appColors.success
                 )
             }
             BadgeType.WARNING -> {
@@ -567,8 +582,8 @@ private fun StatusIcon(
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
-                        .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFFFFA000)
+                        .offset(x = spacing.xxs, y = -spacing.xxs),
+                    tint = appColors.warning
                 )
             }
             BadgeType.NONE -> { /* Non mostrare nulla */ }

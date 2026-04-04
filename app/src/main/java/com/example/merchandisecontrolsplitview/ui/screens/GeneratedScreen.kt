@@ -40,6 +40,8 @@ import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity // se hai questa classe nel tuo package
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
+import com.example.merchandisecontrolsplitview.ui.theme.appColors
+import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Check
@@ -112,6 +114,7 @@ fun GeneratedScreen(
     isNewEntry: Boolean,
     isManualEntry: Boolean
 ) {
+    val spacing = MaterialTheme.appSpacing
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val productAlreadyInListText = stringResource(R.string.product_already_in_list)
@@ -624,7 +627,7 @@ fun GeneratedScreen(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 88.dp)
+                        .padding(end = spacing.lg, bottom = 88.dp)
                 )
 
                 if (showManualEntryDialog) {
@@ -872,6 +875,7 @@ private fun GeneratedScreenTopBar(
     onShare: () -> Unit,
     onRename: () -> Unit,
 ) {
+    val spacing = MaterialTheme.appSpacing
     Column(
         modifier = Modifier.background(MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp))
     ) {
@@ -980,7 +984,7 @@ private fun GeneratedScreenTopBar(
             exported = wasExported,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .padding(horizontal = spacing.md, vertical = spacing.xs)
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
     }
@@ -1002,6 +1006,7 @@ private fun GeneratedScreenGridHost(
     onManualRowClick: (Int) -> Unit,
     onHeaderDialogRequest: (Int) -> Unit,
 ) {
+    val spacing = MaterialTheme.appSpacing
     val context = LocalContext.current
 
     Column(Modifier.fillMaxSize()) {
@@ -1063,9 +1068,11 @@ private fun GeneratedScreenFabArea(
 ) {
     if (!visible) return
 
+    val spacing = MaterialTheme.appSpacing
+
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing.md),
         horizontalAlignment = Alignment.End
     ) {
         if (!isManualEntry) {
@@ -1121,6 +1128,7 @@ private fun GeneratedScreenInfoDialog(
     onOpenGenericCalculator: () -> Unit,
     onOpenPurchaseCalculator: (String) -> Unit,
 ) {
+    val spacing = MaterialTheme.appSpacing
     val context = LocalContext.current
     val rowUpdatedText = stringResource(R.string.row_updated)
     val header = excelViewModel.excelData.firstOrNull() ?: return
@@ -1212,7 +1220,7 @@ private fun GeneratedScreenInfoDialog(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = spacing.lg),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -1268,7 +1276,7 @@ private fun GeneratedScreenInfoDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = spacing.lg, vertical = spacing.sm)
                     .focusRequester(backgroundFocusRequester)
                     .focusable()
                     .clickable(
@@ -1277,11 +1285,11 @@ private fun GeneratedScreenInfoDialog(
                     ) {
                         backgroundFocusRequester.requestFocus()
                     },
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(spacing.md)
             ) {
                 GeneratedScreenDetailCard(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalSpacing = 8.dp
+                    contentPadding = PaddingValues(horizontal = spacing.md, vertical = spacing.md),
+                    verticalSpacing = spacing.sm
                 ) {
                     if (isInfoDialogInEditMode) {
                         if (header.contains("productName")) {
@@ -1300,7 +1308,7 @@ private fun GeneratedScreenInfoDialog(
                             )
                         }
 
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                             Text(
                                 text = stringResource(R.string.header_barcode),
                                 style = MaterialTheme.typography.labelLarge,
@@ -1375,7 +1383,7 @@ private fun GeneratedScreenInfoDialog(
                             if (useInlineMeta) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(spacing.md)
                                 ) {
                                     GeneratedScreenCompactMetaBlock(
                                         label = stringResource(R.string.header_barcode),
@@ -1391,7 +1399,7 @@ private fun GeneratedScreenInfoDialog(
                                     )
                                 }
                             } else {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                                     if (barcode.isNotBlank()) {
                                         GeneratedScreenCompactMetaBlock(
                                             label = stringResource(R.string.header_barcode),
@@ -1413,7 +1421,7 @@ private fun GeneratedScreenInfoDialog(
                 }
 
                 GeneratedScreenDetailCard(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                    contentPadding = PaddingValues(horizontal = spacing.md, vertical = spacing.md),
                     verticalSpacing = 10.dp
                 ) {
                     BoxWithConstraints {
@@ -1456,22 +1464,22 @@ private fun GeneratedScreenInfoDialog(
                             } else {
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    verticalArrangement = Arrangement.spacedBy(spacing.xs)
                                 ) {
                                     Surface(
                                         modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(16.dp),
+                                        shape = MaterialTheme.shapes.large,
                                         color = MaterialTheme.colorScheme.secondaryContainer
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(
-                                                start = 12.dp,
-                                                end = 4.dp,
+                                                start = spacing.md,
+                                                end = spacing.xxs,
                                                 top = 10.dp,
                                                 bottom = 10.dp
                                             ),
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
                                         ) {
                                             Column(
                                                 modifier = Modifier.weight(1f),
@@ -1597,7 +1605,7 @@ private fun GeneratedScreenInfoDialog(
                             if (useSideBySideEditors) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
                                     verticalAlignment = Alignment.Top
                                 ) {
                                     countedField(Modifier.weight(1f))
@@ -1619,13 +1627,13 @@ private fun GeneratedScreenInfoDialog(
                         imageVector = Icons.Filled.Calculate,
                         contentDescription = stringResource(R.string.fast_calculator_desc)
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(spacing.sm))
                     Text(text = stringResource(R.string.generic_calculator_title))
                 }
 
                 GeneratedScreenDetailCard(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalSpacing = 8.dp
+                    contentPadding = PaddingValues(horizontal = spacing.md, vertical = spacing.md),
+                    verticalSpacing = spacing.sm
                 ) {
                     GeneratedScreenDetailValueRow(
                         label = stringResource(R.string.header_quantity),
@@ -1637,7 +1645,7 @@ private fun GeneratedScreenInfoDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(spacing.sm))
             }
         }
     }
@@ -1650,9 +1658,10 @@ private fun GeneratedScreenEditableInfoRow(
     isEditMode: Boolean,
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
+    val spacing = MaterialTheme.appSpacing
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.xs)
     ) {
         Text(
             text = label,
@@ -1691,7 +1700,7 @@ private fun GeneratedScreenDetailCard(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
+        shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
     ) {
         Column(
@@ -1715,9 +1724,10 @@ private fun GeneratedScreenCompactInputField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
+    val spacing = MaterialTheme.appSpacing
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.xxs)
     ) {
         Text(
             text = label,
@@ -1755,6 +1765,7 @@ private fun GeneratedScreenStatusToggleButton(
     isComplete: Boolean,
     onClick: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     FilledTonalButton(
         onClick = onClick,
         colors = ButtonDefaults.filledTonalButtonColors(
@@ -1769,7 +1780,7 @@ private fun GeneratedScreenStatusToggleButton(
                 MaterialTheme.colorScheme.primary
             }
         ),
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        contentPadding = PaddingValues(horizontal = spacing.md, vertical = spacing.sm)
     ) {
         Text(
             text = text,
@@ -1788,9 +1799,10 @@ private fun GeneratedScreenCompactMetaBlock(
     modifier: Modifier = Modifier,
     monospaced: Boolean = false
 ) {
+    val spacing = MaterialTheme.appSpacing
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.xxs)
     ) {
         Text(
             text = label,
@@ -1815,9 +1827,10 @@ private fun GeneratedScreenDetailValueRow(
     value: String,
     strikeThrough: Boolean = false
 ) {
+    val spacing = MaterialTheme.appSpacing
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacing.md),
         verticalAlignment = Alignment.Top
     ) {
         Text(
@@ -1860,11 +1873,12 @@ private fun GeneratedScreenRenameDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val spacing = MaterialTheme.appSpacing
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.rename_file)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(spacing.md)) {
                 OutlinedTextField(
                     value = renameText,
                     onValueChange = onRenameTextChange,
@@ -2078,6 +2092,7 @@ fun CalculatorDialog(
     onResult: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val spacing = MaterialTheme.appSpacing
     var input by remember { mutableStateOf(value) }
     var result by remember { mutableStateOf("") }
 
@@ -2111,7 +2126,7 @@ fun CalculatorDialog(
                     readOnly = true, // SOLO tramite tastiera custom
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 6.dp)
+                        .padding(bottom = spacing.xs)
                 )
                 val errorText = stringResource(R.string.error_label)
                 Text(
@@ -2121,14 +2136,14 @@ fun CalculatorDialog(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 24.dp)
+                        .padding(bottom = spacing.xxl)
                         .background(
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.04f),
                             RoundedCornerShape(6.dp)
                         )
-                        .padding(8.dp)
+                        .padding(spacing.sm)
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(spacing.sm))
                 CalculatorKeyboard(
                     onKey = { key ->
                         when (key) {
@@ -2225,6 +2240,8 @@ private fun StatusIcon(
     badgeType: BadgeType,
     contentDescription: String
 ) {
+    val appColors = MaterialTheme.appColors
+    val spacing = MaterialTheme.appSpacing
     Box {
         Icon(
             imageVector = baseIcon,
@@ -2241,8 +2258,8 @@ private fun StatusIcon(
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
-                        .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFF00C853) // Verde
+                        .offset(x = spacing.xxs, y = -spacing.xxs),
+                    tint = appColors.success
                 )
             }
             BadgeType.WARNING -> {
@@ -2252,8 +2269,8 @@ private fun StatusIcon(
                     modifier = Modifier
                         .size(12.dp)
                         .align(Alignment.TopEnd)
-                        .offset(x = 4.dp, y = (-4).dp),
-                    tint = Color(0xFFFFA000) // Arancione/Ambra
+                        .offset(x = spacing.xxs, y = -spacing.xxs),
+                    tint = appColors.warning
                 )
             }
             BadgeType.NONE -> { /* Non mostrare nulla */ }
@@ -2273,6 +2290,7 @@ fun ManualEntryDialog(
     onScanNext: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val spacing = MaterialTheme.appSpacing
     val focusManager = LocalFocusManager.current
     val noScannerResultText = stringResource(R.string.no_scanner_result)
     val productAlreadyInListText = stringResource(R.string.product_already_in_list)
@@ -2536,7 +2554,7 @@ fun ManualEntryDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(spacing.md)
             ) {
                 ExposedDropdownMenuBox(
                     expanded = isCategoryDropdownExpanded,
@@ -2620,7 +2638,7 @@ fun ManualEntryDialog(
                     }
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     OutlinedTextField(
                         value = purchasePrice,
                         onValueChange = { purchasePrice = it },
@@ -2680,7 +2698,7 @@ fun ManualEntryDialog(
 
                 AnimatedVisibility(visible = productFromDb != null) {
                     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(Modifier.padding(spacing.sm), verticalArrangement = Arrangement.spacedBy(spacing.xxs)) {
                             Text(stringResource(R.string.data_from_database), style = MaterialTheme.typography.labelMedium)
                             val formattedPrice = formatClPricePlainDisplay(productFromDb?.retailPrice)
                             val retailPriceInput = formatClPriceInput(productFromDb?.retailPrice)
@@ -2816,13 +2834,14 @@ private fun MenuIconWithTick(
     base: ImageVector,
     showTick: Boolean
 ) {
+    val appColors = MaterialTheme.appColors
     Box(Modifier.size(24.dp)) {
         Icon(base, contentDescription = null)
         if (showTick) {
             Icon(
                 imageVector = Icons.Default.CheckCircle,
                 contentDescription = null,
-                tint = Color(0xFF00C853),
+                tint = appColors.success,
                 modifier = Modifier
                     .size(12.dp)
                     .align(Alignment.TopEnd)
@@ -2842,12 +2861,13 @@ private fun TopInfoChipsBar(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
 ) {
+    val spacing = MaterialTheme.appSpacing
     Row(
         modifier = modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
             .padding(contentPadding),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
         verticalAlignment = Alignment.CenterVertically
     ) {
         supplier?.let { InfoChip(it) }
@@ -2859,6 +2879,7 @@ private fun TopInfoChipsBar(
 
 @Composable
 private fun InfoChip(text: String, tonal: Boolean = false) {
+    val spacing = MaterialTheme.appSpacing
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = if (tonal) {
@@ -2877,7 +2898,7 @@ private fun InfoChip(text: String, tonal: Boolean = false) {
             style = MaterialTheme.typography.labelLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.sm)
         )
     }
 }

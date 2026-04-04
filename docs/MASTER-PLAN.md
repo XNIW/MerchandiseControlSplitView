@@ -26,12 +26,12 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **—** (nessuno; selezionare il prossimo task dal backlog con approvazione utente) |
-| Fase task attivo     | **—** |
-| Backlog documentale  | — |
-| Milestone            | **TASK-016** **`DONE`** (2026-04-05). **TASK-029** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-027** **`DONE`** (2026-04-03). **TASK-026** **`DONE`** (2026-04-03). **TASK-025** **`DONE`** (2026-04-03). **TASK-015** **`DONE`** (2026-04-03). **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. |
-| Prossimo passo operativo | Nessun task in corso. **Prossima azione:** scelta guidata dall’utente (es. smoke **TASK-006** / **TASK-011** per sblocco verso `DONE`, ripresa **TASK-002** `BLOCKED`, o altro task dal backlog). |
-| Ultimo aggiornamento | 2026-04-05 — **TASK-016** chiuso in **`DONE`**; `MASTER-PLAN` e file task sincronizzati. |
+| Task attivo          | **TASK-030** — Design system: colori semantici, forme e spacing centralizzati |
+| Fase task attivo     | **DONE** — in attesa di conferma utente per chiusura formale e attivazione prossimo task |
+| Backlog documentale  | Audit UX/UI completo 2026-04-04: 12 task candidati (TASK-030 → TASK-041) |
+| Milestone            | **TASK-030** **`DONE`** (2026-04-04). **TASK-016** **`DONE`** (2026-04-05). **TASK-029** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-027** **`DONE`** (2026-04-03). **TASK-026** **`DONE`** (2026-04-03). **TASK-025** **`DONE`** (2026-04-03). **TASK-015** **`DONE`** (2026-04-03). **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. |
+| Prossimo passo operativo | **TASK-030** `DONE` — review APPROVED 2026-04-04; tutti i 31 criteri ✅. Prossimo candidato: **TASK-031** (grid readability, dipende da TASK-030). Attivazione richiede conferma utente. |
+| Ultimo aggiornamento | 2026-04-04 — **TASK-030** chiuso in **`DONE`**; review planner APPROVED senza fix. |
 
 **Promemoria antiambiguità (governance):** **TASK-016** è **`DONE`** (2026-04-05). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
 
@@ -546,16 +546,142 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 
 ---
 
+### Backlog post-audit UX/UI (2026-04-04)
+
+> I seguenti task derivano dall'audit completo UX/UI del prodotto eseguito il 2026-04-04.
+> Obiettivo: portare l'app da "funzionante ma grezza" a "rifinita e professionale" senza toccare logica business.
+
+### TASK-030 — Design system: colori semantici, forme e spacing centralizzati
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `DONE`                                                  |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX / UI / Theme / Design System                         |
+| Dipendenze  | Nessuna                                                 |
+| File task   | `docs/TASKS/TASK-030-design-system-colori-semantici-forme-spacing.md` |
+| Descrizione | Centralizzare token visivi (colori semantici success/warning/info/filled, forme, spacing) nel tema Material3, eliminando colori hardcoded nei 5 file consumer del perimetro. Fondamento per tutto il polish UX successivo. |
+| Note tracking | `DONE` 2026-04-04 — review APPROVED senza fix; 31/31 criteri ✅; zero hardcoded nei consumer; build/lint verdi. |
+
+### TASK-031 — Grid readability: riduzione rumore cromatico
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX / UI / Grid                                          |
+| Dipendenze  | TASK-030                                                |
+| Descrizione | Ridurre gli stati colore sovrapposti nella griglia (da 5+ a 2-3 prioritari) per rendere le righe scansionabili a colpo d'occhio. File: `ZoomableExcelGrid.kt`, `TableCell.kt`. |
+
+### TASK-032 — ManualEntryDialog: layout responsivo prezzi
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX / UI / GeneratedScreen                               |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Stack verticale dei 3 campi prezzo/quantità su schermi stretti (<400dp). Attualmente 3 OutlinedTextField su una riga risultano cramped e inutilizzabili su telefoni normali. |
+
+### TASK-033 — Feedback azioni: save/sync/export conferma visiva
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX / Feedback                                           |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Aggiungere feedback visivo (snackbar/toast/flash) dopo salvataggio riga, sync, export completato. Attualmente l'utente non ha conferma che l'azione sia riuscita. |
+
+### TASK-034 — DatabaseScreen: fix icone import/export + delete context
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `MEDIA`                                                 |
+| Area        | UX / UI / DatabaseScreen                                |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Correggere icone Import/Export (attualmente invertite: FileDownload per import, FileUpload per export). Aggiungere nome prodotto/barcode nel dialog di conferma eliminazione. |
+
+### TASK-035 — OptionsScreen: nomi lingue nativi + card visibility
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | UX / UI / OptionsScreen                                 |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Mostrare nomi lingue in script nativo (中文, Español, ecc.). Aumentare visibilità card (elevation/opacity). |
+
+### TASK-036 — HistoryScreen: colori tematizzati + padding uniforme
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | UX / UI / HistoryScreen                                 |
+| Dipendenze  | TASK-030                                                |
+| Descrizione | Eliminare colori hardcoded residui, uniformare padding card, migliorare dark theme compliance. |
+
+### TASK-037 — Dialog unificati: forme, elevazioni, timeout
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `MEDIA`                                                 |
+| Area        | UX / UI / Dialogs                                       |
+| Dipendenze  | TASK-030                                                |
+| Descrizione | Unificare pattern modale: stessa shape (28dp), elevazione coerente, timeout su dialog non dismissibili. File: `DatabaseScreenDialogs.kt`, `GeneratedScreenDialogs.kt`. |
+
+### TASK-038 — Search dialog: clear text + layout input consolidato
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | UX / UI / Search                                        |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Pulizia automatica testo alla riapertura, scanner come trailing icon nel campo di ricerca. |
+
+### TASK-039 — Export dialog semplificato
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | UX / UI / DatabaseScreen                                |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Eliminare la doppia interfaccia preset+checkbox nell'export dialog. Offrire solo preset OPPURE checkbox manuali, non entrambi. |
+
+### TASK-040 — PreGenerate: supplier/category anticipati + feedback qualità dati
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `MEDIA`                                                 |
+| Area        | UX / UI / PreGenerateScreen                             |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Rendere supplier/category visibili e selezionabili prima del tap su "Generate". Aggiungere warning pre-generazione per qualità dati (duplicati barcode, prezzi mancanti). |
+
+### TASK-041 — Completamento workflow: celebrazione + quick export
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `BACKLOG`                                               |
+| Priorità    | `BASSA`                                                 |
+| Area        | UX / UI / GeneratedScreen                               |
+| Dipendenze  | Nessuna                                                 |
+| Descrizione | Mostrare banner "Tutto completato!" quando tutte le righe sono marcate complete, con bottone rapido per export. Dà senso di chiusura al workflow quotidiano. |
+
+---
+
 ## Razionale priorità
 
 ### Priorità prodotto (focus corrente)
 
-**Focus immediato:** **TASK-016** è **`DONE`** (2026-04-05). **TASK-029**, **TASK-028**, **TASK-027**, **TASK-026**, **TASK-025** e **TASK-015** sono tutti **`DONE`** (2026-04-03). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** e **TASK-021** sono **`DONE`** (2026-03-29). **TASK-006** è **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-008** / **TASK-007** / **TASK-005** / **TASK-004** / **TASK-020** / **TASK-003** `DONE`. **TASK-017** `DONE`. **TASK-002** **`BLOCKED`**. Ordine operativo:
+**Focus immediato (post-audit UX/UI 2026-04-04):**
 
-1. **TASK-006** — smoke → eventuale sblocco **`BLOCKED`** verso **`DONE`** dopo i fix strutturali già chiusi.
-2. **TASK-011** — smoke → sblocco verso **`DONE`** quando utile.
-3. **TASK-002 (MEDIA, BLOCKED):** ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
-4. Selezionare un nuovo task attivo dal backlog con **approvazione esplicita utente** (nessun default automatico).
+1. **TASK-030 (ALTA, ACTIVE)** — Design system: colori semantici, forme e spacing centralizzati. Fondamento per tutto il polish successivo.
+2. **TASK-031 (ALTA, BACKLOG)** — Grid readability: riduzione rumore cromatico. Dipende da TASK-030.
+3. **TASK-032 (ALTA, BACKLOG)** — ManualEntryDialog: layout responsivo prezzi.
+4. **TASK-033 (ALTA, BACKLOG)** — Feedback azioni: save/sync/export.
+5. **TASK-034 (MEDIA, BACKLOG)** — DatabaseScreen: fix icone + delete context.
+6. **TASK-037 (MEDIA, BACKLOG)** — Dialog unificati.
+7. **TASK-040 (MEDIA, BACKLOG)** — PreGenerate: supplier/category anticipati.
+8. **TASK-035 (BASSA)**, **TASK-036 (BASSA)**, **TASK-038 (BASSA)**, **TASK-039 (BASSA)**, **TASK-041 (BASSA)** — Polish minore.
+
+**Task BLOCKED residui (smoke manuali pendenti):**
+- **TASK-006** — smoke → eventuale sblocco verso `DONE`.
+- **TASK-011** — smoke → sblocco verso `DONE` quando utile.
+- **TASK-002** — ripresa quando l’utente eseguirà smoke / deciderà chiusura formale.
 
 ### Priorità tecnica / qualità
 
