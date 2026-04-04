@@ -12,6 +12,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import org.apache.poi.ss.usermodel.Row
+import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.xssf.streaming.SXSSFWorkbook
 
 enum class DatabaseExportSheet(
@@ -152,6 +153,9 @@ object DatabaseExportConstants {
 
     const val PRICE_TYPE_PURCHASE = "purchase"
     const val PRICE_TYPE_RETAIL = "retail"
+
+    /** Dimensione pagina repository → export (prodotti e price history). */
+    const val DATABASE_EXPORT_PAGE_SIZE = 500
 }
 
 fun buildDatabaseExportSchema(context: Context): DatabaseExportSchema =
@@ -199,19 +203,7 @@ fun writeDatabaseExport(
                     val workbookSheet = workbook.createSheet(sheet.technicalName)
                     writeHeaderRow(workbookSheet.createRow(0), schema.productHeaders)
                     content.products.forEachIndexed { index, details ->
-                        val product = details.product
-                        val row = workbookSheet.createRow(index + 1)
-                        row.createCell(0).setCellValue(product.barcode)
-                        row.createCell(1).setCellValue(product.itemNumber.orEmpty())
-                        row.createCell(2).setCellValue(product.productName.orEmpty())
-                        row.createCell(3).setCellValue(product.secondProductName.orEmpty())
-                        row.createCell(4).setCellValue(product.purchasePrice ?: 0.0)
-                        row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
-                        row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
-                        row.createCell(7).setCellValue(details.prevRetail ?: 0.0)
-                        row.createCell(8).setCellValue(details.supplierName.orEmpty())
-                        row.createCell(9).setCellValue(details.categoryName.orEmpty())
-                        row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
+                        writeProductDetailDataRow(workbookSheet, index + 1, details)
                     }
                 }
 
@@ -281,8 +273,153 @@ fun writeDatabaseExport(
     }
 }
 
+/**
+ * Export DB senza materializzare l’intero catalogo né la cronologia prezzi in una singola lista:
+ * legge dal repository a pagine e scrive su foglio mentre avanza.
+ * Suppliers/categories restano liste compatte (dataset tipicamente piccolo).
+ */
+@Suppress("DEPRECATION")
+suspend fun writeDatabaseExportStreaming(
+    outputStream: OutputStream,
+    selection: ExportSheetSelection,
+    schema: DatabaseExportSchema,
+    suppliers: List<Supplier>,
+    categories: List<Category>,
+    fetchProductPage: suspend (limit: Int, offset: Int) -> List<ProductWithDetails>,
+    fetchPriceHistoryPage: suspend (limit: Int, offset: Int) -> List<PriceHistoryExportRow>,
+    pageSize: Int = DatabaseExportConstants.DATABASE_EXPORT_PAGE_SIZE,
+    onBeforeProductsSheet: () -> Unit = {},
+    onAfterFirstProductPageFetched: () -> Unit = {},
+    onBeforePriceHistorySheet: () -> Unit = {},
+    onAfterFirstPriceHistoryPageFetched: () -> Unit = {},
+    onSheetWritten: ((DatabaseExportSheet) -> Unit)? = null
+) {
+    require(!selection.isEmpty) { "At least one sheet must be selected." }
+    require(pageSize > 0) { "pageSize must be positive." }
+
+    val workbook = SXSSFWorkbook(100)
+    workbook.isCompressTempFiles = true
+
+    try {
+        selection.selectedSheetsInOrder().forEach { sheet ->
+            when (sheet) {
+                DatabaseExportSheet.PRODUCTS -> {
+                    onBeforeProductsSheet()
+                    val workbookSheet = workbook.createSheet(sheet.technicalName)
+                    writeHeaderRow(workbookSheet.createRow(0), schema.productHeaders)
+                    var offset = 0
+                    var rowIndex = 1
+                    var firstFetch = true
+                    while (true) {
+                        val page = fetchProductPage(pageSize, offset)
+                        if (firstFetch) {
+                            onAfterFirstProductPageFetched()
+                            firstFetch = false
+                        }
+                        if (page.isEmpty()) break
+                        for (details in page) {
+                            writeProductDetailDataRow(workbookSheet, rowIndex++, details)
+                        }
+                        offset += page.size
+                    }
+                }
+
+                DatabaseExportSheet.SUPPLIERS -> {
+                    val workbookSheet = workbook.createSheet(sheet.technicalName)
+                    writeHeaderRow(workbookSheet.createRow(0), schema.supplierHeaders)
+                    suppliers.forEachIndexed { index, supplier ->
+                        val row = workbookSheet.createRow(index + 1)
+                        row.createCell(0).setCellValue(supplier.id.toDouble())
+                        row.createCell(1).setCellValue(supplier.name)
+                    }
+                }
+
+                DatabaseExportSheet.CATEGORIES -> {
+                    val workbookSheet = workbook.createSheet(sheet.technicalName)
+                    writeHeaderRow(workbookSheet.createRow(0), schema.categoryHeaders)
+                    categories.forEachIndexed { index, category ->
+                        val row = workbookSheet.createRow(index + 1)
+                        row.createCell(0).setCellValue(category.id.toDouble())
+                        row.createCell(1).setCellValue(category.name)
+                    }
+                }
+
+                DatabaseExportSheet.PRICE_HISTORY -> {
+                    onBeforePriceHistorySheet()
+                    val workbookSheet = workbook.createSheet(sheet.technicalName)
+                    writeHeaderRow(workbookSheet.createRow(0), schema.priceHistoryHeaders)
+
+                    var previousGroupKey: String? = null
+                    var previousPrice: Double? = null
+                    var offset = 0
+                    var rowIndex = 1
+                    var firstFetch = true
+                    while (true) {
+                        val page = fetchPriceHistoryPage(pageSize, offset)
+                        if (firstFetch) {
+                            onAfterFirstPriceHistoryPageFetched()
+                            firstFetch = false
+                        }
+                        if (page.isEmpty()) break
+                        for (entry in page) {
+                            val row = workbookSheet.createRow(rowIndex++)
+                            val normalizedType = entry.type.uppercase(Locale.ROOT)
+                            val groupKey = "${entry.barcode}|$normalizedType"
+
+                            if (groupKey != previousGroupKey) {
+                                previousGroupKey = groupKey
+                                previousPrice = null
+                            }
+
+                            row.createCell(0).setCellValue(entry.barcode)
+                            row.createCell(1).setCellValue(entry.timestamp)
+                            row.createCell(2).setCellValue(
+                                if (normalizedType.startsWith("PUR")) {
+                                    DatabaseExportConstants.PRICE_TYPE_PURCHASE
+                                } else {
+                                    DatabaseExportConstants.PRICE_TYPE_RETAIL
+                                }
+                            )
+                            previousPrice?.let { row.createCell(3).setCellValue(it) } ?: row.createCell(3)
+                            row.createCell(4).setCellValue(entry.price)
+                            row.createCell(5).setCellValue(entry.source.orEmpty())
+
+                            previousPrice = entry.price
+                        }
+                        offset += page.size
+                    }
+                }
+            }
+
+            onSheetWritten?.invoke(sheet)
+        }
+
+        workbook.write(outputStream)
+        outputStream.flush()
+    } finally {
+        runCatching { workbook.close() }
+        runCatching { workbook.dispose() }
+    }
+}
+
 private fun writeHeaderRow(row: Row, headers: List<String>) {
     headers.forEachIndexed { index, header ->
         row.createCell(index).setCellValue(header)
     }
+}
+
+private fun writeProductDetailDataRow(sheet: Sheet, rowIndex: Int, details: ProductWithDetails) {
+    val product = details.product
+    val row = sheet.createRow(rowIndex)
+    row.createCell(0).setCellValue(product.barcode)
+    row.createCell(1).setCellValue(product.itemNumber.orEmpty())
+    row.createCell(2).setCellValue(product.productName.orEmpty())
+    row.createCell(3).setCellValue(product.secondProductName.orEmpty())
+    row.createCell(4).setCellValue(product.purchasePrice ?: 0.0)
+    row.createCell(5).setCellValue(product.retailPrice ?: 0.0)
+    row.createCell(6).setCellValue(details.prevPurchase ?: 0.0)
+    row.createCell(7).setCellValue(details.prevRetail ?: 0.0)
+    row.createCell(8).setCellValue(details.supplierName.orEmpty())
+    row.createCell(9).setCellValue(details.categoryName.orEmpty())
+    row.createCell(10).setCellValue(product.stockQuantity ?: 0.0)
 }

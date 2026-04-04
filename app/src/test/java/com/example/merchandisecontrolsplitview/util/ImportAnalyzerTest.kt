@@ -355,6 +355,32 @@ class ImportAnalyzerTest {
     }
 
     @Test
+    fun `analyze caps duplicate warning samples while preserving total occurrences and winner row`() = runTest {
+        val importedRows = (1..52).map { index ->
+            importedRow(
+                barcode = "99999999",
+                itemNumber = "ITEM-$index",
+                productName = "Product $index",
+                quantity = "1",
+                purchasePrice = "4",
+                retailPrice = "6"
+            )
+        }
+
+        val analysis = analyze(importedRows = importedRows)
+        val warning = duplicateWarningFor(analysis, "99999999")
+        val merged = analysis.newProducts.single { it.barcode == "99999999" }
+
+        assertEquals(52, warning.totalOccurrences)
+        assertEquals(50, warning.rowNumbers.size)
+        assertEquals((1..49).toList(), warning.rowNumbers.dropLast(1))
+        assertEquals(52, warning.rowNumbers.last())
+        assertEquals("ITEM-52", merged.itemNumber)
+        assertEquals("Product 52", merged.productName)
+        assertEquals(52.0, merged.stockQuantity!!, 0.0001)
+    }
+
+    @Test
     fun `analyzeStreaming unexpected row error hides technical exception text`() = runTest {
         coEvery { repository.findSupplierByName("Broken Supplier") } throws IllegalStateException("stream boom")
 

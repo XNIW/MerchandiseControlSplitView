@@ -163,6 +163,21 @@ ORDER BY p.id ASC
     """)
     suspend fun getAllWithDetailsOnce(): List<ProductWithDetails>
 
+    /** Stesso ordinamento di [getAllWithDetailsOnce] per export chunked senza caricare tutto in RAM. */
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON s.id = p.supplierId
+        LEFT JOIN categories c ON c.id = p.categoryId
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        ORDER BY p.id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails>
+
     data class ProductLite(val id: Long, val barcode: String, val purchasePrice: Double?, val retailPrice: Double?)
     @Query("SELECT id, barcode, purchasePrice, retailPrice FROM products")
     suspend fun getAllLite(): List<ProductLite>

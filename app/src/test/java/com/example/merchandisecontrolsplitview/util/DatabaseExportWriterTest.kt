@@ -1,10 +1,13 @@
 package com.example.merchandisecontrolsplitview.util
 
 import com.example.merchandisecontrolsplitview.data.PriceHistoryExportRow
+import com.example.merchandisecontrolsplitview.data.Product
+import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.data.Supplier
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.time.LocalDateTime
+import kotlinx.coroutines.runBlocking
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -137,6 +140,101 @@ class DatabaseExportWriterTest {
             assertTrue(sheet.getRow(3).getCell(3) == null || sheet.getRow(3).getCell(3).toString().isBlank())
         }
     }
+
+    @Test
+    fun `writeDatabaseExportStreaming merges paged product fetches into one sheet`() = runBlocking {
+        val output = ByteArrayOutputStream()
+        writeDatabaseExportStreaming(
+            outputStream = output,
+            selection = ExportSheetSelection.productsOnly(),
+            schema = sampleSchema(),
+            suppliers = emptyList(),
+            categories = emptyList(),
+            fetchProductPage = { _, offset ->
+                when (offset) {
+                    0 -> listOf(sampleProductWithDetails("111"))
+                    1 -> listOf(sampleProductWithDetails("222"))
+                    else -> emptyList()
+                }
+            },
+            fetchPriceHistoryPage = { _, _ -> emptyList() },
+            pageSize = 1
+        )
+        XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
+            val sheet = workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS)
+            assertEquals(3, sheet.physicalNumberOfRows)
+            assertEquals("111", sheet.getRow(1).getCell(0).stringCellValue)
+            assertEquals("222", sheet.getRow(2).getCell(0).stringCellValue)
+        }
+    }
+
+    @Test
+    fun `writeDatabaseExportStreaming keeps previous price continuity across page boundaries`() = runBlocking {
+        val output = ByteArrayOutputStream()
+        writeDatabaseExportStreaming(
+            outputStream = output,
+            selection = ExportSheetSelection.priceHistoryOnly(),
+            schema = sampleSchema(),
+            suppliers = emptyList(),
+            categories = emptyList(),
+            fetchProductPage = { _, _ -> emptyList() },
+            fetchPriceHistoryPage = { _, offset ->
+                when (offset) {
+                    0 -> listOf(
+                        PriceHistoryExportRow(
+                            barcode = "00000001",
+                            timestamp = "2026-01-01 10:00:00",
+                            type = "PURCHASE",
+                            price = 3.0,
+                            source = "MANUAL"
+                        )
+                    )
+                    1 -> listOf(
+                        PriceHistoryExportRow(
+                            barcode = "00000001",
+                            timestamp = "2026-02-01 10:00:00",
+                            type = "PURCHASE",
+                            price = 4.0,
+                            source = "MANUAL"
+                        )
+                    )
+                    2 -> listOf(
+                        PriceHistoryExportRow(
+                            barcode = "00000001",
+                            timestamp = "2026-03-01 10:00:00",
+                            type = "RETAIL",
+                            price = 7.0,
+                            source = "MANUAL"
+                        )
+                    )
+                    else -> emptyList()
+                }
+            },
+            pageSize = 1
+        )
+
+        XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
+            val sheet = workbook.getSheet(DatabaseExportConstants.SHEET_PRICE_HISTORY)
+            assertTrue(sheet.getRow(1).getCell(3) == null || sheet.getRow(1).getCell(3).toString().isBlank())
+            assertEquals(3.0, sheet.getRow(2).getCell(3).numericCellValue, 0.0001)
+            assertTrue(sheet.getRow(3).getCell(3) == null || sheet.getRow(3).getCell(3).toString().isBlank())
+        }
+    }
+
+    private fun sampleProductWithDetails(barcode: String): ProductWithDetails =
+        ProductWithDetails(
+            product = Product(
+                barcode = barcode,
+                productName = "P",
+                retailPrice = 1.0
+            ),
+            supplierName = null,
+            categoryName = null,
+            lastPurchase = null,
+            prevPurchase = null,
+            lastRetail = null,
+            prevRetail = null
+        )
 
     private fun sampleSchema(): DatabaseExportSchema =
         DatabaseExportSchema(

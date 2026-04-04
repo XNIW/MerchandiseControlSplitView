@@ -12,7 +12,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.util.DatabaseExportContent
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
@@ -22,7 +21,7 @@ import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
-import com.example.merchandisecontrolsplitview.util.writeDatabaseExport
+import com.example.merchandisecontrolsplitview.util.writeDatabaseExportStreaming
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
@@ -762,15 +761,6 @@ class DatabaseViewModel(
             try {
                 val schema = buildDatabaseExportSchema(context)
 
-                val products = if (selection.products) {
-                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRODUCTS))
-                    repository.getAllProductsWithDetails().also {
-                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRODUCTS))
-                    }
-                } else {
-                    emptyList()
-                }
-
                 val suppliers = if (selection.suppliers) {
                     updateExportUiState(progressTracker.fetching(DatabaseExportSheet.SUPPLIERS))
                     repository.getAllSuppliers().also {
@@ -789,27 +779,40 @@ class DatabaseViewModel(
                     emptyList()
                 }
 
-                val priceHistoryRows = if (selection.priceHistory) {
-                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRICE_HISTORY))
-                    repository.getAllPriceHistoryRows().also {
-                        updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRICE_HISTORY))
-                    }
-                } else {
-                    emptyList()
-                }
-
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        writeDatabaseExport(
+                        writeDatabaseExportStreaming(
                             outputStream = outputStream,
                             selection = selection,
                             schema = schema,
-                            content = DatabaseExportContent(
-                                products = products,
-                                suppliers = suppliers,
-                                categories = categories,
-                                priceHistoryRows = priceHistoryRows
-                            ),
+                            suppliers = suppliers,
+                            categories = categories,
+                            fetchProductPage = { limit, offset ->
+                                repository.getProductsWithDetailsPage(limit, offset)
+                            },
+                            fetchPriceHistoryPage = { limit, offset ->
+                                repository.getPriceHistoryRowsPage(limit, offset)
+                            },
+                            onBeforeProductsSheet = {
+                                if (selection.products) {
+                                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRODUCTS))
+                                }
+                            },
+                            onAfterFirstProductPageFetched = {
+                                if (selection.products) {
+                                    updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRODUCTS))
+                                }
+                            },
+                            onBeforePriceHistorySheet = {
+                                if (selection.priceHistory) {
+                                    updateExportUiState(progressTracker.fetching(DatabaseExportSheet.PRICE_HISTORY))
+                                }
+                            },
+                            onAfterFirstPriceHistoryPageFetched = {
+                                if (selection.priceHistory) {
+                                    updateExportUiState(progressTracker.fetched(DatabaseExportSheet.PRICE_HISTORY))
+                                }
+                            },
                             onSheetWritten = { sheet ->
                                 updateExportUiState(progressTracker.sheetWritten(sheet))
                             }

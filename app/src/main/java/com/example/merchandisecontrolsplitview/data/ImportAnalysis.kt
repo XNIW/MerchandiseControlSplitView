@@ -5,7 +5,9 @@ package com.example.merchandisecontrolsplitview.data
 // e correttamente importati qui se necessario, anche se di solito non serve se sono nello stesso package.
 data class DuplicateWarning(
     val barcode: String,
-    val rowNumbers: List<Int>
+    val rowNumbers: List<Int>,
+    /** Totale righe con questo barcode; se maggiore di [rowNumbers], la lista è campionata per limitare memoria/UI. */
+    val totalOccurrences: Int = rowNumbers.size
 )
 data class ImportAnalysis(
     val newProducts: List<Product>,

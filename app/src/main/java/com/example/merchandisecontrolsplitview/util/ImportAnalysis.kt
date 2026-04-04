@@ -9,6 +9,8 @@ import com.example.merchandisecontrolsplitview.R
 object ImportAnalyzer {
 
     private const val MAX_PRODUCT_NAME_LENGTH = 100
+    /** Massimo numeri riga elencati per barcode duplicato (il totale resta in [DuplicateWarning.totalOccurrences]). */
+    private const val MAX_DUPLICATE_ROW_NUMBERS_LISTED = 50
     private const val PRICE_COMPARISON_TOLERANCE = 0.001
     private val DEFERRED_RELATION_ROW_KEYS = setOf(
         "barcode",
@@ -166,9 +168,20 @@ object ImportAnalyzer {
 
         data class Pending(
             val lastRow: MutableMap<String, String>,
-            val rowNumbers: MutableList<Int>,
+            val sampledRowNumbers: MutableList<Int>,
+            var totalOccurrences: Int,
+            var lastRowNumber: Int,
             var qtySum: Double
         )
+
+        fun appendSampleRowNumber(sampledRowNumbers: MutableList<Int>, rowNumber: Int) {
+            if (sampledRowNumbers.size < MAX_DUPLICATE_ROW_NUMBERS_LISTED) {
+                sampledRowNumbers.add(rowNumber)
+            } else {
+                // Keep the newest row visible in the compact sample: the last row wins semantically.
+                sampledRowNumbers[MAX_DUPLICATE_ROW_NUMBERS_LISTED - 1] = rowNumber
+            }
+        }
 
         val pendingByBarcode = LinkedHashMap<String, Pending>()
         var rowIndex = 0
@@ -189,13 +202,17 @@ object ImportAnalyzer {
             if (pending == null) {
                 pendingByBarcode[barcode] = Pending(
                     lastRow = compactDeferredRelationRow(row, barcode),
-                    rowNumbers = mutableListOf(rowIndex),
+                    sampledRowNumbers = mutableListOf(rowIndex),
+                    totalOccurrences = 1,
+                    lastRowNumber = rowIndex,
                     qtySum = qtyForRow
                 )
             } else {
                 pending.lastRow.clear()
                 pending.lastRow.putAll(compactDeferredRelationRow(row, barcode))
-                pending.rowNumbers.add(rowIndex)
+                pending.totalOccurrences += 1
+                pending.lastRowNumber = rowIndex
+                appendSampleRowNumber(pending.sampledRowNumbers, rowIndex)
                 pending.qtySum += qtyForRow
             }
         }
@@ -203,8 +220,12 @@ object ImportAnalyzer {
         for ((barcode, pending) in pendingByBarcode) {
             val finalRow = pending.lastRow
             finalRow["quantity"] = pending.qtySum.toString()
-            if (pending.rowNumbers.size > 1) {
-                warnings += DuplicateWarning(barcode, pending.rowNumbers)
+            if (pending.totalOccurrences > 1) {
+                warnings += DuplicateWarning(
+                    barcode = barcode,
+                    rowNumbers = pending.sampledRowNumbers.toList(),
+                    totalOccurrences = pending.totalOccurrences
+                )
             }
 
             try {
@@ -221,7 +242,7 @@ object ImportAnalyzer {
                 val discountedPriceFromFile = parseDouble(finalRow["discountedPrice"])
 
                 if (discountFromFile != null && (discountFromFile < 0 || discountFromFile > 100)) {
-                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_discount)
+                    errors += RowImportError(pending.lastRowNumber, finalRow, R.string.error_invalid_discount)
                     continue
                 }
 
@@ -238,7 +259,7 @@ object ImportAnalyzer {
                 val prevRetailFromFile = round3(parseDouble(finalRow["oldRetailPrice"] ?: finalRow["prevRetail"]))
 
                 val validationError = validateRow(
-                    pending.rowNumbers.last() - 1,
+                    pending.lastRowNumber - 1,
                     finalRow,
                     barcode,
                     productName,
@@ -252,15 +273,15 @@ object ImportAnalyzer {
 
                 val existing = dbProductByBarcode[barcode]
                 if (existing != null && retailPriceFromFile != null && retailPriceFromFile <= 0.0) {
-                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    errors += RowImportError(pending.lastRowNumber, finalRow, R.string.error_invalid_or_missing_retail_price)
                     continue
                 }
                 if (existing == null && (retailPriceFromFile == null || retailPriceFromFile <= 0.0)) {
-                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_invalid_or_missing_retail_price)
+                    errors += RowImportError(pending.lastRowNumber, finalRow, R.string.error_invalid_or_missing_retail_price)
                     continue
                 }
                 if (quantityToUse != null && quantityToUse < 0) {
-                    errors += RowImportError(pending.rowNumbers.last(), finalRow, R.string.error_negative_quantity)
+                    errors += RowImportError(pending.lastRowNumber, finalRow, R.string.error_negative_quantity)
                     continue
                 }
 
@@ -306,7 +327,7 @@ object ImportAnalyzer {
                     }
                 }
             } catch (ex: Exception) {
-                errors += unexpectedRowProcessingError(pending.rowNumbers.last(), pending.lastRow)
+                errors += unexpectedRowProcessingError(pending.lastRowNumber, pending.lastRow)
             }
         }
 

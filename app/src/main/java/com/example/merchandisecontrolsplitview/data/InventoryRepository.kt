@@ -67,9 +67,13 @@ interface InventoryRepository {
     fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>>
     suspend fun getPreviousPricesForBarcodes(barcodes: List<String>, at: String): Map<String, Pair<Double?, Double?>>
     suspend fun getAllProductsWithDetails(): List<ProductWithDetails>
+    /** Export DB: pagina prodotti con dettaglio (stesso ordinamento di [getAllProductsWithDetails]). */
+    suspend fun getProductsWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails>
     // ⬇️ nell'interfaccia InventoryRepository, aggiungi:
     // PriceHistory export
     suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow>
+    /** Export DB: pagina cronologia prezzi (stesso ordinamento di [getAllPriceHistoryRows]). */
+    suspend fun getPriceHistoryRowsPage(limit: Int, offset: Int): List<PriceHistoryExportRow>
     suspend fun getAllProductsLite(): List<ProductDao.ProductLite>
     suspend fun recordPriceHistoryByBarcodeBatch(
         rows: List<Triple<String /*barcode*/, String /*type*/, Pair<String /*ts*/, Double /*price*/>>>,
@@ -123,6 +127,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
+
+    override suspend fun getProductsWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails> =
+        withContext(Dispatchers.IO) { productDao.getWithDetailsPage(limit, offset) }
     override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
     override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =
         withContext(Dispatchers.IO) {
@@ -266,16 +273,23 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
     override suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow> =
         withContext(Dispatchers.IO) {
-            val rows = priceDao.getAllWithBarcode()  // vedi DAO al punto 3
-            rows.map { r ->
-                PriceHistoryExportRow(
-                    barcode = r.barcode,
-                    timestamp = r.effectiveAt,
-                    type = r.type,
-                    price = r.price,
-                    source = r.source
-                )
-            }
+            mapPriceHistoryExportRows(priceDao.getAllWithBarcode())
+        }
+
+    override suspend fun getPriceHistoryRowsPage(limit: Int, offset: Int): List<PriceHistoryExportRow> =
+        withContext(Dispatchers.IO) {
+            mapPriceHistoryExportRows(priceDao.getAllWithBarcodePage(limit, offset))
+        }
+
+    private fun mapPriceHistoryExportRows(rows: List<PriceHistoryExportRowDb>): List<PriceHistoryExportRow> =
+        rows.map { r ->
+            PriceHistoryExportRow(
+                barcode = r.barcode,
+                timestamp = r.effectiveAt,
+                type = r.type,
+                price = r.price,
+                source = r.source
+            )
         }
 
     override suspend fun getAllProductsLite(): List<ProductDao.ProductLite> =

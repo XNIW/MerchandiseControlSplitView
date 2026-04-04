@@ -39,6 +39,7 @@ fun readAndAnalyzeExcel(
     }
 
     val analysis = analyzeRows(context, rows)
+    rows.clear()
     val hasEmptyTabularResult = analysis.first.isEmpty() || analysis.second.isEmpty()
     if (hasEmptyTabularResult) {
         if (!allowEmptyTabularResult) {

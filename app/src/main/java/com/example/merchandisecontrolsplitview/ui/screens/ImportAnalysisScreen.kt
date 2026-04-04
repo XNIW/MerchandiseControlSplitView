@@ -329,6 +329,17 @@ private fun WarningRow(warning: DuplicateWarning) {
                 color = MaterialTheme.colorScheme.onTertiaryContainer,
                 style = MaterialTheme.typography.bodyMedium
             )
+            if (warning.totalOccurrences > warning.rowNumbers.size) {
+                Text(
+                    text = stringResource(
+                        R.string.warning_duplicate_rows_truncated,
+                        warning.totalOccurrences - warning.rowNumbers.size,
+                        warning.totalOccurrences
+                    ),
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             Text(
                 text = stringResource(R.string.warning_duplicate_resolution),
                 color = MaterialTheme.colorScheme.onTertiaryContainer,

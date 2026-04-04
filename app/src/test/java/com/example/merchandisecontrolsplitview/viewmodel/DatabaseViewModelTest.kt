@@ -75,6 +75,8 @@ class DatabaseViewModelTest {
         coEvery { repository.findCategoryByName(any()) } returns null
         coEvery { repository.addSupplier(any()) } returns null
         coEvery { repository.addCategory(any()) } returns null
+        coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
+        coEvery { repository.getPriceHistoryRowsPage(any(), any()) } returns emptyList()
 
         viewModel = DatabaseViewModel(app, repository)
     }
@@ -333,7 +335,7 @@ class DatabaseViewModelTest {
 
     @Test
     fun `exportDatabase products only with empty dataset writes header only and emits success`() = runTest {
-        coEvery { repository.getAllProductsWithDetails() } returns emptyList()
+        coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
         val targetFile = File.createTempFile("export-products-empty", ".xlsx", app.cacheDir)
 
         viewModel.exportDatabase(
@@ -359,9 +361,11 @@ class DatabaseViewModelTest {
                 workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS).physicalNumberOfRows
             )
         }
-        coVerify(exactly = 1) { repository.getAllProductsWithDetails() }
+        coVerify(exactly = 1) { repository.getProductsWithDetailsPage(any(), any()) }
         coVerify(exactly = 0) { repository.getAllSuppliers() }
         coVerify(exactly = 0) { repository.getAllCategories() }
+        coVerify(exactly = 0) { repository.getPriceHistoryRowsPage(any(), any()) }
+        coVerify(exactly = 0) { repository.getAllProductsWithDetails() }
         coVerify(exactly = 0) { repository.getAllPriceHistoryRows() }
     }
 
@@ -404,13 +408,15 @@ class DatabaseViewModelTest {
         }
         coVerify(exactly = 1) { repository.getAllSuppliers() }
         coVerify(exactly = 1) { repository.getAllCategories() }
+        coVerify(exactly = 0) { repository.getProductsWithDetailsPage(any(), any()) }
+        coVerify(exactly = 0) { repository.getPriceHistoryRowsPage(any(), any()) }
         coVerify(exactly = 0) { repository.getAllProductsWithDetails() }
         coVerify(exactly = 0) { repository.getAllPriceHistoryRows() }
     }
 
     @Test
     fun `exportDatabase ignores second request while one export is already running`() = runTest {
-        coEvery { repository.getAllProductsWithDetails() } returns emptyList()
+        coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
         val firstTargetFile = File.createTempFile("export-guard-first", ".xlsx", app.cacheDir)
         val secondTargetFile = File.createTempFile("export-guard-second", ".xlsx", app.cacheDir)
 
@@ -428,15 +434,16 @@ class DatabaseViewModelTest {
         advanceUntilIdle()
         waitForCondition { viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error }
 
-        coVerify(exactly = 1) { repository.getAllProductsWithDetails() }
+        coVerify(exactly = 1) { repository.getProductsWithDetailsPage(any(), any()) }
+        coVerify(exactly = 0) { repository.getAllProductsWithDetails() }
     }
 
     @Test
     fun `exportDatabase full selection maps out of memory failures to error state`() = runTest {
-        coEvery { repository.getAllProductsWithDetails() } returns emptyList()
+        coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
         coEvery { repository.getAllSuppliers() } returns emptyList()
         coEvery { repository.getAllCategories() } returns emptyList()
-        coEvery { repository.getAllPriceHistoryRows() } throws OutOfMemoryError("heap exhausted")
+        coEvery { repository.getPriceHistoryRowsPage(any(), any()) } throws OutOfMemoryError("heap exhausted")
         val targetFile = File.createTempFile("export-full-oom", ".xlsx", app.cacheDir)
 
         viewModel.exportDatabase(
@@ -452,6 +459,8 @@ class DatabaseViewModelTest {
             UiState.Error(app.getString(R.string.error_file_too_large_or_complex)),
             state
         )
+        coVerify(exactly = 0) { repository.getAllProductsWithDetails() }
+        coVerify(exactly = 0) { repository.getAllPriceHistoryRows() }
     }
 
     @Test

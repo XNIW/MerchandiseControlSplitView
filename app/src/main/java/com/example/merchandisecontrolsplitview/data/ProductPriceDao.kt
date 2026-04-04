@@ -103,6 +103,20 @@ JOIN (
     """)
     suspend fun getAllWithBarcode(): List<PriceHistoryExportRowDb>
 
+    /** Stesso ordinamento di [getAllWithBarcode] per export chunked. */
+    @Query("""
+        SELECT p.barcode      AS barcode,
+               pr.effectiveAt AS effectiveAt,
+               pr.type        AS type,
+               pr.price       AS price,
+               pr.source      AS source
+        FROM product_prices pr
+        JOIN products p ON p.id = pr.productId
+        ORDER BY p.barcode ASC, pr.type ASC, pr.effectiveAt ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    suspend fun getAllWithBarcodePage(limit: Int, offset: Int): List<PriceHistoryExportRowDb>
+
     @Transaction
     suspend fun insertIfChanged(
         productId: Long,

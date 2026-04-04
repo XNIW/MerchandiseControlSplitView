@@ -302,6 +302,7 @@
     <string name="warning_duplicate_barcode">Barcode: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Found in rows: %1$s</string>
     <string name="warning_duplicate_resolution">The data from the last row will be used and the quantities will be summed.</string>
+    <string name="warning_duplicate_rows_truncated">Row list truncated: %1$d more rows not shown (total %2$d).</string>
     <string name="saving_changes">Saving changes&#8230;</string>
     <string name="missing_items_label">Missing products</string>
 
