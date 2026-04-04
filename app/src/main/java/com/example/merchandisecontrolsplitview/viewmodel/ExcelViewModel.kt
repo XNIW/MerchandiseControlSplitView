@@ -16,6 +16,9 @@ import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
+import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
+import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
+import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.classifyExcelFileUserError
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
@@ -766,11 +769,11 @@ class ExcelViewModel(
 
         // Itera su tutte le righe di dati, saltando l'intestazione
         data.drop(1).forEach { rowData ->
-            val quantity = rowData.getOrNull(quantityIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+            val quantity = parseUserQuantityInput(rowData.getOrNull(quantityIndex)) ?: 0.0
 
             if (quantity > 0) {
                 totalItems++
-                val purchasePrice = rowData.getOrNull(purchasePriceIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+                val purchasePrice = parseUserPriceInput(rowData.getOrNull(purchasePriceIndex)) ?: 0.0
                 orderTotal += purchasePrice * quantity
             }
         }
@@ -808,14 +811,14 @@ class ExcelViewModel(
                 val realQuantityStr = editable.getOrNull(modelIndex)?.getOrNull(0)?.value ?: ""
                 val originalQuantityStr = if (originalQuantityIndex != -1) rowData.getOrNull(originalQuantityIndex) ?: "0" else "0"
                 val quantityToUseStr = realQuantityStr.ifBlank { originalQuantityStr }
-                val quantity = quantityToUseStr.replace(",", ".").toDoubleOrNull() ?: 0.0
+                val quantity = parseUserQuantityInput(quantityToUseStr) ?: 0.0
 
                 if (quantity > 0) {
-                    val purchasePrice = rowData.getOrNull(purchasePriceIndex)?.replace(",",".")?.toDoubleOrNull() ?: 0.0
+                    val purchasePrice = parseUserPriceInput(rowData.getOrNull(purchasePriceIndex)) ?: 0.0
 
                     // Logica per calcolare il prezzo finale di pagamento
-                    val discountedPrice = rowData.getOrNull(discountedPriceIndex)?.replace(",",".")?.toDoubleOrNull()
-                    val discountPercent = rowData.getOrNull(discountIndex)?.replace(",",".")?.toDoubleOrNull()
+                    val discountedPrice = parseUserPriceInput(rowData.getOrNull(discountedPriceIndex))
+                    val discountPercent = parseUserNumericInput(rowData.getOrNull(discountIndex))
 
                     val finalPaymentPrice = when {
                         discountedPrice != null -> discountedPrice

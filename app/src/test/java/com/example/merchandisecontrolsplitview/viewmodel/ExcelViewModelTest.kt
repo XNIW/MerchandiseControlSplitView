@@ -182,6 +182,230 @@ class ExcelViewModelTest {
         assertEquals("12345678", updatedEntry.captured.data[1][0])
     }
 
+    /**
+     * EXPECTED_CORRECTION (TASK-027): "1.234" is CL grouped thousands (1234), not decimal 1.234.
+     */
+    @Test
+    fun `updateHistoryEntry CL grouped purchasePrice EXPECTED_CORRECTION uses thousand grouping not decimal dot`() =
+        runTest {
+            val updatedEntry = slot<HistoryEntry>()
+            coEvery { repository.getHistoryEntryByUid(16L) } returns historyEntry(uid = 16L)
+            coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+            viewModel.excelData.addAll(
+                listOf(
+                    listOf("barcode", "purchasePrice", "quantity"),
+                    listOf("12345678", "1.234", "2")
+                )
+            )
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.completeStates.addAll(listOf(false, true))
+
+            viewModel.updateHistoryEntry(16L)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+            assertEquals(2468.0, updatedEntry.captured.paymentTotal, 0.0001)
+            assertEquals(0, updatedEntry.captured.missingItems)
+        }
+
+    @Test
+    fun `updateHistoryEntry discount column uses parseUserNumericInput for CL comma decimal`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(17L) } returns historyEntry(uid = 17L)
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "purchasePrice", "quantity", "discountedPrice", "discount"),
+                listOf("12345678", "1000", "1", "", "10,5")
+            )
+        )
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.completeStates.addAll(listOf(false, true))
+
+        viewModel.updateHistoryEntry(17L)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+        assertEquals(895.0, updatedEntry.captured.paymentTotal, 0.0001)
+    }
+
+    @Test
+    fun `updateHistoryEntry editable CL comma quantity keeps final summary deterministic`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(18L) } returns historyEntry(uid = 18L)
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("12345678", "1000", "0")
+            )
+        )
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.editableValues.add(mutableListOf(mutableStateOf("1,5"), mutableStateOf("")))
+        viewModel.completeStates.addAll(listOf(false, true))
+
+        viewModel.updateHistoryEntry(18L)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+        assertEquals(1500.0, updatedEntry.captured.paymentTotal, 0.0001)
+        assertEquals(0, updatedEntry.captured.missingItems)
+    }
+
+    /**
+     * EXPECTED_CORRECTION (TASK-027): "1.234" on discountedPrice is CL grouped thousands and must
+     * remain the winning branch over percentage fallback.
+     */
+    @Test
+    fun `updateHistoryEntry discountedPrice branch takes precedence with CL grouped discountedPrice EXPECTED_CORRECTION`() =
+        runTest {
+            val updatedEntry = slot<HistoryEntry>()
+            coEvery { repository.getHistoryEntryByUid(19L) } returns historyEntry(uid = 19L)
+            coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+            viewModel.excelData.addAll(
+                listOf(
+                    listOf("barcode", "purchasePrice", "quantity", "discountedPrice", "discount"),
+                    listOf("12345678", "1000", "1", "1.234", "50")
+                )
+            )
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.completeStates.addAll(listOf(false, true))
+
+            viewModel.updateHistoryEntry(19L)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+            assertEquals(1234.0, updatedEntry.captured.paymentTotal, 0.0001)
+        }
+
+    @Test
+    fun `updateHistoryEntry discountedPrice branch takes precedence over discount percent`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(20L) } returns historyEntry(uid = 20L)
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "purchasePrice", "quantity", "discountedPrice", "discount"),
+                listOf("12345678", "1000", "1", "500", "50")
+            )
+        )
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.completeStates.addAll(listOf(false, true))
+
+        viewModel.updateHistoryEntry(20L)
+        advanceUntilIdle()
+
+        assertEquals(500.0, updatedEntry.captured.paymentTotal, 0.0001)
+    }
+
+    @Test
+    fun `updateHistoryEntry invalid numeric input falls back to zero without changing completed-row missing semantics`() =
+        runTest {
+            val updatedEntry = slot<HistoryEntry>()
+            coEvery { repository.getHistoryEntryByUid(21L) } returns historyEntry(uid = 21L)
+            coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+            viewModel.excelData.addAll(
+                listOf(
+                    listOf("barcode", "purchasePrice", "quantity"),
+                    listOf("12345678", "abc", "abc")
+                )
+            )
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+            viewModel.completeStates.addAll(listOf(false, true))
+
+            viewModel.updateHistoryEntry(21L)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
+            assertEquals(0.0, updatedEntry.captured.paymentTotal, 0.0001)
+            assertEquals(0, updatedEntry.captured.missingItems)
+        }
+
+    /**
+     * EXPECTED_CORRECTION (TASK-027): initial summary uses CL parsers; "1.234" × 2 = 2468 not ~2.468.
+     */
+    @Test
+    fun `generateFilteredWithOldPrices initial CL grouped orderTotal EXPECTED_CORRECTION`() = runTest {
+        val insertedEntry = slot<HistoryEntry>()
+        val callback = mockk<(Long) -> Unit>(relaxed = true)
+        coEvery { repository.insertHistoryEntry(capture(insertedEntry)) } returns 78L
+        coEvery {
+            repository.getPreviousPricesForBarcodes(match { it == listOf("12345678") }, any())
+        } returns mapOf("12345678" to (2.0 to 5.0))
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "quantity"),
+                listOf("12345678", "Generated Product", "1.234", "2")
+            )
+        )
+        viewModel.selectedColumns.addAll(listOf(true, true, true, true))
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf("3"), mutableStateOf("7"))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, true))
+
+        viewModel.generateFilteredWithOldPrices("Supplier A", "Category A", callback)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.insertHistoryEntry(any()) }
+        assertEquals(2468.0, insertedEntry.captured.orderTotal, 0.0001)
+        assertEquals(2468.0, insertedEntry.captured.paymentTotal, 0.0001)
+        assertEquals(1, insertedEntry.captured.totalItems)
+        assertEquals(1, insertedEntry.captured.missingItems)
+    }
+
+    /**
+     * EXPECTED_CORRECTION (TASK-027): "1.234,5" must parse as CL grouped decimal 1234.5.
+     */
+    @Test
+    fun `generateFilteredWithOldPrices initial CL grouped decimal orderTotal EXPECTED_CORRECTION`() = runTest {
+        val insertedEntry = slot<HistoryEntry>()
+        val callback = mockk<(Long) -> Unit>(relaxed = true)
+        coEvery { repository.insertHistoryEntry(capture(insertedEntry)) } returns 79L
+        coEvery {
+            repository.getPreviousPricesForBarcodes(match { it == listOf("12345678") }, any())
+        } returns mapOf("12345678" to (2.0 to 5.0))
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "quantity"),
+                listOf("12345678", "Generated Product", "1.234,5", "2")
+            )
+        )
+        viewModel.selectedColumns.addAll(listOf(true, true, true, true))
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf("3"), mutableStateOf("7"))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, true))
+
+        viewModel.generateFilteredWithOldPrices("Supplier A", "Category A", callback)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.insertHistoryEntry(any()) }
+        assertEquals(2469.0, insertedEntry.captured.orderTotal, 0.0001)
+        assertEquals(2469.0, insertedEntry.captured.paymentTotal, 0.0001)
+        assertEquals(1, insertedEntry.captured.totalItems)
+        assertEquals(1, insertedEntry.captured.missingItems)
+    }
+
     @Test
     fun `renameHistoryEntry updates id supplier and category`() = runTest {
         val updatedEntry = slot<HistoryEntry>()

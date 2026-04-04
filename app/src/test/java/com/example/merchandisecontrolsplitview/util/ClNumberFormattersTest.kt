@@ -50,9 +50,20 @@ class ClNumberFormattersTest {
     }
 
     @Test
+    fun `parseUserPriceInput accepts CL grouped decimal input`() {
+        assertEquals(1234.5, parseUserPriceInput("1.234,5")!!, 0.0001)
+    }
+
+    @Test
     fun `parseUserQuantityInput accepts pasted grouped integers from CL display`() {
         assertEquals(1234.0, parseUserQuantityInput("1.234")!!, 0.0001)
         assertEquals(1234.0, parseUserQuantityInput("1,234")!!, 0.0001)
+    }
+
+    @Test
+    fun `parseUserQuantityInput accepts CL decimal quantities with and without grouping`() {
+        assertEquals(1.5, parseUserQuantityInput("1,5")!!, 0.0001)
+        assertEquals(1234.5, parseUserQuantityInput("1.234,5")!!, 0.0001)
     }
 
     @Test
