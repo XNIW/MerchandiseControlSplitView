@@ -13,6 +13,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
 import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import com.example.merchandisecontrolsplitview.MainActivity
@@ -189,35 +190,44 @@ fun AppNavGraph() {
         }
 
         composable(Screen.ImportAnalysis.route) {
-            DisposableEffect(Unit) {
-                onDispose {
-                    dbViewModel.clearImportAnalysis()
-                }
-            }
-
             importAnalysisResult?.let { analysis ->
+                val importFlowState by dbViewModel.importFlowState.collectAsState()
+                val currentEntryUid = excelViewModel.currentEntryStatus.value.third
+
+                LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid) {
+                    if (importFlowState is ImportFlowState.Success) {
+                        if (currentEntryUid != 0L) {
+                            if (analysis.errors.isEmpty()) {
+                                excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
+                            } else {
+                                excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
+                            }
+                        }
+                        dbViewModel.dismissImportPreview()
+                        navController.popBackStack()
+                    }
+                }
+
                 ImportAnalysisScreen(
                     excelViewModel = excelViewModel,
                     databaseViewModel = dbViewModel,
                     importAnalysis = analysis,
-                    onConfirm = { newProducts, updatedProducts ->
-                        val currentEntryUid = excelViewModel.currentEntryStatus.value.third
-
-                        // Applica import
-                        dbViewModel.importProducts(newProducts, updatedProducts, context)
-
-                        // Aggiorna lo stato della voce corrente (se vuoi farlo dopo il successo, spostalo in UiState.Success observer)
-                        if (importAnalysisResult?.errors?.isEmpty() == true) {
-                            excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
-                        } else {
+                    importFlowState = importFlowState,
+                    onConfirm = { previewId, newProducts, updatedProducts ->
+                        dbViewModel.importProducts(previewId, newProducts, updatedProducts, context)
+                    },
+                    onClose = {
+                        val flowState = importFlowState
+                        if (
+                            flowState is ImportFlowState.Error &&
+                            flowState.occurredDuringApply &&
+                            currentEntryUid != 0L
+                        ) {
                             excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
                         }
-
+                        dbViewModel.clearImportAnalysis()
                         navController.popBackStack()
                     },
-                    onCancel = {
-                        navController.popBackStack()
-                    }
                 )
             }
         }

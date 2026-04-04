@@ -9,6 +9,8 @@ import androidx.room.Room
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.ImportApplyRequest
+import com.example.merchandisecontrolsplitview.data.ImportApplyResult
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.PriceHistoryExportRow
 import com.example.merchandisecontrolsplitview.data.Product
@@ -364,75 +366,20 @@ class FullDbExportImportRoundTripTest {
 
         assertTrue(importResult.analysis.analysis.errors.isEmpty())
 
-        val resolvedPayload = resolveImportPayloadForTest(targetRepository, importResult)
-        targetRepository.applyImport(
-            newProducts = resolvedPayload.newProducts,
-            updatedProducts = resolvedPayload.updatedProducts
+        val applyResult = targetRepository.applyImport(
+            ImportApplyRequest(
+                newProducts = importResult.analysis.analysis.newProducts,
+                updatedProducts = importResult.analysis.analysis.updatedProducts,
+                pendingSupplierNames = importResult.pendingSupplierNames,
+                pendingCategoryNames = importResult.pendingCategoryNames,
+                pendingTempSuppliers = importResult.analysis.pendingSuppliers,
+                pendingTempCategories = importResult.analysis.pendingCategories,
+                pendingPriceHistory = importResult.pendingPriceHistory
+            )
         )
-
-        if (importResult.hasPriceHistorySheet) {
-            applyFullDbPriceHistoryStreaming(context, workbookUri, targetRepository)
-        }
+        assertEquals(ImportApplyResult.Success, applyResult)
 
         return importResult
-    }
-
-    private suspend fun resolveImportPayloadForTest(
-        repository: InventoryRepository,
-        importResult: FullDbImportStreamingResult
-    ): ResolvedImportPayloadForTest {
-        val analysis = importResult.analysis
-        if (
-            importResult.pendingSupplierNames.isEmpty() &&
-            importResult.pendingCategoryNames.isEmpty() &&
-            analysis.pendingSuppliers.isEmpty() &&
-            analysis.pendingCategories.isEmpty()
-        ) {
-            return ResolvedImportPayloadForTest(
-                newProducts = analysis.analysis.newProducts,
-                updatedProducts = analysis.analysis.updatedProducts.map { it.newProduct.copy(id = it.oldProduct.id) }
-            )
-        }
-
-        importResult.pendingSupplierNames.forEach { repository.addSupplier(it) }
-        importResult.pendingCategoryNames.forEach { repository.addCategory(it) }
-
-        val supplierIdsByName = repository.getAllSuppliers()
-            .associateBy { it.name.trim().lowercase() }
-        val categoryIdsByName = repository.getAllCategories()
-            .associateBy { it.name.trim().lowercase() }
-
-        fun resolveProduct(product: Product): Product {
-            val resolvedSupplierId = when {
-                product.supplierId == null -> null
-                product.supplierId >= 0L -> product.supplierId
-                else -> analysis.pendingSuppliers[product.supplierId]
-                    ?.trim()
-                    ?.lowercase()
-                    ?.let { supplierIdsByName[it]?.id }
-            }
-
-            val resolvedCategoryId = when {
-                product.categoryId == null -> null
-                product.categoryId >= 0L -> product.categoryId
-                else -> analysis.pendingCategories[product.categoryId]
-                    ?.trim()
-                    ?.lowercase()
-                    ?.let { categoryIdsByName[it]?.id }
-            }
-
-            return product.copy(
-                supplierId = resolvedSupplierId,
-                categoryId = resolvedCategoryId
-            )
-        }
-
-        return ResolvedImportPayloadForTest(
-            newProducts = analysis.analysis.newProducts.map(::resolveProduct),
-            updatedProducts = analysis.analysis.updatedProducts.map { update ->
-                resolveProduct(update.newProduct).copy(id = update.oldProduct.id)
-            }
-        )
     }
 
     private suspend fun seedStandardRoundTripFixture(
@@ -784,9 +731,4 @@ private data class FixtureExpectation(
     val categories: List<String>,
     val nonSyntheticHistory: List<HistoryRowSnapshot>,
     val syntheticRowCount: Int
-)
-
-private data class ResolvedImportPayloadForTest(
-    val newProducts: List<Product>,
-    val updatedProducts: List<Product>
 )

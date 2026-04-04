@@ -79,6 +79,8 @@ import kotlinx.coroutines.launch
 internal fun EditProductDialog(
     product: Product,
     viewModel: DatabaseViewModel,
+    onResolveSupplierId: suspend (String) -> Long? = { name -> viewModel.addSupplier(name)?.id },
+    onResolveCategoryId: suspend (String) -> Long? = { name -> viewModel.addCategory(name)?.id },
     onDismiss: () -> Unit,
     onSave: (Product) -> Unit
 ) {
@@ -153,7 +155,7 @@ internal fun EditProductDialog(
     val scanPromptText = stringResource(R.string.scan_prompt)
     LaunchedEffect(supplierId) {
         supplierName = if (supplierId != null) {
-            viewModel.getSupplierById(supplierId!!)?.name ?: "$supplierIdPrefix $supplierId"
+            viewModel.getSupplierDisplayName(supplierId) ?: "$supplierIdPrefix $supplierId"
         } else {
             noSupplierText
         }
@@ -166,7 +168,7 @@ internal fun EditProductDialog(
     val categoryIdPrefix = stringResource(id = R.string.category_id_prefix)
     LaunchedEffect(categoryId) {
         categoryName = if (categoryId != null) {
-            viewModel.getCategoryById(categoryId!!)?.name ?: "$categoryIdPrefix $categoryId"
+            viewModel.getCategoryDisplayName(categoryId) ?: "$categoryIdPrefix $categoryId"
         } else {
             noCategoryText
         }
@@ -189,7 +191,7 @@ internal fun EditProductDialog(
             },
             onAddNewSupplier = { name ->
                 scope.launch {
-                    viewModel.addSupplier(name)?.let { supplierId = it.id }
+                    onResolveSupplierId(name)?.let { supplierId = it }
                     showSupplierSelectionDialog = false
                 }
             }
@@ -206,7 +208,7 @@ internal fun EditProductDialog(
             },
             onAddNewCategory = { name ->
                 scope.launch {
-                    viewModel.addCategory(name)?.let { categoryId = it.id }
+                    onResolveCategoryId(name)?.let { categoryId = it }
                     showCategorySelectionDialog = false
                 }
             }

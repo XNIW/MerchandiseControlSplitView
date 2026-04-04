@@ -165,6 +165,7 @@
 
     <string name="import_analysis_title">Revisione Importazione</string>
     <string name="confirm_import">Conferma Importazione</string>
+    <string name="import_preview_not_saved_message">Questa anteprima non ha ancora salvato modifiche nel database.</string>
     <string name="new_products_to_add">Nuovi prodotti da aggiungere: %1$s</string>
     <string name="no_new_products">Nessun nuovo prodotto.</string>
     <string name="products_to_update">Prodotti da aggiornare: %1$s</string>
@@ -233,6 +234,7 @@
     <string name="error_data_analysis">Errore durante l\'analisi dei dati: %1$s</string>
     <string name="error_data_analysis_generic">Impossibile analizzare il file selezionato.</string>
     <string name="error_import_generic">Impossibile completare l\'importazione.</string>
+    <string name="import_preview_invalidated">L\'anteprima non è più valida. Rigenera l\'analisi prima di confermare.</string>
     <string name="error_export_generic">Impossibile completare l\'esportazione.</string>
     <string name="error_file_access_denied">Impossibile accedere al file selezionato.</string>
     <string name="error_file_read_failed">Impossibile leggere il file selezionato.</string>

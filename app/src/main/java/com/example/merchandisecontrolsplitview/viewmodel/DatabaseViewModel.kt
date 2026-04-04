@@ -19,7 +19,6 @@ import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
 import com.example.merchandisecontrolsplitview.util.SmartImportWorkbookOutcome
 import com.example.merchandisecontrolsplitview.util.analyzeSmartImportWorkbook
 import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
-import com.example.merchandisecontrolsplitview.util.applyFullDbPriceHistoryStreaming
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
@@ -38,6 +37,20 @@ sealed class UiState {
     data class Loading(val message: String? = null, val progress: Int? = null) : UiState()
     data class Success(val message: String) : UiState()
     data class Error(val message: String) : UiState()
+}
+
+sealed interface ImportFlowState {
+    data object Idle : ImportFlowState
+    data object PreviewLoading : ImportFlowState
+    data class PreviewReady(val previewId: Long) : ImportFlowState
+    data class Applying(val previewId: Long) : ImportFlowState
+    data class Success(val previewId: Long) : ImportFlowState
+    data class Error(
+        val previewId: Long?,
+        val message: String,
+        val occurredDuringApply: Boolean
+    ) : ImportFlowState
+    data class Cancelled(val previewId: Long?) : ImportFlowState
 }
 
 data class ExportUiState(
@@ -107,29 +120,6 @@ private class ExportProgressTracker(
     }
 }
 
-private data class PendingPriceEvent(
-    val barcode: String,
-    val timestamp: String,
-    val type: String,   // "PURCHASE" | "RETAIL"
-    val newPrice: Double,
-    val source: String?
-)
-
-private data class PendingImportApplySnapshot(
-    val pendingPriceHistory: List<PendingPriceEvent>,
-    val pendingSupplierNames: Set<String>,
-    val pendingCategoryNames: Set<String>,
-    val pendingTempSuppliers: Map<Long, String>,
-    val pendingTempCategories: Map<Long, String>,
-    val pendingFullImportUri: Uri?,
-    val hasPendingPriceHistorySheet: Boolean
-)
-
-private data class ResolvedImportPayload(
-    val newProducts: List<Product>,
-    val updatedProducts: List<Product>
-)
-
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
@@ -186,6 +176,8 @@ class DatabaseViewModel(
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+    private val _importFlowState = MutableStateFlow<ImportFlowState>(ImportFlowState.Idle)
+    val importFlowState: StateFlow<ImportFlowState> = _importFlowState.asStateFlow()
     private val _exportUiState = MutableStateFlow(ExportUiState())
     val exportUiState: StateFlow<ExportUiState> = _exportUiState.asStateFlow()
 
@@ -240,13 +232,15 @@ class DatabaseViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
     // --- FIX END ---
 
-    private var pendingPriceHistory: List<PendingPriceEvent> = emptyList()
+    private var pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList()
     private var pendingSupplierNames: Set<String> = emptySet()
     private var pendingCategoryNames: Set<String> = emptySet()
     private var pendingTempSuppliers: Map<Long, String> = emptyMap()
     private var pendingTempCategories: Map<Long, String> = emptyMap()
-    private var pendingFullImportUri: Uri? = null
-    private var hasPendingPriceHistorySheet = false
+    private var activePreviewId: Long? = null
+    private var nextPreviewId = 1L
+    private var nextPendingSupplierTempId = -1L
+    private var nextPendingCategoryTempId = -1L
 
     private fun analysisErrorMessage(context: Context, throwable: Throwable): String {
         return resolveExcelFileErrorMessage(
@@ -285,6 +279,112 @@ class DatabaseViewModel(
         _exportUiState.value = ExportUiState()
     }
 
+    private fun allocatePreviewId(): Long = nextPreviewId++
+
+    private fun updatePendingTempCounters() {
+        nextPendingSupplierTempId = (pendingTempSuppliers.keys.minOrNull() ?: 0L) - 1L
+        nextPendingCategoryTempId = (pendingTempCategories.keys.minOrNull() ?: 0L) - 1L
+    }
+
+    private fun publishPreviewAnalysis(
+        analysis: ImportAnalysis,
+        pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList(),
+        pendingSupplierNames: Set<String> = emptySet(),
+        pendingCategoryNames: Set<String> = emptySet(),
+        pendingTempSuppliers: Map<Long, String> = emptyMap(),
+        pendingTempCategories: Map<Long, String> = emptyMap()
+    ) {
+        _importAnalysisResult.value = analysis
+        this.pendingPriceHistory = pendingPriceHistory
+        this.pendingSupplierNames = pendingSupplierNames
+        this.pendingCategoryNames = pendingCategoryNames
+        this.pendingTempSuppliers = pendingTempSuppliers
+        this.pendingTempCategories = pendingTempCategories
+        updatePendingTempCounters()
+        val previewId = allocatePreviewId()
+        activePreviewId = previewId
+        _importFlowState.value = ImportFlowState.PreviewReady(previewId)
+    }
+
+    private fun clearPendingImportState(clearAnalysisResult: Boolean) {
+        if (clearAnalysisResult) {
+            _importAnalysisResult.value = null
+        }
+        pendingPriceHistory = emptyList()
+        pendingSupplierNames = emptySet()
+        pendingCategoryNames = emptySet()
+        pendingTempSuppliers = emptyMap()
+        pendingTempCategories = emptyMap()
+        activePreviewId = null
+        nextPendingSupplierTempId = -1L
+        nextPendingCategoryTempId = -1L
+    }
+
+    fun cancelImportPreview() {
+        val previewId = activePreviewId
+        clearPendingImportState(clearAnalysisResult = true)
+        _importFlowState.value = if (previewId != null) {
+            ImportFlowState.Cancelled(previewId)
+        } else {
+            ImportFlowState.Idle
+        }
+    }
+
+    fun dismissImportPreview() {
+        clearPendingImportState(clearAnalysisResult = true)
+        _importFlowState.value = ImportFlowState.Idle
+    }
+
+    private fun markPreviewLoading() {
+        _importFlowState.value = ImportFlowState.PreviewLoading
+    }
+
+    private fun markPreviewError(message: String) {
+        _importFlowState.value = ImportFlowState.Error(
+            previewId = activePreviewId,
+            message = message,
+            occurredDuringApply = false
+        )
+    }
+
+    suspend fun resolveImportPreviewSupplierId(name: String): Long? {
+        val normalizedName = name.trim()
+        if (normalizedName.isBlank()) return null
+        repository.findSupplierByName(normalizedName)?.let { return it.id }
+        pendingTempSuppliers.entries.firstOrNull { (_, value) ->
+            value.equals(normalizedName, ignoreCase = true)
+        }?.let { return it.key }
+
+        val tempId = nextPendingSupplierTempId--
+        pendingTempSuppliers = pendingTempSuppliers + (tempId to normalizedName)
+        return tempId
+    }
+
+    suspend fun resolveImportPreviewCategoryId(name: String): Long? {
+        val normalizedName = name.trim()
+        if (normalizedName.isBlank()) return null
+        repository.findCategoryByName(normalizedName)?.let { return it.id }
+        pendingTempCategories.entries.firstOrNull { (_, value) ->
+            value.equals(normalizedName, ignoreCase = true)
+        }?.let { return it.key }
+
+        val tempId = nextPendingCategoryTempId--
+        pendingTempCategories = pendingTempCategories + (tempId to normalizedName)
+        return tempId
+    }
+
+    suspend fun getSupplierDisplayName(id: Long?): String? {
+        if (id == null) return null
+        if (id < 0L) return pendingTempSuppliers[id]
+        return repository.getSupplierById(id)?.name
+    }
+
+    suspend fun getCategoryDisplayName(id: Long?): String? {
+        if (id == null) return null
+        if (id < 0L) return pendingTempCategories[id]
+        return repository.getCategoryById(id)?.name
+    }
+
     fun setFilter(text: String) {
         _filter.value = text.ifBlank { null }
     }
@@ -293,6 +393,7 @@ class DatabaseViewModel(
     val importAnalysisResult: StateFlow<ImportAnalysis?> = _importAnalysisResult.asStateFlow()
 
     fun startSmartImport(context: Context, uri: Uri) {
+        if (importFlowState.value is ImportFlowState.Applying) return
         viewModelScope.launch {
             var fullImportLockAcquired = false
             try {
@@ -312,7 +413,7 @@ class DatabaseViewModel(
                 }) {
                     SmartImportWorkbookOutcome.SingleSheet -> startImportAnalysis(context, uri)
                     is SmartImportWorkbookOutcome.FullDatabaseAnalyzed ->
-                        finalizeFullImportAnalysisSuccess(uri, outcome.result)
+                        finalizeFullImportAnalysisSuccess(outcome.result)
                 }
             } catch (_: FullImportAlreadyInProgressException) {
                 return@launch
@@ -326,8 +427,10 @@ class DatabaseViewModel(
                     handleSmartFullImportFailure(context, e)
                 } else {
                     e.printStackTrace()
-                    _importAnalysisResult.value = null
-                    _uiState.value = UiState.Error(analysisErrorMessage(context, e))
+                    clearPendingImportState(clearAnalysisResult = true)
+                    val userMessage = analysisErrorMessage(context, e)
+                    _uiState.value = UiState.Error(userMessage)
+                    markPreviewError(userMessage)
                 }
             } catch (e: Exception) {
                 if (fullImportLockAcquired) {
@@ -347,7 +450,8 @@ class DatabaseViewModel(
         context: Context,
         uri: Uri
     ): List<Product> {
-        resetPendingImportState(clearAnalysisResult = true)
+        clearPendingImportState(clearAnalysisResult = true)
+        markPreviewLoading()
         withContext(Dispatchers.Main) {
             _uiState.value = UiState.Loading(
                 message = context.getString(R.string.import_loading_file),
@@ -377,18 +481,16 @@ class DatabaseViewModel(
     }
 
     private suspend fun finalizeFullImportAnalysisSuccess(
-        uri: Uri,
         importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult
     ) {
-        _importAnalysisResult.value = importResult.analysis.analysis
-        pendingPriceHistory = emptyList()
-        pendingSupplierNames = importResult.pendingSupplierNames
-        pendingCategoryNames = importResult.pendingCategoryNames
-        pendingTempSuppliers = importResult.analysis.pendingSuppliers
-        pendingTempCategories = importResult.analysis.pendingCategories
-        pendingFullImportUri = uri
-        hasPendingPriceHistorySheet = importResult.hasPriceHistorySheet
-
+        publishPreviewAnalysis(
+            analysis = importResult.analysis.analysis,
+            pendingPriceHistory = importResult.pendingPriceHistory,
+            pendingSupplierNames = importResult.pendingSupplierNames,
+            pendingCategoryNames = importResult.pendingCategoryNames,
+            pendingTempSuppliers = importResult.analysis.pendingSuppliers,
+            pendingTempCategories = importResult.analysis.pendingCategories
+        )
         _uiState.value = UiState.Idle
         currentImportLogUid?.let { uid ->
             appendHistoryLog(
@@ -402,7 +504,7 @@ class DatabaseViewModel(
     }
 
     private suspend fun handleSmartFullImportCancelled() {
-        resetPendingImportState(clearAnalysisResult = true)
+        cancelImportPreview()
         _uiState.value = UiState.Idle
         currentImportLogUid?.let { uid ->
             appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
@@ -415,9 +517,10 @@ class DatabaseViewModel(
         context: Context,
         throwable: Throwable
     ) {
-        resetPendingImportState(clearAnalysisResult = true)
+        clearPendingImportState(clearAnalysisResult = true)
         val userMessage = analysisErrorMessage(context, throwable)
         _uiState.value = UiState.Error(userMessage)
+        markPreviewError(userMessage)
         currentImportLogUid?.let { uid ->
             appendHistoryLog(uid, "FAILED", userMessage)
             Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", throwable)
@@ -426,6 +529,9 @@ class DatabaseViewModel(
     }
 
     fun startImportAnalysis(context: Context, uri: Uri) {
+        if (importFlowState.value is ImportFlowState.Applying) return
+        clearPendingImportState(clearAnalysisResult = true)
+        markPreviewLoading()
         _uiState.value = UiState.Loading(message = context.getString(R.string.import_loading_file), progress = 5)
         viewModelScope.launch {
             try {
@@ -441,12 +547,18 @@ class DatabaseViewModel(
                 val chunks = buildChunkedRows(normalizedHeader, dataRows)
                 val analysis = analyzeImportStreaming(context, chunks, currentDbProducts)
 
-                _importAnalysisResult.value = analysis
+                publishPreviewAnalysis(
+                    analysis = analysis.analysis,
+                    pendingTempSuppliers = analysis.pendingSuppliers,
+                    pendingTempCategories = analysis.pendingCategories
+                )
                 _uiState.value = UiState.Idle
             } catch (e: OutOfMemoryError) {
                 e.printStackTrace()
-                _importAnalysisResult.value = null
-                _uiState.value = UiState.Error(analysisErrorMessage(context, e))
+                clearPendingImportState(clearAnalysisResult = true)
+                val userMessage = analysisErrorMessage(context, e)
+                _uiState.value = UiState.Error(userMessage)
+                markPreviewError(userMessage)
             } catch (e: Exception) {
                 handleImportAnalysisError(context, e)
             }
@@ -469,7 +581,9 @@ class DatabaseViewModel(
         dataRows: List<List<String>>
     ): Boolean {
         if (normalizedHeader.isEmpty() || dataRows.isEmpty()) {
-            _uiState.value = UiState.Error(context.getString(R.string.error_file_empty_or_invalid))
+            val userMessage = context.getString(R.string.error_file_empty_or_invalid)
+            _uiState.value = UiState.Error(userMessage)
+            markPreviewError(userMessage)
             return false
         }
         return true
@@ -500,29 +614,68 @@ class DatabaseViewModel(
         context: Context,
         chunks: Sequence<List<Map<String, String>>>,
         currentDbProducts: List<Product>
-    ): ImportAnalysis {
+    ): ImportAnalyzer.DeferredRelationImportAnalysis {
         return withContext(Dispatchers.Default) {
-            ImportAnalyzer.analyzeStreaming(context, chunks, currentDbProducts, repository)
+            ImportAnalyzer.analyzeStreamingDeferredRelations(
+                context = context,
+                currentDbProducts = currentDbProducts,
+                repository = repository
+            ) { consumer ->
+                chunks.forEach { chunk -> chunk.forEach(consumer) }
+            }
         }
     }
 
     private fun handleImportAnalysisError(context: Context, e: Exception) {
         e.printStackTrace()
-        _uiState.value = UiState.Error(analysisErrorMessage(context, e))
+        clearPendingImportState(clearAnalysisResult = true)
+        val userMessage = analysisErrorMessage(context, e)
+        _uiState.value = UiState.Error(userMessage)
+        markPreviewError(userMessage)
     }
 
     fun clearImportAnalysis() {
-        resetPendingImportState(clearAnalysisResult = true)
+        when (importFlowState.value) {
+            is ImportFlowState.Applying -> Unit
+            is ImportFlowState.PreviewReady,
+            is ImportFlowState.PreviewLoading -> cancelImportPreview()
+            else -> dismissImportPreview()
+        }
     }
 
     fun importProducts(
+        previewId: Long,
         newProducts: List<Product>,
         updatedProducts: List<ProductUpdate>,
         context: Context
     ) {
-        val pendingSnapshot = snapshotPendingImportApplyState()
+        val hasMatchingPreview = when (val state = importFlowState.value) {
+            is ImportFlowState.PreviewReady -> state.previewId == previewId
+            is ImportFlowState.Error -> state.previewId == previewId
+            else -> false
+        }
+        if (!hasMatchingPreview || activePreviewId != previewId) {
+            val message = context.getString(R.string.import_preview_invalidated)
+            _uiState.value = UiState.Error(message)
+            _importFlowState.value = ImportFlowState.Error(
+                previewId = activePreviewId,
+                message = message,
+                occurredDuringApply = false
+            )
+            return
+        }
 
-        // prima era progress = null
+        val importRequest = ImportApplyRequest(
+            newProducts = newProducts,
+            updatedProducts = updatedProducts,
+            pendingSupplierNames = pendingSupplierNames.toSet(),
+            pendingCategoryNames = pendingCategoryNames.toSet(),
+            pendingTempSuppliers = pendingTempSuppliers.toMap(),
+            pendingTempCategories = pendingTempCategories.toMap(),
+            pendingPriceHistory = pendingPriceHistory.toList()
+        )
+        _importFlowState.value = ImportFlowState.Applying(previewId)
+
         _uiState.value = UiState.Loading(
             message = context.getString(R.string.import_applying_changes),
             progress = 90
@@ -536,146 +689,63 @@ class DatabaseViewModel(
             Log.d("DB_IMPORT", "APPLY_IMPORT START uid=$applyLogUid")
 
             try {
-                withContext(Dispatchers.IO) {
-                    val resolvedPayload = resolveImportPayload(
-                        newProducts = newProducts,
-                        updatedProducts = updatedProducts,
-                        pendingSnapshot = pendingSnapshot
-                    )
-                    repository.applyImport(
-                        resolvedPayload.newProducts,
-                        resolvedPayload.updatedProducts
-                    )
+                when (val outcome = withContext(Dispatchers.IO) {
+                    repository.applyImport(importRequest)
+                }) {
+                    ImportApplyResult.Success -> {
+                        _uiState.value = UiState.Loading(
+                            message = context.getString(R.string.import_applying_changes),
+                            progress = 98
+                        )
 
-                    // Eventuale storico prezzi
-                    applyPendingPriceHistory(context, pendingSnapshot)
+                        appendHistoryLog(applyLogUid, "SUCCESS", "Import applicato correttamente.")
+                        Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS uid=$applyLogUid")
+                        _importFlowState.value = ImportFlowState.Success(previewId)
+                        _uiState.value = UiState.Success(context.getString(R.string.import_success))
+                    }
+                    ImportApplyResult.AlreadyRunning -> {
+                        val userMessage = context.getString(R.string.operation_in_progress)
+                        _uiState.value = UiState.Error(userMessage)
+                        _importFlowState.value = ImportFlowState.Error(
+                            previewId = previewId,
+                            message = userMessage,
+                            occurredDuringApply = true
+                        )
+                    }
+                    is ImportApplyResult.Failure -> {
+                        val userMessage = importErrorMessage(context, outcome.cause)
+                        _uiState.value = UiState.Error(userMessage)
+                        _importFlowState.value = ImportFlowState.Error(
+                            previewId = previewId,
+                            message = userMessage,
+                            occurredDuringApply = true
+                        )
+                        appendHistoryLog(applyLogUid, "FAILED", userMessage)
+                        Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", outcome.cause)
+                    }
                 }
-
-                // mini feedback finale prima del SUCCESS
-                _uiState.value = UiState.Loading(
-                    message = context.getString(R.string.import_applying_changes),
-                    progress = 98
+            } catch (e: CancellationException) {
+                val userMessage = importErrorMessage(context, e)
+                _uiState.value = UiState.Error(userMessage)
+                _importFlowState.value = ImportFlowState.Error(
+                    previewId = previewId,
+                    message = userMessage,
+                    occurredDuringApply = true
                 )
-
-                appendHistoryLog(applyLogUid, "SUCCESS", "Import applicato correttamente.")
-                Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS uid=$applyLogUid")
-                _uiState.value = UiState.Success(context.getString(R.string.import_success))
+                appendHistoryLog(applyLogUid, "FAILED", userMessage)
+                Log.e("DB_IMPORT", "APPLY_IMPORT CANCELLED uid=$applyLogUid", e)
             } catch (e: Exception) {
                 val userMessage = importErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
+                _importFlowState.value = ImportFlowState.Error(
+                    previewId = previewId,
+                    message = userMessage,
+                    occurredDuringApply = true
+                )
                 appendHistoryLog(applyLogUid, "FAILED", userMessage)
                 Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
-            } finally {
-                resetPendingImportState(clearAnalysisResult = false)
             }
         }
-    }
-
-    private fun snapshotPendingImportApplyState(): PendingImportApplySnapshot =
-        PendingImportApplySnapshot(
-            pendingPriceHistory = pendingPriceHistory.toList(),
-            pendingSupplierNames = pendingSupplierNames.toSet(),
-            pendingCategoryNames = pendingCategoryNames.toSet(),
-            pendingTempSuppliers = pendingTempSuppliers.toMap(),
-            pendingTempCategories = pendingTempCategories.toMap(),
-            pendingFullImportUri = pendingFullImportUri,
-            hasPendingPriceHistorySheet = hasPendingPriceHistorySheet
-        )
-
-    private fun resetPendingImportState(clearAnalysisResult: Boolean) {
-        if (clearAnalysisResult) {
-            _importAnalysisResult.value = null
-        }
-        pendingPriceHistory = emptyList()
-        pendingSupplierNames = emptySet()
-        pendingCategoryNames = emptySet()
-        pendingTempSuppliers = emptyMap()
-        pendingTempCategories = emptyMap()
-        pendingFullImportUri = null
-        hasPendingPriceHistorySheet = false
-    }
-
-    private suspend fun resolveImportPayload(
-        newProducts: List<Product>,
-        updatedProducts: List<ProductUpdate>,
-        pendingSnapshot: PendingImportApplySnapshot
-    ): ResolvedImportPayload {
-        if (
-            pendingSnapshot.pendingSupplierNames.isEmpty() &&
-            pendingSnapshot.pendingCategoryNames.isEmpty() &&
-            pendingSnapshot.pendingTempSuppliers.isEmpty() &&
-            pendingSnapshot.pendingTempCategories.isEmpty()
-        ) {
-            return ResolvedImportPayload(
-                newProducts = newProducts,
-                updatedProducts = updatedProducts.map { pu ->
-                    pu.newProduct.copy(id = pu.oldProduct.id)
-                }
-            )
-        }
-
-        pendingSnapshot.pendingSupplierNames.forEach { repository.addSupplier(it) }
-        pendingSnapshot.pendingCategoryNames.forEach { repository.addCategory(it) }
-
-        val supplierIdsByName = repository.getAllSuppliers()
-            .associateBy { it.name.trim().lowercase() }
-        val categoryIdsByName = repository.getAllCategories()
-            .associateBy { it.name.trim().lowercase() }
-
-        fun resolveProduct(product: Product): Product {
-            val resolvedSupplierId = when {
-                product.supplierId == null -> null
-                product.supplierId >= 0L -> product.supplierId
-                else -> pendingSnapshot.pendingTempSuppliers[product.supplierId]
-                    ?.trim()
-                    ?.lowercase()
-                    ?.let { supplierIdsByName[it]?.id }
-            }
-
-            val resolvedCategoryId = when {
-                product.categoryId == null -> null
-                product.categoryId >= 0L -> product.categoryId
-                else -> pendingSnapshot.pendingTempCategories[product.categoryId]
-                    ?.trim()
-                    ?.lowercase()
-                    ?.let { categoryIdsByName[it]?.id }
-            }
-
-            return product.copy(
-                supplierId = resolvedSupplierId,
-                categoryId = resolvedCategoryId
-            )
-        }
-
-        return ResolvedImportPayload(
-            newProducts = newProducts.map(::resolveProduct),
-            updatedProducts = updatedProducts.map { pu ->
-                resolveProduct(pu.newProduct).copy(id = pu.oldProduct.id)
-            }
-        )
-    }
-
-    private suspend fun applyPendingPriceHistory(
-        context: Context,
-        pendingSnapshot: PendingImportApplySnapshot
-    ) {
-        if (pendingSnapshot.pendingPriceHistory.isNotEmpty()) {
-            pendingSnapshot.pendingPriceHistory
-                .groupBy { it.source ?: "IMPORT_SHEET" }
-                .forEach { (src, events) ->
-                    val rows = events.map { e ->
-                        Triple(e.barcode, e.type, e.timestamp to e.newPrice)
-                    }
-                    repository.recordPriceHistoryByBarcodeBatch(rows, src)
-                }
-            return
-        }
-
-        if (!pendingSnapshot.hasPendingPriceHistorySheet) return
-
-        val fullImportUri = pendingSnapshot.pendingFullImportUri
-            ?: throw IllegalStateException("Missing full import uri for pending price history")
-        applyFullDbPriceHistoryStreaming(context, fullImportUri, repository)
     }
 
     fun exportDatabase(
@@ -809,6 +879,9 @@ class DatabaseViewModel(
     // --- FIX END ---
 
     fun analyzeGridData(gridData: List<Map<String, String>>) {
+        if (importFlowState.value is ImportFlowState.Applying) return
+        clearPendingImportState(clearAnalysisResult = true)
+        markPreviewLoading()
         _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_analyzing), progress = 10)
         viewModelScope.launch {
             try {
@@ -818,12 +891,25 @@ class DatabaseViewModel(
                 }
                 _uiState.value = UiState.Loading(message = appContext.getString(R.string.import_analyzing), progress = 70)
                 val analysis = withContext(Dispatchers.Default) {
-                    ImportAnalyzer.analyze(appContext, gridData, currentDbProducts, repository)
+                    ImportAnalyzer.analyzeStreamingDeferredRelations(
+                        context = appContext,
+                        currentDbProducts = currentDbProducts,
+                        repository = repository
+                    ) { consumer ->
+                        gridData.forEach(consumer)
+                    }
                 }
-                _importAnalysisResult.value = analysis
+                publishPreviewAnalysis(
+                    analysis = analysis.analysis,
+                    pendingTempSuppliers = analysis.pendingSuppliers,
+                    pendingTempCategories = analysis.pendingCategories
+                )
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
-                _uiState.value = UiState.Error(analysisErrorMessage(appContext, e))
+                clearPendingImportState(clearAnalysisResult = true)
+                val userMessage = analysisErrorMessage(appContext, e)
+                _uiState.value = UiState.Error(userMessage)
+                markPreviewError(userMessage)
             }
         }
     }
@@ -852,9 +938,11 @@ class DatabaseViewModel(
 
     // ⬇️ IMPORT COMPLETO: nuovo metodo pubblico
     fun startFullDbImport(context: Context, uri: Uri) {
+        if (importFlowState.value is ImportFlowState.Applying) return
         // blocca se c'è già un import in corso
         if (!importMutex.tryLock()) return
-        resetPendingImportState(clearAnalysisResult = true)
+        clearPendingImportState(clearAnalysisResult = true)
+        markPreviewLoading()
         _uiState.value = UiState.Loading(message = context.getString(R.string.operation_in_progress))
 
         viewModelScope.launch {
@@ -891,15 +979,14 @@ class DatabaseViewModel(
                     )
                 }
 
-                _importAnalysisResult.value = importResult.analysis.analysis
-                pendingPriceHistory = emptyList()
-                pendingSupplierNames = importResult.pendingSupplierNames
-                pendingCategoryNames = importResult.pendingCategoryNames
-                pendingTempSuppliers = importResult.analysis.pendingSuppliers
-                pendingTempCategories = importResult.analysis.pendingCategories
-                pendingFullImportUri = uri
-                hasPendingPriceHistorySheet = importResult.hasPriceHistorySheet
-
+                publishPreviewAnalysis(
+                    analysis = importResult.analysis.analysis,
+                    pendingPriceHistory = importResult.pendingPriceHistory,
+                    pendingSupplierNames = importResult.pendingSupplierNames,
+                    pendingCategoryNames = importResult.pendingCategoryNames,
+                    pendingTempSuppliers = importResult.analysis.pendingSuppliers,
+                    pendingTempCategories = importResult.analysis.pendingCategories
+                )
                 _uiState.value = UiState.Idle
                 currentImportLogUid?.let { uid ->
                     appendHistoryLog(
@@ -912,7 +999,7 @@ class DatabaseViewModel(
                 currentImportLogUid = null
 
             } catch (e: CancellationException) {
-                resetPendingImportState(clearAnalysisResult = true)
+                cancelImportPreview()
                 _uiState.value = UiState.Idle
                 currentImportLogUid?.let { uid ->
                     appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
@@ -922,9 +1009,10 @@ class DatabaseViewModel(
                 throw e
 
             } catch (e: OutOfMemoryError) {
-                resetPendingImportState(clearAnalysisResult = true)
+                clearPendingImportState(clearAnalysisResult = true)
                 val userMessage = analysisErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
+                markPreviewError(userMessage)
                 currentImportLogUid?.let { uid ->
                     appendHistoryLog(uid, "FAILED", userMessage)
                     Log.e("DB_IMPORT", "FULL_IMPORT OOM uid=$uid", e)
@@ -932,9 +1020,10 @@ class DatabaseViewModel(
                 currentImportLogUid = null
 
             } catch (e: Exception) {
-                resetPendingImportState(clearAnalysisResult = true)
+                clearPendingImportState(clearAnalysisResult = true)
                 val userMessage = analysisErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
+                markPreviewError(userMessage)
                 currentImportLogUid?.let { uid ->
                     appendHistoryLog(uid, "FAILED", userMessage)
                     Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", e)

@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.ui.screens
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -38,6 +39,7 @@ import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,15 +47,30 @@ fun ImportAnalysisScreen(
     excelViewModel: ExcelViewModel,
     databaseViewModel: DatabaseViewModel,
     importAnalysis: ImportAnalysis,
-    onConfirm: (List<Product>, List<ProductUpdate>) -> Unit,
-    onCancel: () -> Unit
+    importFlowState: ImportFlowState,
+    onConfirm: (Long, List<Product>, List<ProductUpdate>) -> Unit,
+    onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val errorFileExportedText = stringResource(R.string.error_file_exported)
     val errorExportFailedText = stringResource(R.string.error_export_generic)
+    val isApplying = importFlowState is ImportFlowState.Applying
+    val previewId = when (importFlowState) {
+        is ImportFlowState.PreviewReady -> importFlowState.previewId
+        is ImportFlowState.Error -> importFlowState.previewId
+        else -> null
+    }
+    val importErrorMessage = (importFlowState as? ImportFlowState.Error)?.message
+    val closeActionText = stringResource(
+        if (importErrorMessage == null) R.string.cancel else R.string.close
+    )
 
-    val editableNewProducts = remember { importAnalysis.newProducts.map { it.copy() }.toMutableStateList() }
-    val editableUpdatedProducts = remember { importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList() }
+    val editableNewProducts = remember(importAnalysis) {
+        importAnalysis.newProducts.map { it.copy() }.toMutableStateList()
+    }
+    val editableUpdatedProducts = remember(importAnalysis) {
+        importAnalysis.updatedProducts.map { it.copy(newProduct = it.newProduct.copy()) }.toMutableStateList()
+    }
 
     var newProductsExpanded by remember { mutableStateOf(true) }
     var updatedProductsExpanded by remember { mutableStateOf(true) }
@@ -73,11 +90,19 @@ fun ImportAnalysisScreen(
         }
     }
 
+    BackHandler {
+        if (!isApplying) {
+            onClose()
+        }
+    }
+
     if (itemToEdit != null) {
         val (index, product) = itemToEdit!!
         EditProductDialog(
             product = product,
             viewModel = databaseViewModel,
+            onResolveSupplierId = { databaseViewModel.resolveImportPreviewSupplierId(it) },
+            onResolveCategoryId = { databaseViewModel.resolveImportPreviewCategoryId(it) },
             onDismiss = { itemToEdit = null },
             onSave = { updatedProduct ->
                 editableNewProducts[index] = updatedProduct
@@ -91,6 +116,8 @@ fun ImportAnalysisScreen(
         EditProductDialog(
             product = productUpdate.newProduct,
             viewModel = databaseViewModel,
+            onResolveSupplierId = { databaseViewModel.resolveImportPreviewSupplierId(it) },
+            onResolveCategoryId = { databaseViewModel.resolveImportPreviewCategoryId(it) },
             onDismiss = { updateToEdit = null },
             onSave = { updatedProduct ->
                 editableUpdatedProducts[index] = productUpdate.copy(newProduct = updatedProduct)
@@ -109,10 +136,19 @@ fun ImportAnalysisScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
             ) {
                 Button(
-                    onClick = { onConfirm(editableNewProducts, editableUpdatedProducts) },
-                    enabled = editableNewProducts.isNotEmpty() || editableUpdatedProducts.isNotEmpty()
+                    onClick = {
+                        previewId?.let {
+                            onConfirm(it, editableNewProducts, editableUpdatedProducts)
+                        }
+                    },
+                    enabled = !isApplying &&
+                        previewId != null &&
+                        (editableNewProducts.isNotEmpty() || editableUpdatedProducts.isNotEmpty())
                 ) { Text(stringResource(R.string.confirm_import)) }
-                OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+                OutlinedButton(
+                    onClick = onClose,
+                    enabled = !isApplying
+                ) { Text(closeActionText) }
             }
         }
     ) { paddingValues ->
@@ -123,6 +159,45 @@ fun ImportAnalysisScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.preview_file_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = stringResource(R.string.import_preview_not_saved_message),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        AnimatedVisibility(visible = isApplying) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                Text(
+                                    text = stringResource(R.string.import_applying_changes),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                        importErrorMessage?.let { message ->
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            }
             if (importAnalysis.warnings.isNotEmpty()) {
                 item {
                     ExpandableSection(
@@ -157,14 +232,15 @@ fun ImportAnalysisScreen(
                 }
             }
             if (newProductsExpanded && editableNewProducts.isNotEmpty()) {
-                itemsIndexed(editableNewProducts, key = { index, p -> "new-${p.barcode}-$index" }) { index, product ->
-                    DisplayProductRow(
-                        product = product,
-                        databaseViewModel = databaseViewModel, // <-- AGGIUNGI QUESTO PARAMETRO
-                        onEditClick = { itemToEdit = index to product }
-                    )
+                    itemsIndexed(editableNewProducts, key = { index, p -> "new-${p.barcode}-$index" }) { index, product ->
+                        DisplayProductRow(
+                            product = product,
+                            databaseViewModel = databaseViewModel,
+                            editEnabled = !isApplying,
+                            onEditClick = { itemToEdit = index to product }
+                        )
+                    }
                 }
-            }
 
             item {
                 ExpandableSection(
@@ -181,12 +257,13 @@ fun ImportAnalysisScreen(
                 }
             }
             if (updatedProductsExpanded && editableUpdatedProducts.isNotEmpty()) {
-                itemsIndexed(editableUpdatedProducts, key = { index, u -> "update-${u.oldProduct.id}-$index" }) { index, update ->
-                    DisplayProductUpdateRow(
-                        productUpdate = update,
-                        onEditClick = { updateToEdit = index to update }
-                    )
-                }
+                    itemsIndexed(editableUpdatedProducts, key = { index, u -> "update-${u.oldProduct.id}-$index" }) { index, update ->
+                        DisplayProductUpdateRow(
+                            productUpdate = update,
+                            editEnabled = !isApplying,
+                            onEditClick = { updateToEdit = index to update }
+                        )
+                    }
             }
 
             item {
@@ -198,13 +275,16 @@ fun ImportAnalysisScreen(
                     if (importAnalysis.errors.isNotEmpty()) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             val exportErrorsFilename = stringResource(R.string.default_error_export_filename)
-                            Button(onClick = { exportErrorsLauncher.launch(exportErrorsFilename) }) {
+                            Button(
+                                onClick = { exportErrorsLauncher.launch(exportErrorsFilename) },
+                                enabled = !isApplying
+                            ) {
                                 Text(stringResource(R.string.export_errors))
                             }
                             OutlinedButton(onClick = {
                                 excelViewModel.errorRowIndexes.value = importAnalysis.errors.map { it.rowNumber }.toSet()
-                                onCancel()
-                            }) {
+                                onClose()
+                            }, enabled = !isApplying) {
                                 Text(stringResource(R.string.correct_errors))
                             }
                         }
@@ -261,33 +341,26 @@ private fun WarningRow(warning: DuplicateWarning) {
 @Composable
 private fun DisplayProductRow(
     product: Product,
-    databaseViewModel: DatabaseViewModel, // <-- 1. AGGIUNGI IL VIEWMODEL
+    databaseViewModel: DatabaseViewModel,
+    editEnabled: Boolean,
     onEditClick: () -> Unit
 ) {
-    // --- 2. STATI PER CONSERVARE I NOMI RECUPERATI ---
     var supplierName by remember { mutableStateOf<String?>(null) }
     var categoryName by remember { mutableStateOf<String?>(null) }
     val loadingEllipsisText = stringResource(R.string.loading_ellipsis)
     val notFoundShortText = stringResource(R.string.not_found_short)
 
-    // --- 3. EFFETTO PER CARICARE I NOMI QUANDO GLI ID CAMBIANO ---
     LaunchedEffect(product.supplierId) {
         if (product.supplierId != null) {
-            // Se non è già stato caricato, impostiamo un testo temporaneo
             if (supplierName == null) supplierName = loadingEllipsisText
-
-            // Chiamata asincrona per ottenere il nome
-            val supplier = databaseViewModel.getSupplierById(product.supplierId)
-            supplierName = supplier?.name ?: notFoundShortText
+            supplierName = databaseViewModel.getSupplierDisplayName(product.supplierId) ?: notFoundShortText
         }
     }
 
     LaunchedEffect(product.categoryId) {
         if (product.categoryId != null) {
             if (categoryName == null) categoryName = loadingEllipsisText
-
-            val category = databaseViewModel.getCategoryById(product.categoryId)
-            categoryName = category?.name ?: notFoundShortText
+            categoryName = databaseViewModel.getCategoryDisplayName(product.categoryId) ?: notFoundShortText
         }
     }
 
@@ -314,7 +387,6 @@ private fun DisplayProductRow(
                 Text("${stringResource(R.string.barcode_prefix)} ${product.barcode}", style = MaterialTheme.typography.bodySmall)
                 Text("${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}", style = MaterialTheme.typography.bodySmall)
 
-                // --- 4. VISUALIZZA I NOMI RECUPERATI ---
                 if (supplierName != null) {
                     Text("${stringResource(R.string.supplier_label)}: $supplierName", style = MaterialTheme.typography.bodySmall)
                 }
@@ -328,7 +400,7 @@ private fun DisplayProductRow(
                 Text("${stringResource(R.string.purchase_prefix)} ${formatClPricePlainDisplay(product.purchasePrice)}", style = MaterialTheme.typography.bodyMedium)
                 Text("${stringResource(R.string.sell_prefix)} ${formatClPricePlainDisplay(product.retailPrice)}", style = MaterialTheme.typography.bodyMedium)
             }
-            IconButton(onClick = onEditClick) {
+            IconButton(onClick = onEditClick, enabled = editEnabled) {
                 Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_product))
             }
         }
@@ -336,7 +408,11 @@ private fun DisplayProductRow(
 }
 
 @Composable
-private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: () -> Unit) {
+private fun DisplayProductUpdateRow(
+    productUpdate: ProductUpdate,
+    editEnabled: Boolean,
+    onEditClick: () -> Unit
+) {
     Card(elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)) {
         Column(
             modifier = Modifier
@@ -350,7 +426,7 @@ private fun DisplayProductUpdateRow(productUpdate: ProductUpdate, onEditClick: (
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(productUpdate.oldProduct.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                IconButton(onClick = onEditClick) {
+                IconButton(onClick = onEditClick, enabled = editEnabled) {
                     Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.edit_update))
                 }
             }

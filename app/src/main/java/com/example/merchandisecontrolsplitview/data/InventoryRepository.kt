@@ -1,7 +1,9 @@
 package com.example.merchandisecontrolsplitview.data
 
 import androidx.paging.PagingSource
+import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -35,7 +37,7 @@ interface InventoryRepository {
     suspend fun addProduct(product: Product)
     suspend fun updateProduct(product: Product)
     suspend fun deleteProduct(product: Product)
-    suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>)
+    suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult
 
     // Supplier methods
     suspend fun getSupplierById(id: Long): Supplier?
@@ -80,13 +82,19 @@ interface InventoryRepository {
     suspend fun getCurrentPriceSnapshot(): List<CurrentPriceRow>
 }
 
-class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
+internal object DefaultInventoryRepositoryTestHooks {
+    @Volatile
+    var afterProductsPersisted: (suspend () -> Unit)? = null
+}
+
+class DefaultInventoryRepository(private val db: AppDatabase) : InventoryRepository {
     private val productDao: ProductDao = db.productDao()
     private val supplierDao: SupplierDao = db.supplierDao()
     private val categoryDao: CategoryDao = db.categoryDao()
     private val historyDao: HistoryEntryDao = db.historyEntryDao()
     private val priceDao: ProductPriceDao = db.productPriceDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    private val applyImportMutex = Mutex()
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
     override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
@@ -116,47 +124,25 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
     override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
-    override suspend fun applyImport(
-        newProducts: List<Product>,
-        updatedProducts: List<Product>
-    ) = withContext(Dispatchers.IO) {
-        val now = LocalDateTime.now()
-        val prevTs = now.minusSeconds(1).format(tSFMT)
-        val nowTs  = now.format(tSFMT)
+    override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =
+        withContext(Dispatchers.IO) {
+            if (!applyImportMutex.tryLock()) {
+                return@withContext ImportApplyResult.AlreadyRunning
+            }
 
-        // 1) Persistenza prodotti
-        if (newProducts.isNotEmpty()) productDao.insertAll(newProducts)
-        if (updatedProducts.isNotEmpty()) productDao.updateAll(updatedProducts)
-
-        // 2) Mappa barcode -> id (per TUTTI quelli interessati)
-        val allBarcodes = (newProducts.map { it.barcode } + updatedProducts.map { it.barcode })
-            .distinct()
-        val persisted = if (allBarcodes.isEmpty()) emptyList()
-        else productDao.findByBarcodes(allBarcodes)
-        val idByBarcode = persisted.associateBy({ it.barcode }, { it.id })
-
-        // 3) Funzione helper (suspend)
-        suspend fun recordBothStates(productId: Long, p: Product) {
-            // Stato "precedente" (se presente nei campi old*)
-            p.oldPurchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV") }
-            p.oldRetailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, prevTs, "IMPORT_PREV") }
-
-            // Stato "attuale"
-            p.purchasePrice?.let { priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs, "IMPORT") }
-            p.retailPrice  ?.let { priceDao.insertIfChanged(productId, "RETAIL",   it, nowTs, "IMPORT") }
+            try {
+                db.withTransaction {
+                    applyImportAtomically(request)
+                }
+                ImportApplyResult.Success
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (throwable: Throwable) {
+                ImportApplyResult.Failure(throwable)
+            } finally {
+                applyImportMutex.unlock()
+            }
         }
-
-        // 4) Applica per i nuovi
-        for (p in newProducts) {
-            val id = idByBarcode[p.barcode] ?: continue
-            recordBothStates(id, p)
-        }
-
-        // 5) Applica per gli aggiornati (gli updated hanno già id)
-        for (p in updatedProducts) {
-            recordBothStates(p.id, p)
-        }
-    }
 
     // --- Supplier Implementations ---
     override suspend fun getSupplierById(id: Long) =
@@ -362,6 +348,145 @@ class DefaultInventoryRepository(db: AppDatabase) : InventoryRepository {
                 purchasePrice = purchase,
                 retailPrice = retail
             )
+        }
+    }
+
+    private suspend fun applyImportAtomically(request: ImportApplyRequest) {
+        val supplierIdsByName = supplierDao.getAll()
+            .associate { it.name.trim().lowercase() to it.id }
+            .toMutableMap()
+        val categoryIdsByName = categoryDao.getAll()
+            .associate { it.name.trim().lowercase() to it.id }
+            .toMutableMap()
+
+        suspend fun resolveSupplierIdByName(name: String): Long? {
+            val normalizedName = name.trim()
+            val key = normalizedName.lowercase()
+            if (key.isBlank()) return null
+            supplierIdsByName[key]?.let { return it }
+
+            supplierDao.findByName(normalizedName)?.id?.let { existingId ->
+                supplierIdsByName[key] = existingId
+                return existingId
+            }
+
+            val insertedId = supplierDao.insert(Supplier(name = normalizedName))
+            val resolvedId = when {
+                insertedId > 0L -> insertedId
+                else -> supplierDao.findByName(normalizedName)?.id
+            } ?: return null
+
+            supplierIdsByName[key] = resolvedId
+            return resolvedId
+        }
+
+        suspend fun resolveCategoryIdByName(name: String): Long? {
+            val normalizedName = name.trim()
+            val key = normalizedName.lowercase()
+            if (key.isBlank()) return null
+            categoryIdsByName[key]?.let { return it }
+
+            categoryDao.findByName(normalizedName)?.id?.let { existingId ->
+                categoryIdsByName[key] = existingId
+                return existingId
+            }
+
+            categoryDao.insert(Category(name = normalizedName))
+            val resolvedId = categoryDao.findByName(normalizedName)?.id ?: return null
+            categoryIdsByName[key] = resolvedId
+            return resolvedId
+        }
+
+        suspend fun resolveProduct(product: Product): Product {
+            val resolvedSupplierId = when {
+                product.supplierId == null -> null
+                product.supplierId >= 0L -> product.supplierId
+                else -> request.pendingTempSuppliers[product.supplierId]?.let { name ->
+                    resolveSupplierIdByName(name)
+                }
+            }
+            val resolvedCategoryId = when {
+                product.categoryId == null -> null
+                product.categoryId >= 0L -> product.categoryId
+                else -> request.pendingTempCategories[product.categoryId]?.let { name ->
+                    resolveCategoryIdByName(name)
+                }
+            }
+            return product.copy(
+                supplierId = resolvedSupplierId,
+                categoryId = resolvedCategoryId
+            )
+        }
+
+        request.pendingSupplierNames.forEach { resolveSupplierIdByName(it) }
+        request.pendingCategoryNames.forEach { resolveCategoryIdByName(it) }
+
+        val resolvedNewProducts = request.newProducts.map { resolveProduct(it) }
+        val resolvedUpdatedProducts = request.updatedProducts.map { update ->
+            resolveProduct(update.newProduct).copy(id = update.oldProduct.id)
+        }
+
+        if (resolvedNewProducts.isNotEmpty()) {
+            productDao.insertAll(resolvedNewProducts)
+        }
+        if (resolvedUpdatedProducts.isNotEmpty()) {
+            productDao.updateAll(resolvedUpdatedProducts)
+        }
+
+        DefaultInventoryRepositoryTestHooks.afterProductsPersisted?.invoke()
+
+        val now = LocalDateTime.now()
+        val prevTs = now.minusSeconds(1).format(tSFMT)
+        val nowTs = now.format(tSFMT)
+
+        val allBarcodes = (
+            resolvedNewProducts.map { it.barcode } +
+                resolvedUpdatedProducts.map { it.barcode } +
+                request.pendingPriceHistory.map { it.barcode }
+            ).distinct()
+        val persistedProducts = if (allBarcodes.isEmpty()) {
+            emptyList()
+        } else {
+            productDao.findByBarcodes(allBarcodes)
+        }
+        val productIdsByBarcode = persistedProducts.associate { it.barcode to it.id }
+
+        suspend fun recordImportedCurrentAndPreviousPrices(productId: Long, product: Product) {
+            product.oldPurchasePrice?.let {
+                priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV")
+            }
+            product.oldRetailPrice?.let {
+                priceDao.insertIfChanged(productId, "RETAIL", it, prevTs, "IMPORT_PREV")
+            }
+            product.purchasePrice?.let {
+                priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs, "IMPORT")
+            }
+            product.retailPrice?.let {
+                priceDao.insertIfChanged(productId, "RETAIL", it, nowTs, "IMPORT")
+            }
+        }
+
+        resolvedNewProducts.forEach { product ->
+            productIdsByBarcode[product.barcode]?.let { productId ->
+                recordImportedCurrentAndPreviousPrices(productId, product)
+            }
+        }
+        resolvedUpdatedProducts.forEach { product ->
+            recordImportedCurrentAndPreviousPrices(product.id, product)
+        }
+
+        val pendingPriceHistoryPoints = request.pendingPriceHistory.mapNotNull { entry ->
+            val productId = productIdsByBarcode[entry.barcode] ?: return@mapNotNull null
+            ProductPrice(
+                productId = productId,
+                type = entry.type,
+                price = entry.price,
+                effectiveAt = entry.timestamp,
+                source = entry.source ?: "IMPORT_SHEET"
+            )
+        }
+        if (pendingPriceHistoryPoints.isNotEmpty()) {
+            priceDao.insertAll(pendingPriceHistoryPoints)
         }
     }
 }

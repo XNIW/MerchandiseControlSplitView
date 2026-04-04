@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.util
 import android.content.Context
 import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.ImportPriceHistoryEntry
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.util.canonicalExcelHeaderKey
@@ -45,6 +46,7 @@ data class FullDbImportStreamingResult(
     val analysis: ImportAnalyzer.DeferredRelationImportAnalysis,
     val pendingSupplierNames: Set<String>,
     val pendingCategoryNames: Set<String>,
+    val pendingPriceHistory: List<ImportPriceHistoryEntry>,
     val hasPriceHistorySheet: Boolean,
     val productsRowCount: Int,
     val supplierRowCount: Int,
@@ -147,6 +149,7 @@ private suspend fun analyzeFullDbImportStreaming(
     val supplierNames = linkedSetOf<String>()
     val categoryNames = linkedSetOf<String>()
     var hasPriceHistorySheet = false
+    val priceHistoryRows = mutableListOf<ImportPriceHistoryEntry>()
 
     forEachWorkbookSheet(reader) { sheetName, sheetStream ->
         when (normalizeExcelHeader(sheetName)) {
@@ -176,7 +179,7 @@ private suspend fun analyzeFullDbImportStreaming(
             }
 
             normalizeExcelHeader("PriceHistory") -> {
-                validatePriceHistorySheetHeader(sheetStream, styles, sharedStrings)
+                priceHistoryRows += parsePriceHistorySheet(sheetStream, styles, sharedStrings)
                 hasPriceHistorySheet = true
             }
         }
@@ -189,6 +192,7 @@ private suspend fun analyzeFullDbImportStreaming(
         analysis = analysis,
         pendingSupplierNames = (supplierNames + analysis.pendingSuppliers.values).toSet(),
         pendingCategoryNames = (categoryNames + analysis.pendingCategories.values).toSet(),
+        pendingPriceHistory = priceHistoryRows,
         hasPriceHistorySheet = hasPriceHistorySheet,
         productsRowCount = productsRowCount,
         supplierRowCount = supplierRowCount,
@@ -344,6 +348,51 @@ private fun parseEntityNamesSheet(
     }
 
     return names
+}
+
+private fun parsePriceHistorySheet(
+    sheetStream: InputStream,
+    styles: StylesTable,
+    sharedStrings: ReadOnlySharedStringsTable
+): List<ImportPriceHistoryEntry> {
+    var headerIndexes: PriceHistoryHeaderIndexes? = null
+    var headerRow: List<String>? = null
+    val rows = mutableListOf<ImportPriceHistoryEntry>()
+
+    parseSheetRows(sheetStream, styles, sharedStrings) { row ->
+        if (headerIndexes == null) {
+            headerRow = row
+            headerIndexes = requirePriceHistoryHeaderIndexes(row)
+            return@parseSheetRows
+        }
+
+        val indexes = requireNotNull(headerIndexes)
+        val barcode = row.getOrNull(indexes.barcodeIndex)?.trim().orEmpty()
+        val timestamp = row.getOrNull(indexes.timestampIndex)?.trim().orEmpty()
+        val rawType = row.getOrNull(indexes.typeIndex)?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        val newPrice = row.getOrNull(indexes.newPriceIndex)
+            ?.replace(",", ".")
+            ?.toDoubleOrNull()
+        val source = row.getOrNull(indexes.sourceIndex)?.trim().orEmpty().ifBlank { null }
+
+        if (barcode.isBlank() || timestamp.isBlank() || rawType.isBlank() || newPrice == null) {
+            return@parseSheetRows
+        }
+
+        rows += ImportPriceHistoryEntry(
+            barcode = barcode,
+            type = if (rawType.startsWith("pur")) "PURCHASE" else "RETAIL",
+            timestamp = timestamp,
+            price = newPrice,
+            source = source
+        )
+    }
+
+    if (headerRow == null) {
+        requirePriceHistoryHeaderIndexes(null)
+    }
+
+    return rows
 }
 
 private fun validatePriceHistorySheetHeader(

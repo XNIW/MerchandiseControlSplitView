@@ -7,6 +7,7 @@ import android.os.Looper
 import app.cash.turbine.test
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.ImportApplyResult
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
@@ -26,9 +27,11 @@ import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.slot
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
@@ -197,6 +200,7 @@ class DatabaseViewModelTest {
         assertTrue(result!!.newProducts.any { it.barcode == "87654321" })
         assertTrue(result.updatedProducts.any { it.oldProduct.barcode == "12345678" })
         assertEquals(UiState.Idle, viewModel.uiState.value)
+        assertTrue(viewModel.importFlowState.value is ImportFlowState.PreviewReady)
     }
 
     @Test
@@ -485,6 +489,7 @@ class DatabaseViewModelTest {
         viewModel.clearImportAnalysis()
 
         assertNull(viewModel.importAnalysisResult.value)
+        assertTrue(viewModel.importFlowState.value is ImportFlowState.Cancelled)
     }
 
     @Test
@@ -494,13 +499,15 @@ class DatabaseViewModelTest {
         val oldProduct = sampleProduct(id = 10L, barcode = "11111111", productName = "Old Name")
         val updatedProduct = oldProduct.copy(productName = "New Name", purchasePrice = 8.0)
         val pendingEntry = historyEntry().copy(uid = 88L)
+        val previewId = preparePreview()
 
         coEvery { repository.insertHistoryEntry(capture(insertedHistory)) } returns 88L
         coEvery { repository.getHistoryEntryByUid(88L) } returns pendingEntry
         coEvery { repository.updateHistoryEntry(capture(updatedHistory)) } just runs
-        coEvery { repository.applyImport(any(), any()) } just runs
+        coEvery { repository.applyImport(any()) } returns ImportApplyResult.Success
 
         viewModel.importProducts(
+            previewId = previewId,
             newProducts = listOf(sampleProduct(barcode = "22222222", productName = "Brand New")),
             updatedProducts = listOf(ProductUpdate(oldProduct, updatedProduct, changedFields = listOf(1))),
             context = app
@@ -510,12 +517,16 @@ class DatabaseViewModelTest {
 
         coVerify(timeout = 3_000, exactly = 1) {
             repository.applyImport(
-                match { it.single().barcode == "22222222" },
-                match { it.single().id == oldProduct.id && it.single().productName == "New Name" }
+                match {
+                    it.newProducts.single().barcode == "22222222" &&
+                        it.updatedProducts.single().oldProduct.id == oldProduct.id &&
+                        it.updatedProducts.single().newProduct.productName == "New Name"
+                }
             )
         }
         assertEquals("STARTED", insertedHistory.captured.data[1][0])
         assertEquals("SUCCESS", updatedHistory.captured.data.last()[0])
+        assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
         viewModel.uiState.test {
             assertEquals(
                 UiState.Success(app.getString(R.string.import_success)),
@@ -530,13 +541,17 @@ class DatabaseViewModelTest {
         val insertedHistory = slot<HistoryEntry>()
         val updatedHistory = slot<HistoryEntry>()
         val pendingEntry = historyEntry().copy(uid = 91L)
+        val previewId = preparePreview()
 
         coEvery { repository.insertHistoryEntry(capture(insertedHistory)) } returns 91L
         coEvery { repository.getHistoryEntryByUid(91L) } returns pendingEntry
         coEvery { repository.updateHistoryEntry(capture(updatedHistory)) } just runs
-        coEvery { repository.applyImport(any(), any()) } throws IllegalStateException("db offline")
+        coEvery { repository.applyImport(any()) } returns ImportApplyResult.Failure(
+            IllegalStateException("db offline")
+        )
 
         viewModel.importProducts(
+            previewId = previewId,
             newProducts = listOf(sampleProduct(barcode = "33333333", productName = "Broken")),
             updatedProducts = emptyList(),
             context = app
@@ -553,6 +568,81 @@ class DatabaseViewModelTest {
             app.getString(R.string.error_import_generic),
             updatedHistory.captured.data.last()[1]
         )
+        assertEquals(
+            ImportFlowState.Error(
+                previewId = previewId,
+                message = app.getString(R.string.error_import_generic),
+                occurredDuringApply = true
+            ),
+            viewModel.importFlowState.value
+        )
+    }
+
+    @Test
+    fun `importProducts ignores double confirm while apply is already running`() = runTest {
+        val previewId = preparePreview()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { repository.insertHistoryEntry(any()) } returnsMany listOf(100L, 101L)
+        coEvery { repository.getHistoryEntryByUid(any()) } returns historyEntry().copy(uid = 100L)
+        coEvery { repository.updateHistoryEntry(any()) } just runs
+        coEvery { repository.applyImport(any()) } coAnswers {
+            gate.await()
+            ImportApplyResult.Success
+        }
+
+        val firstApply = async {
+            viewModel.importProducts(
+                previewId = previewId,
+                newProducts = listOf(sampleProduct(barcode = "66667777", productName = "First")),
+                updatedProducts = emptyList(),
+                context = app
+            )
+        }
+        advanceUntilIdle()
+
+        viewModel.importProducts(
+            previewId = previewId,
+            newProducts = listOf(sampleProduct(barcode = "66667778", productName = "Second")),
+            updatedProducts = emptyList(),
+            context = app
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.applyImport(any()) }
+        gate.complete(Unit)
+        firstApply.await()
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun `clearImportAnalysis does not cancel an apply already in progress`() = runTest {
+        val previewId = preparePreview()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { repository.insertHistoryEntry(any()) } returns 120L
+        coEvery { repository.getHistoryEntryByUid(120L) } returns historyEntry().copy(uid = 120L)
+        coEvery { repository.updateHistoryEntry(any()) } just runs
+        coEvery { repository.applyImport(any()) } coAnswers {
+            gate.await()
+            ImportApplyResult.Success
+        }
+
+        viewModel.importProducts(
+            previewId = previewId,
+            newProducts = listOf(sampleProduct(barcode = "77776666", productName = "In Flight")),
+            updatedProducts = emptyList(),
+            context = app
+        )
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.Applying }
+
+        viewModel.clearImportAnalysis()
+
+        assertTrue(viewModel.importFlowState.value is ImportFlowState.Applying)
+        assertNotNull(viewModel.importAnalysisResult.value)
+
+        gate.complete(Unit)
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.Success }
+
+        assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
     }
 
     private fun sampleProduct(
@@ -586,6 +676,23 @@ class DatabaseViewModelTest {
         syncStatus = SyncStatus.NOT_ATTEMPTED,
         wasExported = false
     )
+
+    private suspend fun preparePreview(): Long {
+        coEvery { repository.getAllProducts() } returns emptyList()
+        viewModel.analyzeGridData(
+            listOf(
+                mapOf(
+                    "barcode" to "55554444",
+                    "productName" to "Preview Product",
+                    "purchasePrice" to "4.0",
+                    "retailPrice" to "6.0",
+                    "quantity" to "1"
+                )
+            )
+        )
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.PreviewReady }
+        return (viewModel.importFlowState.value as ImportFlowState.PreviewReady).previewId
+    }
 
     private fun createWorkbook(
         name: String,

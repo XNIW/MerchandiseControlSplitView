@@ -166,6 +166,7 @@
 
     <string name="import_analysis_title">导入审核</string>
     <string name="confirm_import">确认导入</string>
+    <string name="import_preview_not_saved_message">此预览尚未将任何更改保存到数据库。</string>
     <string name="new_products_to_add">新增产品：%1$s</string>
     <string name="no_new_products">没有新产品。</string>
     <string name="products_to_update">待更新产品：%1$s</string>
@@ -227,6 +228,7 @@
     <string name="error_data_analysis">数据分析时出错：%1$s</string>
     <string name="error_data_analysis_generic">无法分析所选文件。</string>
     <string name="error_import_generic">无法完成导入。</string>
+    <string name="import_preview_invalidated">此预览已失效。请重新分析后再确认。</string>
     <string name="error_export_generic">无法完成导出。</string>
     <string name="error_file_access_denied">无法访问所选文件。</string>
     <string name="error_file_read_failed">无法读取所选文件。</string>

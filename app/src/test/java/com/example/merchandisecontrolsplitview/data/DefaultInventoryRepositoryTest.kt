@@ -6,6 +6,9 @@ import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -13,6 +16,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +44,7 @@ class DefaultInventoryRepositoryTest {
 
     @After
     fun teardown() {
+        DefaultInventoryRepositoryTestHooks.afterProductsPersisted = null
         db.close()
     }
 
@@ -131,11 +136,14 @@ class DefaultInventoryRepositoryTest {
             oldRetailPrice = 2.8
         )
 
-        repository.applyImport(
-            newProducts = listOf(newProduct),
-            updatedProducts = listOf(updatedProduct)
+        val result = repository.applyImport(
+            importRequest(
+                newProducts = listOf(newProduct),
+                updatedProducts = listOf(ProductUpdate(existing, updatedProduct, changedFields = emptyList()))
+            )
         )
 
+        assertEquals(ImportApplyResult.Success, result)
         val importedNew = repository.findProductByBarcode("33334444")!!
         val importedUpdated = repository.findProductByBarcode("11112222")!!
         val newPurchaseHistory = repository.getPriceSeries(importedNew.id, "PURCHASE").first()
@@ -151,6 +159,162 @@ class DefaultInventoryRepositoryTest {
         )
         assertTrue(importRows.any { it.barcode == "33334444" && it.source == "IMPORT_PREV" })
         assertTrue(importRows.any { it.barcode == "33334444" && it.source == "IMPORT" })
+    }
+
+    @Test
+    fun `applyImport resolves deferred relations and includes pending price history in one apply`() = runTest {
+        val result = repository.applyImport(
+            importRequest(
+                newProducts = listOf(
+                    Product(
+                        barcode = "22223333",
+                        productName = "Deferred Product",
+                        purchasePrice = 4.0,
+                        retailPrice = 6.0,
+                        supplierId = -1L,
+                        categoryId = -2L
+                    )
+                ),
+                pendingTempSuppliers = mapOf(-1L to "Deferred Supplier"),
+                pendingTempCategories = mapOf(-2L to "Deferred Category"),
+                pendingPriceHistory = listOf(
+                    ImportPriceHistoryEntry(
+                        barcode = "22223333",
+                        type = "PURCHASE",
+                        timestamp = "2026-04-03 10:00:00",
+                        price = 4.2,
+                        source = "IMPORT_SHEET"
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val imported = repository.findProductByBarcode("22223333")!!
+        val supplier = repository.getSupplierById(imported.supplierId!!)
+        val category = repository.getCategoryById(imported.categoryId!!)
+        val priceHistoryRows = repository.getAllPriceHistoryRows()
+
+        assertEquals("Deferred Supplier", supplier?.name)
+        assertEquals("Deferred Category", category?.name)
+        assertTrue(
+            priceHistoryRows.any {
+                it.barcode == "22223333" &&
+                    it.timestamp == "2026-04-03 10:00:00" &&
+                    it.source == "IMPORT_SHEET"
+            }
+        )
+    }
+
+    @Test
+    fun `applyImport rolls back products relations and price history on failure after product persistence`() = runTest {
+        DefaultInventoryRepositoryTestHooks.afterProductsPersisted = {
+            throw IllegalStateException("boom")
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                newProducts = listOf(
+                    Product(
+                        barcode = "77778888",
+                        productName = "Rollback Product",
+                        purchasePrice = 2.0,
+                        retailPrice = 3.0,
+                        supplierId = -1L,
+                        categoryId = -2L
+                    )
+                ),
+                pendingTempSuppliers = mapOf(-1L to "Rollback Supplier"),
+                pendingTempCategories = mapOf(-2L to "Rollback Category"),
+                pendingPriceHistory = listOf(
+                    ImportPriceHistoryEntry(
+                        barcode = "77778888",
+                        type = "PURCHASE",
+                        timestamp = "2026-04-03 11:00:00",
+                        price = 2.2,
+                        source = "IMPORT_SHEET"
+                    )
+                )
+            )
+        )
+
+        assertTrue(result is ImportApplyResult.Failure)
+        assertNull(repository.findProductByBarcode("77778888"))
+        assertTrue(repository.getAllSuppliers().isEmpty())
+        assertTrue(repository.getAllCategories().isEmpty())
+        assertTrue(repository.getAllPriceHistoryRows().isEmpty())
+    }
+
+    @Test
+    fun `applyImport rolls back when cancellation happens before commit`() = runTest {
+        DefaultInventoryRepositoryTestHooks.afterProductsPersisted = {
+            throw CancellationException("cancelled")
+        }
+
+        try {
+            repository.applyImport(
+                importRequest(
+                    newProducts = listOf(
+                        Product(
+                            barcode = "99998888",
+                            productName = "Cancelled Product",
+                            purchasePrice = 2.0,
+                            retailPrice = 3.0,
+                            supplierId = -1L
+                        )
+                    ),
+                    pendingTempSuppliers = mapOf(-1L to "Cancelled Supplier")
+                )
+            )
+            fail("Expected CancellationException")
+        } catch (_: CancellationException) {
+            assertNull(repository.findProductByBarcode("99998888"))
+            assertTrue(repository.getAllSuppliers().isEmpty())
+            assertTrue(repository.getAllPriceHistoryRows().isEmpty())
+        }
+    }
+
+    @Test
+    fun `applyImport rejects a second concurrent apply`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        DefaultInventoryRepositoryTestHooks.afterProductsPersisted = {
+            started.complete(Unit)
+            gate.await()
+        }
+
+        val firstRequest = importRequest(
+            newProducts = listOf(
+                Product(
+                    barcode = "12340000",
+                    productName = "First Apply",
+                    purchasePrice = 1.0,
+                    retailPrice = 2.0
+                )
+            )
+        )
+        val secondRequest = importRequest(
+            newProducts = listOf(
+                Product(
+                    barcode = "12340001",
+                    productName = "Second Apply",
+                    purchasePrice = 1.0,
+                    retailPrice = 2.0
+                )
+            )
+        )
+
+        val firstApply = async { repository.applyImport(firstRequest) }
+        started.await()
+
+        val secondResult = async { repository.applyImport(secondRequest) }.await()
+        gate.complete(Unit)
+        val firstResult = firstApply.await()
+
+        assertEquals(ImportApplyResult.AlreadyRunning, secondResult)
+        assertEquals(ImportApplyResult.Success, firstResult)
+        assertNotNull(repository.findProductByBarcode("12340000"))
+        assertNull(repository.findProductByBarcode("12340001"))
     }
 
     @Test
@@ -317,5 +481,23 @@ class DefaultInventoryRepositoryTest {
         missingItems = 0,
         syncStatus = SyncStatus.NOT_ATTEMPTED,
         wasExported = false
+    )
+
+    private fun importRequest(
+        newProducts: List<Product> = emptyList(),
+        updatedProducts: List<ProductUpdate> = emptyList(),
+        pendingSupplierNames: Set<String> = emptySet(),
+        pendingCategoryNames: Set<String> = emptySet(),
+        pendingTempSuppliers: Map<Long, String> = emptyMap(),
+        pendingTempCategories: Map<Long, String> = emptyMap(),
+        pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList()
+    ) = ImportApplyRequest(
+        newProducts = newProducts,
+        updatedProducts = updatedProducts,
+        pendingSupplierNames = pendingSupplierNames,
+        pendingCategoryNames = pendingCategoryNames,
+        pendingTempSuppliers = pendingTempSuppliers,
+        pendingTempCategories = pendingTempCategories,
+        pendingPriceHistory = pendingPriceHistory
     )
 }

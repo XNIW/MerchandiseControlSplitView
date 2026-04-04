@@ -167,6 +167,7 @@
 
     <string name="import_analysis_title">Import Review</string>
     <string name="confirm_import">Confirm Import</string>
+    <string name="import_preview_not_saved_message">This preview has not saved any changes to the database yet.</string>
     <string name="new_products_to_add">New products to add: %1$s</string>
     <string name="no_new_products">No new products.</string>
     <string name="products_to_update">Products to update: %1$s</string>
@@ -228,6 +229,7 @@
     <string name="error_data_analysis">Error during data analysis: %1$s</string>
     <string name="error_data_analysis_generic">Could not analyze the selected file.</string>
     <string name="error_import_generic">Could not complete the import.</string>
+    <string name="import_preview_invalidated">This preview is no longer valid. Run the analysis again before confirming.</string>
     <string name="error_export_generic">Could not complete the export.</string>
     <string name="error_file_access_denied">Could not access the selected file.</string>
     <string name="error_file_read_failed">Could not read the selected file.</string>

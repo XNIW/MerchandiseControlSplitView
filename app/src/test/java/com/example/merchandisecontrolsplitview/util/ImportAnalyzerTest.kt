@@ -55,7 +55,7 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyze creates missing supplier and category`() = runTest {
+    fun `analyze keeps missing supplier and category deferred without preview writes`() = runTest {
         val analysis = analyze(
             importedRows = listOf(
                 importedRow(
@@ -66,10 +66,10 @@ class ImportAnalyzerTest {
         )
 
         val product = analysis.newProducts.single()
-        assertEquals(100L, product.supplierId)
-        assertEquals(200L, product.categoryId)
-        coVerify(exactly = 1) { repository.addSupplier("Supplier A") }
-        coVerify(exactly = 1) { repository.addCategory("Category A") }
+        assertTrue((product.supplierId ?: 0L) < 0L)
+        assertTrue((product.categoryId ?: 0L) < 0L)
+        coVerify(exactly = 0) { repository.addSupplier(any()) }
+        coVerify(exactly = 0) { repository.addCategory(any()) }
     }
 
     @Test
@@ -280,7 +280,7 @@ class ImportAnalyzerTest {
 
     @Test
     fun `analyze unexpected row error hides technical exception text`() = runTest {
-        coEvery { repository.addSupplier("Broken Supplier") } throws IllegalStateException("db boom")
+        coEvery { repository.findSupplierByName("Broken Supplier") } throws IllegalStateException("db boom")
 
         val analysis = analyze(
             importedRows = listOf(importedRow(supplier = "Broken Supplier"))
@@ -356,7 +356,7 @@ class ImportAnalyzerTest {
 
     @Test
     fun `analyzeStreaming unexpected row error hides technical exception text`() = runTest {
-        coEvery { repository.addSupplier("Broken Supplier") } throws IllegalStateException("stream boom")
+        coEvery { repository.findSupplierByName("Broken Supplier") } throws IllegalStateException("stream boom")
 
         val analysis = analyzeStreaming(
             chunks = sequenceOf(listOf(importedRow(supplier = "Broken Supplier")))
@@ -369,6 +369,28 @@ class ImportAnalyzerTest {
             context.getString(R.string.error_import_row_processing_failed),
             context.getString(error.errorReasonResId, *error.formatArgs.toTypedArray())
         )
+    }
+
+    @Test
+    fun `analyzeStreamingDeferredRelations exposes pending relation maps for missing names`() = runTest {
+        val analysis = ImportAnalyzer.analyzeStreamingDeferredRelations(
+            context = context,
+            currentDbProducts = emptyList(),
+            repository = repository
+        ) { consumer ->
+            consumer(
+                importedRow(
+                    supplier = "Deferred Supplier",
+                    category = "Deferred Category"
+                )
+            )
+        }
+
+        val product = analysis.analysis.newProducts.single()
+        assertEquals("Deferred Supplier", analysis.pendingSuppliers[product.supplierId])
+        assertEquals("Deferred Category", analysis.pendingCategories[product.categoryId])
+        coVerify(exactly = 0) { repository.addSupplier(any()) }
+        coVerify(exactly = 0) { repository.addCategory(any()) }
     }
 
     private suspend fun analyze(
