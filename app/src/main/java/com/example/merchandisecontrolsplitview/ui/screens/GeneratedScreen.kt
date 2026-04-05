@@ -2638,54 +2638,17 @@ fun ManualEntryDialog(
                     }
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
-                    OutlinedTextField(
-                        value = purchasePrice,
-                        onValueChange = { purchasePrice = it },
-                        label = { Text(stringResource(R.string.header_purchase_price)) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .onFocusChanged { state ->
-                                if (!state.isFocused) {
-                                    purchasePrice = normalizeClPriceInput(purchasePrice)
-                                }
-                            },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
-                    )
-                    OutlinedTextField(
-                        value = retailPrice,
-                        onValueChange = { retailPrice = it },
-                        label = { Text(stringResource(R.string.header_retail_price) + "*") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(priceFocusRequester)
-                            .onFocusChanged { state ->
-                                if (!state.isFocused) {
-                                    val normalized = normalizeClPriceInput(retailPrice.text)
-                                    retailPrice = TextFieldValue(normalized, TextRange(normalized.length))
-                                }
-                            },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
-                    )
-                    OutlinedTextField(
-                        value = quantity,
-                        onValueChange = { quantity = it },
-                        label = { Text(stringResource(R.string.header_quantity)) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(quantityFocusRequester)
-                            .onFocusChanged { state ->
-                                if (!state.isFocused) {
-                                    val normalized = normalizeClQuantityInput(quantity.text)
-                                    quantity = TextFieldValue(normalized, TextRange(normalized.length))
-                                }
-                            },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                        keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() })
-                    )
-                }
+                ManualEntryPriceQuantityBlock(
+                    purchasePrice = purchasePrice,
+                    onPurchasePriceChange = { purchasePrice = it },
+                    retailPrice = retailPrice,
+                    onRetailPriceChange = { retailPrice = it },
+                    quantity = quantity,
+                    onQuantityChange = { quantity = it },
+                    priceFocusRequester = priceFocusRequester,
+                    quantityFocusRequester = quantityFocusRequester,
+                    nameFocusRequester = nameFocusRequester
+                )
 
                 OutlinedTextField(
                     value = productName,
@@ -2782,6 +2745,96 @@ fun ManualEntryDialog(
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
         }
     )
+}
+
+@Composable
+private fun ManualEntryPriceQuantityBlock(
+    purchasePrice: String,
+    onPurchasePriceChange: (String) -> Unit,
+    retailPrice: TextFieldValue,
+    onRetailPriceChange: (TextFieldValue) -> Unit,
+    quantity: TextFieldValue,
+    onQuantityChange: (TextFieldValue) -> Unit,
+    priceFocusRequester: FocusRequester,
+    quantityFocusRequester: FocusRequester,
+    nameFocusRequester: FocusRequester
+) {
+    val fieldSpacing = MaterialTheme.appSpacing.sm
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val useVerticalLayout = maxWidth < 400.dp
+
+        val purchasePriceField: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(
+                value = purchasePrice,
+                onValueChange = onPurchasePriceChange,
+                label = { Text(stringResource(R.string.header_purchase_price)) },
+                modifier = modifier.onFocusChanged { state ->
+                    if (!state.isFocused) {
+                        onPurchasePriceChange(normalizeClPriceInput(purchasePrice))
+                    }
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+            )
+        }
+
+        val retailPriceField: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(
+                value = retailPrice,
+                onValueChange = onRetailPriceChange,
+                label = { Text(stringResource(R.string.header_retail_price) + "*") },
+                modifier = modifier
+                    .focusRequester(priceFocusRequester)
+                    .onFocusChanged { state ->
+                        if (!state.isFocused) {
+                            val normalized = normalizeClPriceInput(retailPrice.text)
+                            onRetailPriceChange(TextFieldValue(normalized, TextRange(normalized.length)))
+                        }
+                    },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+            )
+        }
+
+        val quantityField: @Composable (Modifier) -> Unit = { modifier ->
+            OutlinedTextField(
+                value = quantity,
+                onValueChange = onQuantityChange,
+                label = { Text(stringResource(R.string.header_quantity)) },
+                modifier = modifier
+                    .focusRequester(quantityFocusRequester)
+                    .onFocusChanged { state ->
+                        if (!state.isFocused) {
+                            val normalized = normalizeClQuantityInput(quantity.text)
+                            onQuantityChange(TextFieldValue(normalized, TextRange(normalized.length)))
+                        }
+                    },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() })
+            )
+        }
+
+        if (useVerticalLayout) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(fieldSpacing)
+            ) {
+                purchasePriceField(Modifier.fillMaxWidth())
+                retailPriceField(Modifier.fillMaxWidth())
+                quantityField(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(fieldSpacing)
+            ) {
+                purchasePriceField(Modifier.weight(1f))
+                retailPriceField(Modifier.weight(1f))
+                quantityField(Modifier.weight(1f))
+            }
+        }
+    }
 }
 
 fun toNormalizedProduct(
