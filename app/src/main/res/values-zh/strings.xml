@@ -324,6 +324,10 @@
     <string name="error_missing_essential_columns_prompt">
 操作不允许。缺少必要的列：%1$s。请在继续之前点击这些列的标题进行识别。
 </string>
+    <string name="pre_generate_generate_requirements">请选择供应商和类别以启用生成。</string>
+    <string name="pre_generate_warning_duplicate_barcodes">文件中发现了 %1$d 个重复条码。</string>
+    <string name="pre_generate_warning_duplicate_barcodes_with_sample">文件中发现了 %1$d 个重复条码，包括：%2$s。</string>
+    <string name="pre_generate_warning_missing_purchase_prices">%1$d 行已有条码但缺少进价。</string>
     <string name="error_barcode_already_exists">错误：已存在具有此条码的产品。</string>
     <string name="add_products_manually">手动添加商品</string>
     <string name="no_products_add_new">没有商品。请添加新商品！</string>

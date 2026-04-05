@@ -324,6 +324,10 @@
     <string name="error_missing_essential_columns_prompt">
 Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica estas columnas haciendo clic en su encabezado antes de continuar.
 </string>
+    <string name="pre_generate_generate_requirements">Selecciona un proveedor y una categoría para habilitar Generar.</string>
+    <string name="pre_generate_warning_duplicate_barcodes">Se detectaron %1$d códigos de barras duplicados en el archivo.</string>
+    <string name="pre_generate_warning_duplicate_barcodes_with_sample">Se detectaron %1$d códigos de barras duplicados en el archivo, incluidos: %2$s.</string>
+    <string name="pre_generate_warning_missing_purchase_prices">%1$d filas con código de barras no tienen precio de compra.</string>
     <string name="error_barcode_already_exists">Error: Ya existe un producto con este código de barras.</string>
     <string name="add_products_manually">Agregar productos manualmente</string>
     <string name="manual_entry_indicator">Entrada añadida manualmente</string>

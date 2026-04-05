@@ -340,6 +340,10 @@
 
     <string name="edit_column_type">Modifica tipo colonna</string>
     <string name="error_missing_essential_columns_prompt">Azione non permessa. Colonne essenziali mancanti: %1$s. Per favore, identifica queste colonne cliccando sulla loro intestazione prima di procedere.</string>
+    <string name="pre_generate_generate_requirements">Seleziona un fornitore e una categoria per abilitare Genera.</string>
+    <string name="pre_generate_warning_duplicate_barcodes">Rilevati %1$d barcode duplicati nel file.</string>
+    <string name="pre_generate_warning_duplicate_barcodes_with_sample">Rilevati %1$d barcode duplicati nel file, inclusi: %2$s.</string>
+    <string name="pre_generate_warning_missing_purchase_prices">%1$d righe con barcode hanno il prezzo di acquisto mancante.</string>
     <string name="error_barcode_already_exists">Errore: esiste già un prodotto con questo codice a barre.</string>
     <string name="add_products_manually">Aggiungi prodotti manualmente</string>
     <string name="no_products_add_new">Nessun prodotto presente. Aggiungi un nuovo prodotto!</string>

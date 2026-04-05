@@ -325,6 +325,10 @@
     <string name="error_missing_essential_columns_prompt">
 Action not allowed. Essential columns missing: %1$s. Please identify these columns by clicking their header before proceeding.
 </string>
+    <string name="pre_generate_generate_requirements">Select a supplier and a category to enable Generate.</string>
+    <string name="pre_generate_warning_duplicate_barcodes">%1$d duplicate barcodes were found in the file.</string>
+    <string name="pre_generate_warning_duplicate_barcodes_with_sample">%1$d duplicate barcodes were found in the file, including: %2$s.</string>
+    <string name="pre_generate_warning_missing_purchase_prices">%1$d rows with a barcode are missing the purchase price.</string>
     <string name="error_barcode_already_exists">Error: A product with this barcode already exists.</string>
     <string name="add_products_manually">Add products manually</string>
     <string name="no_products_add_new">No products found. Add a new product!</string>

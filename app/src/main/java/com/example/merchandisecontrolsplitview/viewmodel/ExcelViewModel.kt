@@ -50,6 +50,17 @@ sealed class DateFilter {
     data class CustomRange(val startDate: LocalDate, val endDate: LocalDate) : DateFilter()
 }
 
+data class PreGenerateDataQualitySummary(
+    val duplicateBarcodeCount: Int = 0,
+    val duplicateBarcodeSamples: List<String> = emptyList(),
+    val missingPurchasePriceCount: Int = 0
+) {
+    val hasWarnings: Boolean
+        get() = duplicateBarcodeCount > 0 || missingPurchasePriceCount > 0
+}
+
+private const val PRE_GENERATE_DUPLICATE_SAMPLE_LIMIT = 2
+
 /**
  * ViewModel per gestione griglia Excel e cronologia persistente.
  */
@@ -453,6 +464,47 @@ class ExcelViewModel(
                 onResult
             )
         }
+    }
+
+    fun getPreGenerateDataQualitySummary(): PreGenerateDataQualitySummary {
+        val header = excelData.firstOrNull() ?: return PreGenerateDataQualitySummary()
+        val barcodeIndex = header.indexOf("barcode")
+        val purchasePriceIndex = header.indexOf("purchasePrice")
+
+        if (barcodeIndex == -1) {
+            return PreGenerateDataQualitySummary()
+        }
+
+        val barcodeOccurrences = LinkedHashMap<String, Int>()
+        var missingPurchasePriceCount = 0
+
+        excelData.drop(1).forEach { row ->
+            val barcode = row.getOrNull(barcodeIndex)?.trim().orEmpty()
+            if (barcode.isBlank()) {
+                return@forEach
+            }
+
+            barcodeOccurrences[barcode] = (barcodeOccurrences[barcode] ?: 0) + 1
+
+            if (purchasePriceIndex != -1) {
+                val purchasePrice = row.getOrNull(purchasePriceIndex)?.trim().orEmpty()
+                if (purchasePrice.isBlank()) {
+                    missingPurchasePriceCount++
+                }
+            }
+        }
+
+        val duplicateBarcodes = barcodeOccurrences
+            .asSequence()
+            .filter { (_, occurrences) -> occurrences > 1 }
+            .map { (barcode, _) -> barcode }
+            .toList()
+
+        return PreGenerateDataQualitySummary(
+            duplicateBarcodeCount = duplicateBarcodes.size,
+            duplicateBarcodeSamples = duplicateBarcodes.take(PRE_GENERATE_DUPLICATE_SAMPLE_LIMIT),
+            missingPurchasePriceCount = missingPurchasePriceCount
+        )
     }
 
     private suspend fun fetchPreviousPrices(barcodeIdx: Int): Map<String, Pair<Double?, Double?>> {

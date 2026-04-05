@@ -108,6 +108,48 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `getPreGenerateDataQualitySummary keeps duplicate feedback compact and counts missing purchase prices`() =
+        runTest {
+            viewModel.excelData.addAll(
+                listOf(
+                    listOf("barcode", "purchasePrice", "productName"),
+                    listOf("111", "", "A"),
+                    listOf("111", "100", "A second row"),
+                    listOf("222", "", "B"),
+                    listOf("222", "200", "B second row"),
+                    listOf("333", "300", "C"),
+                    listOf("333", "300", "C second row")
+                )
+            )
+
+            val summary = viewModel.getPreGenerateDataQualitySummary()
+
+            assertEquals(3, summary.duplicateBarcodeCount)
+            assertEquals(listOf("111", "222"), summary.duplicateBarcodeSamples)
+            assertEquals(2, summary.missingPurchasePriceCount)
+            assertTrue(summary.hasWarnings)
+        }
+
+    @Test
+    fun `getPreGenerateDataQualitySummary ignores blank barcodes and missing purchase price column`() =
+        runTest {
+            viewModel.excelData.addAll(
+                listOf(
+                    listOf("barcode", "productName"),
+                    listOf("", "Missing barcode"),
+                    listOf("111", "Single row")
+                )
+            )
+
+            val summary = viewModel.getPreGenerateDataQualitySummary()
+
+            assertEquals(0, summary.duplicateBarcodeCount)
+            assertTrue(summary.duplicateBarcodeSamples.isEmpty())
+            assertEquals(0, summary.missingPurchasePriceCount)
+            assertFalse(summary.hasWarnings)
+        }
+
+    @Test
     fun `generateFilteredWithOldPrices persists entry and updates generated state`() = runTest {
         val insertedEntry = slot<HistoryEntry>()
         val callback = mockk<(Long) -> Unit>(relaxed = true)
