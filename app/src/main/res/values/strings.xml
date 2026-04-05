@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Generali -->
     <string name="app_name">Controllo Merci</string>
     <string name="back">Indietro</string>
@@ -13,10 +13,14 @@
     <!-- Schermata Opzioni -->
     <string name="options">Opzioni</string>
     <string name="select_language">Seleziona lingua</string>
-    <string name="chinese">Cinese</string>
-    <string name="italian">Italiano</string>
-    <string name="spanish">Spagnolo</string>
-    <string name="english">Inglese</string>
+    <string name="chinese" tools:ignore="UnusedResources">Cinese</string>
+    <string name="italian" tools:ignore="UnusedResources">Italiano</string>
+    <string name="spanish" tools:ignore="UnusedResources">Spagnolo</string>
+    <string name="english" tools:ignore="UnusedResources">Inglese</string>
+    <string name="language_endonym_zh" translatable="false">中文</string>
+    <string name="language_endonym_it" translatable="false">Italiano</string>
+    <string name="language_endonym_es" translatable="false">Español</string>
+    <string name="language_endonym_en" translatable="false">English</string>
     <string name="select_theme">Tema</string>
     <string name="theme_auto">Auto (sistema)</string>
     <string name="theme_light">Chiaro</string>

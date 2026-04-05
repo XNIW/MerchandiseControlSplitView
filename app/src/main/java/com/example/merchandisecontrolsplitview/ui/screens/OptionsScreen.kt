@@ -4,8 +4,10 @@ import android.app.Activity
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Language
@@ -48,10 +50,10 @@ fun OptionsScreen(
     val savedLang = prefs.getString("lang", "en") ?: "en"
     var langPref by remember { mutableStateOf(savedLang) }
     val languages = listOf(
-        "zh" to stringResource(id = R.string.chinese),
-        "it" to stringResource(id = R.string.italian),
-        "es" to stringResource(id = R.string.spanish),
-        "en" to stringResource(id = R.string.english)
+        "zh" to stringResource(id = R.string.language_endonym_zh),
+        "it" to stringResource(id = R.string.language_endonym_it),
+        "es" to stringResource(id = R.string.language_endonym_es),
+        "en" to stringResource(id = R.string.language_endonym_en)
     )
 
     Scaffold(
@@ -70,7 +72,8 @@ fun OptionsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             // --- THEME SECTION (Vertical Radio Buttons) ---
@@ -80,11 +83,12 @@ fun OptionsScreen(
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     themeOptions.forEach { (value, label) ->
+                        val selected = value == themePref
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .selectable(
-                                    selected = (value == themePref),
+                                    selected = selected,
                                     onClick = {
                                         if (themePref != value) {
                                             themePref = value
@@ -103,12 +107,14 @@ fun OptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = (value == themePref),
+                                selected = selected,
                                 onClick = null
                             )
                             Text(
                                 text = label,
                                 style = MaterialTheme.typography.bodyLarge,
+                                color = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 modifier = Modifier.padding(start = 16.dp)
                             )
                         }
@@ -123,11 +129,12 @@ fun OptionsScreen(
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     languages.forEach { (langCode, langName) ->
+                        val selected = langCode == langPref
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .selectable(
-                                    selected = (langCode == langPref),
+                                    selected = selected,
                                     onClick = {
                                         if (langPref != langCode) {
                                             langPref = langCode
@@ -144,12 +151,14 @@ fun OptionsScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = (langCode == langPref),
+                                selected = selected,
                                 onClick = null
                             )
                             Text(
                                 text = langName,
                                 style = MaterialTheme.typography.bodyLarge,
+                                color = if (selected) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                                 modifier = Modifier.padding(start = 16.dp)
                             )
                         }
@@ -169,8 +178,10 @@ private fun OptionsGroup(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -182,7 +193,7 @@ private fun OptionsGroup(
                 Spacer(Modifier.width(12.dp))
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
             }
