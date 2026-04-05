@@ -17,8 +17,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -229,6 +229,7 @@ fun GeneratedScreenSearchDialog(
 
     LaunchedEffect(visible) {
         if (visible) {
+            onSearchTextChange("")
             delay(50)
             searchFocusRequester.requestFocus()
             keyboardController?.show()
@@ -249,41 +250,39 @@ fun GeneratedScreenSearchDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                FilledTonalButton(
-                    onClick = onLaunchScanner,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.CameraAlt, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.scanner))
-                }
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = onSearchTextChange,
-                    label = { Text(stringResource(R.string.insert_number)) },
-                    leadingIcon = {
+            OutlinedTextField(
+                value = searchText,
+                onValueChange = onSearchTextChange,
+                label = { Text(stringResource(R.string.insert_number)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = null
+                    )
+                },
+                trailingIcon = {
+                    IconButton(onClick = onLaunchScanner) {
                         Icon(
-                            imageVector = Icons.Filled.Search,
-                            contentDescription = null
+                            imageVector = Icons.Filled.CameraAlt,
+                            contentDescription = stringResource(R.string.scan_icon_desc)
                         )
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Ascii,
-                        imeAction = ImeAction.Search,
-                        capitalization = KeyboardCapitalization.None,
-                        autoCorrectEnabled = false
-                    ),
-                    keyboardActions = KeyboardActions(onSearch = {
-                        keyboardController?.hide()
-                        onPerformSearch()
-                    }),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(searchFocusRequester)
-                )
-            }
+                    }
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Search,
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false
+                ),
+                keyboardActions = KeyboardActions(onSearch = {
+                    keyboardController?.hide()
+                    onPerformSearch()
+                }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(searchFocusRequester)
+            )
         },
         confirmButton = {
             Button(onClick = {

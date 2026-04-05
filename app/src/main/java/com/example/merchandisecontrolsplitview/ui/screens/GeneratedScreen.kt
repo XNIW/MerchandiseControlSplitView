@@ -640,7 +640,6 @@ fun GeneratedScreen(
                     isManualEntry = isManualEntry,
                     onLaunchScanner = { launchMainScanner() },
                     onOpenSearch = {
-                        searchText = ""
                         showSearchDialog = true
                     },
                     modifier = Modifier
