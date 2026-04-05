@@ -38,10 +38,12 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +62,7 @@ import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import kotlinx.coroutines.delay
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -68,22 +71,35 @@ import java.util.Locale
 private val priceHistoryStorageFormatter: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
+private const val LOADING_SAFETY_TIMEOUT_MS = 180_000L
 private const val PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH = 24
 private const val PRICE_HISTORY_ELLIPSIS = "\u2026"
 
 @Composable
-internal fun LoadingDialog(loading: UiState.Loading) {
+internal fun LoadingDialog(
+    loading: UiState.Loading,
+    onSafetyTimeout: () -> Unit = {}
+) {
     LoadingDialog(
         message = loading.message,
-        progress = loading.progress
+        progress = loading.progress,
+        onSafetyTimeout = onSafetyTimeout
     )
 }
 
 @Composable
 internal fun LoadingDialog(
     message: String?,
-    progress: Int?
+    progress: Int?,
+    onSafetyTimeout: () -> Unit = {}
 ) {
+    val currentOnSafetyTimeout by rememberUpdatedState(onSafetyTimeout)
+
+    LaunchedEffect(Unit) {
+        delay(LOADING_SAFETY_TIMEOUT_MS)
+        currentOnSafetyTimeout()
+    }
+
     Dialog(
         onDismissRequest = {},
         properties = DialogProperties(
@@ -99,7 +115,7 @@ internal fun LoadingDialog(
             contentAlignment = Alignment.Center
         ) {
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(28.dp),
                 tonalElevation = 6.dp,
                 shadowElevation = 12.dp,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -166,6 +182,8 @@ internal fun DatabaseExportDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(stringResource(R.string.export_database_dialog_title))
@@ -304,6 +322,8 @@ internal fun DeleteProductConfirmationDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = { Text(stringResource(R.string.delete_confirmation_title)) },
         text = {
             val trimmedName = product.productName?.trim().orEmpty()

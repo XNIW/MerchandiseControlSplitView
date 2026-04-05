@@ -68,6 +68,8 @@ fun PreGenerateScreen(
     var customHeader by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     var showSelectionDialog by remember { mutableStateOf(false) }
+    var excelLoadingTimedOut by remember { mutableStateOf(false) }
+    var databaseLoadingTimedOut by remember { mutableStateOf(false) }
 
     val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
     var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
@@ -112,6 +114,21 @@ fun PreGenerateScreen(
         "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
         "discount", "discountedPrice"
     )
+    val isDatabaseLoading = databaseUiState is UiState.Loading
+    val showExcelLoadingDialog = isExcelLoading && !excelLoadingTimedOut
+    val showDatabaseLoadingDialog = isDatabaseLoading && !databaseLoadingTimedOut
+
+    LaunchedEffect(isExcelLoading) {
+        if (!isExcelLoading) {
+            excelLoadingTimedOut = false
+        }
+    }
+
+    LaunchedEffect(isDatabaseLoading) {
+        if (!isDatabaseLoading) {
+            databaseLoadingTimedOut = false
+        }
+    }
 
     BackHandler { onBack() }
 
@@ -140,19 +157,29 @@ fun PreGenerateScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            val isAnalysisInProgress = databaseUiState is UiState.Loading
+            val isAnalysisInProgress = showDatabaseLoadingDialog
             val analysisError = (databaseUiState as? UiState.Error)?.message
 
             when {
-                isExcelLoading || isAnalysisInProgress -> {
+                showExcelLoadingDialog || showDatabaseLoadingDialog -> {
                     when {
-                        isExcelLoading -> LoadingDialog(
-                            UiState.Loading(
+                        showExcelLoadingDialog -> LoadingDialog(
+                            loading = UiState.Loading(
                                 message = stringResource(R.string.loading_file),
                                 progress = excelProgress
-                            )
+                            ),
+                            onSafetyTimeout = {
+                                excelLoadingTimedOut = true
+                                excelViewModel.resetState()
+                            }
                         )
-                        databaseUiState is UiState.Loading -> LoadingDialog(databaseUiState)
+                        showDatabaseLoadingDialog -> LoadingDialog(
+                            loading = databaseUiState,
+                            onSafetyTimeout = {
+                                databaseLoadingTimedOut = true
+                                databaseViewModel.consumeUiState()
+                            }
+                        )
                     }
                 }
                 excelLoadError != null || analysisError != null -> {

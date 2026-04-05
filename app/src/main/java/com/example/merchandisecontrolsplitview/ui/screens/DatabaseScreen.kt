@@ -59,6 +59,8 @@ fun DatabaseScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var requestedExportSelection by remember { mutableStateOf(ExportSheetSelection.full()) }
+    var exportLoadingTimedOut by remember { mutableStateOf(false) }
+    var uiLoadingTimedOut by remember { mutableStateOf(false) }
 
     var showHistoryFor by remember { mutableStateOf<Product?>(null) }
 
@@ -81,7 +83,10 @@ fun DatabaseScreen(
         }
     }
 
-    val isLoading = uiState is UiState.Loading || exportUiState.inProgress
+    val isUiLoading = uiState is UiState.Loading
+    val showExportLoadingDialog = exportUiState.inProgress && !exportLoadingTimedOut
+    val showUiLoadingDialog = isUiLoading && !uiLoadingTimedOut
+    val isLoading = showExportLoadingDialog || showUiLoadingDialog
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
@@ -130,6 +135,18 @@ fun DatabaseScreen(
                 viewModel.consumeUiState()
             }
             is UiState.Idle, is UiState.Loading -> Unit
+        }
+    }
+
+    LaunchedEffect(exportUiState.inProgress) {
+        if (!exportUiState.inProgress) {
+            exportLoadingTimedOut = false
+        }
+    }
+
+    LaunchedEffect(isUiLoading) {
+        if (!isUiLoading) {
+            uiLoadingTimedOut = false
         }
     }
 
@@ -193,14 +210,21 @@ fun DatabaseScreen(
     }
 
     when {
-        exportUiState.inProgress -> {
+        showExportLoadingDialog -> {
             LoadingDialog(
                 message = exportUiState.message,
-                progress = exportUiState.progress
+                progress = exportUiState.progress,
+                onSafetyTimeout = { exportLoadingTimedOut = true }
             )
         }
-        uiState is UiState.Loading -> {
-            LoadingDialog(uiState as UiState.Loading)
+        showUiLoadingDialog -> {
+            LoadingDialog(
+                loading = uiState as UiState.Loading,
+                onSafetyTimeout = {
+                    uiLoadingTimedOut = true
+                    viewModel.consumeUiState()
+                }
+            )
         }
     }
 

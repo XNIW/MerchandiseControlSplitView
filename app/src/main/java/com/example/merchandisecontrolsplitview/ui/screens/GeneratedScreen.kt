@@ -243,6 +243,23 @@ fun GeneratedScreen(
     val dbUiState by databaseViewModel.uiState.collectAsState()
     val isExporting by excelViewModel.isExporting
     val exportProgress by excelViewModel.exportProgress
+    var exportLoadingTimedOut by remember { mutableStateOf(false) }
+    var databaseLoadingTimedOut by remember { mutableStateOf(false) }
+    val isDatabaseLoading = dbUiState is UiState.Loading
+    val showExportLoadingDialog = isExporting && !exportLoadingTimedOut
+    val showDatabaseLoadingDialog = isDatabaseLoading && !databaseLoadingTimedOut
+
+    LaunchedEffect(isExporting) {
+        if (!isExporting) {
+            exportLoadingTimedOut = false
+        }
+    }
+
+    LaunchedEffect(isDatabaseLoading) {
+        if (!isDatabaseLoading) {
+            databaseLoadingTimedOut = false
+        }
+    }
 
     BackHandler {
         handleBackPress()
@@ -755,11 +772,25 @@ fun GeneratedScreen(
     }
 
     // in fondo allo screen (fuori dallo Scaffold)
-    if (isExporting) {
-        LoadingDialog(UiState.Loading(message = stringResource(R.string.export_in_progress), progress = exportProgress))
+    if (showExportLoadingDialog) {
+        LoadingDialog(
+            loading = UiState.Loading(
+                message = stringResource(R.string.export_in_progress),
+                progress = exportProgress
+            ),
+            onSafetyTimeout = { exportLoadingTimedOut = true }
+        )
     }
-    if (dbUiState is UiState.Loading) {
-        (dbUiState as? UiState.Loading)?.let { LoadingDialog(it) }
+    if (showDatabaseLoadingDialog) {
+        (dbUiState as? UiState.Loading)?.let { loadingState ->
+            LoadingDialog(
+                loading = loadingState,
+                onSafetyTimeout = {
+                    databaseLoadingTimedOut = true
+                    databaseViewModel.consumeUiState()
+                }
+            )
+        }
     }
 
     if (showRenameDialog) {

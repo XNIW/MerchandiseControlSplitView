@@ -56,6 +56,7 @@ fun GeneratedScreenDiscardDraftDialog(
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = {
             Text(
                 text = stringResource(R.string.discard_and_exit_title),
@@ -104,6 +105,7 @@ fun GeneratedScreenExitFromHistoryDialog(
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = {
             Text(
                 text = stringResource(R.string.exit_confirmation_title),
@@ -177,6 +179,7 @@ fun GeneratedScreenExitToHomeDialog(
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = {
             Text(
                 text = stringResource(R.string.dialog_title_return_home),
@@ -238,6 +241,7 @@ fun GeneratedScreenSearchDialog(
             onDismiss()
         },
         shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
         title = {
             Text(
                 text = stringResource(R.string.search_number),
