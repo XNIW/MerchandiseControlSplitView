@@ -126,7 +126,8 @@
 
     <!-- 删除确认对话框 -->
     <string name="delete_confirmation_title">删除确认</string>
-    <string name="delete_confirmation_message">你确定要删除此产品吗？</string>
+    <string name="delete_confirmation_intro">此操作无法撤销。请确认下方名称与条码。</string>
+    <string name="delete_confirmation_barcode_empty">未填写</string>
 
     <!-- 产品 -->
     <string name="unnamed_product">未命名产品</string>

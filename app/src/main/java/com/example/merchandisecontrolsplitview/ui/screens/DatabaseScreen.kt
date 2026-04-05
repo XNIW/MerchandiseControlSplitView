@@ -230,13 +230,19 @@ fun DatabaseScreen(
         )
     }
 
-    if (showDeleteDialog) {
+    if (showDeleteDialog && itemToDelete != null) {
+        val productToDelete = itemToDelete!!
         DeleteProductConfirmationDialog(
+            product = productToDelete,
             onConfirm = {
-                itemToDelete?.let { viewModel.deleteProduct(it) }
+                viewModel.deleteProduct(productToDelete)
                 showDeleteDialog = false
+                itemToDelete = null
             },
-            onDismiss = { showDeleteDialog = false }
+            onDismiss = {
+                showDeleteDialog = false
+                itemToDelete = null
+            }
         )
     }
 

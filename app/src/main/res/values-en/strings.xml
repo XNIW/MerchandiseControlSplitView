@@ -127,7 +127,8 @@
 
     <!-- Delete confirmation dialogs -->
     <string name="delete_confirmation_title">Delete confirmation</string>
-    <string name="delete_confirmation_message">Are you sure you want to delete this product?</string>
+    <string name="delete_confirmation_intro">This can\'t be undone. Check the name and barcode before confirming.</string>
+    <string name="delete_confirmation_barcode_empty">Not set</string>
 
     <!-- Product -->
     <string name="unnamed_product">Unnamed product</string>

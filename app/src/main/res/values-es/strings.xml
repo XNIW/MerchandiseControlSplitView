@@ -126,7 +126,8 @@
 
     <!-- Confirmaciones y diálogos de eliminación -->
     <string name="delete_confirmation_title">Confirmar eliminación</string>
-    <string name="delete_confirmation_message">¿Estás seguro de que deseas eliminar este producto?</string>
+    <string name="delete_confirmation_intro">Operación irreversible. Verifica el nombre y el código antes de confirmar.</string>
+    <string name="delete_confirmation_barcode_empty">Sin indicar</string>
 
     <!-- Producto -->
     <string name="unnamed_product">Producto sin nombre</string>

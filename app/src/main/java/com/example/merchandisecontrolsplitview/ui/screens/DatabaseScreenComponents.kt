@@ -86,7 +86,7 @@ internal fun DatabaseScreenTopBar(
         actions = {
             IconButton(onClick = onImportClick) {
                 Icon(
-                    Icons.Default.FileDownload,
+                    Icons.Default.FileUpload,
                     contentDescription = stringResource(R.string.import_file)
                 )
             }
@@ -96,7 +96,7 @@ internal fun DatabaseScreenTopBar(
                 onClick = onExportClick
             ) {
                 Icon(
-                    Icons.Default.FileUpload,
+                    Icons.Default.FileDownload,
                     contentDescription = stringResource(R.string.export_file)
                 )
             }
