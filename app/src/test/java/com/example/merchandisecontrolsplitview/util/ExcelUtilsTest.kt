@@ -115,6 +115,260 @@ class ExcelUtilsTest {
     }
 
     @Test
+    fun `analyzePoiSheet keeps legacy single-row header fast path for clean files`() {
+        withSheet(
+            listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Total Price"),
+            listOf("12345678", "Alpha", "4", "2", "8"),
+            listOf("23456789", "Beta", "5", "3", "15")
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+
+            assertEquals("legacy-fast-path", result.trace.headerMode)
+            assertEquals(listOf(0), result.trace.headerRows)
+            assertEquals(
+                listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),
+                result.header
+            )
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet isolates printable table and combines split headers`() {
+        withSheet(
+            listOf("SHOPPING HOGAR SPA", "", "", "", "", "", "", "", ""),
+            listOf("Nº ALBARAN :", "13076", "FECHA", "1/4/2026 16:41", "COD.CLIE:1048", "", "PAG:", "1/1", ""),
+            listOf("", "REF.CAJAS", "COD.BARRA", "", "CANTID", "PRE/U", "DTO%", "PRE/U", "IMPORTE"),
+            listOf("", "", "", "ARTICULO", "", "", "", "", ""),
+            listOf(1, "10161", "6120000101614", "XJ2204-3", 12, 900, 0, 900, 10800),
+            listOf(2, "10162", "6120000101621", "YJ5237", 12, 1100, 0, 1100, 13200)
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+            val header = result.header
+            val rows = result.dataRows
+
+            assertEquals("combined-lookback", result.trace.headerMode)
+            assertEquals(listOf(2, 3), result.trace.headerRows)
+            assertEquals("itemNumber", header[1])
+            assertEquals("barcode", header[2])
+            assertEquals("productName", header[3])
+            assertEquals("quantity", header[4])
+            assertEquals("purchasePrice", header[5])
+            assertEquals("discount", header[6])
+            assertEquals("totalPrice", header[8])
+            assertEquals(
+                listOf("1", "10161", "6120000101614", "XJ2204-3", "12", "900", "0", "900", "10800"),
+                rows.first()
+            )
+            assertEquals("alias", result.headerSource[1])
+            assertEquals("alias", result.headerSource[2])
+            assertEquals("alias", result.headerSource[3])
+            assertEquals("alias", result.headerSource[4])
+            assertEquals("alias", result.headerSource[5])
+            assertEquals("alias", result.headerSource[6])
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet keeps REF CAJAS as item number when values are not row-like`() {
+        withSheet(
+            listOf("REF.CAJAS", "COD.BARRA", "ARTICULO", "CANTID", "PRE/U", "IMPORTE"),
+            listOf("10161", "6120000101614", "Alpha", "12", "900", "10800"),
+            listOf("11683", "6120000116830", "Beta", "8", "1500", "12000"),
+            listOf("12970", "6120000129700", "Gamma", "12", "1500", "18000")
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+
+            assertEquals("itemNumber", result.header[0])
+            assertEquals("alias", result.headerSource[0])
+            assertEquals(
+                "header-alias",
+                result.trace.fieldDecisions.first { it.field == "itemNumber" }.reason
+            )
+            assertEquals("10161", result.dataRows.first()[0])
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet distinguishes barcode and item number on headerless numeric columns`() {
+        withSheet(
+            listOf(900, "10161", "6120000101614", "Glass One", 12, 10800),
+            listOf(1100, "10162", "6120000101621", "Glass Two", 12, 13200),
+            listOf(1500, "11683", "6120000116830", "Glass Three", 8, 12000)
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+            val header = result.header
+            val firstRow = result.dataRows.first()
+
+            assertEquals("10161", firstRow[header.indexOf("itemNumber")])
+            assertEquals("6120000101614", firstRow[header.indexOf("barcode")])
+            assertEquals(
+                "pattern-score",
+                result.trace.fieldDecisions.first { it.field == "barcode" }.reason
+            )
+            assertEquals(
+                "pattern-score",
+                result.trace.fieldDecisions.first { it.field == "itemNumber" }.reason
+            )
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet distinguishes quantity and purchase price when both are integers`() {
+        withSheet(
+            listOf("6120000101614", 900, 12, "10161", "Glass One"),
+            listOf("6120000101621", 1100, 12, "10162", "Glass Two"),
+            listOf("6120000116830", 1500, 8, "11683", "Glass Three")
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+            val header = result.header
+            val firstRow = result.dataRows.first()
+
+            assertEquals("12", firstRow[header.indexOf("quantity")])
+            assertEquals("900", firstRow[header.indexOf("purchasePrice")])
+            assertEquals("high", result.trace.fieldDecisions.first { it.field == "quantity" }.confidence)
+            assertEquals("high", result.trace.fieldDecisions.first { it.field == "purchasePrice" }.confidence)
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet handles printable shopping layout with grouped integer totals`() {
+        fun sparseRow(lastColumn: Int, values: Map<Int, Any?>): List<Any?> {
+            val row = MutableList<Any?>(lastColumn + 1) { "" }
+            values.forEach { (index, value) -> row[index] = value }
+            return row
+        }
+
+        withSheet(
+            sparseRow(
+                51,
+                mapOf(
+                    3 to "Nº ALBARAN : 13076",
+                    13 to "FECHA: 1/4/2026 16:41",
+                    20 to "COD.CLIE:1048",
+                    36 to "PAG: 1/1"
+                )
+            ),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "REF.CAJAS",
+                    9 to "COD.BARRA",
+                    27 to "CANTID",
+                    33 to "PRE/U",
+                    40 to "DTO%",
+                    44 to "PRE/U",
+                    49 to "IMPORTE"
+                )
+            ),
+            sparseRow(51, mapOf(9 to "ARTICULO")),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "1",
+                    6 to "10161",
+                    11 to "6120000101614",
+                    15 to "XJ2204-3马桶刷",
+                    29 to "12",
+                    38 to "900",
+                    43 to "0",
+                    47 to "900",
+                    51 to "10,800"
+                )
+            ),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "2",
+                    6 to "10162",
+                    11 to "6120000101621",
+                    15 to "YJ5237马桶刷",
+                    29 to "12",
+                    38 to "1,100",
+                    43 to "0",
+                    47 to "1,100",
+                    51 to "13,200"
+                )
+            ),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "3",
+                    6 to "10163",
+                    11 to "6120000101638",
+                    15 to "HX-093马桶吸",
+                    29 to "12",
+                    38 to "1,000",
+                    43 to "0",
+                    47 to "1,000",
+                    51 to "12,000"
+                )
+            ),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "4",
+                    6 to "11683",
+                    11 to "6120000116830",
+                    15 to "45X2M 无胶膜玻璃贴 R041",
+                    29 to "8",
+                    38 to "1,500",
+                    43 to "0",
+                    47 to "1,500",
+                    51 to "12,000"
+                )
+            ),
+            sparseRow(
+                51,
+                mapOf(
+                    1 to "5",
+                    6 to "11692",
+                    11 to "6120000116922",
+                    15 to "45X2M 无胶膜玻璃贴 R001",
+                    29 to "8",
+                    38 to "1,500",
+                    43 to "0",
+                    47 to "1,500",
+                    51 to "12,000"
+                )
+            )
+        ) { sheet ->
+            val result = analyzePoiSheetDetailed(context, sheet)
+            val header = result.header
+            val firstRow = result.dataRows.first()
+            val itemNumberIdx = header.indexOf("itemNumber")
+            val barcodeIdx = header.indexOf("barcode")
+            val productNameIdx = header.indexOf("productName")
+            val quantityIdx = header.indexOf("quantity")
+            val purchasePriceIdx = header.indexOf("purchasePrice")
+            val totalPriceIdx = header.indexOf("totalPrice")
+
+            assertEquals("combined-lookback", result.trace.headerMode)
+            assertTrue(header.contains("REF.CAJAS"))
+            assertTrue(itemNumberIdx >= 0)
+            assertTrue(barcodeIdx >= 0)
+            assertTrue(productNameIdx >= 0)
+            assertTrue(quantityIdx >= 0)
+            assertTrue(purchasePriceIdx >= 0)
+            assertTrue(totalPriceIdx >= 0)
+            assertEquals("10161", firstRow[itemNumberIdx])
+            assertEquals("6120000101614", firstRow[barcodeIdx])
+            assertEquals("XJ2204-3马桶刷", firstRow[productNameIdx])
+            assertEquals("12", firstRow[quantityIdx])
+            assertEquals("900", firstRow[purchasePriceIdx])
+            assertEquals("10,800", firstRow[totalPriceIdx])
+            assertEquals("pattern-score", result.trace.fieldDecisions.first { it.field == "itemNumber" }.reason)
+            assertEquals(
+                "quantity-multiplication",
+                result.trace.fieldDecisions.first { it.field == "purchasePrice" }.reason
+            )
+            assertEquals(
+                "quantity-multiplication",
+                result.trace.fieldDecisions.first { it.field == "totalPrice" }.reason
+            )
+        }
+    }
+
+    @Test
     fun `analyzePoiSheet returns expected data for a minimal happy path`() {
         withSheet(
             listOf("barcode", "productName", "purchasePrice", "quantity", "totalPrice"),

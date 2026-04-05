@@ -24,6 +24,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -666,7 +667,7 @@ class ExcelViewModelTest {
             listOf(Uri.fromFile(firstWorkbook), Uri.fromFile(secondWorkbook))
         )
         advanceUntilIdle()
-        waitForCondition { viewModel.excelData.size == 4 && !viewModel.isLoading.value }
+        waitForCondition { !viewModel.isLoading.value }
 
         assertEquals(null, viewModel.loadError.value)
         assertEquals(
@@ -685,6 +686,184 @@ class ExcelViewModelTest {
             listOf("pattern", "pattern", "pattern", "pattern", "pattern", "pattern"),
             viewModel.headerTypes.toList()
         )
+    }
+
+    @Test
+    fun `loadFromMultipleUris handles printable split header workbook`() = runTest {
+        val workbook = createWorkbook(
+            name = "load-split-header",
+            rows = listOf(
+                listOf("SHOPPING HOGAR SPA", "", "", "", "", "", "", "", ""),
+                listOf("Nº ALBARAN :", "13076", "FECHA", "1/4/2026 16:41", "COD.CLIE:1048", "", "PAG:", "1/1", ""),
+                listOf("", "REF.CAJAS", "COD.BARRA", "", "CANTID", "PRE/U", "DTO%", "PRE/U", "IMPORTE"),
+                listOf("", "", "", "ARTICULO", "", "", "", "", ""),
+                listOf(1, "10161", "6120000101614", "XJ2204-3", 12, 900, 0, 900, 10800),
+                listOf(2, "10162", "6120000101621", "YJ5237", 12, 1100, 0, 1100, 13200)
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(workbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 3 && !viewModel.isLoading.value }
+
+        val header = viewModel.excelData.first()
+        assertEquals("", header[0])
+        assertEquals("itemNumber", header[1])
+        assertEquals("barcode", header[2])
+        assertEquals("productName", header[3])
+        assertEquals("quantity", header[4])
+        assertEquals("purchasePrice", header[5])
+        assertEquals("discount", header[6])
+        assertEquals("totalPrice", header[8])
+        assertEquals(
+            listOf("1", "10161", "6120000101614", "XJ2204-3", "12", "900", "0", "900", "10800"),
+            viewModel.excelData[1]
+        )
+        assertEquals("alias", viewModel.headerTypes[1])
+        assertEquals("alias", viewModel.headerTypes[2])
+        assertEquals("alias", viewModel.headerTypes[3])
+        assertEquals("alias", viewModel.headerTypes[4])
+        assertEquals("alias", viewModel.headerTypes[5])
+        assertEquals("alias", viewModel.headerTypes[6])
+    }
+
+    @Test
+    fun `loadFromMultipleUris handles shopping hogar printable offsets with grouped totals`() = runTest {
+        fun sparseRow(lastColumn: Int, values: Map<Int, Any?>): List<Any?> {
+            val row = MutableList<Any?>(lastColumn + 1) { "" }
+            values.forEach { (index, value) -> row[index] = value }
+            return row
+        }
+
+        val workbook = createWorkbook(
+            name = "load-shopping-hogar-printable",
+            rows = listOf(
+                sparseRow(
+                    51,
+                    mapOf(
+                        3 to "Nº ALBARAN : 13076",
+                        13 to "FECHA: 1/4/2026 16:41",
+                        20 to "COD.CLIE:1048",
+                        36 to "PAG: 1/1"
+                    )
+                ),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "REF.CAJAS",
+                        9 to "COD.BARRA",
+                        27 to "CANTID",
+                        33 to "PRE/U",
+                        40 to "DTO%",
+                        44 to "PRE/U",
+                        49 to "IMPORTE"
+                    )
+                ),
+                sparseRow(51, mapOf(9 to "ARTICULO")),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "1",
+                        6 to "10161",
+                        11 to "6120000101614",
+                        15 to "XJ2204-3马桶刷",
+                        29 to "12",
+                        38 to "900",
+                        43 to "0",
+                        47 to "900",
+                        51 to "10,800"
+                    )
+                ),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "2",
+                        6 to "10162",
+                        11 to "6120000101621",
+                        15 to "YJ5237马桶刷",
+                        29 to "12",
+                        38 to "1,100",
+                        43 to "0",
+                        47 to "1,100",
+                        51 to "13,200"
+                    )
+                ),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "3",
+                        6 to "10163",
+                        11 to "6120000101638",
+                        15 to "HX-093马桶吸",
+                        29 to "12",
+                        38 to "1,000",
+                        43 to "0",
+                        47 to "1,000",
+                        51 to "12,000"
+                    )
+                ),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "4",
+                        6 to "11683",
+                        11 to "6120000116830",
+                        15 to "45X2M 无胶膜玻璃贴 R041",
+                        29 to "8",
+                        38 to "1,500",
+                        43 to "0",
+                        47 to "1,500",
+                        51 to "12,000"
+                    )
+                ),
+                sparseRow(
+                    51,
+                    mapOf(
+                        1 to "5",
+                        6 to "11692",
+                        11 to "6120000116922",
+                        15 to "45X2M 无胶膜玻璃贴 R001",
+                        29 to "8",
+                        38 to "1,500",
+                        43 to "0",
+                        47 to "1,500",
+                        51 to "12,000"
+                    )
+                )
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(workbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 6 && !viewModel.isLoading.value }
+
+        val header = viewModel.excelData.first()
+        val itemNumberIdx = header.indexOf("itemNumber")
+        val barcodeIdx = header.indexOf("barcode")
+        val productNameIdx = header.indexOf("productName")
+        val quantityIdx = header.indexOf("quantity")
+        val purchasePriceIdx = header.indexOf("purchasePrice")
+        val totalPriceIdx = header.indexOf("totalPrice")
+
+        assertTrue(header.contains("REF.CAJAS"))
+        assertTrue(itemNumberIdx >= 0)
+        assertTrue(barcodeIdx >= 0)
+        assertTrue(productNameIdx >= 0)
+        assertTrue(quantityIdx >= 0)
+        assertTrue(purchasePriceIdx >= 0)
+        assertTrue(totalPriceIdx >= 0)
+        assertEquals(
+            "10161",
+            viewModel.excelData[1][itemNumberIdx]
+        )
+        assertEquals("6120000101614", viewModel.excelData[1][barcodeIdx])
+        assertEquals("XJ2204-3马桶刷", viewModel.excelData[1][productNameIdx])
+        assertEquals("12", viewModel.excelData[1][quantityIdx])
+        assertEquals("900", viewModel.excelData[1][purchasePriceIdx])
+        assertEquals("10,800", viewModel.excelData[1][totalPriceIdx])
+        assertEquals("pattern", viewModel.headerTypes[itemNumberIdx])
+        assertEquals("pattern", viewModel.headerTypes[purchasePriceIdx])
+        assertEquals("pattern", viewModel.headerTypes[totalPriceIdx])
     }
 
     @Test
@@ -851,7 +1030,8 @@ class ExcelViewModelTest {
 
     private fun createWorkbook(
         name: String,
-        rows: List<List<Any>>
+        rows: List<List<Any?>>,
+        configure: (XSSFWorkbook, Sheet) -> Unit = { _, _ -> }
     ): File {
         val file = File.createTempFile(name, ".xlsx", app.cacheDir)
         XSSFWorkbook().use { workbook ->
@@ -859,13 +1039,14 @@ class ExcelViewModelTest {
             rows.forEachIndexed { rowIndex, values ->
                 val row = sheet.createRow(rowIndex)
                 values.forEachIndexed { cellIndex, value ->
-                    val cell = row.createCell(cellIndex)
                     when (value) {
-                        is Number -> cell.setCellValue(value.toDouble())
-                        else -> cell.setCellValue(value.toString())
+                        null -> Unit
+                        is Number -> row.createCell(cellIndex).setCellValue(value.toDouble())
+                        else -> row.createCell(cellIndex).setCellValue(value.toString())
                     }
                 }
             }
+            configure(workbook, sheet)
             file.outputStream().use(workbook::write)
         }
         return file

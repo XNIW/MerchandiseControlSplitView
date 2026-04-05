@@ -223,9 +223,108 @@ private fun normalizeHeader(s: String) = normalizeExcelHeader(s)
 private data class PrunedColumnsResult(
     val header: MutableList<String>,
     val headerSource: MutableList<String>,
-    val dataRows: List<List<String>>,
-    val oldToNewIndex: Map<Int, Int>
+    val dataRows: List<List<String>>
 )
+
+private data class RowProfile(
+    val index: Int,
+    val nonBlankColumns: Set<Int>,
+    val nonBlankCount: Int,
+    val numericCount: Int,
+    val textCount: Int,
+    val aliasHits: Int
+) {
+    val looksDataLike: Boolean
+        get() = nonBlankCount >= 4 && numericCount >= 2 && textCount >= 1
+}
+
+internal data class ExcelColumnCandidate(
+    val columnIndex: Int,
+    val score: Double,
+    val reasons: List<String>
+)
+
+internal data class ExcelFieldDecisionTrace(
+    val field: String,
+    val selectedColumnIndex: Int?,
+    val confidence: String,
+    val reason: String,
+    val candidates: List<ExcelColumnCandidate>
+)
+
+internal data class ExcelAnalysisTrace(
+    val hasHeader: Boolean,
+    val dataRowIdx: Int,
+    val headerRows: List<Int>,
+    val headerMode: String,
+    val sampleSize: Int,
+    val fieldDecisions: List<ExcelFieldDecisionTrace>
+)
+
+internal data class ExcelAnalysisResult(
+    val header: List<String>,
+    val dataRows: List<List<String>>,
+    val headerSource: List<String>,
+    val trace: ExcelAnalysisTrace
+)
+
+private data class ColumnSample(
+    val columnIndex: Int,
+    val values: List<String>,
+    val nonBlankValues: List<String>,
+    val numericValues: List<Double>,
+    val medianNumeric: Double?,
+    val numericRatio: Double,
+    val integerRatio: Double,
+    val decimalRawRatio: Double,
+    val dominantLengthShare: Double,
+    val dominantValueShare: Double,
+    val digitLongRatio: Double,
+    val shortCodeRatio: Double,
+    val alphaNumericRatio: Double,
+    val textRatio: Double,
+    val longTextRatio: Double,
+    val smallPositiveRatio: Double,
+    val priceLikeMagnitudeRatio: Double
+)
+
+private data class HeaderDetection(
+    val dataRowIdx: Int,
+    val hasHeader: Boolean,
+    val headerRows: List<Int>,
+    val headerMode: String
+)
+
+private data class NumericPairDetection(
+    val purchaseColumn: Int,
+    val totalColumn: Int,
+    val matchRatio: Double,
+    val averageRelativeError: Double
+)
+
+private const val LEGACY_HEADER_ALIAS_FAST_PATH = 3
+private const val MAX_HEADER_LOOKBACK_ROWS = 2
+private const val MAX_PATTERN_SAMPLE_ROWS = 40
+private const val MIN_PATTERN_EVIDENCE = 2
+private const val MIN_PATTERN_SCORE = 0.45
+private const val AMBIGUITY_MARGIN = 0.08
+private const val MIN_ROW_NUMBER_LIKE_RATIO = 0.75
+
+private fun minimumEvidenceFor(dataRowCount: Int): Int {
+    return if (dataRowCount <= 1) 1 else MIN_PATTERN_EVIDENCE
+}
+
+private fun parseAnalysisNumber(value: String?): Double? {
+    val clean = value?.trim()?.replace(" ", "").orEmpty()
+    if (clean.isBlank()) return null
+    if (clean.matches(Regex("^-?[1-9]\\d{0,2}(,\\d{3})+$"))) {
+        return clean.replace(",", "").toDoubleOrNull()
+    }
+    if (clean.matches(Regex("^-?[1-9]\\d{0,2}(\\.\\d{3})+$"))) {
+        return clean.replace(".", "").toDoubleOrNull()
+    }
+    return parseNumber(clean)
+}
 
 private fun normalizeTabularRows(rows: List<List<String>>): List<List<String>> {
     return rows.map { row -> row.dropLastWhile { it.isEmpty() } }
@@ -270,208 +369,864 @@ private fun pruneTotallyEmptyColumns(
         return PrunedColumnsResult(
             header = mutableListOf(),
             headerSource = mutableListOf(),
-            dataRows = dataRows,
-            oldToNewIndex = emptyMap()
+            dataRows = dataRows
         )
     }
 
     val nonEmptyCols = header.indices.filter { col ->
         dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
     }
-    val oldToNewIndex = nonEmptyCols.withIndex().associate { it.value to it.index }
 
     return PrunedColumnsResult(
         header = nonEmptyCols.map { header[it] }.toMutableList(),
         headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList(),
-        dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } },
-        oldToNewIndex = oldToNewIndex
+        dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } }
     )
+}
+
+private fun ratio(numerator: Int, denominator: Int): Double {
+    if (denominator <= 0) return 0.0
+    return numerator.toDouble() / denominator.toDouble()
+}
+
+private fun <T> dominantShare(values: List<T>): Double {
+    if (values.isEmpty()) return 0.0
+    val maxCount = values.groupingBy { it }.eachCount().values.maxOrNull() ?: 0
+    return ratio(maxCount, values.size)
+}
+
+private fun median(values: List<Double>): Double? {
+    if (values.isEmpty()) return null
+    val sorted = values.sorted()
+    val mid = sorted.size / 2
+    return if (sorted.size % 2 == 0) {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
+private fun countHeaderAliasHits(row: List<String>): Int {
+    return row.mapNotNull(::canonicalExcelHeaderKey).distinct().size
+}
+
+private fun buildRowProfiles(rows: List<List<String>>): List<RowProfile> {
+    return rows.mapIndexed { index, row ->
+        val nonBlankColumns = row.mapIndexedNotNull { colIndex, value ->
+            colIndex.takeIf { value.isNotBlank() }
+        }.toSet()
+        val numericCount = row.count { parseAnalysisNumber(it) != null }
+        val textCount = row.count { it.isNotBlank() && parseAnalysisNumber(it) == null }
+        RowProfile(
+            index = index,
+            nonBlankColumns = nonBlankColumns,
+            nonBlankCount = nonBlankColumns.size,
+            numericCount = numericCount,
+            textCount = textCount,
+            aliasHits = countHeaderAliasHits(row)
+        )
+    }
+}
+
+private fun sharedColumnCount(first: RowProfile, second: RowProfile): Int {
+    return first.nonBlankColumns.intersect(second.nonBlankColumns).size
+}
+
+private fun detectHeader(rows: List<List<String>>, profiles: List<RowProfile>): HeaderDetection {
+    if (rows.isEmpty()) {
+        return HeaderDetection(
+            dataRowIdx = -1,
+            hasHeader = false,
+            headerRows = emptyList(),
+            headerMode = "generated-no-data"
+        )
+    }
+
+    var candidateIdx = -1
+    val lastIndex = rows.lastIndex
+    for (idx in rows.indices) {
+        val current = profiles[idx]
+        if (!current.looksDataLike) continue
+
+        val repeatedPatternMatches = (idx + 1..minOf(idx + 3, lastIndex)).count { nextIdx ->
+            val next = profiles[nextIdx]
+            val minOverlap = minOf(
+                3,
+                minOf(current.nonBlankCount, next.nonBlankCount)
+            )
+            next.looksDataLike && sharedColumnCount(current, next) >= minOverlap
+        }
+        val previousAliasHits = profiles.getOrNull(idx - 1)?.aliasHits ?: 0
+        val futureSupportsTable = repeatedPatternMatches >= 1
+        val immediateHeaderSupportsTable = previousAliasHits >= LEGACY_HEADER_ALIAS_FAST_PATH
+        val startsWithDenseData = idx == 0 && (profiles.getOrNull(1)?.looksDataLike == true)
+        if (futureSupportsTable || immediateHeaderSupportsTable || startsWithDenseData) {
+            candidateIdx = idx
+            break
+        }
+    }
+
+    if (candidateIdx < 0) {
+        candidateIdx = profiles.indexOfFirst { it.looksDataLike }
+    }
+    if (candidateIdx <= 0) {
+        return HeaderDetection(
+            dataRowIdx = candidateIdx,
+            hasHeader = false,
+            headerRows = emptyList(),
+            headerMode = if (candidateIdx >= 0) "generated-no-header" else "generated-fallback"
+        )
+    }
+
+    val immediateHeaderIdx = candidateIdx - 1
+    val immediateAliasHits = profiles[immediateHeaderIdx].aliasHits
+    if (immediateAliasHits >= LEGACY_HEADER_ALIAS_FAST_PATH) {
+        return HeaderDetection(
+            dataRowIdx = candidateIdx,
+            hasHeader = true,
+            headerRows = listOf(immediateHeaderIdx),
+            headerMode = "legacy-fast-path"
+        )
+    }
+
+    val lookbackStart = maxOf(0, candidateIdx - MAX_HEADER_LOOKBACK_ROWS)
+    val lookbackRows = (lookbackStart until candidateIdx).filter { idx ->
+        val profile = profiles[idx]
+        profile.nonBlankCount > 0 && !profile.looksDataLike
+    }
+
+    val headerRows = when {
+        lookbackRows.size >= 2 -> lookbackRows.takeLast(MAX_HEADER_LOOKBACK_ROWS)
+        lookbackRows.isNotEmpty() -> lookbackRows
+        else -> listOf(immediateHeaderIdx)
+    }
+
+    val combinedHeader = mergeHeaderRows(rows, headerRows)
+    val combinedAliasHits = countHeaderAliasHits(combinedHeader)
+    return when {
+        combinedAliasHits > immediateAliasHits && headerRows.size > 1 -> HeaderDetection(
+            dataRowIdx = candidateIdx,
+            hasHeader = true,
+            headerRows = headerRows,
+            headerMode = "combined-lookback"
+        )
+        else -> HeaderDetection(
+            dataRowIdx = candidateIdx,
+            hasHeader = true,
+            headerRows = listOf(immediateHeaderIdx),
+            headerMode = "single-row-fallback"
+        )
+    }
+}
+
+private fun mergeHeaderRows(rows: List<List<String>>, headerRows: List<Int>): List<String> {
+    if (headerRows.isEmpty()) return emptyList()
+    val colCount = headerRows.maxOf { idx -> rows.getOrNull(idx)?.size ?: 0 }
+    return (0 until colCount).map { col ->
+        headerRows.mapNotNull { rowIdx ->
+            rows.getOrNull(rowIdx)?.getOrNull(col)?.takeIf { it.isNotBlank() }
+        }.distinct().joinToString(" ")
+    }
+}
+
+private fun alignTabularWidths(
+    header: MutableList<String>,
+    headerSource: MutableList<String>,
+    dataRows: List<List<String>>
+): Triple<MutableList<String>, MutableList<String>, List<List<String>>> {
+    val colCount = maxOf(header.size, dataRows.maxOfOrNull { it.size } ?: 0)
+    while (header.size < colCount) {
+        header.add("")
+        headerSource.add("unknown")
+    }
+    val normalizedRows = dataRows.map { row ->
+        if (row.size >= colCount) row else row + List(colCount - row.size) { "" }
+    }
+    return Triple(header, headerSource, normalizedRows)
+}
+
+private fun buildColumnSamples(dataRows: List<List<String>>, colCount: Int): List<ColumnSample> {
+    val sampleRows = dataRows.take(MAX_PATTERN_SAMPLE_ROWS)
+    return (0 until colCount).map { col ->
+        val values = sampleRows.map { row -> row.getOrNull(col)?.trim().orEmpty() }
+        val nonBlankValues = values.filter { it.isNotBlank() }
+        val numericValues = nonBlankValues.mapNotNull(::parseAnalysisNumber)
+        val digitOnlyValues = nonBlankValues.filter { value -> value.all(Char::isDigit) }
+        val lengthValues = nonBlankValues.map { it.length }
+        ColumnSample(
+            columnIndex = col,
+            values = values,
+            nonBlankValues = nonBlankValues,
+            numericValues = numericValues,
+            medianNumeric = median(numericValues),
+            numericRatio = ratio(numericValues.size, sampleRows.size),
+            integerRatio = ratio(
+                numericValues.count { value -> value == value.toLong().toDouble() },
+                numericValues.size
+            ),
+            decimalRawRatio = ratio(
+                nonBlankValues.count { value ->
+                    value.contains(',') || value.contains('.')
+                },
+                nonBlankValues.size
+            ),
+            dominantLengthShare = dominantShare(lengthValues),
+            dominantValueShare = dominantShare(nonBlankValues),
+            digitLongRatio = ratio(
+                digitOnlyValues.count { value -> value.length in 8..14 },
+                nonBlankValues.size
+            ),
+            shortCodeRatio = ratio(
+                nonBlankValues.count { value ->
+                    value.length in 4..12 &&
+                        value.any(Char::isDigit) &&
+                        (value.length < 8 || value.any(Char::isLetter))
+                },
+                nonBlankValues.size
+            ),
+            alphaNumericRatio = ratio(
+                nonBlankValues.count { value ->
+                    value.any(Char::isLetter) && value.any(Char::isDigit)
+                },
+                nonBlankValues.size
+            ),
+            textRatio = ratio(
+                nonBlankValues.count { value ->
+                    parseAnalysisNumber(value) == null && value.length >= 3
+                },
+                nonBlankValues.size
+            ),
+            longTextRatio = ratio(
+                nonBlankValues.count { value ->
+                    parseAnalysisNumber(value) == null &&
+                        (value.length >= 5 || value.contains(' '))
+                },
+                nonBlankValues.size
+            ),
+            smallPositiveRatio = ratio(
+                numericValues.count { value -> value > 0.0 && value <= 200.0 },
+                numericValues.size
+            ),
+            priceLikeMagnitudeRatio = ratio(
+                numericValues.count { value -> value >= 20.0 },
+                numericValues.size
+            )
+        )
+    }
+}
+
+private fun scorePatternCandidates(
+    field: String,
+    availableColumns: List<Int>,
+    columnSamples: List<ColumnSample>,
+    numericMedianRank: Map<Int, Double>,
+    dataRows: List<List<String>>
+): List<ExcelColumnCandidate> {
+    val minEvidence = minimumEvidenceFor(dataRows.size)
+    return availableColumns.map { col ->
+        val sample = columnSamples[col]
+        val reasons = mutableListOf<String>()
+        val score = when (field) {
+            "barcode" -> {
+                if (sample.nonBlankValues.size < minEvidence) {
+                    reasons += "insufficient-evidence"
+                    0.0
+                } else {
+                    reasons += "digits=${"%.2f".format(sample.digitLongRatio)}"
+                    reasons += "len=${"%.2f".format(sample.dominantLengthShare)}"
+                    (sample.numericRatio * 0.20) +
+                        (sample.digitLongRatio * 0.55) +
+                        (sample.dominantLengthShare * 0.15) +
+                        ((1.0 - sample.alphaNumericRatio) * 0.10)
+                }
+            }
+            "itemNumber" -> {
+                if (sample.nonBlankValues.size < minEvidence) {
+                    reasons += "insufficient-evidence"
+                    0.0
+                } else {
+                    reasons += "short=${"%.2f".format(sample.shortCodeRatio)}"
+                    reasons += "alphaNum=${"%.2f".format(sample.alphaNumericRatio)}"
+                    (sample.numericRatio * 0.15) +
+                        (sample.shortCodeRatio * 0.45) +
+                        (sample.alphaNumericRatio * 0.20) +
+                        ((1.0 - sample.digitLongRatio) * 0.20)
+                }
+            }
+            "productName" -> {
+                if (sample.nonBlankValues.size < minEvidence) {
+                    reasons += "insufficient-evidence"
+                    0.0
+                } else {
+                    reasons += "text=${"%.2f".format(sample.textRatio)}"
+                    reasons += "long=${"%.2f".format(sample.longTextRatio)}"
+                    (sample.textRatio * 0.55) +
+                        (sample.longTextRatio * 0.30) +
+                        ((1.0 - sample.numericRatio) * 0.15)
+                }
+            }
+            "quantity" -> {
+                if (sample.numericValues.size < minEvidence) {
+                    reasons += "insufficient-evidence"
+                    0.0
+                } else {
+                    val rank = numericMedianRank[sample.columnIndex] ?: 0.5
+                    val rowNumberLike = rowNumberLikeRatio(sample)
+                    reasons += "small=${"%.2f".format(sample.smallPositiveRatio)}"
+                    reasons += "rank=${"%.2f".format(rank)}"
+                    reasons += "seq=${"%.2f".format(rowNumberLike)}"
+                    (sample.numericRatio * 0.30) +
+                        (sample.integerRatio * 0.20) +
+                        (sample.smallPositiveRatio * 0.25) +
+                        ((1.0 - rank) * 0.15) +
+                        (sample.dominantValueShare * 0.10) -
+                        (rowNumberLike * 0.25)
+                }
+            }
+            "purchasePrice" -> {
+                if (sample.numericValues.size < minEvidence) {
+                    reasons += "insufficient-evidence"
+                    0.0
+                } else {
+                    val rank = numericMedianRank[sample.columnIndex] ?: 0.5
+                    reasons += "price=${"%.2f".format(sample.priceLikeMagnitudeRatio)}"
+                    reasons += "rank=${"%.2f".format(rank)}"
+                    (sample.numericRatio * 0.30) +
+                        (sample.priceLikeMagnitudeRatio * 0.20) +
+                        (rank * 0.20) +
+                        (sample.decimalRawRatio * 0.10) +
+                        ((1.0 - sample.digitLongRatio) * 0.05) +
+                        ((1.0 - sample.dominantValueShare) * 0.05) +
+                        ((1.0 - sample.shortCodeRatio) * 0.10)
+                }
+            }
+            "totalPrice" -> {
+                val quantityCol = availableColumns.firstOrNull()
+                val purchaseCol = availableColumns.getOrNull(1)
+                if (quantityCol == null || purchaseCol == null) {
+                    reasons += "missing-dependencies"
+                    0.0
+                } else {
+                    val matches = dataRows.count { row ->
+                        val quantity = parseAnalysisNumber(row.getOrNull(quantityCol))
+                        val purchase = parseAnalysisNumber(row.getOrNull(purchaseCol))
+                        val total = parseAnalysisNumber(row.getOrNull(col))
+                        if (quantity == null || purchase == null || total == null) return@count false
+                        val expected = quantity * purchase
+                        val epsilon = 0.10 * expected.coerceAtLeast(1.0)
+                        kotlin.math.abs(total - expected) <= epsilon
+                    }
+                    reasons += "mul=${"%.2f".format(ratio(matches, dataRows.size))}"
+                    ratio(matches, dataRows.size)
+                }
+            }
+            else -> 0.0
+        }
+        ExcelColumnCandidate(
+            columnIndex = col,
+            score = score.coerceIn(0.0, 1.0),
+            reasons = reasons
+        )
+    }.sortedWith(
+        compareByDescending<ExcelColumnCandidate> { it.score }
+            .thenBy { it.columnIndex }
+    )
+}
+
+private fun confidenceFor(
+    selected: ExcelColumnCandidate,
+    runnerUp: ExcelColumnCandidate?
+): String {
+    return when {
+        selected.score < MIN_PATTERN_SCORE -> "low"
+        runnerUp == null -> "high"
+        selected.score - runnerUp.score <= AMBIGUITY_MARGIN -> "low"
+        selected.score >= 0.70 -> "high"
+        else -> "medium"
+    }
+}
+
+private fun shouldAssignCandidate(
+    selected: ExcelColumnCandidate,
+    runnerUp: ExcelColumnCandidate?
+): Boolean {
+    if (selected.score < MIN_PATTERN_SCORE) return false
+    if (runnerUp == null) return true
+    return selected.score - runnerUp.score > AMBIGUITY_MARGIN
+}
+
+private fun withPatternHeaderSource(
+    headerSource: MutableList<String>,
+    col: Int
+) {
+    if (headerSource.getOrNull(col) != "alias") {
+        headerSource[col] = "pattern"
+    }
+}
+
+private fun synthesizeFieldTraces(
+    fields: List<String>,
+    decisions: Map<String, ExcelFieldDecisionTrace>
+): List<ExcelFieldDecisionTrace> {
+    return fields.map { field ->
+        decisions[field] ?: ExcelFieldDecisionTrace(
+            field = field,
+            selectedColumnIndex = null,
+            confidence = "low",
+            reason = "not-evaluated",
+            candidates = emptyList()
+        )
+    }
+}
+
+private fun detectPurchaseTotalPair(
+    quantityCol: Int,
+    availableColumns: List<Int>,
+    columnSamples: List<ColumnSample>,
+    dataRows: List<List<String>>
+): NumericPairDetection? {
+    val minEvidence = minimumEvidenceFor(dataRows.size)
+    var best: NumericPairDetection? = null
+
+    availableColumns.forEachIndexed { index, firstCol ->
+        val firstMedian = columnSamples[firstCol].medianNumeric ?: return@forEachIndexed
+        for (secondCol in availableColumns.drop(index + 1)) {
+            val secondMedian = columnSamples[secondCol].medianNumeric ?: continue
+            val purchaseCol = if (firstMedian <= secondMedian) firstCol else secondCol
+            val totalCol = if (purchaseCol == firstCol) secondCol else firstCol
+            var informativeRows = 0
+            var matches = 0
+            var errorSum = 0.0
+            dataRows.forEach { row ->
+                val quantity = parseAnalysisNumber(row.getOrNull(quantityCol))
+                val purchase = parseAnalysisNumber(row.getOrNull(purchaseCol))
+                val total = parseAnalysisNumber(row.getOrNull(totalCol))
+                if (quantity == null || purchase == null || total == null) return@forEach
+                informativeRows += 1
+                val expected = quantity * purchase
+                errorSum += kotlin.math.abs(total - expected) / expected.coerceAtLeast(1.0)
+                val epsilon = 0.10 * expected.coerceAtLeast(1.0)
+                if (kotlin.math.abs(total - expected) <= epsilon) {
+                    matches += 1
+                }
+            }
+            val matchRatio = ratio(matches, informativeRows)
+            val averageRelativeError = if (informativeRows == 0) {
+                Double.POSITIVE_INFINITY
+            } else {
+                errorSum / informativeRows.toDouble()
+            }
+            val meetsEvidence = informativeRows >= minEvidence &&
+                (informativeRows > 1 || matchRatio >= 1.0)
+            val current = NumericPairDetection(
+                purchaseColumn = purchaseCol,
+                totalColumn = totalCol,
+                matchRatio = matchRatio,
+                averageRelativeError = averageRelativeError
+            )
+            val bestPair = best
+            val isBetter = when {
+                bestPair == null -> true
+                current.matchRatio > bestPair.matchRatio -> true
+                current.matchRatio < bestPair.matchRatio -> false
+                current.averageRelativeError < bestPair.averageRelativeError -> true
+                current.averageRelativeError > bestPair.averageRelativeError -> false
+                else -> current.purchaseColumn < bestPair.purchaseColumn
+            }
+            if (meetsEvidence && isBetter) {
+                best = NumericPairDetection(
+                    purchaseColumn = purchaseCol,
+                    totalColumn = totalCol,
+                    matchRatio = matchRatio,
+                    averageRelativeError = averageRelativeError
+                )
+            }
+        }
+    }
+
+    return best?.takeIf { detection ->
+        detection.matchRatio >= if (dataRows.size <= 1) 1.0 else 0.70
+    }
+}
+
+private fun rowNumberLikeRatio(sample: ColumnSample): Double {
+    var informative = 0
+    var matches = 0
+    sample.values.forEachIndexed { index, value ->
+        val number = parseAnalysisNumber(value) ?: return@forEachIndexed
+        if (number != number.toLong().toDouble()) return@forEachIndexed
+        informative += 1
+        if (number.toLong() == (index + 1).toLong()) {
+            matches += 1
+        }
+    }
+    return ratio(matches, informative)
+}
+
+private fun shouldSkipHeaderAlias(
+    key: String,
+    rawHeader: String,
+    sample: ColumnSample
+): Boolean {
+    if (key != "itemNumber") return false
+    if (normalizeHeader(rawHeader) != normalizeHeader("ref.cajas")) return false
+    return rowNumberLikeRatio(sample) >= MIN_ROW_NUMBER_LIKE_RATIO
 }
 
 private fun analyzeRows(
     context: Context,
     rows: List<List<String>>
 ): Triple<List<String>, List<List<String>>, List<String>> {
-    // Trova la prima riga "intestazione dati"
-    var dataRowIdx = -1
-    for ((idx, row) in rows.withIndex()) {
-        val numericCount = row.count { it.replace(",", ".").toDoubleOrNull() != null }
-        val textCount = row.count { it.isNotBlank() && it.replace(",", ".").toDoubleOrNull() == null }
-        if (numericCount >= 3 && textCount >= 1) {
-            dataRowIdx = idx
-            break
-        }
-    }
-    val hasHeader = (dataRowIdx > 0 && dataRowIdx < rows.size)
+    val result = analyzeRowsDetailed(context, rows)
+    return Triple(result.header, result.dataRows, result.headerSource)
+}
+
+internal fun analyzeRowsDetailed(
+    context: Context,
+    rows: List<List<String>>
+): ExcelAnalysisResult {
+    val profiles = buildRowProfiles(rows)
+    val headerDetection = detectHeader(rows, profiles)
+    val hasHeader = headerDetection.hasHeader
 
     var header: MutableList<String>
     var headerSource: MutableList<String>
     var dataRows: List<List<String>>
 
     if (hasHeader) {
-        header = rows[dataRowIdx - 1].toMutableList()
+        header = mergeHeaderRows(rows, headerDetection.headerRows).toMutableList()
         headerSource = MutableList(header.size) { "unknown" }
-        dataRows = rows.drop(dataRowIdx).filter { row ->
-            val numericCount = row.count { it.replace(",", ".").toDoubleOrNull() != null }
-            val textCount = row.count { it.isNotBlank() && it.replace(",", ".").toDoubleOrNull() == null }
-            numericCount >= 3 && textCount >= 1
+        val start = headerDetection.dataRowIdx.coerceAtLeast(0)
+        dataRows = rows.drop(start).filter { row ->
+            val numericCount = row.count { parseAnalysisNumber(it) != null }
+            val textCount = row.count { it.isNotBlank() && parseAnalysisNumber(it) == null }
+            val nonBlankCount = row.count { it.isNotBlank() }
+            nonBlankCount >= 4 && numericCount >= 2 && textCount >= 1
         }
     } else {
         val colCount = rows.maxOfOrNull { it.size } ?: 0
-        header = (1..colCount).map { "${context.getString(R.string.generated_column_prefix)} $it" }.toMutableList()
+        header = (1..colCount).map {
+            "${context.getString(R.string.generated_column_prefix)} $it"
+        }.toMutableList()
         headerSource = MutableList(header.size) { "generated" }
         dataRows = rows
     }
-    if (dataRows.isEmpty()) return Triple(header, dataRows, headerSource)
+    if (dataRows.isEmpty()) {
+        return ExcelAnalysisResult(
+            header = header,
+            dataRows = dataRows,
+            headerSource = headerSource,
+            trace = ExcelAnalysisTrace(
+                hasHeader = hasHeader,
+                dataRowIdx = headerDetection.dataRowIdx,
+                headerRows = headerDetection.headerRows,
+                headerMode = headerDetection.headerMode,
+                sampleSize = 0,
+                fieldDecisions = emptyList()
+            )
+        )
+    }
 
-    // --- Alias (uguali a prima) ---
+    val aligned = alignTabularWidths(header, headerSource, dataRows)
+    header = aligned.first
+    headerSource = aligned.second
+    dataRows = aligned.third
+
     val possibleNames = KNOWN_EXCEL_HEADER_ALIASES
-
     val headerMap = mutableMapOf<String, Int>()
     val usedCols = mutableSetOf<Int>()
+    val decisionTraces = mutableMapOf<String, ExcelFieldDecisionTrace>()
 
+    val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
+    header = prunedColumns.header
+    headerSource = prunedColumns.headerSource
+    dataRows = prunedColumns.dataRows
+
+    val colCount = header.size
+    val threshold = (dataRows.size * 0.5).toInt().coerceAtLeast(1)
+    val rawHeader = header.toList()
+
+    val columnSamples = buildColumnSamples(dataRows, colCount)
     if (hasHeader) {
         val prioritizedKeys = listOf("retailPrice", "purchasePrice") +
-                possibleNames.keys.filterNot { it == "retailPrice" || it == "purchasePrice" }
+            possibleNames.keys.filterNot { it == "retailPrice" || it == "purchasePrice" }
 
         for (key in prioritizedKeys) {
             val aliases = possibleNames[key] ?: continue
-            val foundIdx = header.indexOfFirst { colName ->
+            val foundIdx = rawHeader.indexOfFirst { colName ->
                 if (normalizeHeader(colName).isBlank()) false else {
                     val normCol = normalizeHeader(colName)
                     aliases.any { alias -> normCol == normalizeHeader(alias) }
                 }
             }
             if (foundIdx >= 0 && !usedCols.contains(foundIdx)) {
+                if (shouldSkipHeaderAlias(key, rawHeader[foundIdx], columnSamples[foundIdx])) {
+                    decisionTraces[key] = ExcelFieldDecisionTrace(
+                        field = key,
+                        selectedColumnIndex = null,
+                        confidence = "low",
+                        reason = "header-alias-rejected",
+                        candidates = listOf(
+                            ExcelColumnCandidate(
+                                columnIndex = foundIdx,
+                                score = 0.0,
+                                reasons = listOf("row-number-like-ref-cajas")
+                            )
+                        )
+                    )
+                    continue
+                }
                 headerMap[key] = foundIdx
                 usedCols.add(foundIdx)
                 header[foundIdx] = key
                 headerSource[foundIdx] = "alias"
+                decisionTraces[key] = ExcelFieldDecisionTrace(
+                    field = key,
+                    selectedColumnIndex = foundIdx,
+                    confidence = "high",
+                    reason = "header-alias",
+                    candidates = listOf(
+                        ExcelColumnCandidate(
+                            columnIndex = foundIdx,
+                            score = 1.0,
+                            reasons = listOf("alias-match")
+                        )
+                    )
+                )
             }
         }
-
-        val newHeaderMap = mutableMapOf<String, Int>()
-        val newUsedCols = mutableSetOf<Int>()
-        val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
-        header = prunedColumns.header
-        headerSource = prunedColumns.headerSource
-        dataRows = prunedColumns.dataRows
-        for ((k, oldIdx) in headerMap) {
-            prunedColumns.oldToNewIndex[oldIdx]?.let { newIdx ->
-                newHeaderMap[k] = newIdx
-                newUsedCols.add(newIdx)
-            }
-        }
-        headerMap.clear(); headerMap.putAll(newHeaderMap)
-        usedCols.clear(); usedCols.addAll(newUsedCols)
-    } else {
-        val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
-        header = prunedColumns.header
-        headerSource = prunedColumns.headerSource
-        dataRows = prunedColumns.dataRows
     }
+    val minEvidence = minimumEvidenceFor(dataRows.size)
+    val rankedNumericColumns = columnSamples
+        .filter { it.numericValues.size >= minEvidence && it.digitLongRatio < 0.90 }
+        .sortedBy { it.medianNumeric ?: Double.MAX_VALUE }
+    val numericMedianRank = rankedNumericColumns
+        .withIndex()
+        .associate { (index, sample) ->
+            sample.columnIndex to if (rankedNumericColumns.size <= 1) {
+                0.5
+            } else {
+                ratio(index, rankedNumericColumns.size - 1)
+            }
+        }
 
-    val colCount = header.size
-    val threshold = (dataRows.size * 0.5).toInt()
-
-    fun setIfFound(key: String, col: Int) {
+    fun setPatternField(key: String, col: Int, trace: ExcelFieldDecisionTrace) {
         if (usedCols.contains(col)) return
         headerMap[key] = col
         usedCols.add(col)
         header[col] = key
-        if (headerSource[col] != "alias") headerSource[col] = "pattern"
+        withPatternHeaderSource(headerSource, col)
+        decisionTraces[key] = trace.copy(selectedColumnIndex = col)
     }
 
-    // Pattern principali
-    val principali = listOf("itemNumber", "barcode", "productName", "quantity", "purchasePrice", "totalPrice")
-    for (key in principali) {
-        if (!headerMap.containsKey(key)) {
-            when (key) {
-                "barcode" -> {
-                    for (col in 0 until colCount) {
-                        if (usedCols.contains(col)) continue
-                        val matches = dataRows.count { row ->
-                            val v = row.getOrNull(col)?.trim() ?: ""
-                            (v.length in listOf(8,12,13) && v.all(Char::isDigit))
-                        }
-                        if (matches >= threshold) { setIfFound("barcode", col); break }
-                    }
+    val firstPassFields = listOf("barcode", "productName", "quantity")
+
+    val pendingFieldCandidates = firstPassFields
+        .filterNot(headerMap::containsKey)
+        .associateWith { field ->
+            scorePatternCandidates(
+                field = field,
+                availableColumns = (0 until colCount).filterNot(usedCols::contains),
+                columnSamples = columnSamples,
+                numericMedianRank = numericMedianRank,
+                dataRows = dataRows
+            )
+        }
+
+    val greedyFieldOrder = pendingFieldCandidates
+        .entries
+        .sortedWith(
+            compareByDescending<Map.Entry<String, List<ExcelColumnCandidate>>> {
+                it.value.firstOrNull()?.score ?: 0.0
+            }.thenBy { firstPassFields.indexOf(it.key) }
+        )
+        .map { it.key }
+
+    for (field in greedyFieldOrder) {
+        val ranked = pendingFieldCandidates[field].orEmpty()
+        val availableRanked = ranked.filterNot { usedCols.contains(it.columnIndex) }
+        val selected = availableRanked.firstOrNull()
+        val runnerUp = availableRanked.getOrNull(1)
+        if (selected != null) {
+            val confidence = confidenceFor(selected, runnerUp)
+            val reason = if (shouldAssignCandidate(selected, runnerUp)) {
+                "pattern-score"
+            } else {
+                "low-confidence"
+            }
+            val trace = ExcelFieldDecisionTrace(
+                field = field,
+                selectedColumnIndex = if (shouldAssignCandidate(selected, runnerUp)) {
+                    selected.columnIndex
+                } else {
+                    null
+                },
+                confidence = confidence,
+                reason = reason,
+                candidates = availableRanked.take(3)
+            )
+            decisionTraces[field] = trace
+            if (shouldAssignCandidate(selected, runnerUp)) {
+                setPatternField(field, selected.columnIndex, trace)
+            }
+        } else {
+            decisionTraces[field] = ExcelFieldDecisionTrace(
+                field = field,
+                selectedColumnIndex = null,
+                confidence = "low",
+                reason = "no-candidate",
+                candidates = emptyList()
+            )
+        }
+    }
+
+    if (!headerMap.containsKey("purchasePrice") || !headerMap.containsKey("totalPrice")) {
+        val quantityIdx = headerMap["quantity"]
+        if (quantityIdx != null) {
+            val pair = detectPurchaseTotalPair(
+                quantityCol = quantityIdx,
+                availableColumns = (0 until colCount).filterNot(usedCols::contains),
+                columnSamples = columnSamples,
+                dataRows = dataRows
+            )
+            if (pair != null) {
+                if (!headerMap.containsKey("purchasePrice")) {
+                    val purchaseTrace = ExcelFieldDecisionTrace(
+                        field = "purchasePrice",
+                        selectedColumnIndex = pair.purchaseColumn,
+                        confidence = "high",
+                        reason = "quantity-multiplication",
+                        candidates = listOf(
+                            ExcelColumnCandidate(
+                                columnIndex = pair.purchaseColumn,
+                                score = pair.matchRatio,
+                                reasons = listOf("pair=${"%.2f".format(pair.matchRatio)}")
+                            )
+                        )
+                    )
+                    setPatternField("purchasePrice", pair.purchaseColumn, purchaseTrace)
                 }
-                "itemNumber" -> {
-                    for (col in 0 until colCount) {
-                        if (usedCols.contains(col)) continue
-                        val matches = dataRows.count { row ->
-                            val v = row.getOrNull(col)?.trim() ?: ""
-                            v.length in 4..12 && (v.any { it.isDigit() } || v.any { it.isLetter() })
-                        }
-                        if (matches >= dataRows.size * 0.5) { setIfFound("itemNumber", col); break }
-                    }
+                if (!headerMap.containsKey("totalPrice")) {
+                    val totalTrace = ExcelFieldDecisionTrace(
+                        field = "totalPrice",
+                        selectedColumnIndex = pair.totalColumn,
+                        confidence = "high",
+                        reason = "quantity-multiplication",
+                        candidates = listOf(
+                            ExcelColumnCandidate(
+                                columnIndex = pair.totalColumn,
+                                score = pair.matchRatio,
+                                reasons = listOf("pair=${"%.2f".format(pair.matchRatio)}")
+                            )
+                        )
+                    )
+                    setPatternField("totalPrice", pair.totalColumn, totalTrace)
                 }
-                "quantity" -> {
-                    for (col in 0 until colCount) {
-                        if (usedCols.contains(col)) continue
-                        val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-                        if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
-                            setIfFound("quantity", col); break
-                        }
-                    }
+            }
+        }
+    }
+
+    val secondPassFields = listOf("itemNumber", "purchasePrice")
+    secondPassFields
+        .filterNot(headerMap::containsKey)
+        .forEach { field ->
+            val availableRanked = scorePatternCandidates(
+                field = field,
+                availableColumns = (0 until colCount).filterNot(usedCols::contains),
+                columnSamples = columnSamples,
+                numericMedianRank = numericMedianRank,
+                dataRows = dataRows
+            )
+            val selected = availableRanked.firstOrNull()
+            val runnerUp = availableRanked.getOrNull(1)
+            if (selected != null) {
+                val assign = shouldAssignCandidate(selected, runnerUp)
+                val trace = ExcelFieldDecisionTrace(
+                    field = field,
+                    selectedColumnIndex = if (assign) selected.columnIndex else null,
+                    confidence = confidenceFor(selected, runnerUp),
+                    reason = if (assign) "pattern-score" else "low-confidence",
+                    candidates = availableRanked.take(3)
+                )
+                decisionTraces[field] = trace
+                if (assign) {
+                    setPatternField(field, selected.columnIndex, trace)
                 }
-                "purchasePrice" -> {
-                    for (col in 0 until colCount) {
-                        if (usedCols.contains(col)) continue
-                        val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-                        if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
-                            setIfFound("purchasePrice", col); break
-                        }
-                    }
-                }
-                "totalPrice" -> {
-                    val idxQuantity = headerMap["quantity"] ?: -1
-                    val idxPurchase = headerMap["purchasePrice"] ?: -1
-                    if (idxQuantity != -1 && idxPurchase != -1) {
-                        for (col in 0 until colCount) {
-                            if (usedCols.contains(col)) continue
-                            val matches = dataRows.count { row ->
-                                val quantity = parseNumber(row.getOrNull(idxQuantity))
-                                val purchase = parseNumber(row.getOrNull(idxPurchase))
-                                val tot      = parseNumber(row.getOrNull(col))
-                                if (quantity == null || purchase == null || tot == null) return@count false
-                                val expected = quantity * purchase
-                                val epsilon = 0.10 * (expected.coerceAtLeast(1.0))
-                                kotlin.math.abs(tot - expected) <= epsilon
-                            }
-                            if (matches >= dataRows.size * 0.7) {
-                                setIfFound("totalPrice", col)
-                                break
-                            }
-                        }
-                    }
-                }
-                "productName" -> {
-                    for (col in 0 until colCount) {
-                        if (usedCols.contains(col)) continue
-                        val matches = dataRows.count { row ->
-                            val v = row.getOrNull(col)?.trim() ?: ""
-                            v.length >= 3
-                        }
-                        if (matches >= dataRows.size * 0.5) { setIfFound("productName", col); break }
-                    }
-                }
+            }
+        }
+
+    if (!headerMap.containsKey("totalPrice")) {
+        val quantityIdx = headerMap["quantity"]
+        val purchaseIdx = headerMap["purchasePrice"]
+        val ranked = if (quantityIdx != null && purchaseIdx != null) {
+            scorePatternCandidates(
+                field = "totalPrice",
+                availableColumns = (0 until colCount)
+                    .filterNot { usedCols.contains(it) }
+                    .let { listOf(quantityIdx, purchaseIdx) + it },
+                columnSamples = columnSamples,
+                numericMedianRank = numericMedianRank,
+                dataRows = dataRows
+            ).filterNot { it.columnIndex == quantityIdx || it.columnIndex == purchaseIdx }
+        } else {
+            emptyList()
+        }
+        val selected = ranked.firstOrNull()
+        val runnerUp = ranked.getOrNull(1)
+        if (selected != null) {
+            val confidence = confidenceFor(selected, runnerUp)
+            val trace = ExcelFieldDecisionTrace(
+                field = "totalPrice",
+                selectedColumnIndex = if (shouldAssignCandidate(selected, runnerUp)) {
+                    selected.columnIndex
+                } else {
+                    null
+                },
+                confidence = confidence,
+                reason = if (shouldAssignCandidate(selected, runnerUp)) {
+                    "total-multiplication"
+                } else {
+                    "low-confidence"
+                },
+                candidates = ranked.take(3)
+            )
+            decisionTraces["totalPrice"] = trace
+            if (shouldAssignCandidate(selected, runnerUp)) {
+                setPatternField("totalPrice", selected.columnIndex, trace)
             }
         }
     }
 
     if (!hasHeader) {
-        val supplementari = listOf("retailPrice", "secondProductName", "supplier", "discount", "discountedPrice", "rowNumber")
+        val supplementari = listOf(
+            "retailPrice",
+            "secondProductName",
+            "supplier",
+            "discount",
+            "discountedPrice",
+            "rowNumber"
+        )
         for (key in supplementari) {
             if (!headerMap.containsKey(key)) {
                 when (key) {
                     "retailPrice", "discountedPrice" -> {
                         for (col in 0 until colCount) {
                             if (usedCols.contains(col)) continue
-                            val nums = dataRows.mapNotNull { it.getOrNull(col)?.replace(",", ".")?.toDoubleOrNull() }
-                            if (nums.isNotEmpty() && nums.all { it > 0 } && nums.size >= dataRows.size * 0.7) {
-                                setIfFound(key, col); break
+                            val sample = columnSamples[col]
+                            val nums = dataRows.mapNotNull { row ->
+                                parseAnalysisNumber(row.getOrNull(col))
+                            }
+                            if (
+                                nums.isNotEmpty() &&
+                                nums.all { it > 0 } &&
+                                nums.size >= dataRows.size * 0.7 &&
+                                sample.shortCodeRatio < 0.5
+                            ) {
+                                headerMap[key] = col
+                                usedCols.add(col)
+                                header[col] = key
+                                withPatternHeaderSource(headerSource, col)
+                                break
                             }
                         }
                     }
@@ -480,9 +1235,15 @@ private fun analyzeRows(
                             if (usedCols.contains(col)) continue
                             val matches = dataRows.count { row ->
                                 val v = row.getOrNull(col)?.trim() ?: ""
-                                v.length >= 3
+                                v.length >= 3 && parseAnalysisNumber(v) == null
                             }
-                            if (matches >= dataRows.size * 0.5) { setIfFound(key, col); break }
+                            if (matches >= dataRows.size * 0.5) {
+                                headerMap[key] = col
+                                usedCols.add(col)
+                                header[col] = key
+                                withPatternHeaderSource(headerSource, col)
+                                break
+                            }
                         }
                     }
                     "discount" -> {
@@ -490,9 +1251,16 @@ private fun analyzeRows(
                             if (usedCols.contains(col)) continue
                             val matches = dataRows.count { row ->
                                 val v = row.getOrNull(col)?.trim() ?: ""
-                                v.matches(Regex("""^(0[.,]\d{1,2})$""")) || v.matches(Regex("""^\d{1,2}%$"""))
+                                v.matches(Regex("""^(0[.,]\d{1,2})$""")) ||
+                                    v.matches(Regex("""^\d{1,2}%$"""))
                             }
-                            if (matches >= threshold) { setIfFound("discount", col); break }
+                            if (matches >= threshold) {
+                                headerMap[key] = col
+                                usedCols.add(col)
+                                header[col] = key
+                                withPatternHeaderSource(headerSource, col)
+                                break
+                            }
                         }
                     }
                     "rowNumber" -> {
@@ -502,7 +1270,13 @@ private fun analyzeRows(
                                 val v = row.getOrNull(col)?.trim() ?: ""
                                 v.matches(Regex("""^\d+$""")) && v.length <= 6
                             }
-                            if (matches >= threshold) { setIfFound("rowNumber", col); break }
+                            if (matches >= threshold) {
+                                headerMap[key] = col
+                                usedCols.add(col)
+                                header[col] = key
+                                withPatternHeaderSource(headerSource, col)
+                                break
+                            }
                         }
                     }
                 }
@@ -567,21 +1341,51 @@ private fun analyzeRows(
         val name = valAt("productName")
         val item = valAt("itemNumber")
         val code = valAt("barcode")
-        val firstText = row.firstOrNull { it.isNotBlank() && it.replace(",", ".").toDoubleOrNull() == null }
+        val firstText = row.firstOrNull { it.isNotBlank() && parseAnalysisNumber(it) == null }
             ?.trim()?.lowercase().orEmpty()
         val looksLikeToken = summaryTokens.any { tok -> firstText.startsWith(tok) || name.lowercase().startsWith(tok) }
-        val manyNumbers = row.count { it.replace(",", ".").toDoubleOrNull() != null } >= 2
+        val manyNumbers = row.count { parseAnalysisNumber(it) != null } >= 2
         val lacksIdentity = code.isBlank() && item.isBlank() && name.length < 3
         return looksLikeToken && manyNumbers && lacksIdentity
     }
 
     dataRows = dataRows.filterNot { isSummaryRow(it) }
 
-    return Triple(header, dataRows, headerSource)
+    return ExcelAnalysisResult(
+        header = header,
+        dataRows = dataRows,
+        headerSource = headerSource,
+        trace = ExcelAnalysisTrace(
+            hasHeader = hasHeader,
+            dataRowIdx = headerDetection.dataRowIdx,
+            headerRows = headerDetection.headerRows,
+            headerMode = headerDetection.headerMode,
+            sampleSize = dataRows.take(MAX_PATTERN_SAMPLE_ROWS).size,
+            fieldDecisions = synthesizeFieldTraces(
+                fields = listOf(
+                    "itemNumber",
+                    "barcode",
+                    "productName",
+                    "quantity",
+                    "purchasePrice",
+                    "totalPrice"
+                ),
+                decisions = decisionTraces
+            )
+        )
+    )
 }
 
 fun analyzePoiSheet(context: Context, sheet: Sheet)
         : Triple<List<String>, List<List<String>>, List<String>> {
+    val result = analyzePoiSheetDetailed(context, sheet)
+    return Triple(result.header, result.dataRows, result.headerSource)
+}
+
+internal fun analyzePoiSheetDetailed(
+    context: Context,
+    sheet: Sheet
+): ExcelAnalysisResult {
     val fmt = DataFormatter()
     val rows = mutableListOf<List<String>>()
     for (r in 0..sheet.lastRowNum) {
@@ -589,5 +1393,5 @@ fun analyzePoiSheet(context: Context, sheet: Sheet)
         val last = row.lastCellNum.toInt().coerceAtLeast(0)
         rows += (0 until last).map { c -> fmt.formatCellValue(row.getCell(c)).trim() }
     }
-    return analyzeRows(context, normalizeTabularRows(rows))
+    return analyzeRowsDetailed(context, normalizeTabularRows(rows))
 }
