@@ -295,6 +295,9 @@
     <string name="edit_row">编辑行</string>
     <string name="save_changes">保存更改</string>
     <string name="row_updated">行已更新</string>
+    <string name="manual_row_added">行已添加</string>
+    <string name="manual_row_updated">行已保存</string>
+    <string name="manual_row_deleted">行已删除</string>
     <string name="scan_barcode_for_editing">扫描条码</string>
 
     <string name="duplicate_warnings_found">发现重复警告（%1$s）</string>

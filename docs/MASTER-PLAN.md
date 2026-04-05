@@ -592,6 +592,8 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Area        | UX / Feedback                                           |
 | Dipendenze  | Nessuna                                                 |
 | Descrizione | Aggiungere feedback visivo (snackbar/toast/flash) dopo salvataggio riga, sync, export completato. Attualmente l'utente non ha conferma che l'azione sia riuscita. |
+| File task   | `docs/TASKS/TASK-033-feedback-azioni-save-sync-export-conferma-visiva.md` |
+| Note tracking | **PLANNING** completato 2026-04-05 — audit repo-grounded in file task; attivazione `EXECUTION` solo su approvazione utente. |
 
 ### TASK-034 — DatabaseScreen: fix icone import/export + delete context
 | Campo       | Valore                                                  |

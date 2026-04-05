@@ -295,6 +295,9 @@
     <string name="edit_row">Editar fila</string>
     <string name="save_changes">Guardar cambios</string>
     <string name="row_updated">Fila actualizada</string>
+    <string name="manual_row_added">Fila agregada</string>
+    <string name="manual_row_updated">Fila guardada</string>
+    <string name="manual_row_deleted">Fila eliminada</string>
     <string name="scan_barcode_for_editing">Escanear código de barras</string>
 
     <string name="duplicate_warnings_found">Avisos de duplicados encontrados (%1$s)</string>

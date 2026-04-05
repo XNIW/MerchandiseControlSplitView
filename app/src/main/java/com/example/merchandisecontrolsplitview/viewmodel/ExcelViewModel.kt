@@ -664,18 +664,18 @@ class ExcelViewModel(
     }
 
     // 3. AGGIUNGI: Nuova funzione `suspend` per il salvataggio garantito
-    suspend fun saveCurrentStateToHistory(entryUid: Long) = withContext(Dispatchers.IO) { // <-- Cambia firma
-        repository.getHistoryEntryByUid(entryUid)?.let { entryToUpdate ->
-            val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
-            val updatedEntry = entryToUpdate.copy(
-                data = excelData.map { it.toList() },
-                editable = editableValues.map { row -> row.map { it.value } },
-                complete = completeStates.toList(),
-                paymentTotal = finalPaymentTotal,
-                missingItems = finalMissingItems
-            )
-            repository.updateHistoryEntry(updatedEntry)
-        }
+    suspend fun saveCurrentStateToHistory(entryUid: Long): Boolean = withContext(Dispatchers.IO) {
+        val entryToUpdate = repository.getHistoryEntryByUid(entryUid) ?: return@withContext false
+        val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
+        val updatedEntry = entryToUpdate.copy(
+            data = excelData.map { it.toList() },
+            editable = editableValues.map { row -> row.map { it.value } },
+            complete = completeStates.toList(),
+            paymentTotal = finalPaymentTotal,
+            missingItems = finalMissingItems
+        )
+        repository.updateHistoryEntry(updatedEntry)
+        true
     }
 
     fun loadHistoryEntry(entry: HistoryEntry) {
@@ -892,8 +892,11 @@ class ExcelViewModel(
             completeStates.add(false)
 
             // Salva lo stato completo nel DB
-            saveCurrentStateToHistory(entryUid)
-            lastUsedCategory.value = categoryName
+            if (saveCurrentStateToHistory(entryUid)) {
+                lastUsedCategory.value = categoryName
+                historyActionMessage.value = getApplication<Application>()
+                    .getString(R.string.manual_row_added)
+            }
         }
     }
 
@@ -903,8 +906,11 @@ class ExcelViewModel(
             if (dataIndex in excelData.indices) {
                 excelData[dataIndex] = rowData
                 // Non serve modificare editable/complete perché non sono usati qui
-                saveCurrentStateToHistory(entryUid)
-                lastUsedCategory.value = categoryName
+                if (saveCurrentStateToHistory(entryUid)) {
+                    lastUsedCategory.value = categoryName
+                    historyActionMessage.value = getApplication<Application>()
+                        .getString(R.string.manual_row_updated)
+                }
             }
         }
     }
@@ -923,7 +929,10 @@ class ExcelViewModel(
                     completeStates.removeAt(dataIndex)
                 }
 
-                saveCurrentStateToHistory(entryUid)
+                if (saveCurrentStateToHistory(entryUid)) {
+                    historyActionMessage.value = getApplication<Application>()
+                        .getString(R.string.manual_row_deleted)
+                }
             }
         }
     }

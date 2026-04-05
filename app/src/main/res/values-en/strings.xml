@@ -296,6 +296,9 @@
     <string name="edit_row">Edit Row</string>
     <string name="save_changes">Save Changes</string>
     <string name="row_updated">Row Updated</string>
+    <string name="manual_row_added">Row added</string>
+    <string name="manual_row_updated">Row saved</string>
+    <string name="manual_row_deleted">Row deleted</string>
     <string name="scan_barcode_for_editing">Scan barcode</string>
 
     <string name="duplicate_warnings_found">Duplicate warnings found (%1$s)</string>

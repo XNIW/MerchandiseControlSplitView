@@ -1026,6 +1026,174 @@ class ExcelViewModelTest {
         assertEquals(2, viewModel.editableValues.size)
         assertEquals(2, viewModel.completeStates.size)
         assertEquals("11112222", updatedEntry.captured.data[1][0])
+        assertEquals(
+            app.getString(R.string.manual_row_added),
+            viewModel.historyActionMessage.value
+        )
+    }
+
+    @Test
+    fun `addManualRow does not emit success feedback when history entry is missing`() = runTest {
+        coEvery { repository.getHistoryEntryByUid(11L) } returns null
+
+        viewModel.excelData.add(listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"))
+        viewModel.editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
+        viewModel.completeStates.add(false)
+
+        viewModel.addManualRow(
+            entryUid = 11L,
+            rowData = listOf("99990000", "Manual Product", "3.0", "5.0", "2", "Cat Z"),
+            categoryName = "Cat Z"
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        assertEquals(null, viewModel.historyActionMessage.value)
+        assertEquals(null, viewModel.lastUsedCategory.value)
+    }
+
+    @Test
+    fun `updateManualRow updates row history entry and emits localized feedback`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(2L) } returns historyEntry(
+            uid = 2L,
+            data = listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Before", "3.0", "5.0", "2", "Cat A")
+            ),
+            editable = listOf(listOf("", ""), listOf("", "")),
+            complete = listOf(false, false)
+        )
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Before", "3.0", "5.0", "2", "Cat A")
+            )
+        )
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf(""), mutableStateOf(""))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, false))
+
+        viewModel.updateManualRow(
+            entryUid = 2L,
+            index = 0,
+            rowData = listOf("11112222", "After", "4.0", "6.0", "3", "Cat B"),
+            categoryName = "Cat B"
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.historyActionMessage.value == app.getString(R.string.manual_row_updated) }
+
+        assertEquals("After", viewModel.excelData[1][1])
+        assertEquals("Cat B", viewModel.lastUsedCategory.value)
+        assertEquals("After", updatedEntry.captured.data[1][1])
+        assertEquals(
+            app.getString(R.string.manual_row_updated),
+            viewModel.historyActionMessage.value
+        )
+    }
+
+    @Test
+    fun `updateManualRow does not emit success feedback when history entry is missing`() = runTest {
+        coEvery { repository.getHistoryEntryByUid(12L) } returns null
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Before", "3.0", "5.0", "2", "Cat A")
+            )
+        )
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf(""), mutableStateOf(""))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, false))
+
+        viewModel.updateManualRow(
+            entryUid = 12L,
+            index = 0,
+            rowData = listOf("11112222", "After", "4.0", "6.0", "3", "Cat B"),
+            categoryName = "Cat B"
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        assertEquals(null, viewModel.historyActionMessage.value)
+        assertEquals(null, viewModel.lastUsedCategory.value)
+    }
+
+    @Test
+    fun `deleteManualRow removes row state persists history entry and emits localized feedback`() = runTest {
+        val updatedEntry = slot<HistoryEntry>()
+        coEvery { repository.getHistoryEntryByUid(3L) } returns historyEntry(
+            uid = 3L,
+            data = listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Delete Me", "3.0", "5.0", "2", "Cat A")
+            ),
+            editable = listOf(listOf("", ""), listOf("", "")),
+            complete = listOf(false, false)
+        )
+        coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Delete Me", "3.0", "5.0", "2", "Cat A")
+            )
+        )
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf(""), mutableStateOf(""))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, false))
+
+        viewModel.deleteManualRow(entryUid = 3L, index = 0)
+        advanceUntilIdle()
+        waitForCondition { viewModel.historyActionMessage.value == app.getString(R.string.manual_row_deleted) }
+
+        assertEquals(1, viewModel.excelData.size)
+        assertEquals(1, viewModel.editableValues.size)
+        assertEquals(1, viewModel.completeStates.size)
+        assertEquals(1, updatedEntry.captured.data.size)
+        assertEquals(
+            app.getString(R.string.manual_row_deleted),
+            viewModel.historyActionMessage.value
+        )
+    }
+
+    @Test
+    fun `deleteManualRow does not emit success feedback when history entry is missing`() = runTest {
+        coEvery { repository.getHistoryEntryByUid(13L) } returns null
+
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category"),
+                listOf("11112222", "Delete Me", "3.0", "5.0", "2", "Cat A")
+            )
+        )
+        viewModel.editableValues.addAll(
+            listOf(
+                mutableListOf(mutableStateOf(""), mutableStateOf("")),
+                mutableListOf(mutableStateOf(""), mutableStateOf(""))
+            )
+        )
+        viewModel.completeStates.addAll(listOf(false, false))
+
+        viewModel.deleteManualRow(entryUid = 13L, index = 0)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        assertEquals(null, viewModel.historyActionMessage.value)
     }
 
     private fun createWorkbook(

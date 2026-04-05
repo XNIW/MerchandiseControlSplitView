@@ -308,6 +308,9 @@
     <string name="edit_row">Modifica riga</string>
     <string name="save_changes">Salva modifiche</string>
     <string name="row_updated">Riga aggiornata</string>
+    <string name="manual_row_added">Riga aggiunta</string>
+    <string name="manual_row_updated">Riga salvata</string>
+    <string name="manual_row_deleted">Riga eliminata</string>
     <string name="scan_barcode_for_editing">Scansiona codice a barre</string>
 
     <string name="duplicate_warnings_found">Avvisi duplicati trovati (%1$s)</string>

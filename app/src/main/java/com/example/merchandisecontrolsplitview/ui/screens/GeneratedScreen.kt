@@ -342,6 +342,7 @@ fun GeneratedScreen(
                     putExtra(Intent.EXTRA_SUBJECT, appNameText)
                     putExtra(Intent.EXTRA_TEXT, shareExportMessageText)
                 }
+                Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
                 context.startActivity(Intent.createChooser(share, shareXlsxText))
                 excelViewModel.markCurrentEntryAsExported(entryUid)
             } catch (_: Exception) {
