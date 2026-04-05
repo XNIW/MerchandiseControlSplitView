@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.util.formatGridNumericDisplay
+import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 
 @Composable
 fun ZoomableExcelGrid(
@@ -54,6 +55,12 @@ fun ZoomableExcelGrid(
     if (data.isEmpty()) return
 
     val appColors = MaterialTheme.appColors
+    val isDarkTheme = isSystemInDarkTheme()
+    val headerEssentialAlpha = if (isDarkTheme) 0.38f else 0.22f
+    val headerMetaAlpha = if (isDarkTheme) 0.28f else 0.14f
+    val rowErrorAlpha = if (isDarkTheme) 0.7f else 0.45f
+    val selectedColumnBorderAlpha = if (isDarkTheme) 0.82f else 0.60f
+    val completeAccentAlpha = if (isDarkTheme) 0.34f else 0.18f
 
     val columnCount = data[0].size
     if (selectedColumns.size != columnCount) {
@@ -64,6 +71,7 @@ fun ZoomableExcelGrid(
     val indexQuantita = columnCount - 3
     val indexPrezzo = columnCount - 2
     val indexCompleto = columnCount - 1
+    val originalQuantityIndex = columnKeys?.indexOf("quantity") ?: -1
 
     val horizontalState = rememberScrollState()
 
@@ -81,11 +89,11 @@ fun ZoomableExcelGrid(
                             // --- NUOVO: Verifica se la colonna è essenziale ---
                             val isEssential = isColumnEssential(ci)
 
-                            // --- MODIFICA: La logica dei colori ora include lo stato "essenziale" ---
+                            // Header/meta-state remain intentionally lighter than data-row priorities.
                             val headerBgColor = when {
-                                isEssential -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.6f)
-                                headerTypes?.getOrNull(ci) == "alias" -> appColors.gridAliasBackground
-                                headerTypes?.getOrNull(ci) == "pattern" -> appColors.gridPatternBackground
+                                isEssential -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = headerEssentialAlpha)
+                                headerTypes?.getOrNull(ci) == "alias" -> appColors.gridAliasBackground.copy(alpha = headerMetaAlpha)
+                                headerTypes?.getOrNull(ci) == "pattern" -> appColors.gridPatternBackground.copy(alpha = headerMetaAlpha)
                                 else -> null
                             }
 
@@ -114,10 +122,27 @@ fun ZoomableExcelGrid(
                             ?: false
                     } else false
                     val isComplete = completeStates.getOrNull(r) == true
+                    val countedQuantity = if (hasEditable) {
+                        parseUserQuantityInput(editableValues.getOrNull(r)?.getOrNull(0)?.value)
+                    } else {
+                        null
+                    }
+                    val originalQuantity = if (originalQuantityIndex != -1) {
+                        parseUserQuantityInput(row.getOrNull(originalQuantityIndex))
+                    } else {
+                        null
+                    }
+                    // Keep the row visibly incomplete when the counted quantity is lower than
+                    // the source-file quantity, even if the retail-price field is still blank.
+                    val hasIncompleteQuantity = !isComplete &&
+                        countedQuantity != null &&
+                        originalQuantity != null &&
+                        countedQuantity < originalQuantity
+                    val hasSecondaryRowState = bothFilled || hasIncompleteQuantity
                     val isErrorRow = errorRowIndexes.contains(r)
                     val highlightColor = if (isErrorRow) {
                         MaterialTheme.colorScheme.errorContainer.copy(
-                            alpha = if (isSystemInDarkTheme()) 0.7f else 0.45f
+                            alpha = rowErrorAlpha
                         )
                     } else {
                         null
@@ -154,7 +179,7 @@ fun ZoomableExcelGrid(
                                         }
                                         TableCell(
                                             text = text, width = cellWidth, height = cellHeight,
-                                            isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                            isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
                                             onCellClick = { onCellEditRequest(r, ci) },
                                             overrideBackgroundColor = highlightColor
                                         )
@@ -165,7 +190,7 @@ fun ZoomableExcelGrid(
                                             columnKey = columnKeys?.getOrNull(ci)
                                         ),
                                         width = cellWidth, height = cellHeight,
-                                        isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onQuantityCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
@@ -175,38 +200,47 @@ fun ZoomableExcelGrid(
                                             columnKey = columnKeys?.getOrNull(ci)
                                         ),
                                         width = cellWidth, height = cellHeight,
-                                        isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onPriceCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
                                     hasEditable && ci == indexCompleto -> {
-                                        val completeColor = appColors.successContainer
+                                        val isSelectedColumn = selectedColumns.getOrElse(ci) { false }
+                                        val completeBackgroundColor = when {
+                                            isErrorRow -> highlightColor!!
+                                            isComplete -> appColors.successContainer.copy(alpha = completeAccentAlpha)
+                                            else -> MaterialTheme.colorScheme.surface
+                                        }
+                                        val completeBorderColor = when {
+                                            isErrorRow -> MaterialTheme.colorScheme.error
+                                            isComplete -> appColors.success
+                                            isSelectedColumn -> MaterialTheme.colorScheme.primary.copy(alpha = selectedColumnBorderAlpha)
+                                            else -> MaterialTheme.colorScheme.outlineVariant
+                                        }
                                         Box(
                                             modifier = Modifier
                                                 .width(cellWidth)
                                                 .height(cellHeight)
-                                                .background(
-                                                    when {
-                                                        isErrorRow -> highlightColor!!
-                                                        isComplete -> completeColor
-                                                        else -> MaterialTheme.colorScheme.surface
-                                                    }
-                                                )
-                                                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                                                .background(completeBackgroundColor)
+                                                .border(if (isErrorRow || isSelectedColumn) 1.dp else 0.5.dp, completeBorderColor)
                                                 .clickable { onCompleteToggle(r) },
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Check,
                                                 contentDescription = stringResource(R.string.header_complete),
-                                                tint = if (isComplete) appColors.onSuccessContainer
-                                                else MaterialTheme.colorScheme.outline
+                                                tint = when {
+                                                    isErrorRow -> MaterialTheme.colorScheme.onErrorContainer
+                                                    isComplete -> appColors.success
+                                                    isSelectedColumn -> MaterialTheme.colorScheme.primary
+                                                    else -> MaterialTheme.colorScheme.outline
+                                                }
                                             )
                                         }
                                     }
                                     else -> TableCell(
                                         text = formattedCell, width = cellWidth, height = cellHeight,
-                                        isRowFilled = bothFilled, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
                                         onCellClick = { onRowCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )

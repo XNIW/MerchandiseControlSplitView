@@ -3,28 +3,29 @@ package com.example.merchandisecontrolsplitview.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.ui.res.stringResource
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
@@ -45,24 +46,44 @@ fun TableCell(
 ) {
     val appColors = MaterialTheme.appColors
     val spacing = MaterialTheme.appSpacing
+    val isDarkTheme = isSystemInDarkTheme()
     val defaultBackgroundColor = MaterialTheme.colorScheme.surface
+    val searchStateAlpha = if (isDarkTheme) 0.34f else 0.16f
+    val rowFilledBackgroundAlpha = if (isDarkTheme) 0.58f else 0.42f
+    val selectedColumnBorderAlpha = if (isDarkTheme) 0.82f else 0.60f
+    val filledBorderAlpha = if (isDarkTheme) 0.92f else 0.72f
+    val hasErrorOverride = overrideBackgroundColor != null && !isHeader
 
-    val finalBackgroundColor = overrideBackgroundColor ?: when {
-        isHeader -> MaterialTheme.colorScheme.surfaceVariant
+    // Visual priority: explicit override (error rows / header meta-state) > completed rows.
+    // Search, selected column and rowFilled stay secondary via light tint and border only.
+    val finalBackgroundColor = when {
+        hasErrorOverride -> overrideBackgroundColor
         isRowComplete -> appColors.successContainer
-        isRowFilled -> appColors.filledContainer
-        isSearchMatch -> MaterialTheme.colorScheme.tertiaryContainer
-        isSelectedColumn -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        isHeader -> overrideBackgroundColor ?: MaterialTheme.colorScheme.surfaceVariant
+        isSearchMatch -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = searchStateAlpha)
+        isRowFilled -> appColors.filledContainer.copy(alpha = rowFilledBackgroundAlpha)
         else -> defaultBackgroundColor
     }
 
     val textColor = when {
-        isHeader -> MaterialTheme.colorScheme.onSurfaceVariant
-        isSearchMatch -> MaterialTheme.colorScheme.onTertiaryContainer
-        isSelectedColumn -> MaterialTheme.colorScheme.onPrimaryContainer
+        hasErrorOverride -> MaterialTheme.colorScheme.onErrorContainer
         isRowComplete -> appColors.onSuccessContainer
         isRowFilled -> appColors.onFilledContainer
+        isHeader -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> MaterialTheme.colorScheme.onSurface
+    }
+
+    val borderColor = when {
+        hasErrorOverride -> MaterialTheme.colorScheme.error
+        isSearchMatch -> MaterialTheme.colorScheme.tertiary
+        isSelectedColumn && !isRowComplete -> MaterialTheme.colorScheme.primary.copy(alpha = selectedColumnBorderAlpha)
+        isRowFilled && !isRowComplete -> appColors.warning.copy(alpha = filledBorderAlpha)
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+
+    val borderThickness = when {
+        hasErrorOverride || isSearchMatch || (isSelectedColumn && !isRowComplete) || (isRowFilled && !isRowComplete) -> 1.dp
+        else -> 0.5.dp
     }
 
     Box(
@@ -70,7 +91,7 @@ fun TableCell(
             .width(width)
             .height(height)
             .background(finalBackgroundColor)
-            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            .border(borderThickness, borderColor)
             .then(
                 // L'intera cella rimane cliccabile per la selezione/deselezione
                 if (onCellClick != null) Modifier.clickable { onCellClick() }
