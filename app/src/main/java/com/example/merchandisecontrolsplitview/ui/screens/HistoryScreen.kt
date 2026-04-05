@@ -44,6 +44,8 @@ import java.util.Locale
 private val historyTimestampParser: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
 
+private val historyCompactSummarySpacing = 2.dp
+
 private fun formatHistoryTimestamp(timestamp: String, locale: Locale = Locale.getDefault()): String {
     val outputFormatter = DateTimeFormatter
         .ofLocalizedDateTime(FormatStyle.MEDIUM)
@@ -353,6 +355,8 @@ private fun HistoryRow(
     onDeleteClick: () -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
+    val statusIconsBottomInset = spacing.xxl + spacing.sm
+    val statusIconsEndInset = spacing.xxl + spacing.xxl + spacing.sm
     val currentLocale = Locale.getDefault()
     val displayTimestamp = remember(entry.timestamp, currentLocale) {
         formatHistoryTimestamp(entry.timestamp, currentLocale)
@@ -422,7 +426,12 @@ private fun HistoryRow(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = spacing.md, bottom = 32.dp, start = spacing.lg, end = 56.dp),
+                        .padding(
+                            top = spacing.md,
+                            bottom = statusIconsBottomInset,
+                            start = spacing.lg,
+                            end = statusIconsEndInset
+                        ),
                     verticalArrangement = Arrangement.spacedBy(spacing.xs)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -463,7 +472,7 @@ private fun HistoryRow(
                     }
 
                     if (entry.totalItems > 0) {
-                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(historyCompactSummarySpacing)) {
                             Text(
                                 text = "${stringResource(R.string.summary_label)}: ${formatClCount(entry.totalItems)} ${stringResource(R.string.products_label)}",
                                 style = MaterialTheme.typography.bodyMedium

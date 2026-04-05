@@ -593,7 +593,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Dipendenze  | Nessuna                                                 |
 | Descrizione | Aggiungere feedback visivo (snackbar/toast/flash) dopo salvataggio riga, sync, export completato. Attualmente l'utente non ha conferma che l'azione sia riuscita. |
 | File task   | `docs/TASKS/TASK-033-feedback-azioni-save-sync-export-conferma-visiva.md` |
-| Note tracking | **PLANNING** completato 2026-04-05 — audit repo-grounded in file task; attivazione `EXECUTION` solo su approvazione utente. |
+| Note tracking | **DONE** (2026-04-05) — execution/review completate; file task chiuso; nota storica: planning repo-grounded aveva preceduto l’approvazione a EXECUTION. |
 
 ### TASK-034 — DatabaseScreen: fix icone import/export + delete context
 | Campo       | Valore                                                  |
@@ -623,8 +623,10 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | Stato       | `BACKLOG`                                               |
 | Priorità    | `BASSA`                                                 |
 | Area        | UX / UI / HistoryScreen                                 |
-| Dipendenze  | TASK-030                                                |
+| Dipendenze  | TASK-030 (`DONE`)                                       |
+| File task   | `docs/TASKS/TASK-036-historyscreen-colori-tematizzati-padding-uniforme.md` |
 | Descrizione | Eliminare colori hardcoded residui, uniformare padding card, migliorare dark theme compliance. |
+| Note tracking | **PLANNING** completato 2026-04-05 — audit repo-grounded nel file task; perimetro = solo `HistoryScreen.kt`; attivazione `EXECUTION` / task `ACTIVE` solo su approvazione esplicita utente. |
 
 ### TASK-037 — Dialog unificati: forme, elevazioni, timeout
 | Campo       | Valore                                                  |
@@ -692,7 +694,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 1. **TASK-030 (ALTA, DONE, 2026-04-04)** — Design system: colori semantici, forme e spacing centralizzati. Fondamento per tutto il polish successivo; chiusura allineata al backlog e al file task.
 2. **TASK-031 (ALTA, DONE, 2026-04-05)** — Grid readability: riduzione rumore cromatico. Review repo-grounded chiusa con fix finale sul trigger di riga incompleta; file task aggiornato.
 3. **TASK-032 (ALTA, DONE, 2026-04-05)** — ManualEntryDialog: layout responsivo prezzi. Review repo-grounded chiusa con micro-fix locale di incapsulamento e file task aggiornato.
-4. **TASK-033 (ALTA, BACKLOG)** — Feedback azioni: save/sync/export.
+4. **TASK-033 (ALTA, DONE)** — Feedback azioni: save/sync/export conferma visiva.
 5. **TASK-034 (MEDIA, DONE, 2026-04-05)** — DatabaseScreen: fix icone + delete context; review repo-grounded chiusa, build/lint verdi, nessun fix aggiuntivo necessario.
 6. **TASK-037 (MEDIA, BACKLOG)** — Dialog unificati.
 7. **TASK-040 (MEDIA, BACKLOG)** — PreGenerate: supplier/category anticipati.
