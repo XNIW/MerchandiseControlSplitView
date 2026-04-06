@@ -393,6 +393,11 @@
     <string name="more_actions">Altre azioni</string>
     <string name="untitled">Senza titolo</string>
     <string name="exported_short">Esportato</string>
+    <string name="all_complete_banner_title">Tutto completato</string>
+    <string name="all_complete_banner_subtitle">Puoi esportare subito il file Excel.</string>
+    <string name="all_complete_banner_title_exported">Esportazione disponibile</string>
+    <string name="all_complete_banner_subtitle_exported">Puoi salvare una nuova copia del file Excel.</string>
+    <string name="export_now">Esporta ora</string>
     <string name="history_entry_renamed">File rinominato.</string>
     <string name="history_entry_deleted">File eliminato.</string>
     <string name="error_history_entry_rename">Impossibile rinominare il file.</string>

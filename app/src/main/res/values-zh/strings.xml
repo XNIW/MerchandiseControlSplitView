@@ -376,6 +376,11 @@
     <string name="more_actions">更多操作</string>
     <string name="untitled">未命名</string>
     <string name="exported_short">已导出</string>
+    <string name="all_complete_banner_title">全部完成</string>
+    <string name="all_complete_banner_subtitle">你可以立即导出 Excel 文件。</string>
+    <string name="all_complete_banner_title_exported">可导出副本</string>
+    <string name="all_complete_banner_subtitle_exported">你可以保存 Excel 文件的新副本。</string>
+    <string name="export_now">立即导出</string>
     <string name="history_entry_renamed">文件已重命名。</string>
     <string name="history_entry_deleted">文件已删除。</string>
     <string name="error_history_entry_rename">无法重命名该文件。</string>

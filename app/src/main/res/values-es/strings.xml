@@ -375,6 +375,11 @@ Acción no permitida. Faltan columnas esenciales: %1$s. Por favor, identifica es
     <string name="more_actions">Más acciones</string>
     <string name="untitled">Sin título</string>
     <string name="exported_short">Exportado</string>
+    <string name="all_complete_banner_title">Todo listo</string>
+    <string name="all_complete_banner_subtitle">Puedes exportar el archivo Excel ahora.</string>
+    <string name="all_complete_banner_title_exported">Exportación disponible</string>
+    <string name="all_complete_banner_subtitle_exported">Puedes guardar una nueva copia del archivo Excel.</string>
+    <string name="export_now">Exportar ahora</string>
     <string name="history_entry_renamed">Archivo renombrado.</string>
     <string name="history_entry_deleted">Archivo eliminado.</string>
     <string name="error_history_entry_rename">No se pudo renombrar el archivo.</string>

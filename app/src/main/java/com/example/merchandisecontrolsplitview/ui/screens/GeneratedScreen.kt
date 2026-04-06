@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -343,6 +344,33 @@ fun GeneratedScreen(
             }
         }
     }
+    val requestExcelExport: () -> Unit = { if (!isExporting) saveLauncher.launch(titleText) }
+    val showAllCompleteBanner by remember(generated, isManualEntry, excelData, completeStates) {
+        derivedStateOf {
+            val dataSize = excelData.size
+            val isManualDraftEmpty = isManualEntry && dataSize <= 1
+            generated &&
+                dataSize > 1 &&
+                !isManualDraftEmpty &&
+                completeStates.size >= dataSize &&
+                (1 until dataSize).all { row -> completeStates.getOrNull(row) == true }
+        }
+    }
+    val allCompleteBannerTitle = stringResource(
+        if (wasExported) {
+            R.string.all_complete_banner_title_exported
+        } else {
+            R.string.all_complete_banner_title
+        }
+    )
+    val allCompleteBannerSubtitle = stringResource(
+        if (wasExported) {
+            R.string.all_complete_banner_subtitle_exported
+        } else {
+            R.string.all_complete_banner_subtitle
+        }
+    )
+    val exportNowText = stringResource(R.string.export_now)
 
     fun shareXlsx() {
         scope.launch {
@@ -539,7 +567,7 @@ fun GeneratedScreen(
                 onNavigateBack = handleBackPress,
                 onNavigateHome = { showExitToHomeDialog = true },
                 onAnalyzeSync = { analyzeCurrentGrid() },
-                onExport = { saveLauncher.launch(titleText) },
+                onExport = requestExcelExport,
                 onShare = { shareXlsx() },
                 onRename = { openRenameDialog() }
             )
@@ -550,9 +578,27 @@ fun GeneratedScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            AnimatedVisibility(visible = showAllCompleteBanner) {
+                GeneratedScreenAllCompleteBanner(
+                    title = allCompleteBannerTitle,
+                    subtitle = allCompleteBannerSubtitle,
+                    ctaText = exportNowText,
+                    enabled = !isExporting,
+                    onExport = requestExcelExport,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = spacing.md,
+                            end = spacing.md,
+                            top = spacing.sm,
+                            bottom = spacing.md
+                        )
+                )
+            }
             Box(
                 Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
             ) {
                 GeneratedScreenGridHost(
                     excelData = excelData,
@@ -885,6 +931,117 @@ fun GeneratedScreen(
         }
     }
 
+}
+
+@Composable
+private fun GeneratedScreenAllCompleteBanner(
+    title: String,
+    subtitle: String,
+    ctaText: String,
+    enabled: Boolean,
+    onExport: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val spacing = MaterialTheme.appSpacing
+    val appColors = MaterialTheme.appColors
+    val titleTextStyle = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)
+        )
+    ) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = spacing.md, vertical = spacing.md)
+        ) {
+            val isCompact = maxWidth < 380.dp
+            val textBlock: @Composable (Modifier) -> Unit = { textModifier ->
+                Row(
+                    modifier = textModifier,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = appColors.success,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(spacing.xxs)
+                    ) {
+                        Text(
+                            text = title,
+                            style = titleTextStyle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            if (isCompact) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(spacing.md)
+                ) {
+                    textBlock(Modifier.fillMaxWidth())
+                    FilledTonalButton(
+                        onClick = onExport,
+                        enabled = enabled,
+                        modifier = Modifier.align(Alignment.End),
+                        contentPadding = PaddingValues(
+                            horizontal = spacing.md,
+                            vertical = spacing.sm
+                        )
+                    ) {
+                        Text(
+                            text = ctaText,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    textBlock(Modifier.weight(1f))
+                    FilledTonalButton(
+                        onClick = onExport,
+                        enabled = enabled,
+                        contentPadding = PaddingValues(
+                            horizontal = spacing.md,
+                            vertical = spacing.sm
+                        )
+                    ) {
+                        Text(
+                            text = ctaText,
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

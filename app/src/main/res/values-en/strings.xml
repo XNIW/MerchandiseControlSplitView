@@ -377,6 +377,11 @@ Action not allowed. Essential columns missing: %1$s. Please identify these colum
     <string name="more_actions">More actions</string>
     <string name="untitled">Untitled</string>
     <string name="exported_short">Exported</string>
+    <string name="all_complete_banner_title">All set</string>
+    <string name="all_complete_banner_subtitle">You can export the Excel file now.</string>
+    <string name="all_complete_banner_title_exported">Export available</string>
+    <string name="all_complete_banner_subtitle_exported">You can save a new copy of the Excel file.</string>
+    <string name="export_now">Export now</string>
     <string name="history_entry_renamed">File renamed.</string>
     <string name="history_entry_deleted">File deleted.</string>
     <string name="error_history_entry_rename">Could not rename the file.</string>
