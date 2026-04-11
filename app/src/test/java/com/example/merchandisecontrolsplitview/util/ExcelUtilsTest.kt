@@ -442,6 +442,72 @@ class ExcelUtilsTest {
     }
 
     @Test
+    fun `analyzePoiSheet filters hyperasian like footer rows with Chinese total labels`() {
+        withSheet(
+            listOf("rowNumber", "barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("1", "12345678", "ITEM-1", "Alpha", "2", "4", "8"),
+            listOf("2", "23456789", "ITEM-2", "Beta", "1", "5", "5"),
+            listOf("总数", "", "", "总价", "3", "9", "13")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val nameCol = header.indexOf("productName")
+
+            assertEquals(2, rows.size)
+            assertFalse(rows.any { row -> row.getOrNull(nameCol) == "总价" })
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet filters footer rows even when they keep false product identity`() {
+        withSheet(
+            listOf("rowNumber", "barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("1", "12345678", "ITEM-1", "Alpha", "2", "4", "8"),
+            listOf("2", "23456789", "ITEM-2", "Beta", "1", "5", "5"),
+            listOf("3", "0", "150", "合计总数", "3", "9", "13")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val itemCol = header.indexOf("itemNumber")
+
+            assertEquals(2, rows.size)
+            assertFalse(rows.any { row -> row.getOrNull(itemCol) == "150" })
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet filters footer rows when aggregates shift into identity columns`() {
+        withSheet(
+            listOf("产品货号", "条码", "产品名1", "产品名2", "数量", "单价", "总价"),
+            listOf("148995", "7877771489951", "6027水杯650ml(120)", "BOTELLA DE AGUA(120)", "12", "700", "8400"),
+            listOf("149346", "7877771493460", "横扫款 10cm粘毛器20撕 3pc(12/144）", "QUITA PELUSAS(12/144）", "12", "600", "7200"),
+            listOf("总数", "728.000", "总价", "685920.000", "", "", "")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val itemCol = header.indexOf("itemNumber")
+            val barcodeCol = header.indexOf("barcode")
+            val nameCol = header.indexOf("productName")
+
+            assertEquals(2, rows.size)
+            assertFalse(rows.any { row -> row.getOrNull(itemCol) == "总数" })
+            assertFalse(rows.any { row -> row.getOrNull(barcodeCol) == "728.000" })
+            assertFalse(rows.any { row -> row.getOrNull(nameCol) == "总价" })
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet keeps real products whose names start with total`() {
+        withSheet(
+            listOf("rowNumber", "barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("1", "12345678", "ITEM-001", "Total Care Shampoo", "5", "10", "50")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val nameCol = header.indexOf("productName")
+
+            assertEquals(1, rows.size)
+            assertEquals("Total Care Shampoo", rows.single()[nameCol])
+        }
+    }
+
+    @Test
     fun `analyzePoiSheet ensures barcode and purchasePrice columns when header is incomplete`() {
         withSheet(
             listOf("row", "product name", "qty", "totale"),

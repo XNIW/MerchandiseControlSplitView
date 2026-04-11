@@ -1331,22 +1331,109 @@ internal fun analyzeRowsDetailed(
         header = triple.first; dataRows = triple.second; headerSource = triple.third
     }
 
+    fun normalizeSummaryLabel(value: String): String {
+        return value.trim()
+            .lowercase()
+            .replace(Regex("[\\s:：()（）._-]"), "")
+    }
+
     val summaryTokens = listOf(
-        "合计","总计","小计","汇总","合計","總計","小計","總結","总额",
-        "subtotal","total","totale","tot.","sommario","resumen","sum"
-    ).map { it.lowercase() }
+        "合计", "总计", "小计", "汇总", "合計", "總計", "小計", "總結",
+        "总额", "总数", "总价", "总数量", "总金额", "总件数",
+        "subtotal", "total", "totale", "tot.", "sommario", "resumen", "sum"
+    ).map(::normalizeSummaryLabel)
+
+    val summarySuffixTokens = setOf(
+        "",
+        "总数", "总价", "总数量", "总金额", "总件数",
+        "quantity", "qty", "count", "price", "amount", "importe"
+    ).map(::normalizeSummaryLabel).toSet()
+
+    fun isSummaryLabel(value: String): Boolean {
+        val normalized = normalizeSummaryLabel(value)
+        if (normalized.isBlank()) return false
+        if (normalized in summaryTokens) return true
+        return summaryTokens.any { token ->
+            normalized.startsWith(token) &&
+                normalizeSummaryLabel(normalized.removePrefix(token)) in summarySuffixTokens
+        }
+    }
+
+    fun hasPlausibleItemIdentity(item: String): Boolean {
+        val trimmedItem = item.trim()
+        if (trimmedItem.isBlank() || isSummaryLabel(trimmedItem)) return false
+        val digitCount = trimmedItem.count(Char::isDigit)
+        val letterCount = trimmedItem.count(Char::isLetter)
+        val separatorCount = trimmedItem.count { it == '-' || it == '/' || it == '_' }
+        return when {
+            digitCount == trimmedItem.length -> digitCount >= 4
+            digitCount > 0 -> true
+            separatorCount > 0 -> true
+            letterCount == trimmedItem.length -> trimmedItem.length >= 5
+            else -> trimmedItem.length >= 4
+        }
+    }
+
+    fun hasPlausibleProductIdentity(code: String, item: String, name: String, secondName: String): Boolean {
+        val barcodeDigits = code.filter(Char::isDigit)
+        val trimmedName = name.trim()
+        val trimmedSecondName = secondName.trim()
+        val barcodeLooksPlausible = barcodeDigits.length >= 8
+        val itemLooksPlausible = hasPlausibleItemIdentity(item)
+        val nameLooksPlausible = trimmedName.length >= 3 && !isSummaryLabel(trimmedName)
+        val secondNameLooksPlausible = trimmedSecondName.length >= 3 && !isSummaryLabel(trimmedSecondName)
+        return barcodeLooksPlausible || itemLooksPlausible || nameLooksPlausible || secondNameLooksPlausible
+    }
+
+    fun hasShiftedAggregatePattern(
+        code: String,
+        item: String,
+        name: String,
+        secondName: String,
+        quantity: String,
+        purchase: String,
+        total: String,
+        retail: String,
+        discounted: String,
+        realQuantity: String
+    ): Boolean {
+        val numericIdentityCount = listOf(code, item, name, secondName)
+            .count { parseAnalysisNumber(it) != null }
+        val numericMeasureCount = listOf(quantity, purchase, total, retail, discounted, realQuantity)
+            .count { parseAnalysisNumber(it) != null }
+        return numericIdentityCount >= 1 && numericMeasureCount == 0
+    }
 
     fun isSummaryRow(row: List<String>): Boolean {
         fun valAt(key: String) = row.getOrNull(headerMap[key] ?: -1)?.trim().orEmpty()
         val name = valAt("productName")
+        val secondName = valAt("secondProductName")
         val item = valAt("itemNumber")
         val code = valAt("barcode")
+        val quantity = valAt("quantity")
+        val purchase = valAt("purchasePrice")
+        val total = valAt("totalPrice")
+        val retail = valAt("retailPrice")
+        val discounted = valAt("discountedPrice")
+        val realQuantity = valAt("realQuantity")
         val firstText = row.firstOrNull { it.isNotBlank() && parseAnalysisNumber(it) == null }
-            ?.trim()?.lowercase().orEmpty()
-        val looksLikeToken = summaryTokens.any { tok -> firstText.startsWith(tok) || name.lowercase().startsWith(tok) }
+            ?.trim().orEmpty()
+        val looksLikeToken = isSummaryLabel(firstText) || isSummaryLabel(name)
         val manyNumbers = row.count { parseAnalysisNumber(it) != null } >= 2
-        val lacksIdentity = code.isBlank() && item.isBlank() && name.length < 3
-        return looksLikeToken && manyNumbers && lacksIdentity
+        val lacksPlausibleIdentity = !hasPlausibleProductIdentity(code, item, name, secondName)
+        val shiftedAggregates = hasShiftedAggregatePattern(
+            code = code,
+            item = item,
+            name = name,
+            secondName = secondName,
+            quantity = quantity,
+            purchase = purchase,
+            total = total,
+            retail = retail,
+            discounted = discounted,
+            realQuantity = realQuantity
+        )
+        return looksLikeToken && manyNumbers && (lacksPlausibleIdentity || shiftedAggregates)
     }
 
     dataRows = dataRows.filterNot { isSummaryRow(it) }

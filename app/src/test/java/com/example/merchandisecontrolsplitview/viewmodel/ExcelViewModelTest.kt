@@ -669,6 +669,33 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `loadFromMultipleUris excludes footer rows with false product identity from preview`() = runTest {
+        val workbook = createWorkbook(
+            name = "load-footer-summary",
+            rows = hyperAsianLikeRows(
+                listOf(
+                    listOf("1", "12345678", "ITEM-1", "Alpha", "2", "4", "8"),
+                    listOf("2", "23456789", "ITEM-2", "Beta", "1", "5", "5")
+                ),
+                listOf("3", "0", "150", "合计总数", "3", "9", "13")
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(workbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 3 && !viewModel.isLoading.value }
+
+        val header = viewModel.excelData.first()
+        val nameCol = header.indexOf("productName")
+        val itemCol = header.indexOf("itemNumber")
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(3, viewModel.excelData.size)
+        assertFalse(viewModel.excelData.drop(1).any { row -> row.getOrNull(nameCol) == "合计总数" })
+        assertFalse(viewModel.excelData.drop(1).any { row -> row.getOrNull(itemCol) == "150" })
+    }
+
+    @Test
     fun `loadFromMultipleUris empty first workbook uses first file empty message`() = runTest {
         val emptyWorkbook = createWorkbook("excel-first-empty", emptyList())
 
@@ -1027,6 +1054,40 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `appendFromMultipleUris keeps footer rows excluded for compatible appended files`() = runTest {
+        val baseWorkbook = createWorkbook(
+            name = "append-footer-base",
+            rows = hyperAsianLikeRows(
+                listOf(listOf("1", "12345678", "ITEM-1", "Alpha", "2", "4", "8")),
+                listOf("2", "0", "2", "合计总数", "2", "4", "8")
+            )
+        )
+        val appendWorkbook = createWorkbook(
+            name = "append-footer-extra",
+            rows = hyperAsianLikeRows(
+                listOf(listOf("1", "23456789", "ITEM-2", "Beta", "1", "5", "5")),
+                listOf("2", "0", "1", "合计总数", "1", "5", "5")
+            )
+        )
+
+        viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
+
+        viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(appendWorkbook)))
+        advanceUntilIdle()
+        waitForCondition { viewModel.excelData.size == 3 && !viewModel.isLoading.value }
+
+        val header = viewModel.excelData.first()
+        val nameCol = header.indexOf("productName")
+
+        assertEquals(null, viewModel.loadError.value)
+        assertEquals(3, viewModel.excelData.size)
+        assertEquals("Beta", viewModel.excelData.last()[nameCol])
+        assertFalse(viewModel.excelData.drop(1).any { row -> row.getOrNull(nameCol) == "合计总数" })
+    }
+
+    @Test
     fun `createManualEntry persists manual history entry and loads it into state`() = runTest {
         val insertedEntry = slot<HistoryEntry>()
         val callback = mockk<(Long) -> Unit>(relaxed = true)
@@ -1260,6 +1321,15 @@ class ExcelViewModelTest {
             file.outputStream().use(workbook::write)
         }
         return file
+    }
+
+    private fun hyperAsianLikeRows(
+        products: List<List<Any?>>,
+        footer: List<Any?>
+    ): List<List<Any?>> {
+        return listOf(
+            listOf("rowNumber", "barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice")
+        ) + products + listOf(footer)
     }
 
     private fun captureGridState() = GridSnapshot(

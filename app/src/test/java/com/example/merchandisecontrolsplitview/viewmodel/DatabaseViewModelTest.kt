@@ -254,6 +254,34 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `startImportAnalysis excludes footer rows with false product identity`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+        val workbookFile = createWorkbook(
+            name = "import-footer-summary",
+            rows = hyperAsianLikeRows(
+                listOf(
+                    listOf("1", "12345678", "ITEM-1", "Alpha", "2", "4", "6", "8"),
+                    listOf("2", "23456789", "ITEM-2", "Beta", "1", "5", "8", "5")
+                ),
+                listOf("3", "0", "150", "合计总数", "3", "9", "14", "13")
+            )
+        )
+
+        viewModel.startImportAnalysis(app, Uri.fromFile(workbookFile))
+        advanceUntilIdle()
+        waitForCondition {
+            viewModel.importAnalysisResult.value != null || viewModel.uiState.value is UiState.Error
+        }
+
+        val result = viewModel.importAnalysisResult.value
+        assertNotNull(result)
+        assertEquals(2, result!!.newProducts.size)
+        assertTrue(result.newProducts.none { it.barcode == "0" })
+        assertTrue(result.newProducts.none { it.productName == "合计总数" })
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+    }
+
+    @Test
     fun `startImportAnalysis invalid file emits error state`() = runTest {
         val invalidFile = File.createTempFile("invalid-import", ".xlsx", app.cacheDir).apply {
             writeText("not an excel workbook")
@@ -723,6 +751,24 @@ class DatabaseViewModelTest {
             file.outputStream().use(workbook::write)
         }
         return file
+    }
+
+    private fun hyperAsianLikeRows(
+        products: List<List<Any>>,
+        footer: List<Any>
+    ): List<List<Any>> {
+        return listOf(
+            listOf(
+                "rowNumber",
+                "barcode",
+                "itemNumber",
+                "productName",
+                "quantity",
+                "purchasePrice",
+                "retailPrice",
+                "totalPrice"
+            )
+        ) + products + listOf(footer)
     }
 
     private fun waitForCondition(
