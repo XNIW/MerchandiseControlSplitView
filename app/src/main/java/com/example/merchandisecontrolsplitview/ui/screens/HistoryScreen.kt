@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -45,6 +44,7 @@ private val historyTimestampParser: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.ROOT)
 
 private val historyCompactSummarySpacing = 2.dp
+private val HistoryRootBottomClearance = 104.dp
 
 private fun formatHistoryTimestamp(timestamp: String, locale: Locale = Locale.getDefault()): String {
     val outputFormatter = DateTimeFormatter
@@ -59,6 +59,7 @@ private fun formatHistoryTimestamp(timestamp: String, locale: Locale = Locale.ge
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
+    contentPadding: PaddingValues = PaddingValues(),
     historyList: List<HistoryEntryListItem>,
     currentFilter: DateFilter,
     hasAnyHistoryEntries: Boolean,
@@ -67,8 +68,7 @@ fun HistoryScreen(
     onRename: (HistoryEntryListItem, String) -> Unit,
     onDelete: (HistoryEntryListItem) -> Unit,
     onHistoryActionMessageConsumed: () -> Unit,
-    onSetFilter: (DateFilter) -> Unit,
-    onBack: () -> Unit
+    onSetFilter: (DateFilter) -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -122,32 +122,53 @@ fun HistoryScreen(
     }
     val isFilterActive = currentFilter !is DateFilter.All
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(stringResource(R.string.history_title))
-                        if (isFilterActive) {
-                            Text(
-                                text = stringResource(R.string.history_filter_active, filterLabel),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                },
-                actions = {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+                .statusBarsPadding()
+                .padding(horizontal = spacing.xl, vertical = spacing.xl),
+            verticalArrangement = Arrangement.spacedBy(spacing.lg)
+        ) {
+            Text(
+                text = stringResource(R.string.history_root_title),
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.extraLarge,
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(spacing.lg),
+                    verticalArrangement = Arrangement.spacedBy(spacing.md)
+                ) {
+                    Text(
+                        text = stringResource(R.string.filter),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
                     Box {
-                        IconButton(onClick = { showFilterMenu = true }) {
+                        OutlinedButton(
+                            onClick = { showFilterMenu = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = filterLabel,
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Start
+                            )
+                            Spacer(modifier = Modifier.width(spacing.sm))
                             Icon(
-                                Icons.Default.FilterList,
+                                imageVector = Icons.Default.FilterList,
                                 contentDescription = stringResource(R.string.filter),
                                 tint = if (isFilterActive) {
                                     MaterialTheme.colorScheme.primary
@@ -156,6 +177,7 @@ fun HistoryScreen(
                                 }
                             )
                         }
+
                         DropdownMenu(
                             expanded = showFilterMenu,
                             onDismissRequest = { showFilterMenu = false }
@@ -191,56 +213,75 @@ fun HistoryScreen(
                             )
                         }
                     }
-                }
-            )
-        }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            if (historyList.isEmpty()) {
-                HistoryEmptyState(
-                    title = stringResource(
-                        if (hasAnyHistoryEntries) {
-                            R.string.history_filtered_empty_title
-                        } else {
-                            R.string.history_empty_title
-                        }
-                    ),
-                    message = stringResource(
-                        if (hasAnyHistoryEntries) {
-                            R.string.history_filtered_empty_message
-                        } else {
-                            R.string.history_empty_message
-                        }
-                    )
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = spacing.sm)
-                ) {
-                    items(historyList, key = { it.uid }) { entry ->
-                        HistoryRow(
-                            entry = entry,
-                            onClick = { onSelect(entry) },
-                            onRenameClick = {
-                                entryToRename = entry
-                                renameText = entry.id
-                                showRenameDialog = true
-                            },
-                            onDeleteClick = {
-                                entryToDelete = entry
-                                showDeleteDialog = true
-                            }
+
+                    if (isFilterActive) {
+                        Text(
+                            text = stringResource(R.string.history_filter_active, filterLabel),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                if (historyList.isEmpty()) {
+                    HistoryEmptyState(
+                        modifier = Modifier.fillMaxSize(),
+                        title = stringResource(
+                            if (hasAnyHistoryEntries) {
+                                R.string.history_filtered_empty_title
+                            } else {
+                                R.string.history_empty_title
+                            }
+                        ),
+                        message = stringResource(
+                            if (hasAnyHistoryEntries) {
+                                R.string.history_filtered_empty_message
+                            } else {
+                                R.string.history_empty_message
+                            }
+                        )
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = spacing.md)
+                    ) {
+                        items(historyList, key = { it.uid }) { entry ->
+                            HistoryRow(
+                                entry = entry,
+                                onClick = { onSelect(entry) },
+                                onRenameClick = {
+                                    entryToRename = entry
+                                    renameText = entry.id
+                                    showRenameDialog = true
+                                },
+                                onDeleteClick = {
+                                    entryToDelete = entry
+                                    showDeleteDialog = true
+                                }
+                            )
+                        }
+                    }
+                }
+            }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(
+                    start = spacing.md,
+                    end = spacing.md,
+                    bottom = HistoryRootBottomClearance + 64.dp
+                )
+        )
     }
 
     if (showDatePickerDialog) {
@@ -529,12 +570,13 @@ private fun HistoryRow(
 
 @Composable
 private fun HistoryEmptyState(
+    modifier: Modifier = Modifier,
     title: String,
     message: String
 ) {
     val spacing = MaterialTheme.appSpacing
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .padding(horizontal = spacing.xxl),
         verticalArrangement = Arrangement.Center,

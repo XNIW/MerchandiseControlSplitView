@@ -24,9 +24,13 @@
 
 
     <!-- FilePickerScreen -->
+    <string name="inventory_title">Inventory</string>
+    <string name="history_root_title">History</string>
     <string name="file_history">File history</string>
-    <string name="load_excel_file">Load Excel file</string>
-    <string name="file_picker_primary_supporting">Import one or more Excel files to get started.</string>
+    <string name="file_picker_home_title">Start with a file</string>
+    <string name="load_excel_file">Select Excel or HTML files</string>
+    <string name="file_picker_primary_supporting">Choose one or more Excel or HTML files to get started.</string>
+    <string name="inventory_empty_message">No file loaded in this session yet.</string>
     <string name="database">Database</string>
 
     <!-- HistoryScreen -->
@@ -69,7 +73,7 @@
     <string name="generic_calculator_title">Calculator</string>
     <string name="fast_calculator_desc">Quick Calculator</string>
     <string name="error_label">Error</string>
-    <string name="go_to_home">Go to Home</string>
+    <string name="go_to_home">Go to Inventory</string>
 
     <!-- Icon accessibility -->
     <string name="scan_icon_desc">Scan code</string>
@@ -321,7 +325,7 @@
     <string name="exit_without_saving">Exit without Saving</string>
     <string name="save_and_exit">Save and Exit</string>
 
-    <string name="dialog_title_return_home">Return to Home</string>
+    <string name="dialog_title_return_home">Return to Inventory</string>
     <string name="dialog_message_save_and_return_home">Changes will be saved. Do you want to continue?</string>
 
     <string name="edit_column_type">Edit column type</string>

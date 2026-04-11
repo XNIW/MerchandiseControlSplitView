@@ -23,9 +23,13 @@
     <string name="theme_dark">深色</string>
 
     <!-- 文件选择页面 -->
+    <string name="inventory_title">库存</string>
+    <string name="history_root_title">历史</string>
     <string name="file_history">文件历史</string>
-    <string name="load_excel_file">加载Excel文件</string>
-    <string name="file_picker_primary_supporting">导入一个或多个 Excel 文件即可开始。</string>
+    <string name="file_picker_home_title">先从文件开始</string>
+    <string name="load_excel_file">选择 Excel 或 HTML 文件</string>
+    <string name="file_picker_primary_supporting">选择一个或多个 Excel 或 HTML 文件即可开始。</string>
+    <string name="inventory_empty_message">当前会话还没有加载文件。</string>
     <string name="database">数据库</string>
 
     <!-- 历史页面 -->
@@ -68,7 +72,7 @@
     <string name="generic_calculator_title">计算器</string>
     <string name="fast_calculator_desc">快速计算器</string>
     <string name="error_label">错误</string>
-    <string name="go_to_home">返回首页</string>
+    <string name="go_to_home">返回库存</string>
 
     <!-- 图标无障碍 -->
     <string name="scan_icon_desc">扫码</string>
@@ -320,7 +324,7 @@
     <string name="exit_without_saving">不保存退出</string>
     <string name="save_and_exit">保存并退出</string>
 
-    <string name="dialog_title_return_home">返回首页</string>
+    <string name="dialog_title_return_home">返回库存</string>
     <string name="dialog_message_save_and_return_home">修改内容将被保存。是否继续？</string>
 
     <string name="edit_column_type">编辑列类型</string>

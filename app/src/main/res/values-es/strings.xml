@@ -23,9 +23,13 @@
     <string name="theme_dark">Oscuro</string>
 
     <!-- Pantalla FilePickerScreen -->
+    <string name="inventory_title">Inventario</string>
+    <string name="history_root_title">Historial</string>
     <string name="file_history">Historial de archivos</string>
-    <string name="load_excel_file">Cargar archivo Excel</string>
-    <string name="file_picker_primary_supporting">Importa uno o varios archivos Excel para empezar.</string>
+    <string name="file_picker_home_title">Empieza con un archivo</string>
+    <string name="load_excel_file">Seleccionar archivos Excel o HTML</string>
+    <string name="file_picker_primary_supporting">Elige uno o varios archivos Excel o HTML para empezar.</string>
+    <string name="inventory_empty_message">Todavía no hay ningún archivo cargado en esta sesión.</string>
     <string name="database">Base de datos</string>
 
     <!-- Pantalla HistoryScreen -->
@@ -68,7 +72,7 @@
     <string name="generic_calculator_title">Calculadora</string>
     <string name="fast_calculator_desc">Calculadora Rápida</string>
     <string name="error_label">Error</string>
-    <string name="go_to_home">Volver a inicio</string>
+    <string name="go_to_home">Volver a Inventario</string>
 
     <!-- Accesibilidad de iconos -->
     <string name="scan_icon_desc">Escanear código</string>
@@ -320,7 +324,7 @@
     <string name="exit_without_saving">Salir sin guardar</string>
     <string name="save_and_exit">Guardar y salir</string>
 
-    <string name="dialog_title_return_home">Volver al inicio</string>
+    <string name="dialog_title_return_home">Volver a Inventario</string>
     <string name="dialog_message_save_and_return_home">Los cambios se guardarán. ¿Quieres continuar?</string>
 
     <string name="edit_column_type">Modificar tipo de columna</string>
