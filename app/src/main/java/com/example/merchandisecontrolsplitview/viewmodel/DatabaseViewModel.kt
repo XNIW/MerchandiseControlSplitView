@@ -27,8 +27,6 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.sync.Mutex
 
 sealed class UiState {
@@ -126,52 +124,8 @@ class DatabaseViewModel(
     app: Application,
     private val repository: InventoryRepository
 ) : AndroidViewModel(app) {
-
-
-    private val tsFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-
-    // Uid dell'entry di log per il "full import" (analisi file)
-    private var currentImportLogUid: Long? = null
     private val importMutex = Mutex()
     private val exportMutex = Mutex()
-// --- Helper per creare/aggiornare i log nella tabella history_entries ---
-
-    private suspend fun startHistoryLog(kind: String, message: String): Long =
-        withContext(Dispatchers.IO) {
-            repository.insertHistoryEntry(
-                HistoryEntry(
-                    id = "${kind}_${System.currentTimeMillis()}", // etichetta generica, la chiave reale è 'uid' autogenerato
-                    timestamp = LocalDateTime.now().format(tsFmt),
-                    data = listOf(
-                        listOf("status", "message"),
-                        listOf("STARTED", message)
-                    ),
-                    editable = listOf(listOf("", "")),
-                    complete = listOf(false),
-                    supplier = "—",
-                    category = "—",
-                    totalItems = 0,
-                    orderTotal = 0.0,
-                    paymentTotal = 0.0,
-                    missingItems = 0,
-                    syncStatus = SyncStatus.NOT_ATTEMPTED,
-                    wasExported = false
-                )
-            )
-        }
-
-    private suspend fun appendHistoryLog(uid: Long, status: String, message: String) =
-        withContext(Dispatchers.IO) {
-            val cur = repository.getHistoryEntryByUid(uid) ?: return@withContext
-            repository.updateHistoryEntry(
-                cur.copy(
-                    data = cur.data + listOf(listOf(status, message)),
-                    complete = cur.complete + listOf(
-                        status == "SUCCESS" || status == "FAILED" || status == "CANCELLED"
-                    )
-                )
-            )
-        }
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -458,7 +412,6 @@ class DatabaseViewModel(
             )
         }
 
-        currentImportLogUid = startHistoryLog("FULL_IMPORT", "Analisi file avviata: $uri")
         Log.d("DB_IMPORT", "FULL_IMPORT START uri=$uri")
 
         withContext(Dispatchers.Main) {
@@ -491,25 +444,19 @@ class DatabaseViewModel(
             pendingTempCategories = importResult.analysis.pendingCategories
         )
         _uiState.value = UiState.Idle
-        currentImportLogUid?.let { uid ->
-            appendHistoryLog(
-                uid,
-                "SUCCESS",
-                "Analisi completata. Products=${importResult.productsRowCount}, Suppliers=${importResult.supplierRowCount}, Categories=${importResult.categoryRowCount}, PriceHistory=${importResult.hasPriceHistorySheet}."
-            )
-            Log.d("DB_IMPORT", "FULL_IMPORT SUCCESS uid=$uid")
-        }
-        currentImportLogUid = null
+        Log.d(
+            "DB_IMPORT",
+            "FULL_IMPORT SUCCESS products=${importResult.productsRowCount} " +
+                "suppliers=${importResult.supplierRowCount} " +
+                "categories=${importResult.categoryRowCount} " +
+                "priceHistory=${importResult.hasPriceHistorySheet}"
+        )
     }
 
     private suspend fun handleSmartFullImportCancelled() {
         cancelImportPreview()
         _uiState.value = UiState.Idle
-        currentImportLogUid?.let { uid ->
-            appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
-            Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED uid=$uid")
-        }
-        currentImportLogUid = null
+        Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED")
     }
 
     private suspend fun handleSmartFullImportFailure(
@@ -520,11 +467,7 @@ class DatabaseViewModel(
         val userMessage = analysisErrorMessage(context, throwable)
         _uiState.value = UiState.Error(userMessage)
         markPreviewError(userMessage)
-        currentImportLogUid?.let { uid ->
-            appendHistoryLog(uid, "FAILED", userMessage)
-            Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", throwable)
-        }
-        currentImportLogUid = null
+        Log.e("DB_IMPORT", "FULL_IMPORT FAILED message=$userMessage", throwable)
     }
 
     fun startImportAnalysis(context: Context, uri: Uri) {
@@ -681,11 +624,10 @@ class DatabaseViewModel(
         )
 
         viewModelScope.launch {
-            val applyLogUid = startHistoryLog(
-                "APPLY_IMPORT",
-                "Applico import: new=${newProducts.size}, updated=${updatedProducts.size}"
+            Log.d(
+                "DB_IMPORT",
+                "APPLY_IMPORT START previewId=$previewId new=${newProducts.size} updated=${updatedProducts.size}"
             )
-            Log.d("DB_IMPORT", "APPLY_IMPORT START uid=$applyLogUid")
 
             try {
                 when (val outcome = withContext(Dispatchers.IO) {
@@ -697,8 +639,7 @@ class DatabaseViewModel(
                             progress = 98
                         )
 
-                        appendHistoryLog(applyLogUid, "SUCCESS", "Import applicato correttamente.")
-                        Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS uid=$applyLogUid")
+                        Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS previewId=$previewId")
                         _importFlowState.value = ImportFlowState.Success(previewId)
                         _uiState.value = UiState.Success(context.getString(R.string.import_success))
                     }
@@ -719,8 +660,7 @@ class DatabaseViewModel(
                             message = userMessage,
                             occurredDuringApply = true
                         )
-                        appendHistoryLog(applyLogUid, "FAILED", userMessage)
-                        Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", outcome.cause)
+                        Log.e("DB_IMPORT", "APPLY_IMPORT FAILED previewId=$previewId", outcome.cause)
                     }
                 }
             } catch (e: CancellationException) {
@@ -731,8 +671,7 @@ class DatabaseViewModel(
                     message = userMessage,
                     occurredDuringApply = true
                 )
-                appendHistoryLog(applyLogUid, "FAILED", userMessage)
-                Log.e("DB_IMPORT", "APPLY_IMPORT CANCELLED uid=$applyLogUid", e)
+                Log.e("DB_IMPORT", "APPLY_IMPORT CANCELLED previewId=$previewId", e)
             } catch (e: Exception) {
                 val userMessage = importErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
@@ -741,8 +680,7 @@ class DatabaseViewModel(
                     message = userMessage,
                     occurredDuringApply = true
                 )
-                appendHistoryLog(applyLogUid, "FAILED", userMessage)
-                Log.e("DB_IMPORT", "APPLY_IMPORT FAILED uid=$applyLogUid", e)
+                Log.e("DB_IMPORT", "APPLY_IMPORT FAILED previewId=$previewId", e)
             }
         }
     }
@@ -950,8 +888,6 @@ class DatabaseViewModel(
 
         viewModelScope.launch {
             try {
-                // 1) log di avvio
-                currentImportLogUid = startHistoryLog("FULL_IMPORT", "Analisi file avviata: $uri")
                 Log.d("DB_IMPORT", "FULL_IMPORT START uri=$uri")
 
                 // 2) lettura/analisi su IO
@@ -991,24 +927,18 @@ class DatabaseViewModel(
                     pendingTempCategories = importResult.analysis.pendingCategories
                 )
                 _uiState.value = UiState.Idle
-                currentImportLogUid?.let { uid ->
-                    appendHistoryLog(
-                        uid,
-                        "SUCCESS",
-                        "Analisi completata. Products=${importResult.productsRowCount}, Suppliers=${importResult.supplierRowCount}, Categories=${importResult.categoryRowCount}, PriceHistory=${importResult.hasPriceHistorySheet}."
-                    )
-                    Log.d("DB_IMPORT", "FULL_IMPORT SUCCESS uid=$uid")
-                }
-                currentImportLogUid = null
+                Log.d(
+                    "DB_IMPORT",
+                    "FULL_IMPORT SUCCESS products=${importResult.productsRowCount} " +
+                        "suppliers=${importResult.supplierRowCount} " +
+                        "categories=${importResult.categoryRowCount} " +
+                        "priceHistory=${importResult.hasPriceHistorySheet}"
+                )
 
             } catch (e: CancellationException) {
                 cancelImportPreview()
                 _uiState.value = UiState.Idle
-                currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "CANCELLED", "Analisi annullata.")
-                    Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED uid=$uid")
-                }
-                currentImportLogUid = null
+                Log.w("DB_IMPORT", "FULL_IMPORT CANCELLED")
                 throw e
 
             } catch (e: OutOfMemoryError) {
@@ -1016,22 +946,14 @@ class DatabaseViewModel(
                 val userMessage = analysisErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
                 markPreviewError(userMessage)
-                currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "FAILED", userMessage)
-                    Log.e("DB_IMPORT", "FULL_IMPORT OOM uid=$uid", e)
-                }
-                currentImportLogUid = null
+                Log.e("DB_IMPORT", "FULL_IMPORT OOM message=$userMessage", e)
 
             } catch (e: Exception) {
                 clearPendingImportState(clearAnalysisResult = true)
                 val userMessage = analysisErrorMessage(context, e)
                 _uiState.value = UiState.Error(userMessage)
                 markPreviewError(userMessage)
-                currentImportLogUid?.let { uid ->
-                    appendHistoryLog(uid, "FAILED", userMessage)
-                    Log.e("DB_IMPORT", "FULL_IMPORT FAILED uid=$uid", e)
-                }
-                currentImportLogUid = null
+                Log.e("DB_IMPORT", "FULL_IMPORT FAILED message=$userMessage", e)
 
             } finally {
                 importMutex.unlock()

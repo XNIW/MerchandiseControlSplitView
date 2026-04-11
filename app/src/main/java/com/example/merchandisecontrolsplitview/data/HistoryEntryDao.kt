@@ -3,23 +3,43 @@ package com.example.merchandisecontrolsplitview.data
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+// Single source of truth for what the user-visible History screen should hide.
+internal const val USER_VISIBLE_HISTORY_WHERE_CLAUSE = """
+    id NOT LIKE 'APPLY_IMPORT_%'
+    AND id NOT LIKE 'FULL_IMPORT_%'
+"""
+
 @Dao
 interface HistoryEntryDao {
-    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC")
-    fun getAllFlow(): Flow<List<HistoryEntry>>
+    @Query(
+        "SELECT * FROM history_entries WHERE " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            " ORDER BY timestamp DESC"
+    )
+    fun getAllUserVisibleFlow(): Flow<List<HistoryEntry>>
 
     @Query(
         """
         SELECT uid, id, timestamp, supplier, category, wasExported, syncStatus,
                orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
         FROM history_entries
+        WHERE """ +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            """
         ORDER BY timestamp DESC
         """
     )
-    fun getAllListItemsFlow(): Flow<List<HistoryEntryListItem>>
+    fun getAllUserVisibleListItemsFlow(): Flow<List<HistoryEntryListItem>>
 
-    @Query("SELECT * FROM history_entries WHERE timestamp >= :startDate AND timestamp <= :endDate ORDER BY timestamp DESC")
-    fun getEntriesBetweenDatesFlow(startDate: String, endDate: String): Flow<List<HistoryEntry>>
+    @Query(
+        "SELECT * FROM history_entries WHERE timestamp >= :startDate AND timestamp <= :endDate AND " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            " ORDER BY timestamp DESC"
+    )
+    fun getUserVisibleEntriesBetweenDatesFlow(
+        startDate: String,
+        endDate: String
+    ): Flow<List<HistoryEntry>>
 
     @Query(
         """
@@ -27,10 +47,16 @@ interface HistoryEntryDao {
                orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
         FROM history_entries
         WHERE timestamp >= :startDate AND timestamp <= :endDate
+          AND """ +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            """
         ORDER BY timestamp DESC
         """
     )
-    fun getListItemsBetweenDatesFlow(startDate: String, endDate: String): Flow<List<HistoryEntryListItem>>
+    fun getUserVisibleListItemsBetweenDatesFlow(
+        startDate: String,
+        endDate: String
+    ): Flow<List<HistoryEntryListItem>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: HistoryEntry): Long
@@ -50,6 +76,10 @@ interface HistoryEntryDao {
     @Query("SELECT timestamp FROM history_entries ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestTimestamp(): String?
 
-    @Query("SELECT EXISTS(SELECT 1 FROM history_entries)")
-    fun hasEntriesFlow(): Flow<Boolean>
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM history_entries WHERE " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            ")"
+    )
+    fun hasUserVisibleEntriesFlow(): Flow<Boolean>
 }

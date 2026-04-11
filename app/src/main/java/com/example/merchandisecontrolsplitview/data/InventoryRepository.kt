@@ -53,7 +53,8 @@ interface InventoryRepository {
     suspend fun searchCategoriesByName(query: String): List<Category>
     suspend fun addCategory(name: String): Category?
 
-    // History methods
+    // User-visible history methods. Technical import audit rows stay in logcat and are excluded
+    // at the DAO source from the normal History flows.
     fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>>
     fun getFilteredHistoryListFlow(filter: DateFilter): Flow<List<HistoryEntryListItem>>
     fun hasHistoryEntriesFlow(): Flow<Boolean>
@@ -249,22 +250,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     override fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>> {
         val range = historyRangeFor(filter)
         return if (range == null) {
-            historyDao.getAllFlow()
+            historyDao.getAllUserVisibleFlow()
         } else {
-            historyDao.getEntriesBetweenDatesFlow(range.first, range.second)
+            historyDao.getUserVisibleEntriesBetweenDatesFlow(range.first, range.second)
         }
     }
 
     override fun getFilteredHistoryListFlow(filter: DateFilter): Flow<List<HistoryEntryListItem>> {
         val range = historyRangeFor(filter)
         return if (range == null) {
-            historyDao.getAllListItemsFlow()
+            historyDao.getAllUserVisibleListItemsFlow()
         } else {
-            historyDao.getListItemsBetweenDatesFlow(range.first, range.second)
+            historyDao.getUserVisibleListItemsBetweenDatesFlow(range.first, range.second)
         }
     }
 
-    override fun hasHistoryEntriesFlow(): Flow<Boolean> = historyDao.hasEntriesFlow()
+    override fun hasHistoryEntriesFlow(): Flow<Boolean> = historyDao.hasUserVisibleEntriesFlow()
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }

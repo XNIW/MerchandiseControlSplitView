@@ -341,6 +341,7 @@ class DefaultInventoryRepositoryTest {
     fun `getFilteredHistoryFlow respects custom date range`() = runTest {
         repository.insertHistoryEntry(historyEntry(id = "JAN", timestamp = "2026-01-10 10:00:00"))
         repository.insertHistoryEntry(historyEntry(id = "FEB", timestamp = "2026-02-15 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "APPLY_IMPORT_1700000000000", timestamp = "2026-01-12 10:00:00"))
 
         val januaryEntries = repository.getFilteredHistoryFlow(
             DateFilter.CustomRange(
@@ -357,6 +358,7 @@ class DefaultInventoryRepositoryTest {
     fun `getFilteredHistoryFlow all returns every entry ordered descending`() = runTest {
         repository.insertHistoryEntry(historyEntry(id = "OLD", timestamp = "2026-01-10 10:00:00"))
         repository.insertHistoryEntry(historyEntry(id = "NEW", timestamp = "2026-02-15 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "FULL_IMPORT_1700000000000", timestamp = "2026-02-16 10:00:00"))
 
         val entries = repository.getFilteredHistoryFlow(DateFilter.All).first()
 
@@ -398,6 +400,7 @@ class DefaultInventoryRepositoryTest {
     fun `getFilteredHistoryListFlow respects custom date range`() = runTest {
         repository.insertHistoryEntry(historyEntry(id = "JAN", timestamp = "2026-01-10 10:00:00"))
         repository.insertHistoryEntry(historyEntry(id = "FEB", timestamp = "2026-02-15 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "FULL_IMPORT_1700000000001", timestamp = "2026-01-18 10:00:00"))
 
         val januaryEntries = repository.getFilteredHistoryListFlow(
             DateFilter.CustomRange(
@@ -411,10 +414,35 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `hasHistoryEntriesFlow reports whether history exists`() = runTest {
+    fun `getFilteredHistoryFlow keeps user entries with placeholder metadata while filtering technical prefixes`() = runTest {
+        repository.insertHistoryEntry(
+            historyEntry(id = "USER_VISIBLE", timestamp = "2026-03-28 09:00:00").copy(
+                supplier = "—",
+                category = "—",
+                totalItems = 0,
+                orderTotal = 0.0,
+                paymentTotal = 0.0,
+                missingItems = 0
+            )
+        )
+        repository.insertHistoryEntry(historyEntry(id = "APPLY_IMPORT_1700000000002", timestamp = "2026-03-28 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "FULL_IMPORT_1700000000003", timestamp = "2026-03-28 11:00:00"))
+
+        val entries = repository.getFilteredHistoryFlow(DateFilter.All).first()
+
+        assertEquals(listOf("USER_VISIBLE"), entries.map { it.id })
+    }
+
+    @Test
+    fun `hasHistoryEntriesFlow ignores technical-only history`() = runTest {
         assertEquals(false, repository.hasHistoryEntriesFlow().first())
 
-        repository.insertHistoryEntry(historyEntry(id = "ONLY", timestamp = "2026-03-28 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "APPLY_IMPORT_1700000000004", timestamp = "2026-03-28 10:00:00"))
+        repository.insertHistoryEntry(historyEntry(id = "FULL_IMPORT_1700000000005", timestamp = "2026-03-28 10:00:01"))
+
+        assertEquals(false, repository.hasHistoryEntriesFlow().first())
+
+        repository.insertHistoryEntry(historyEntry(id = "ONLY", timestamp = "2026-03-28 10:00:02"))
 
         assertEquals(true, repository.hasHistoryEntriesFlow().first())
     }

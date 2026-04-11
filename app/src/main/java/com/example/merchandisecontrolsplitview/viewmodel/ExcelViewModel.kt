@@ -137,8 +137,8 @@ class ExcelViewModel(
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
     val dateFilter: StateFlow<DateFilter> = _dateFilter.asStateFlow()
 
-    // Lista alleggerita per la schermata History: evita di caricare i blob della griglia
-    // nello scroll principale e lascia i fetch completi solo ai percorsi che ne hanno bisogno.
+    // Lista alleggerita per la schermata History: usa solo la history utente visibile
+    // ed evita di caricare i blob della griglia nello scroll principale.
     val historyListEntries: StateFlow<List<HistoryEntryListItem>> = _dateFilter
         .flatMapLatest { filter ->
             repository.getFilteredHistoryListFlow(filter)
@@ -156,7 +156,8 @@ class ExcelViewModel(
             initialValue = false
         )
 
-    // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry.
+    // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry
+    // visibile all'utente.
     val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
         .flatMapLatest { filter ->
             repository.getFilteredHistoryFlow(filter)

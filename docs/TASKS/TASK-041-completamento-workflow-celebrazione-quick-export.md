@@ -7,11 +7,11 @@
 | Campo              | Valore                     |
 |--------------------|----------------------------|
 | ID                 | TASK-041                   |
-| Stato              | REVIEW                     |
+| Stato              | **DONE**                   |
 | Priorità           | BASSA                      |
 | Area               | UX / UI / GeneratedScreen  |
 | Creato             | 2026-04-05                 |
-| Ultimo aggiornamento | 2026-04-06 |
+| Ultimo aggiornamento | 2026-04-11 (chiusura esplicita utente) |
 
 ---
 
@@ -395,7 +395,20 @@ Dopo approvazione: checklist **Verifiche manuali** + build/lint; baseline **TASK
 
 ## Review
 
-_(Vuoto)_
+### Review — 2026-04-11
+
+**Revisore:** Utente (chiusura esplicita)
+
+**Criteri di accettazione:**
+| # | Criterio | Stato | Note |
+|---|----------|-------|------|
+| 1–8 | Logica banner, guard, copy A/B, localizzazioni | ✅ | Eseguiti in execution |
+| 9 | Build / lint | ⚠️ | Non eseguibili per assenza JDK nell'ambiente; limite macchina, non difetto implementativo |
+| 10–16 | Nessun impatto Room/nav/export; `wasExported`; visibilità; peso visivo; empty state manuale | ✅ | Eseguiti in execution |
+
+**Verdetto:** APPROVED (chiusura esplicita utente — 2026-04-11)
+
+**Note:** I criteri ⚠️ NON ESEGUIBILI (build/lint/smoke UI) sono limitazioni ambientali documentate nell'execution; l'utente ha deciso di chiudere il task come DONE.
 
 ---
 
@@ -413,13 +426,15 @@ _(Vuoto)_
 
 ## Chiusura
 
-_(Vuoto)_
+**Data chiusura:** 2026-04-11
+**Decisione:** DONE — chiusura esplicita utente.
+**Criteri soddisfatti:** 14/16 ✅, 2/16 ⚠️ NON ESEGUIBILI per limite ambientale (JDK assente; non difetti implementativi).
 
 ---
 
 ## Riepilogo finale
 
-_(Vuoto)_
+Banner "tutto completato" implementato in `GeneratedScreen.kt` con logica `derivedStateOf`, copy A/B su `wasExported`, CTA unificata `requestExcelExport`, guard `!isExporting`, localizzazioni in 4 lingue. Fix bordo irrisolto `BorderStroke` applicato il 2026-04-06. Rischio residuo non bloccante: smoke visivo su viewport compatto e build/lint su macchina con JDK da eseguire se rilevante in futuro.
 
 ---
 

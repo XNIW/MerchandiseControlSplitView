@@ -6,14 +6,12 @@ import android.net.Uri
 import android.os.Looper
 import app.cash.turbine.test
 import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.ImportApplyResult
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.data.Supplier
-import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
@@ -25,7 +23,6 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
-import io.mockk.slot
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -530,17 +527,11 @@ class DatabaseViewModelTest {
     }
 
     @Test
-    fun `importProducts applies import and appends success log`() = runTest {
-        val insertedHistory = slot<HistoryEntry>()
-        val updatedHistory = slot<HistoryEntry>()
+    fun `importProducts applies import without persisting technical history entries`() = runTest {
         val oldProduct = sampleProduct(id = 10L, barcode = "11111111", productName = "Old Name")
         val updatedProduct = oldProduct.copy(productName = "New Name", purchasePrice = 8.0)
-        val pendingEntry = historyEntry().copy(uid = 88L)
         val previewId = preparePreview()
 
-        coEvery { repository.insertHistoryEntry(capture(insertedHistory)) } returns 88L
-        coEvery { repository.getHistoryEntryByUid(88L) } returns pendingEntry
-        coEvery { repository.updateHistoryEntry(capture(updatedHistory)) } just runs
         coEvery { repository.applyImport(any()) } returns ImportApplyResult.Success
 
         viewModel.importProducts(
@@ -561,8 +552,9 @@ class DatabaseViewModelTest {
                 }
             )
         }
-        assertEquals("STARTED", insertedHistory.captured.data[1][0])
-        assertEquals("SUCCESS", updatedHistory.captured.data.last()[0])
+        coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
+        coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        coVerify(exactly = 0) { repository.getHistoryEntryByUid(any()) }
         assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
         viewModel.uiState.test {
             assertEquals(
@@ -574,15 +566,9 @@ class DatabaseViewModelTest {
     }
 
     @Test
-    fun `importProducts repository failure emits generic error and safe history log`() = runTest {
-        val insertedHistory = slot<HistoryEntry>()
-        val updatedHistory = slot<HistoryEntry>()
-        val pendingEntry = historyEntry().copy(uid = 91L)
+    fun `importProducts repository failure emits generic error without persisting technical history entries`() = runTest {
         val previewId = preparePreview()
 
-        coEvery { repository.insertHistoryEntry(capture(insertedHistory)) } returns 91L
-        coEvery { repository.getHistoryEntryByUid(91L) } returns pendingEntry
-        coEvery { repository.updateHistoryEntry(capture(updatedHistory)) } just runs
         coEvery { repository.applyImport(any()) } returns ImportApplyResult.Failure(
             IllegalStateException("db offline")
         )
@@ -600,11 +586,9 @@ class DatabaseViewModelTest {
             UiState.Error(app.getString(R.string.error_import_generic)),
             viewModel.uiState.value
         )
-        assertEquals("FAILED", updatedHistory.captured.data.last()[0])
-        assertEquals(
-            app.getString(R.string.error_import_generic),
-            updatedHistory.captured.data.last()[1]
-        )
+        coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
+        coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        coVerify(exactly = 0) { repository.getHistoryEntryByUid(any()) }
         assertEquals(
             ImportFlowState.Error(
                 previewId = previewId,
@@ -619,9 +603,6 @@ class DatabaseViewModelTest {
     fun `importProducts ignores double confirm while apply is already running`() = runTest {
         val previewId = preparePreview()
         val gate = CompletableDeferred<Unit>()
-        coEvery { repository.insertHistoryEntry(any()) } returnsMany listOf(100L, 101L)
-        coEvery { repository.getHistoryEntryByUid(any()) } returns historyEntry().copy(uid = 100L)
-        coEvery { repository.updateHistoryEntry(any()) } just runs
         coEvery { repository.applyImport(any()) } coAnswers {
             gate.await()
             ImportApplyResult.Success
@@ -646,6 +627,7 @@ class DatabaseViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { repository.applyImport(any()) }
+        coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
         gate.complete(Unit)
         firstApply.await()
         advanceUntilIdle()
@@ -655,9 +637,6 @@ class DatabaseViewModelTest {
     fun `clearImportAnalysis does not cancel an apply already in progress`() = runTest {
         val previewId = preparePreview()
         val gate = CompletableDeferred<Unit>()
-        coEvery { repository.insertHistoryEntry(any()) } returns 120L
-        coEvery { repository.getHistoryEntryByUid(120L) } returns historyEntry().copy(uid = 120L)
-        coEvery { repository.updateHistoryEntry(any()) } just runs
         coEvery { repository.applyImport(any()) } coAnswers {
             gate.await()
             ImportApplyResult.Success
@@ -679,6 +658,7 @@ class DatabaseViewModelTest {
         gate.complete(Unit)
         waitForCondition { viewModel.importFlowState.value is ImportFlowState.Success }
 
+        coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
         assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
     }
 
@@ -693,25 +673,6 @@ class DatabaseViewModelTest {
         purchasePrice = 3.0,
         retailPrice = 4.0,
         stockQuantity = 1.0
-    )
-
-    private fun historyEntry() = HistoryEntry(
-        id = "apply-import",
-        timestamp = "2026-03-28 10:00:00",
-        data = listOf(
-            listOf("status", "message"),
-            listOf("STARTED", "Applying import")
-        ),
-        editable = listOf(listOf("", "")),
-        complete = listOf(false),
-        supplier = "Supplier",
-        category = "Category",
-        totalItems = 0,
-        orderTotal = 0.0,
-        paymentTotal = 0.0,
-        missingItems = 0,
-        syncStatus = SyncStatus.NOT_ATTEMPTED,
-        wasExported = false
     )
 
     private suspend fun preparePreview(): Long {
