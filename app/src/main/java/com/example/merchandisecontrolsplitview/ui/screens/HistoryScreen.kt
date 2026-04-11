@@ -465,7 +465,7 @@ private fun HistoryRow(
 
                     if(details.isNotEmpty()){
                         Text(
-                            text = details.joinToString(" | "),
+                            text = details.joinToString(stringResource(R.string.history_details_separator)),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -474,22 +474,26 @@ private fun HistoryRow(
                     if (entry.totalItems > 0) {
                         Column(verticalArrangement = Arrangement.spacedBy(historyCompactSummarySpacing)) {
                             Text(
-                                text = "${stringResource(R.string.summary_label)}: ${formatClCount(entry.totalItems)} ${stringResource(R.string.products_label)}",
+                                text = stringResource(
+                                    R.string.count_label_format,
+                                    stringResource(R.string.label_value_format, stringResource(R.string.summary_label), formatClCount(entry.totalItems)),
+                                    stringResource(R.string.products_label)
+                                ),
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "${stringResource(R.string.order_value_label)}: ${formatClSummaryMoney(entry.orderTotal)}",
+                                text = stringResource(R.string.label_value_format, stringResource(R.string.order_value_label), formatClSummaryMoney(entry.orderTotal)),
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             if (entry.missingItems > 0) {
                                 Text(
-                                    text = "${stringResource(R.string.missing_items_label)}: ${formatClCount(entry.missingItems)}",
+                                    text = stringResource(R.string.label_value_format, stringResource(R.string.missing_items_label), formatClCount(entry.missingItems)),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.error
                                 )
                             }
                             Text(
-                                text = "${stringResource(R.string.payment_total_label)}: ${formatClSummaryMoney(entry.paymentTotal)}",
+                                text = stringResource(R.string.label_value_format, stringResource(R.string.payment_total_label), formatClSummaryMoney(entry.paymentTotal)),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold
                             )

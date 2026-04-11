@@ -279,6 +279,9 @@
     <string name="products_label">Products</string>
     <string name="order_value_label">Order Value</string>
     <string name="payment_total_label">Total Payment</string>
+    <string name="label_value_format">%1$s: %2$s</string>
+    <string name="history_details_separator"> | </string>
+    <string name="count_label_format">%1$s %2$s</string>
     <string name="filter">Filter</string>
     <string name="filter_all">Show all</string>
     <string name="filter_current_month">Current month</string>
