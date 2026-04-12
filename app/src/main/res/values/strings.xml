@@ -455,6 +455,19 @@
     <string name="error_history_entry_rename">Impossibile rinominare il file.</string>
     <string name="error_history_entry_delete">Impossibile eliminare il file.</string>
 
+    <!-- TASK-047: GeneratedScreen — top bar, progress card, filtro errori, summary footer -->
+    <string name="finish">Fine</string>
+    <string name="show_only_errors">Solo errori</string>
+    <string name="errors_filter_active">Filtro: solo errori</string>
+    <string name="n_error_rows">%d con errori</string>
+    <string name="no_errors_found">Nessun errore</string>
+    <string name="summary_completed_label">Completate</string>
+    <string name="summary_pending_label">In sospeso</string>
+    <string name="column_mapping_overflow">Mapping colonne…</string>
+    <string name="generated_progress_section">Avanzamento</string>
+    <string name="initial_order_total_label">Totale ordine iniziale</string>
+    <string name="data_rows_label">Righe dati</string>
+
     <!-- Menu / azioni -->
     <string name="import_products_single_sheet">Importa prodotti (foglio singolo)</string>
     <string name="import_database_full">Importa database (completo)</string>

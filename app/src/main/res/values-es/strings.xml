@@ -460,4 +460,17 @@
 
     <string name="manual_add_suffix">Añadido_Manual</string>
     <string name="supplier_manual">Manual</string>
+
+    <!-- TASK-047: GeneratedScreen — barra superior, tarjeta de progreso, filtro errores, resumen -->
+    <string name="finish">Listo</string>
+    <string name="show_only_errors">Solo errores</string>
+    <string name="errors_filter_active">Filtro: solo errores</string>
+    <string name="n_error_rows">%d con errores</string>
+    <string name="no_errors_found">Sin errores</string>
+    <string name="summary_completed_label">Completadas</string>
+    <string name="summary_pending_label">Pendientes</string>
+    <string name="column_mapping_overflow">Asignación de columnas…</string>
+    <string name="generated_progress_section">Avance</string>
+    <string name="initial_order_total_label">Total pedido inicial</string>
+    <string name="data_rows_label">Filas de datos</string>
 </resources>

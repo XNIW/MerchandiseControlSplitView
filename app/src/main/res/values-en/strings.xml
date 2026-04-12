@@ -462,4 +462,17 @@
 
     <string name="manual_add_suffix">Manual_Add</string>
     <string name="supplier_manual">Manual</string>
+
+    <!-- TASK-047: GeneratedScreen — top bar, progress card, error filter, summary footer -->
+    <string name="finish">Done</string>
+    <string name="show_only_errors">Errors only</string>
+    <string name="errors_filter_active">Filter: errors only</string>
+    <string name="n_error_rows">%d with errors</string>
+    <string name="no_errors_found">No errors</string>
+    <string name="summary_completed_label">Completed</string>
+    <string name="summary_pending_label">Pending</string>
+    <string name="column_mapping_overflow">Column mapping…</string>
+    <string name="generated_progress_section">Progress</string>
+    <string name="initial_order_total_label">Initial order total</string>
+    <string name="data_rows_label">Data rows</string>
 </resources>

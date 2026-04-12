@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
@@ -205,6 +206,14 @@ fun GeneratedScreen(
     var isInfoDialogInEditMode by remember { mutableStateOf(false) }
 
     var showExitToHomeDialog by remember { mutableStateOf(false) }
+
+    // TASK-047: filter errori + column picker overflow
+    var showOnlyErrorRows by remember { mutableStateOf(false) }
+    var showColumnPickerDialog by remember { mutableStateOf(false) }
+    // Auto-reset filter when there are no error rows
+    LaunchedEffect(errorIndexes) {
+        if (errorIndexes.isEmpty()) showOnlyErrorRows = false
+    }
 
     val secondProductNameState = remember { mutableStateOf(TextFieldValue()) }
     val barcodeState = remember { mutableStateOf(TextFieldValue()) }
@@ -551,25 +560,28 @@ fun GeneratedScreen(
         }
     }
 
+    // Derived state used by progress card and summary footer
+    val totalDataRows = (excelData.size - 1).coerceAtLeast(0)
+    val completedCount = completeStates.count { it }
+    val isManualDraftEmpty = isManualEntry && excelData.size <= 1
+    val showProgressCard = generated && excelData.size > 1 && !isManualDraftEmpty
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             GeneratedScreenTopBar(
                 titleText = titleText,
-                excelData = excelData,
-                generated = generated,
-                supplierName = excelViewModel.supplierName.ifBlank { null },
-                categoryName = excelViewModel.categoryName.ifBlank { null },
-                completedCount = completeStates.count { it },
-                totalCount = (excelData.size - 1).coerceAtLeast(0),
+                isGenerated = generated && excelData.isNotEmpty(),
                 wasExported = wasExported,
                 syncStatus = syncStatus,
                 onNavigateBack = handleBackPress,
-                onNavigateHome = { showExitToHomeDialog = true },
+                onFinish = handleBackPress,
                 onAnalyzeSync = { analyzeCurrentGrid() },
+                onNavigateHome = { showExitToHomeDialog = true },
                 onExport = requestExcelExport,
                 onShare = { shareXlsx() },
-                onRename = { openRenameDialog() }
+                onRename = { openRenameDialog() },
+                onOpenColumnMapping = { showColumnPickerDialog = true }
             )
         }
     ) { paddingValues ->
@@ -578,6 +590,7 @@ fun GeneratedScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Banner completamento TASK-041 — solo quando semanticamente corretto
             AnimatedVisibility(visible = showAllCompleteBanner) {
                 GeneratedScreenAllCompleteBanner(
                     title = allCompleteBannerTitle,
@@ -591,8 +604,23 @@ fun GeneratedScreen(
                             start = spacing.md,
                             end = spacing.md,
                             top = spacing.sm,
-                            bottom = spacing.md
+                            bottom = spacing.xs
                         )
+                )
+            }
+            // Progress card — sostituisce TopInfoChipsBar + SummaryFooter; visibile solo con dati reali
+            AnimatedVisibility(visible = showProgressCard) {
+                GeneratedScreenProgressCard(
+                    supplierName = excelViewModel.supplierName.ifBlank { null },
+                    categoryName = excelViewModel.categoryName.ifBlank { null },
+                    completed = completedCount,
+                    total = totalDataRows,
+                    errorCount = errorIndexes.size,
+                    wasExported = wasExported,
+                    showOnlyErrors = showOnlyErrorRows,
+                    onToggleErrors = { showOnlyErrorRows = !showOnlyErrorRows },
+                    initialOrderTotal = formatClSummaryMoney(excelViewModel.initialOrderTotal),
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
             Box(
@@ -608,6 +636,7 @@ fun GeneratedScreen(
                     searchMatches = searchMatches,
                     errorIndexes = errorIndexes,
                     isManualEntry = isManualEntry,
+                    showOnlyErrors = showOnlyErrorRows,
                     onCompleteToggle = { row ->
                         completeStates[row] = !completeStates[row]
                         excelViewModel.updateHistoryEntry(entryUid)
@@ -631,7 +660,6 @@ fun GeneratedScreen(
                         productToEditIndex = row - 1
                         showManualEntryDialog = true
                     },
-                    onHeaderDialogRequest = { colIdx -> headerDialogIndex = colIdx },
                 )
 
                 GeneratedScreenDiscardDraftDialog(
@@ -690,7 +718,7 @@ fun GeneratedScreen(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = spacing.lg, bottom = 88.dp)
+                        .padding(end = spacing.lg, bottom = 72.dp)
                 )
 
                 if (showManualEntryDialog) {
@@ -887,6 +915,44 @@ fun GeneratedScreen(
         )
     }
 
+    // TASK-047: Column picker — escape hatch dal menu overflow per mapping colonne legacy
+    if (showColumnPickerDialog && excelData.isNotEmpty()) {
+        val context = LocalContext.current
+        val headerRow = excelData[0]
+        // Exclude last 3 system-generated cols (quantity, price, complete)
+        val mappableColCount = (headerRow.size - 3).coerceAtLeast(0)
+        AlertDialog(
+            onDismissRequest = { showColumnPickerDialog = false },
+            title = { Text(stringResource(R.string.column_mapping_overflow)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    repeat(mappableColCount) { ci ->
+                        val localizedName = com.example.merchandisecontrolsplitview.util.getLocalizedHeader(context, headerRow[ci])
+                        TextButton(
+                            onClick = {
+                                headerDialogIndex = ci
+                                showColumnPickerDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = localizedName,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = TextAlign.Start
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showColumnPickerDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
     // Dialog per la selezione del tipo di colonna
     if (showCustomHeaderDialog && headerDialogIndex != null) {
         GeneratedScreenCustomHeaderDialog(
@@ -1048,134 +1114,145 @@ private fun GeneratedScreenAllCompleteBanner(
 @Composable
 private fun GeneratedScreenTopBar(
     titleText: String,
-    excelData: List<List<String>>,
-    generated: Boolean,
-    supplierName: String?,
-    categoryName: String?,
-    completedCount: Int,
-    totalCount: Int,
+    isGenerated: Boolean,
     wasExported: Boolean,
     syncStatus: com.example.merchandisecontrolsplitview.data.SyncStatus,
     onNavigateBack: () -> Unit,
-    onNavigateHome: () -> Unit,
+    onFinish: () -> Unit,
     onAnalyzeSync: () -> Unit,
+    onNavigateHome: () -> Unit,
     onExport: () -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
+    onOpenColumnMapping: () -> Unit,
 ) {
-    val spacing = MaterialTheme.appSpacing
-    Column(
-        modifier = Modifier.background(MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp))
-    ) {
-        CenterAlignedTopAppBar(
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent,
-                scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
-            ),
-            navigationIcon = {
-                IconButton(onClick = onNavigateBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back)
-                    )
-                }
-            },
-            title = {
-                var tapKey by remember { mutableIntStateOf(0) }
-                key(tapKey) {
+    CenterAlignedTopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
+            scrolledContainerColor = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
+        ),
+        navigationIcon = {
+            IconButton(onClick = onNavigateBack) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.back)
+                )
+            }
+        },
+        title = {
+            var tapKey by remember { mutableIntStateOf(0) }
+            key(tapKey) {
+                Text(
+                    text = titleText.ifBlank { stringResource(R.string.untitled) },
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier
+                        .clickable { tapKey++ }
+                        .basicMarquee(
+                            animationMode = MarqueeAnimationMode.Immediately,
+                            iterations = 1
+                        )
+                )
+            }
+        },
+        actions = {
+            if (isGenerated) {
+                // CTA primaria "Fine" — azione di chiusura workflow principale
+                TextButton(onClick = onFinish) {
                     Text(
-                        text = titleText.ifBlank { stringResource(R.string.untitled) },
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier
-                            .clickable { tapKey++ }
-                            .basicMarquee(
-                                animationMode = MarqueeAnimationMode.Immediately,
-                                iterations = 1
-                            )
+                        text = stringResource(R.string.finish),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
-            },
-            actions = {
-                if (excelData.isNotEmpty() && generated) {
-                    IconButton(onClick = onNavigateHome) {
+                // Overflow menu — tutte le azioni secondarie
+                var menuOpen by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
                         Icon(
-                            Icons.Default.Home,
-                            contentDescription = stringResource(R.string.go_to_home)
+                            Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.more_actions)
                         )
                     }
-                    IconButton(onClick = onAnalyzeSync) {
-                        StatusIcon(
-                            baseIcon = Icons.Default.Sync,
-                            badgeType = when (syncStatus) {
-                                com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
-                                com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
-                                com.example.merchandisecontrolsplitview.data.SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                    DropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false }
+                    ) {
+                        // Sync con badge stato
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.sync_with_database)) },
+                            leadingIcon = {
+                                StatusIcon(
+                                    baseIcon = Icons.Default.Sync,
+                                    badgeType = when (syncStatus) {
+                                        com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
+                                        com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
+                                        com.example.merchandisecontrolsplitview.data.SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                                    },
+                                    contentDescription = stringResource(R.string.sync_with_database)
+                                )
                             },
-                            contentDescription = stringResource(R.string.sync_with_database)
+                            onClick = {
+                                menuOpen = false
+                                onAnalyzeSync()
+                            }
                         )
-                    }
-
-                    var menuOpen by remember { mutableStateOf(false) }
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = stringResource(R.string.more_actions)
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = menuOpen,
-                            onDismissRequest = { menuOpen = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.export_file)) },
-                                leadingIcon = {
-                                    MenuIconWithTick(
-                                        base = Icons.Default.FileDownload,
-                                        showTick = wasExported
-                                    )
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    onExport()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.share_xlsx)) },
-                                leadingIcon = { Icon(Icons.Default.Share, null) },
-                                onClick = {
-                                    menuOpen = false
-                                    onShare()
-                                }
-                            )
-                            HorizontalDivider()
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.rename_file)) },
-                                leadingIcon = { Icon(Icons.Default.Edit, null) },
-                                onClick = {
-                                    menuOpen = false
-                                    onRename()
-                                }
-                            )
-                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.export_file)) },
+                            leadingIcon = {
+                                MenuIconWithTick(
+                                    base = Icons.Default.FileDownload,
+                                    showTick = wasExported
+                                )
+                            },
+                            onClick = {
+                                menuOpen = false
+                                onExport()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.share_xlsx)) },
+                            leadingIcon = { Icon(Icons.Default.Share, null) },
+                            onClick = {
+                                menuOpen = false
+                                onShare()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.rename_file)) },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            onClick = {
+                                menuOpen = false
+                                onRename()
+                            }
+                        )
+                        HorizontalDivider()
+                        // Escape hatch legacy per mapping colonne
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.column_mapping_overflow)) },
+                            leadingIcon = { Icon(Icons.Default.Calculate, null) },
+                            onClick = {
+                                menuOpen = false
+                                onOpenColumnMapping()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.go_to_home)) },
+                            leadingIcon = { Icon(Icons.Default.Home, null) },
+                            onClick = {
+                                menuOpen = false
+                                onNavigateHome()
+                            }
+                        )
                     }
                 }
             }
-        )
-        TopInfoChipsBar(
-            supplier = supplierName,
-            category = categoryName,
-            completed = completedCount,
-            total = totalCount,
-            exported = wasExported,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = spacing.md, vertical = spacing.xs)
-        )
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
-    }
+        }
+    )
 }
 
 @Composable
@@ -1187,14 +1264,13 @@ private fun GeneratedScreenGridHost(
     searchMatches: Set<Pair<Int, Int>>,
     errorIndexes: Set<Int>,
     isManualEntry: Boolean,
+    showOnlyErrors: Boolean,
     onCompleteToggle: (Int) -> Unit,
     onQuantityClick: (Int) -> Unit,
     onPriceClick: (Int) -> Unit,
     onGeneratedRowClick: (Int) -> Unit,
     onManualRowClick: (Int) -> Unit,
-    onHeaderDialogRequest: (Int) -> Unit,
 ) {
-    val spacing = MaterialTheme.appSpacing
     val context = LocalContext.current
 
     Column(Modifier.fillMaxSize()) {
@@ -1217,9 +1293,19 @@ private fun GeneratedScreenGridHost(
             }
         } else if (excelData.isNotEmpty()) {
             val localizedHeader = excelData[0].map { getLocalizedHeader(context, it) }
-            val localizedData = listOf(localizedHeader) + excelData.drop(1)
+
+            // Filter support: when showOnlyErrors is active, build a pre-filtered data list
+            // and a rowIndexMapping so ZoomableExcelGrid still reads state at the real row index.
+            val isFiltered = showOnlyErrors && errorIndexes.isNotEmpty()
+            val realRowIndexes: List<Int>? = if (isFiltered) errorIndexes.toList().sorted() else null
+            val displayData: List<List<String>> = if (realRowIndexes != null) {
+                listOf(localizedHeader) + realRowIndexes.map { excelData[it] }
+            } else {
+                listOf(localizedHeader) + excelData.drop(1)
+            }
+
             ZoomableExcelGrid(
-                data = localizedData,
+                data = displayData,
                 cellWidth = 120.dp,
                 cellHeight = 48.dp,
                 selectedColumns = selectedColumns,
@@ -1237,10 +1323,11 @@ private fun GeneratedScreenGridHost(
                     if (isManualEntry) onManualRowClick(row) else onGeneratedRowClick(row)
                 },
                 columnKeys = excelData.firstOrNull(),
-                onHeaderClick = onHeaderDialogRequest,
+                onHeaderClick = null,
                 isColumnEssential = { false },
-                onHeaderEditClick = onHeaderDialogRequest,
-                isManualEntry = isManualEntry
+                onHeaderEditClick = null,
+                isManualEntry = isManualEntry,
+                rowIndexMapping = realRowIndexes
             )
         }
     }
@@ -1290,6 +1377,146 @@ private fun GeneratedScreenFabArea(
         }
     }
 }
+
+// TASK-047 ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Unified progress section shown above the grid — merges progress + summary, no footer needed.
+ * Row 1: supplier · category metadata | exported badge
+ * Row 2: X/Y count + full-width thin progress bar
+ * Row 3: status hint (pending / done) [left] + economic total [right]
+ * Row 4: error toggle (right-aligned, only when errors exist)
+ */
+@Composable
+private fun GeneratedScreenProgressCard(
+    supplierName: String?,
+    categoryName: String?,
+    completed: Int,
+    total: Int,
+    errorCount: Int,
+    wasExported: Boolean,
+    showOnlyErrors: Boolean,
+    onToggleErrors: () -> Unit,
+    initialOrderTotal: String,
+    modifier: Modifier = Modifier,
+) {
+    val spacing = MaterialTheme.appSpacing
+    val appColors = MaterialTheme.appColors
+    val progress = if (total > 0) completed.toFloat() / total.toFloat() else 0f
+    val pending = (total - completed).coerceAtLeast(0)
+    val hasErrors = errorCount > 0
+    val allDone = completed == total && total > 0
+
+    Column(modifier = modifier) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp))
+                .padding(horizontal = spacing.md, vertical = spacing.sm),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs)
+        ) {
+            // Row 1: metadata + exported badge
+            val metaParts = buildList {
+                supplierName?.let { add(it) }
+                categoryName?.let { add(it) }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = metaParts.joinToString(" · "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (wasExported) {
+                    Spacer(Modifier.width(spacing.xs))
+                    Text(
+                        text = stringResource(R.string.exported_short),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            // Row 2: X/Y count + full-width thin progress bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+            ) {
+                Text(
+                    text = "${formatClCount(completed)}/${formatClCount(total)}",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = if (allDone) appColors.success else MaterialTheme.colorScheme.onSurface
+                )
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.weight(1f).height(3.dp),
+                    color = if (allDone) appColors.success else MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                )
+            }
+
+            // Row 3: status hint (left) + economic total (right)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = when {
+                        allDone -> stringResource(R.string.no_errors_found)
+                        hasErrors -> stringResource(R.string.n_error_rows, errorCount)
+                        else -> "${formatClCount(pending)} ${stringResource(R.string.summary_pending_label).lowercase()}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        allDone -> appColors.success
+                        hasErrors -> appColors.warning
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+                Text(
+                    text = initialOrderTotal,
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // Row 4: error toggle (right-aligned, only when errors exist)
+            if (hasErrors) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = if (showOnlyErrors) stringResource(R.string.errors_filter_active)
+                               else stringResource(R.string.show_only_errors),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (showOnlyErrors) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(spacing.xs))
+                    Switch(
+                        checked = showOnlyErrors,
+                        onCheckedChange = { onToggleErrors() }
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+    }
+}
+
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -3092,54 +3319,3 @@ private fun MenuIconWithTick(
     }
 }
 
-@Composable
-private fun TopInfoChipsBar(
-    supplier: String?,
-    category: String?,
-    completed: Int,
-    total: Int,
-    exported: Boolean,
-    modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
-) {
-    val spacing = MaterialTheme.appSpacing
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(contentPadding),
-        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        supplier?.let { InfoChip(it) }
-        category?.let { InfoChip(it) }
-        InfoChip("${formatClCount(completed)}/${formatClCount(total)}")
-        if (exported) InfoChip(stringResource(R.string.exported_short), tonal = true)
-    }
-}
-
-@Composable
-private fun InfoChip(text: String, tonal: Boolean = false) {
-    val spacing = MaterialTheme.appSpacing
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = if (tonal) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceColorAtElevation(4.dp)
-        },
-        contentColor = if (tonal) {
-            MaterialTheme.colorScheme.onSecondaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = spacing.md, vertical = spacing.sm)
-        )
-    }
-}

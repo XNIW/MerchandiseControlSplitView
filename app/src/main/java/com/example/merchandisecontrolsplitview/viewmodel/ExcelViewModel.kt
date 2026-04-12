@@ -843,6 +843,14 @@ class ExcelViewModel(
         }
     }
 
+    /**
+     * Read-only derived value: initial purchase-order total for the current [excelData].
+     * Exposed for display purposes only (GeneratedScreen summary footer).
+     * Delegates to [calculateInitialSummary] — no logic duplicated in the UI.
+     */
+    val initialOrderTotal: Double
+        get() = if (excelData.size > 1) calculateInitialSummary(excelData).second else 0.0
+
     private fun calculateInitialSummary(
         data: List<List<String>>
     ): Pair<Int, Double> {

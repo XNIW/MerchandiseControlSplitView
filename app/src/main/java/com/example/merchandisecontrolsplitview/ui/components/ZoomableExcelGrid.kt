@@ -50,7 +50,10 @@ fun ZoomableExcelGrid(
     // --- NUOVO: Parametri per gestire le colonne essenziali ---
     isColumnEssential: (colIndex: Int) -> Boolean,
     onHeaderEditClick: ((colIndex: Int) -> Unit)?,
-    isManualEntry: Boolean
+    isManualEntry: Boolean,
+    // When non-null: data rows are pre-filtered; rowIndexMapping[displayIdx] = real row index in
+    // completeStates / editableValues / errorRowIndexes / searchMatches / callbacks.
+    rowIndexMapping: List<Int>? = null
 ) {
     if (data.isEmpty()) return
 
@@ -115,7 +118,10 @@ fun ZoomableExcelGrid(
 
                 // Data rows
                 itemsIndexed(data.drop(1)) { idx, row ->
-                    val r = idx + 1
+                    // When rowIndexMapping is provided the data is pre-filtered; map back to the
+                    // real row index so that completeStates / editableValues / callbacks all refer
+                    // to the correct position in the full dataset.
+                    val r = rowIndexMapping?.getOrNull(idx) ?: (idx + 1)
                     val bothFilled = if (hasEditable) {
                         editableValues.getOrNull(r)
                             ?.let { it.getOrNull(0)?.value?.isNotEmpty() == true && it.getOrNull(1)?.value?.isNotEmpty() == true }
