@@ -183,17 +183,21 @@ fun AppNavGraph() {
             }
 
             composable(Screen.History.route) {
-                val historyList by excelViewModel.historyListEntries.collectAsState()
+                val historyList by excelViewModel.historyDisplayEntries.collectAsState()
                 val historyActionMessage by excelViewModel.historyActionMessage
-                val currentDateFilter by excelViewModel.dateFilter.collectAsState()
+                val currentHistoryFilter by excelViewModel.historyFilter.collectAsState()
                 val hasHistoryEntries by excelViewModel.hasHistoryEntries.collectAsState()
+                val availableSuppliers by excelViewModel.availableHistorySuppliers.collectAsState()
+                val availableCategories by excelViewModel.availableHistoryCategories.collectAsState()
 
                 HistoryScreen(
                     contentPadding = innerPadding,
                     historyList = historyList,
-                    currentFilter = currentDateFilter,
+                    currentFilter = currentHistoryFilter,
                     hasAnyHistoryEntries = hasHistoryEntries,
                     historyActionMessage = historyActionMessage,
+                    availableSuppliers = availableSuppliers,
+                    availableCategories = availableCategories,
                     onSelect = { entry ->
                         excelViewModel.loadHistoryEntry(entry.uid) {
                             navController.navigate(
@@ -208,7 +212,7 @@ fun AppNavGraph() {
                     onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry.uid, newName) },
                     onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry.uid) },
                     onHistoryActionMessageConsumed = { excelViewModel.consumeHistoryActionMessage() },
-                    onSetFilter = { filter -> excelViewModel.setDateFilter(filter) }
+                    onSetFilter = { filter -> excelViewModel.setHistoryFilter(filter) }
                 )
             }
 

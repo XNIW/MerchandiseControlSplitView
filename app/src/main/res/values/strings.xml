@@ -308,11 +308,18 @@
     <string name="filter_previous_month">Mese precedente</string>
     <string name="filter_custom_range">Intervallo personalizzato…</string>
     <string name="history_filter_active">Filtro attivo: %1$s</string>
+    <string name="history_entry_created_at">Creato il %1$s</string>
     <string name="history_filter_custom_range_value">%1$s - %2$s</string>
     <string name="history_empty_title">Nessuna cronologia</string>
     <string name="history_empty_message">Le importazioni e le voci manuali salvate appariranno qui.</string>
     <string name="history_filtered_empty_title">Nessun risultato</string>
-    <string name="history_filtered_empty_message">Prova un filtro diverso o amplia l\'intervallo di date.</string>
+    <string name="history_filtered_empty_message">Nessuna voce corrisponde ai filtri selezionati.</string>
+    <string name="history_filter_sheet_title">Filtri</string>
+    <string name="history_filter_period_section">Periodo</string>
+    <string name="history_filter_all_option">Tutti</string>
+    <string name="history_filter_reset">Reimposta</string>
+    <string name="history_filter_apply">Applica</string>
+    <string name="history_filter_search_hint">Cerca…</string>
 
     <string name="next">Avanti</string>
     <string name="select_start_date">Seleziona data di inizio</string>

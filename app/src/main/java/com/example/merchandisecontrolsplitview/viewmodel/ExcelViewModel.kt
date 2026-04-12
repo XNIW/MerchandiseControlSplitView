@@ -51,6 +51,22 @@ sealed class DateFilter {
     data class CustomRange(val startDate: LocalDate, val endDate: LocalDate) : DateFilter()
 }
 
+/**
+ * Filtro combinato per la schermata Cronologia: periodo + fornitore + categoria.
+ * Il filtro data opera a livello DB; supplier e category sono filtri in-memory.
+ */
+data class HistoryFilter(
+    val dateFilter: DateFilter = DateFilter.All,
+    val supplier: String = "",
+    val category: String = ""
+) {
+    val isDateFilterActive: Boolean get() = dateFilter !is DateFilter.All
+    val isSupplierFilterActive: Boolean get() = supplier.isNotBlank()
+    val isCategoryFilterActive: Boolean get() = category.isNotBlank()
+    val hasAnyActiveFilter: Boolean
+        get() = isDateFilterActive || isSupplierFilterActive || isCategoryFilterActive
+}
+
 data class PreGenerateDataQualitySummary(
     val duplicateBarcodeCount: Int = 0,
     val duplicateBarcodeSamples: List<String> = emptyList(),
@@ -135,15 +151,70 @@ class ExcelViewModel(
     // Removed repository instantiation as it is now injected via constructor
 
 
-    // Stato privato che mantiene il filtro corrente. Inizia con "Mostra tutto".
+    // Stato privato che mantiene il filtro data. Alimenta le query Room.
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
-    val dateFilter: StateFlow<DateFilter> = _dateFilter.asStateFlow()
+
+    // Filtri in-memory per fornitore e categoria (applicati dopo il filtro DB).
+    private val _supplierFilter = MutableStateFlow("")
+    private val _categoryFilter = MutableStateFlow("")
+
+    // Filtro combinato esposto alla UI: periodo + supplier + category.
+    val historyFilter: StateFlow<HistoryFilter> = combine(
+        _dateFilter, _supplierFilter, _categoryFilter
+    ) { date, supplier, category ->
+        HistoryFilter(dateFilter = date, supplier = supplier, category = category)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Lazily,
+        initialValue = HistoryFilter()
+    )
 
     // Lista alleggerita per la schermata History: usa solo la history utente visibile
     // ed evita di caricare i blob della griglia nello scroll principale.
+    // Filtrata solo per data — usata anche da GeneratedScreen per recuperare il timestamp entry.
     val historyListEntries: StateFlow<List<HistoryEntryListItem>> = _dateFilter
         .flatMapLatest { filter ->
             repository.getFilteredHistoryListFlow(filter)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = emptyList()
+        )
+
+    // Lista per la visualizzazione nella HistoryScreen: filtrata anche per supplier e category.
+    val historyDisplayEntries: StateFlow<List<HistoryEntryListItem>> = combine(
+        historyListEntries, _supplierFilter, _categoryFilter
+    ) { entries, supplier, category ->
+        entries.filter { entry ->
+            (supplier.isBlank() || entry.supplier.equals(supplier, ignoreCase = true)) &&
+                (category.isBlank() || entry.category.equals(category, ignoreCase = true))
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Lazily,
+        initialValue = emptyList()
+    )
+
+    // Fornitori distinti disponibili nel periodo selezionato (prima del filtro in-memory).
+    val availableHistorySuppliers: StateFlow<List<String>> = historyListEntries
+        .map { entries ->
+            entries.mapNotNull { e -> e.supplier.trim().takeIf { it.isNotBlank() } }
+                .distinct()
+                .sorted()
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = emptyList()
+        )
+
+    // Categorie distinte disponibili nel periodo selezionato (prima del filtro in-memory).
+    val availableHistoryCategories: StateFlow<List<String>> = historyListEntries
+        .map { entries ->
+            entries.mapNotNull { e -> e.category.trim().takeIf { it.isNotBlank() } }
+                .distinct()
+                .sorted()
         }
         .stateIn(
             scope = viewModelScope,
@@ -283,7 +354,17 @@ class ExcelViewModel(
 
 
     /**
-     * NUOVO: Metodo pubblico chiamato dalla UI per cambiare il filtro attivo.
+     * Imposta il filtro combinato (periodo + fornitore + categoria) dalla UI.
+     */
+    fun setHistoryFilter(filter: HistoryFilter) {
+        _dateFilter.value = filter.dateFilter
+        _supplierFilter.value = filter.supplier
+        _categoryFilter.value = filter.category
+    }
+
+    /**
+     * Aggiorna solo il filtro data, mantenendo supplier e category correnti.
+     * Mantenuto per compatibilità con eventuali call site non migrati.
      */
     fun setDateFilter(filter: DateFilter) {
         _dateFilter.value = filter
