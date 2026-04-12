@@ -26,12 +26,12 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **Nessun task attivo.** **TASK-045** — **`DONE`** (2026-04-11; shell principale iOS-like con bottom navigation persistente + tab `Inventario` / `Database` / `Cronologia` / `Opzioni`; review planner APPROVED; 2 fix insets applicati in review; `assembleDebug` / `lint` verdi; file `docs/TASKS/TASK-045-home-filepicker-dashboard-ux-riferimento-ios.md`) |
-| Fase task attivo     | **—** |
-| Backlog documentale  | Audit UX/UI 2026-04-04 (TASK-030 → TASK-041); **TASK-030** `DONE`; **TASK-031** `DONE`; **TASK-032** `DONE`; **TASK-034** `DONE`; **TASK-035** `DONE`; **TASK-037** `DONE`; **TASK-038** `DONE` (review repo-grounded APPROVED senza fix, build/lint verdi, smoke execution e call site audit verificati 2026-04-05); **TASK-039** `DONE` (2026-04-05 — rollback esplicito al dialog precedente con preset + checkbox, review veloce positiva, build/lint verdi); **TASK-040** `DONE` (2026-04-05 — chiusura documentale; review repo-grounded + micro-fix FAB overlay; `assembleDebug` / `lint` / `ExcelViewModelTest` verdi; file `docs/TASKS/TASK-040-pregenerate-supplier-category-e-feedback-qualita.md`); **TASK-041** `DONE` (2026-04-11 — chiusura esplicita utente; review APPROVED; banner completamento + quick export `GeneratedScreen`; rischio residuo non bloccante: build/lint e smoke UI non eseguibili per limite JDK; file `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`); **TASK-042** `DONE` (2026-04-04); **TASK-043** `DONE` (2026-04-10 — esclusione righe footer/totali da `dataRows`; review APPROVED; `docs/TASKS/TASK-043-robustezza-esclusione-righe-totali-footer-preview-import-analysis.md`); **TASK-044** `DONE` (2026-04-11 — History senza entry tecniche `APPLY_IMPORT_*` + `FULL_IMPORT_*`; review planner APPROVED repo-grounded; filtro centralizzato `USER_VISIBLE_HISTORY_WHERE_CLAUSE` DAO + stop insert VM + baseline JVM + build/lint verdi; file `docs/TASKS/TASK-044-history-cronologia-utente-senza-entry-tecniche-apply-import.md`); **TASK-045** **`ACTIVE`** / **`PLANNING`** (2026-04-11 — re-plan richiesto dall’utente: bottom navigation persistente + shell principale iOS-like; task non più limitato al solo polish di `FilePickerScreen`) |
+| Task attivo          | **TASK-046** — **`EXECUTION`** (2026-04-11; PreGenerateScreen full UX rewrite iOS-style; file `docs/TASKS/TASK-046-pregenerate-ios-style-full-ux-rewrite.md`) |
+| Fase task attivo     | **EXECUTION** |
+| Backlog documentale  | Audit UX/UI 2026-04-04 (TASK-030 → TASK-041); **TASK-030** `DONE`; **TASK-031** `DONE`; **TASK-032** `DONE`; **TASK-034** `DONE`; **TASK-035** `DONE`; **TASK-037** `DONE`; **TASK-038** `DONE` (review repo-grounded APPROVED senza fix, build/lint verdi, smoke execution e call site audit verificati 2026-04-05); **TASK-039** `DONE` (2026-04-05 — rollback esplicito al dialog precedente con preset + checkbox, review veloce positiva, build/lint verdi); **TASK-040** `DONE` (2026-04-05 — chiusura documentale; review repo-grounded + micro-fix FAB overlay; `assembleDebug` / `lint` / `ExcelViewModelTest` verdi; file `docs/TASKS/TASK-040-pregenerate-supplier-category-e-feedback-qualita.md`); **TASK-041** `DONE` (2026-04-11 — chiusura esplicita utente; review APPROVED; banner completamento + quick export `GeneratedScreen`; rischio residuo non bloccante: build/lint e smoke UI non eseguibili per limite JDK; file `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`); **TASK-042** `DONE` (2026-04-04); **TASK-043** `DONE` (2026-04-10 — esclusione righe footer/totali da `dataRows`; review APPROVED; `docs/TASKS/TASK-043-robustezza-esclusione-righe-totali-footer-preview-import-analysis.md`); **TASK-044** `DONE` (2026-04-11 — History senza entry tecniche `APPLY_IMPORT_*` + `FULL_IMPORT_*`; review planner APPROVED repo-grounded; filtro centralizzato `USER_VISIBLE_HISTORY_WHERE_CLAUSE` DAO + stop insert VM + baseline JVM + build/lint verdi; file `docs/TASKS/TASK-044-history-cronologia-utente-senza-entry-tecniche-apply-import.md`); **TASK-045** `DONE` (2026-04-11); **TASK-046** `BACKLOG` (2026-04-11 — PreGenerateScreen UX full iOS-style; file `docs/TASKS/TASK-046-pregenerate-ios-style-full-ux-rewrite.md`; stato file task **PLANNING**) |
 | Milestone            | **TASK-045** **`DONE`** (2026-04-11). **TASK-044** **`DONE`** (2026-04-11). **TASK-043** **`DONE`** (2026-04-10). **TASK-041** **`DONE`** (2026-04-11). **TASK-042** **`DONE`** (2026-04-04). **TASK-040** **`DONE`** (2026-04-05). **TASK-039** **`DONE`** (2026-04-05). **TASK-038** **`DONE`** (2026-04-05). **TASK-037** **`DONE`** (2026-04-05). **TASK-035** **`DONE`** (2026-04-05). **TASK-032** **`DONE`** (2026-04-05). **TASK-030** **`DONE`** (2026-04-04). **TASK-016** **`DONE`** (2026-04-05). **TASK-029** **`DONE`** (2026-04-03). **TASK-028** **`DONE`** (2026-04-03). **TASK-027** **`DONE`** (2026-04-03). **TASK-026** **`DONE`** (2026-04-03). **TASK-025** **`DONE`** (2026-04-03). **TASK-015** **`DONE`** (2026-04-03). **TASK-024** **`DONE`** (2026-03-30). **TASK-023** **`DONE`** (2026-03-30). **TASK-022** **`DONE`** (2026-03-30). **TASK-019** **`DONE`** (2026-03-30). **TASK-018** **`DONE`**. **TASK-014** **`DONE`**. **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-012** **`DONE`**. **TASK-010** **`DONE`**. **TASK-007** **`DONE`**. |
-| Prossimo passo operativo | In attesa di indicazione utente per il prossimo task da attivare. |
-| Ultimo aggiornamento | 2026-04-11 — **TASK-045** chiuso in `DONE`; review planner completata con 2 fix insets (FAB DatabaseScreen, SnackbarHost HistoryScreen); `assembleDebug` / `lint` verdi. |
+| Prossimo passo operativo | **TASK-046** `EXECUTION` avviato — audit pre-Execution completato (10 integrazioni da analisi codice reale); pronto per implementazione. |
+| Ultimo aggiornamento | 2026-04-11 — **TASK-046** passato da `BACKLOG/PLANNING` a `ACTIVE/EXECUTION` dopo audit planning repo-grounded. |
 
 **Promemoria antiambiguità (governance):** **TASK-040** è **`DONE`** (2026-04-05 — file task chiuso, 22/22 criteri con smoke visivo non bloccante documentato). **TASK-016** è **`DONE`** (2026-04-05). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
 
@@ -706,7 +706,7 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-044 — History: cronologia utente senza entry tecniche `APPLY_IMPORT_*`
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE` (fase **`EXECUTION`** — 2026-04-11; review repo-grounded planning completata; FULL_IMPORT_* confermato in perimetro) |
+| Stato       | `DONE` (2026-04-11 — review planner APPROVED repo-grounded) |
 | Priorità    | `MEDIA`                                                 |
 | Area        | UX / History / Import apply (`DatabaseViewModel`)       |
 | Dipendenze  | Nessuna                                                 |
@@ -716,12 +716,22 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 ### TASK-045 — Shell principale iOS-like: bottom navigation persistente + tab root
 | Campo       | Valore                                                  |
 |-------------|---------------------------------------------------------|
-| Stato       | `ACTIVE` (fase **`EXECUTION`** — 2026-04-11; re-plan approvato dal planner post-audit codice; Planning Addendum D21–D27 integrato) |
+| Stato       | `DONE` (2026-04-11 — review planner APPROVED; `assembleDebug` / `lint` verdi) |
 | Priorità    | `ALTA`                                                  |
 | Area        | UX/UI — shell root + schermate principali               |
 | Dipendenze  | Nessuna (coerenza consigliata con **TASK-030** `DONE`) |
 | File task   | `docs/TASKS/TASK-045-home-filepicker-dashboard-ux-riferimento-ios.md` |
 | Descrizione | Riallineare Android alla shell iOS: bottom navigation persistente con `Inventario` / `Database` / `Cronologia` / `Opzioni`, `Inventario` trattato come tab root e non come home isolata, adattamento delle schermate root alla nuova shell. Business logic invariata; navigation/UI root in perimetro. |
+
+### TASK-046 — PreGenerateScreen: full UX rewrite iOS-style (pre-processing)
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `ACTIVE` (file task **EXECUTION** — audit pre-Execution completato 2026-04-11) |
+| Priorità    | `ALTA`                                                  |
+| Area        | UX/UI — PreGenerate / anteprima import Excel            |
+| Dipendenze  | **TASK-040** `DONE`; **TASK-030** `DONE`; **TASK-045** `DONE` |
+| File task   | `docs/TASKS/TASK-046-pregenerate-ios-style-full-ux-rewrite.md` |
+| Descrizione | Riprogettare `PreGenerateScreen` con gerarchia iOS-like: top bar raffinata, preview compatta prime 20 righe, lista colonne guidata, sezioni fornitore/categoria, CTA finale narrativa; **senza** mutare `ExcelViewModel` come fonte di verità né la logica import/generate. |
 
 ---
 

@@ -20,6 +20,7 @@ import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
+import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcelDetailed
 import com.example.merchandisecontrolsplitview.util.classifyExcelFileUserError
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
 import com.example.merchandisecontrolsplitview.util.ExcelFileUserError
@@ -72,6 +73,7 @@ class ExcelViewModel(
     private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
     // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
+    val originalHeaders = mutableStateListOf<String>()
     val selectedColumns = mutableStateListOf<Boolean>()
     val editableValues = mutableStateListOf<MutableList<MutableState<String>>>()
     val completeStates = mutableStateListOf<Boolean>()
@@ -183,6 +185,8 @@ class ExcelViewModel(
 
     private var _originalHistoryEntryState: HistoryEntry? = null
     private var _preGenerateStateBackup: List<List<String>>? = null
+    private var _preGenerateOriginalHeadersBackup: List<String>? = null
+    private var _preGenerateHeaderTypesBackup: List<String>? = null
 
     val lastUsedCategory = mutableStateOf<String?>(null)
 
@@ -222,11 +226,13 @@ class ExcelViewModel(
      */
     private fun populateStateFromEntry(entry: HistoryEntry) {
         excelData.clear()
+        originalHeaders.clear()
         selectedColumns.clear()
         editableValues.clear()
         completeStates.clear()
         errorRowIndexes.value = emptySet()
         excelData.addAll(entry.data)
+        originalHeaders.addAll(entry.data.firstOrNull()?.toList().orEmpty())
         entry.editable.forEach { row ->
             editableValues.add(row.map { mutableStateOf(it) }.toMutableList())
         }
@@ -258,6 +264,14 @@ class ExcelViewModel(
         _preGenerateStateBackup?.let { backupData ->
             resetState()
             excelData.addAll(backupData)
+            originalHeaders.addAll(
+                _preGenerateOriginalHeadersBackup
+                    ?: backupData.firstOrNull()?.toList().orEmpty()
+            )
+            headerTypes.addAll(
+                _preGenerateHeaderTypesBackup
+                    ?: List(backupData.firstOrNull()?.size ?: 0) { "unknown" }
+            )
             initPreGenerateState()
             generated.value = false
         }
@@ -292,9 +306,9 @@ class ExcelViewModel(
             postProgress(5) // sta partendo
 
             try {
-                val (goldenHeader, firstDataRows, headerSource) = try {
+                val firstAnalysis = try {
                     withContext(Dispatchers.IO) {
-                        readAndAnalyzeExcel(context, uris.first())
+                        readAndAnalyzeExcelDetailed(context, uris.first())
                     }
                 } catch (e: Exception) {
                     val isFirstFileEmpty =
@@ -306,6 +320,9 @@ class ExcelViewModel(
                     }
                     throw e
                 }
+                val goldenHeader = firstAnalysis.header
+                val firstDataRows = firstAnalysis.dataRows
+                val headerSource = firstAnalysis.headerSource
                 postProgress(15)
 
                 val allValidRows = mutableListOf<List<String>>()
@@ -331,6 +348,7 @@ class ExcelViewModel(
                 postProgress(95) // merge dati / setup stato
                 excelData.add(goldenHeader)
                 excelData.addAll(allValidRows)
+                originalHeaders.addAll(firstAnalysis.originalHeaders)
                 headerTypes.addAll(headerSource)
                 initPreGenerateState()
             } catch (e: Exception) {
@@ -432,6 +450,8 @@ class ExcelViewModel(
     fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
         // Prima di qualsiasi modifica, salviamo lo stato attuale della griglia.
         _preGenerateStateBackup = excelData.map { it.toList() }
+        _preGenerateOriginalHeadersBackup = originalHeaders.toList()
+        _preGenerateHeaderTypesBackup = headerTypes.toList()
 
         viewModelScope.launch { // Esegui operazioni pesanti su un thread in background
             val header = excelData.firstOrNull() ?: return@launch
@@ -747,6 +767,7 @@ class ExcelViewModel(
 
     fun resetState() {
         excelData.clear()
+        originalHeaders.clear()
         selectedColumns.clear()
         editableValues.clear()
         completeStates.clear()
@@ -771,6 +792,18 @@ class ExcelViewModel(
                 headerRow[colIdx] = type
                 excelData[0] = headerRow
             }
+        }
+    }
+
+    fun restoreOriginalHeader(colIdx: Int) {
+        val originalHeader = originalHeaders.getOrNull(colIdx)?.takeIf { it.isNotBlank() } ?: return
+        if (colIdx in headerTypes.indices) {
+            headerTypes[colIdx] = "unknown"
+        }
+        val headerRow = excelData.firstOrNull()?.toMutableList() ?: return
+        if (colIdx in headerRow.indices) {
+            headerRow[colIdx] = originalHeader
+            excelData[0] = headerRow
         }
     }
 

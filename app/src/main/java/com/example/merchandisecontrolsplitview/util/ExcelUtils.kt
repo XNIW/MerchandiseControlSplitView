@@ -16,6 +16,19 @@ fun readAndAnalyzeExcel(
     uri: Uri,
     allowEmptyTabularResult: Boolean = false
 ): Triple<List<String>, List<List<String>>, List<String>> {
+    val analysis = readAndAnalyzeExcelDetailed(
+        context = context,
+        uri = uri,
+        allowEmptyTabularResult = allowEmptyTabularResult
+    )
+    return Triple(analysis.header, analysis.dataRows, analysis.headerSource)
+}
+
+internal fun readAndAnalyzeExcelDetailed(
+    context: Context,
+    uri: Uri,
+    allowEmptyTabularResult: Boolean = false
+): ExcelAnalysisResult {
     val rows = mutableListOf<List<String>>()
     val emptyFileMessage = context.getString(R.string.error_file_empty_or_invalid)
     val inputStream = context.contentResolver.openInputStream(uri)
@@ -38,14 +51,27 @@ fun readAndAnalyzeExcel(
         }
     }
 
-    val analysis = analyzeRows(context, rows)
+    val analysis = analyzeRowsDetailed(context, rows)
     rows.clear()
-    val hasEmptyTabularResult = analysis.first.isEmpty() || analysis.second.isEmpty()
+    val hasEmptyTabularResult = analysis.header.isEmpty() || analysis.dataRows.isEmpty()
     if (hasEmptyTabularResult) {
         if (!allowEmptyTabularResult) {
             throw IllegalArgumentException(emptyFileMessage)
         }
-        return Triple(emptyList(), emptyList(), emptyList())
+        return ExcelAnalysisResult(
+            header = emptyList(),
+            originalHeaders = emptyList(),
+            dataRows = emptyList(),
+            headerSource = emptyList(),
+            trace = ExcelAnalysisTrace(
+                hasHeader = false,
+                dataRowIdx = -1,
+                headerRows = emptyList(),
+                headerMode = "empty-allowed",
+                sampleSize = 0,
+                fieldDecisions = emptyList()
+            )
+        )
     }
     return analysis
 }
@@ -222,6 +248,14 @@ private fun normalizeHeader(s: String) = normalizeExcelHeader(s)
 
 private data class PrunedColumnsResult(
     val header: MutableList<String>,
+    val originalHeaders: MutableList<String>,
+    val headerSource: MutableList<String>,
+    val dataRows: List<List<String>>
+)
+
+private data class AlignedColumnsResult(
+    val header: MutableList<String>,
+    val originalHeaders: MutableList<String>,
     val headerSource: MutableList<String>,
     val dataRows: List<List<String>>
 )
@@ -263,6 +297,7 @@ internal data class ExcelAnalysisTrace(
 
 internal data class ExcelAnalysisResult(
     val header: List<String>,
+    val originalHeaders: List<String>,
     val dataRows: List<List<String>>,
     val headerSource: List<String>,
     val trace: ExcelAnalysisTrace
@@ -362,12 +397,14 @@ private fun readPoiRows(sheet: Sheet): List<List<String>> {
 
 private fun pruneTotallyEmptyColumns(
     header: List<String>,
+    originalHeaders: List<String>,
     headerSource: List<String>,
     dataRows: List<List<String>>
 ): PrunedColumnsResult {
     if (header.isEmpty()) {
         return PrunedColumnsResult(
             header = mutableListOf(),
+            originalHeaders = mutableListOf(),
             headerSource = mutableListOf(),
             dataRows = dataRows
         )
@@ -379,6 +416,7 @@ private fun pruneTotallyEmptyColumns(
 
     return PrunedColumnsResult(
         header = nonEmptyCols.map { header[it] }.toMutableList(),
+        originalHeaders = nonEmptyCols.map { originalHeaders.getOrNull(it).orEmpty() }.toMutableList(),
         headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList(),
         dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } }
     )
@@ -531,18 +569,25 @@ private fun mergeHeaderRows(rows: List<List<String>>, headerRows: List<Int>): Li
 
 private fun alignTabularWidths(
     header: MutableList<String>,
+    originalHeaders: MutableList<String>,
     headerSource: MutableList<String>,
     dataRows: List<List<String>>
-): Triple<MutableList<String>, MutableList<String>, List<List<String>>> {
+) : AlignedColumnsResult {
     val colCount = maxOf(header.size, dataRows.maxOfOrNull { it.size } ?: 0)
     while (header.size < colCount) {
         header.add("")
+        originalHeaders.add("")
         headerSource.add("unknown")
     }
     val normalizedRows = dataRows.map { row ->
         if (row.size >= colCount) row else row + List(colCount - row.size) { "" }
     }
-    return Triple(header, headerSource, normalizedRows)
+    return AlignedColumnsResult(
+        header = header,
+        originalHeaders = originalHeaders,
+        headerSource = headerSource,
+        dataRows = normalizedRows
+    )
 }
 
 private fun buildColumnSamples(dataRows: List<List<String>>, colCount: Int): List<ColumnSample> {
@@ -890,11 +935,13 @@ internal fun analyzeRowsDetailed(
     val hasHeader = headerDetection.hasHeader
 
     var header: MutableList<String>
+    var originalHeaders: MutableList<String>
     var headerSource: MutableList<String>
     var dataRows: List<List<String>>
 
     if (hasHeader) {
-        header = mergeHeaderRows(rows, headerDetection.headerRows).toMutableList()
+        originalHeaders = mergeHeaderRows(rows, headerDetection.headerRows).toMutableList()
+        header = originalHeaders.toMutableList()
         headerSource = MutableList(header.size) { "unknown" }
         val start = headerDetection.dataRowIdx.coerceAtLeast(0)
         dataRows = rows.drop(start).filter { row ->
@@ -908,12 +955,14 @@ internal fun analyzeRowsDetailed(
         header = (1..colCount).map {
             "${context.getString(R.string.generated_column_prefix)} $it"
         }.toMutableList()
+        originalHeaders = MutableList(header.size) { "" }
         headerSource = MutableList(header.size) { "generated" }
         dataRows = rows
     }
     if (dataRows.isEmpty()) {
         return ExcelAnalysisResult(
             header = header,
+            originalHeaders = originalHeaders,
             dataRows = dataRows,
             headerSource = headerSource,
             trace = ExcelAnalysisTrace(
@@ -927,18 +976,20 @@ internal fun analyzeRowsDetailed(
         )
     }
 
-    val aligned = alignTabularWidths(header, headerSource, dataRows)
-    header = aligned.first
-    headerSource = aligned.second
-    dataRows = aligned.third
+    val aligned = alignTabularWidths(header, originalHeaders, headerSource, dataRows)
+    header = aligned.header
+    originalHeaders = aligned.originalHeaders
+    headerSource = aligned.headerSource
+    dataRows = aligned.dataRows
 
     val possibleNames = KNOWN_EXCEL_HEADER_ALIASES
     val headerMap = mutableMapOf<String, Int>()
     val usedCols = mutableSetOf<Int>()
     val decisionTraces = mutableMapOf<String, ExcelFieldDecisionTrace>()
 
-    val prunedColumns = pruneTotallyEmptyColumns(header, headerSource, dataRows)
+    val prunedColumns = pruneTotallyEmptyColumns(header, originalHeaders, headerSource, dataRows)
     header = prunedColumns.header
+    originalHeaders = prunedColumns.originalHeaders
     headerSource = prunedColumns.headerSource
     dataRows = prunedColumns.dataRows
 
@@ -1288,27 +1339,32 @@ internal fun analyzeRowsDetailed(
         key: String,
         insertAt: Int,
         header: MutableList<String>,
+        originalHeaders: MutableList<String>,
         headerSource: MutableList<String>,
         dataRows: List<List<String>>
-    ): Triple<MutableList<String>, List<List<String>>, MutableList<String>> {
+    ): Quadruple<MutableList<String>, MutableList<String>, List<List<String>>, MutableList<String>> {
         if (!header.contains(key)) {
             header.add(insertAt, key)
+            originalHeaders.add(insertAt, "")
             headerSource.add(insertAt, "generated")
             val newRows = dataRows.map { row ->
                 val m = row.toMutableList()
                 m.add(insertAt, "")
                 m
             }
-            return Triple(header, newRows, headerSource)
+            return Quadruple(header, originalHeaders, newRows, headerSource)
         }
-        return Triple(header, dataRows, headerSource)
+        return Quadruple(header, originalHeaders, dataRows, headerSource)
     }
 
     // Enforce colonne minime
     run {
         val pos = header.indexOf("itemNumber").let { if (it >= 0) it + 1 else 0 }
-        val triple = ensureColumn("barcode", pos, header, headerSource, dataRows)
-        header = triple.first; dataRows = triple.second; headerSource = triple.third
+        val quadruple = ensureColumn("barcode", pos, header, originalHeaders, headerSource, dataRows)
+        header = quadruple.first
+        originalHeaders = quadruple.second
+        dataRows = quadruple.third
+        headerSource = quadruple.fourth
     }
     run {
         val afterBarcode = header.indexOf("barcode").let { if (it >= 0) it + 1 else -1 }
@@ -1317,8 +1373,11 @@ internal fun analyzeRowsDetailed(
             header.contains("itemNumber") -> header.indexOf("itemNumber") + 1
             else -> header.size
         }
-        val triple = ensureColumn("productName", pos, header, headerSource, dataRows)
-        header = triple.first; dataRows = triple.second; headerSource = triple.third
+        val quadruple = ensureColumn("productName", pos, header, originalHeaders, headerSource, dataRows)
+        header = quadruple.first
+        originalHeaders = quadruple.second
+        dataRows = quadruple.third
+        headerSource = quadruple.fourth
     }
     run {
         val afterQty = header.indexOf("quantity").let { if (it >= 0) it + 1 else -1 }
@@ -1327,8 +1386,11 @@ internal fun analyzeRowsDetailed(
             header.contains("productName") -> header.indexOf("productName") + 1
             else -> header.size
         }
-        val triple = ensureColumn("purchasePrice", pos, header, headerSource, dataRows)
-        header = triple.first; dataRows = triple.second; headerSource = triple.third
+        val quadruple = ensureColumn("purchasePrice", pos, header, originalHeaders, headerSource, dataRows)
+        header = quadruple.first
+        originalHeaders = quadruple.second
+        dataRows = quadruple.third
+        headerSource = quadruple.fourth
     }
 
     fun normalizeSummaryLabel(value: String): String {
@@ -1440,6 +1502,7 @@ internal fun analyzeRowsDetailed(
 
     return ExcelAnalysisResult(
         header = header,
+        originalHeaders = originalHeaders,
         dataRows = dataRows,
         headerSource = headerSource,
         trace = ExcelAnalysisTrace(
@@ -1468,6 +1531,13 @@ fun analyzePoiSheet(context: Context, sheet: Sheet)
     val result = analyzePoiSheetDetailed(context, sheet)
     return Triple(result.header, result.dataRows, result.headerSource)
 }
+
+private data class Quadruple<A, B, C, D>(
+    val first: A,
+    val second: B,
+    val third: C,
+    val fourth: D
+)
 
 internal fun analyzePoiSheetDetailed(
     context: Context,
