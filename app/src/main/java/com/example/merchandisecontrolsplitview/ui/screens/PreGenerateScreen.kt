@@ -48,12 +48,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -85,9 +80,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
@@ -495,14 +494,14 @@ fun PreGenerateScreen(
                                 canKeepOnlyRequired = hasOptionalColumnsSelected,
                                 onSelectAll = { excelViewModel.toggleSelectAll() },
                                 onKeepOnlyRequired = {
-                                    if (hasOptionalColumnsSelected) {
-                                        // Reuse the existing VM toggle semantics instead of adding
-                                        // another source of truth for bulk selection.
-                                        if (canSelectAllOptionalColumns) {
-                                            excelViewModel.toggleSelectAll()
-                                        }
+                                    // toggleSelectAll semantics: any-unselected→select-all, all-selected→deselect-all.
+                                    // To land in "only required" we need the deselect-all path.
+                                    // If some optional columns are not yet selected, normalise to
+                                    // "all selected" first, then the second call deselects all optional.
+                                    if (canSelectAllOptionalColumns) {
                                         excelViewModel.toggleSelectAll()
                                     }
+                                    excelViewModel.toggleSelectAll()
                                 },
                                 onToggleSelection = { index ->
                                     excelViewModel.toggleColumnSelection(index)
@@ -902,30 +901,35 @@ private fun PreGenerateColumnsSection(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
-            PreGeneratePill(
-                text = stringResource(
-                    R.string.pre_generate_columns_selected_count,
-                    selectedCount,
-                    totalCount
-                )
-            )
-            PreGeneratePill(
-                text = stringResource(
-                    R.string.pre_generate_columns_identified_count,
-                    identifiedCount
-                ),
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (needsReviewCount > 0) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(spacing.xs)
+            ) {
                 PreGeneratePill(
                     text = stringResource(
-                        R.string.pre_generate_columns_needs_review_count,
-                        needsReviewCount
-                    ),
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        R.string.pre_generate_columns_selected_count,
+                        selectedCount,
+                        totalCount
+                    )
                 )
+                PreGeneratePill(
+                    text = stringResource(
+                        R.string.pre_generate_columns_identified_count,
+                        identifiedCount
+                    ),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (needsReviewCount > 0) {
+                    PreGeneratePill(
+                        text = stringResource(
+                            R.string.pre_generate_columns_needs_review_count,
+                            needsReviewCount
+                        ),
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
             }
 
             FlowRow(
@@ -998,7 +1002,7 @@ private fun PreGenerateColumnsSection(
                     )
 
                     if (index != visibleColumns.lastIndex) {
-                        HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+                        HorizontalDivider()
                     }
                 }
             }
@@ -1050,6 +1054,7 @@ private fun PreGenerateFilterChip(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PreGenerateColumnRow(
     column: PreGenerateColumnUiModel,
@@ -1058,7 +1063,6 @@ private fun PreGenerateColumnRow(
 ) {
     val spacing = MaterialTheme.appSpacing
     val successColor = MaterialTheme.appColors.success
-    val isUnidentified = column.status == PreGenerateColumnStatus.UNIDENTIFIED
     val examples = if (column.examples.isNotEmpty()) {
         stringResource(
             R.string.pre_generate_column_examples,
@@ -1073,46 +1077,39 @@ private fun PreGenerateColumnRow(
         horizontalArrangement = Arrangement.spacedBy(spacing.md),
         verticalAlignment = Alignment.Top
     ) {
-        Surface(
-            shape = CircleShape,
-            color = if (isUnidentified) {
-                MaterialTheme.colorScheme.errorContainer
-            } else {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-            },
-            contentColor = if (isUnidentified) {
-                MaterialTheme.colorScheme.onErrorContainer
-            } else {
-                MaterialTheme.colorScheme.primary
-            }
-        ) {
-            Icon(
-                imageVector = if (isUnidentified) {
-                    Icons.Default.Warning
-                } else {
-                    Icons.AutoMirrored.Filled.ArrowForward
-                },
-                contentDescription = null,
-                modifier = Modifier.padding(10.dp)
-            )
-        }
-
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                verticalAlignment = Alignment.Top
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = column.title,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
+                IconButton(
+                    onClick = onEditType,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = stringResource(R.string.edit_column_type),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
 
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(spacing.xs)
+            ) {
                 if (column.isEssential) {
                     PreGeneratePill(
                         text = stringResource(R.string.pre_generate_required_badge),
@@ -1120,7 +1117,6 @@ private fun PreGenerateColumnRow(
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-
                 PreGeneratePill(
                     text = columnStatusLabel(column.status),
                     containerColor = when (column.status) {
@@ -1144,17 +1140,6 @@ private fun PreGenerateColumnRow(
                             MaterialTheme.colorScheme.onErrorContainer
                     }
                 )
-
-                IconButton(
-                    onClick = onEditType,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = stringResource(R.string.edit_column_type),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
             }
 
             Text(
@@ -1193,7 +1178,6 @@ private fun PreGenerateColumnRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun <T> PreGenerateEntitySection(
     title: String,
@@ -1213,82 +1197,129 @@ private fun <T> PreGenerateEntitySection(
     itemLabel: (T) -> String
 ) {
     val scope = rememberCoroutineScope()
+    val spacing = MaterialTheme.appSpacing
+
+    // Show inline list when:
+    // - user is typing and no valid selection yet  →  !isSelectionValid && inputText.isNotBlank()
+    // - or "show all" was requested               →  expanded
+    // and there is something to show
+    val showList = !isSelectionValid &&
+        (inputText.isNotBlank() || expanded) &&
+        (suggestions.isNotEmpty() || createPrompt != null)
 
     PreGenerateSectionCard(
         title = title,
         supportingText = supportingText
     ) {
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { onExpandedChange(!expanded) }
-        ) {
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = {
-                    onInputChange(it)
-                    onExpandedChange(true)
-                },
-                placeholder = { Text(placeholder) },
-                singleLine = true,
-                trailingIcon = {
-                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(
-                        type = ExposedDropdownMenuAnchorType.PrimaryEditable,
-                        enabled = true
-                    )
-            )
+        OutlinedTextField(
+            value = inputText,
+            onValueChange = { newValue ->
+                onInputChange(newValue)
+                // Collapse "show all" once user starts typing a real query
+                if (expanded && newValue.isNotBlank()) onExpandedChange(false)
+            },
+            placeholder = { Text(placeholder) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
 
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { onExpandedChange(false) }
+        if (showList) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
             ) {
-                suggestions.forEach { suggestion ->
-                    DropdownMenuItem(
-                        text = { Text(itemLabel(suggestion)) },
-                        onClick = {
-                            onSuggestionSelected(suggestion)
-                            onExpandedChange(false)
-                        }
-                    )
-                }
-
-                createPrompt?.let { prompt ->
-                    DropdownMenuItem(
-                        text = { Text(prompt) },
-                        onClick = {
-                            scope.launch {
-                                onCreateRequested()?.let { created ->
-                                    onSuggestionSelected(created)
+                Column {
+                    suggestions.forEachIndexed { index, suggestion ->
+                        val label = itemLabel(suggestion)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSuggestionSelected(suggestion)
                                     onExpandedChange(false)
                                 }
-                            }
+                                .padding(horizontal = spacing.lg, vertical = spacing.md),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = buildHighlightedSuggestion(label, inputText),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                    )
+                        if (index < suggestions.lastIndex || createPrompt != null) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = spacing.lg),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                            )
+                        }
+                    }
+                    createPrompt?.let { prompt ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        onCreateRequested()?.let { created ->
+                                            onSuggestionSelected(created)
+                                            onExpandedChange(false)
+                                        }
+                                    }
+                                }
+                                .padding(horizontal = spacing.lg, vertical = spacing.md),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = prompt,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        HorizontalDivider()
+        // Hide "show all" browse affordance once a valid selection has been confirmed:
+        // tapping it would clear the input text and invalidate the current selection.
+        // The user can still change their choice by typing directly in the field above.
+        if (!isSelectionValid) {
+            HorizontalDivider()
 
-        TextButton(
-            onClick = {
-                onInputChange("")
-                onExpandedChange(true)
-            },
-            contentPadding = PaddingValues(0.dp),
-            colors = ButtonDefaults.textButtonColors(
-                contentColor = MaterialTheme.colorScheme.primary
-            )
-        ) {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = null
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(stringResource(R.string.pre_generate_show_all_options))
+            TextButton(
+                onClick = {
+                    onInputChange("")
+                    onExpandedChange(true)
+                },
+                contentPadding = PaddingValues(0.dp),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.size(8.dp))
+                Text(stringResource(R.string.pre_generate_show_all_options))
+            }
         }
 
         Text(
@@ -1404,7 +1435,7 @@ private fun PreGenerateGenerateSection(
                 if (!isGenerateEnabled && generateDisabledReason != null) {
                     Text(
                         text = generateDisabledReason,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -1486,7 +1517,7 @@ private fun PreGenerateSectionLabel(
 ) {
     Text(
         text = title,
-        style = MaterialTheme.typography.headlineSmall,
+        style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
@@ -1630,9 +1661,9 @@ private fun PreGeneratePreviewTable(
                     Row(
                         modifier = Modifier.background(
                             if (rowIndex == 0) {
-                                MaterialTheme.colorScheme.surfaceContainerLowest
+                                MaterialTheme.colorScheme.surfaceContainerLow
                             } else {
-                                MaterialTheme.colorScheme.surface
+                                MaterialTheme.colorScheme.surfaceContainerLowest
                             }
                         )
                     ) {
@@ -1697,7 +1728,7 @@ private fun PreviewCell(
             color = if (isHeader) {
                 MaterialTheme.colorScheme.onSurface
             } else {
-                MaterialTheme.colorScheme.onSurface
+                MaterialTheme.colorScheme.onSurfaceVariant
             },
             maxLines = if (isHeader) 1 else 2,
             overflow = TextOverflow.Ellipsis
@@ -1872,3 +1903,21 @@ private fun buildColumnExamples(
     .distinct()
     .take(PRE_GENERATE_COLUMN_EXAMPLE_LIMIT)
     .toList()
+
+private fun buildHighlightedSuggestion(
+    text: String,
+    query: String
+): AnnotatedString {
+    if (query.isBlank()) return AnnotatedString(text)
+    val lowerText = text.lowercase()
+    val lowerQuery = query.trim().lowercase()
+    val startIndex = lowerText.indexOf(lowerQuery)
+    if (startIndex < 0) return AnnotatedString(text)
+    return buildAnnotatedString {
+        append(text.substring(0, startIndex))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+            append(text.substring(startIndex, startIndex + lowerQuery.length))
+        }
+        append(text.substring(startIndex + lowerQuery.length))
+    }
+}

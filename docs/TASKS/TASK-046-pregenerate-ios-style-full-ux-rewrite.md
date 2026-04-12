@@ -7,11 +7,11 @@
 | Campo                 | Valore |
 |-----------------------|--------|
 | ID                    | **TASK-046** |
-| Stato                 | **REVIEW** |
+| Stato                 | **DONE** |
 | Priorità              | **ALTA** |
 | Area                  | UX/UI — PreGenerate / import Excel / anteprima |
 | Creato                | 2026-04-11 |
-| Ultimo aggiornamento  | 2026-04-11 (Execution rifinita con terzo pass focused su preview reale + gestione colonne identificate/non identificate: `assembleDebug`, `lint`, `ExcelUtilsTest`, `ExcelViewModelTest` verdi; task resta in `REVIEW`) |
+| Ultimo aggiornamento  | 2026-04-11 (Pass 8 / Review: 6 fix qualità codice+UX; `assembleDebug` e `lintDebug` verdi; task → `DONE`) |
 
 > **Nota numerazione:** la richiesta finale citava «TASK-036» ma **TASK-036** è già assegnato in repo (`docs/TASKS/TASK-036-historyscreen-colori-tematizzati-padding-uniforme.md`). Questo task è **TASK-046** (successore logico post **TASK-045**).
 
@@ -482,8 +482,8 @@ Il planning è sufficientemente concreto: acceptance criteria chiari, matrice st
 **Check obbligatori (pass 4):**
 | Check                    | Stato | Note |
 |--------------------------|-------|------|
-| Build Gradle             | ✅ ESEGUITO | `JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew assembleDebug` → `BUILD SUCCESSFUL in 11s` |
-| Lint                     | ✅ ESEGUITO | `JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home PATH="$JAVA_HOME/bin:$PATH" ./gradlew lint` → `BUILD SUCCESSFUL in 35s` |
+| Build Gradle             | ✅ ESEGUITO | `JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home PATH=”$JAVA_HOME/bin:$PATH” ./gradlew assembleDebug` → `BUILD SUCCESSFUL in 11s` |
+| Lint                     | ✅ ESEGUITO | `JAVA_HOME=/Applications/Android Studio.app/Contents/jbr/Contents/Home PATH=”$JAVA_HOME/bin:$PATH” ./gradlew lint` → `BUILD SUCCESSFUL in 35s` |
 | Warning nuovi            | ✅ ESEGUITO | Nessun warning nuovo introdotto dal pass 4; restano solo warning/toolchain baseline esterni al task |
 | Coerenza con planning    | ✅ ESEGUITO | Pass interamente nel perimetro UX/UI della preview; nessun allargamento di scope o refactor architetturale |
 | Criteri di accettazione  | ⚠️ NON ESEGUIBILE | Verifiche statiche verdi; la qualita visiva finale della preview resta da confermare in review manuale con confronto diretto col reference iOS |
@@ -495,17 +495,196 @@ Il planning è sufficientemente concreto: acceptance criteria chiari, matrice st
 - In review confrontare soprattutto la preview con lo screenshot iOS: piu colonne visibili, meno bordi pesanti, righe piu compatte e gerarchia visiva piu pulita.
 - Se il device reale mostra ancora colonne eccessivamente larghe su file con molti testi lunghi, il punto da rifinire e `resolvePreviewColumnWidth(...)`, senza toccare la logica dei dati o del mapping.
 
+### Esecuzione — 2026-04-11 (pass 5, fix UX colonne verticali + digitazione supplier/category)
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/PreGenerateScreen.kt` — due fix mirati su problemi UX reali segnalati nell'utente.
+
+**Problema 1 — titoli colonna che vanno in verticale**
+
+Il composable `PreGenerateColumnRow` aveva il titolo colonna in una `Row` con `weight(1f, fill = false)` insieme a due `Pill` badge e un `IconButton`. Con `fill = false`, il titolo poteva contrarsi fino a zero se i badge erano larghi, causando ogni carattere su riga separata con testi cinesi/spagnoli/lunghi.
+
+Fix: ristrutturata la sezione interna della colonna in due Row separate:
+- **Riga 1:** `Text(title, modifier = weight(1f), maxLines=2, overflow=Ellipsis)` + `IconButton(remap)` — il titolo ha ora tutto lo spazio disponibile e va a capo in modo naturale su al massimo 2 righe;
+- **Riga 2:** badge `obbligatoria` + badge `stato` (Identified/Manual/Generated/Unidentified) in `Row` con `spacedBy` — non competono piu con il titolo per la larghezza.
+
+**Problema 2 — digitazione interrotta da suggerimenti supplier/category**
+
+Il composable `PreGenerateEntitySection` usava `ExposedDropdownMenuBox` + `DropdownMenu` con `onExpandedChange(true)` su ogni `onValueChange`. Il `ExposedDropdownMenuBox` gestisce internamente focus e tastiera in modo invasivo: a ogni carattere la popup si riapriva, il sistema ricalcolava la posizione della tastiera e il focus poteva saltare.
+
+Fix: rimosso completamente `ExposedDropdownMenuBox` e sostituito con:
+- **`OutlinedTextField` standalone** senza wrapper né `menuAnchor` — digitazione stabile, focus invariato, nessuna interferenza;
+- **Lista suggerimenti inline condizionale** (Surface + Column) sotto il TextField, mostrata quando `!isSelectionValid && (inputText.isNotBlank() || expanded)` e ci sono suggerimenti o un createPrompt disponibile;
+- **Highlight del testo matchato** con `buildHighlightedSuggestion()` (AnnotatedString + SpanStyle bold) per chiarire quale parte del suggerimento corrisponde alla query;
+- **Voce “Crea nuovo”** con icona Add inline nella stessa lista, al posto del DropdownMenuItem separato;
+- **”Mostra tutto”** (TextButton già esistente): imposta `inputText = “”` e `expanded = true` → la lista mostra tutte le entita disponibili;
+- **Chiusura lista dopo selezione:** `onExpandedChange(false)` + `isSelectionValid = true` → `showList = false` automaticamente.
+
+Rimossi import non piu usati: `DropdownMenu`, `DropdownMenuItem`, `ExposedDropdownMenuAnchorType`, `ExposedDropdownMenuBox`, `ExposedDropdownMenuDefaults`.
+Aggiunti import: `AnnotatedString`, `SpanStyle`, `buildAnnotatedString`, `withStyle` da `androidx.compose.ui.text`.
+
+**Cosa cambia per l'utente:**
+- Titoli colonna lunghi (cinese, spagnolo, italiano) leggibili orizzontalmente su al massimo 2 righe.
+- Badge e icona remap sempre allineate e mai compresse dal titolo.
+- Digitazione in supplier/category fluida e continua senza interruzioni da popup.
+- Suggerimenti compaiono inline sotto il campo senza rubare il focus.
+- La parte del testo che corrisponde alla ricerca appare in grassetto.
+
+**Cosa NON cambia:**
+- Comportamento funzionale invariato: `DatabaseViewModel.onSupplierSearchQueryChanged`, `DatabaseViewModel.onCategorySearchQueryChanged`, selezione/creazione, wiring `selectedSupplier`/`selectedCategory`, gate `isGenerateEnabled`.
+- Reset supplier/category su reload vs append: `resetInlineSelectionsOnNextDataset` + `LaunchedEffect(excelData.size)` identici.
+- Tutte le sezioni della schermata, la CTA, il remap colonne, il dialog di scelta tipo, il generate.
+
+**Check obbligatori (pass 5):**
+| Check                    | Stato | Note |
+|--------------------------|-------|------|
+| Build Gradle             | ✅ ESEGUITO | `assembleDebug` → `BUILD SUCCESSFUL in 7s` |
+| Lint                     | ✅ ESEGUITO | `lint` → `BUILD SUCCESSFUL in 750ms` (UP-TO-DATE); nessun warning nuovo |
+| Warning nuovi            | ✅ ESEGUITO | Nessun warning nuovo introdotto nel pass 5 |
+| Coerenza con planning    | ✅ ESEGUITO | Fix puramente UI; nessun cambio a `ExcelViewModel`, DB, navigation o logica business |
+| Criteri di accettazione  | ⚠️ NON ESEGUIBILE | Verifiche statiche verdi; smoke manuale UI ancora pendente come nei pass precedenti |
+
+**Baseline regressione TASK-004 (pass 5):**
+- Non applicabile: il pass 5 tocca solo `PreGenerateScreen.kt` (layout composable + rimozione ExposedDropdownMenuBox); nessuna modifica a `ExcelViewModel`, `ExcelUtils`, import/export, repository o altra logica coperta dalla baseline JVM.
+
+### Esecuzione — 2026-04-11 (pass 6, rifinitura layout card colonne: freccia grande + badge FlowRow)
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/PreGenerateScreen.kt` — due micro-fix mirati al layout interno di `PreGenerateColumnRow`.
+
+**Problema 1 — freccia grande a sinistra della riga colonna**
+
+La `Surface` circolare con `Icon(ArrowForward)` (o `Icon(Warning)` per colonne non identificate) occupava ~44dp a sinistra di ogni riga, riducendo lo spazio disponibile per titolo, badge e metadati senza aggiungere valore UX percepibile. Lo stato della colonna è già comunicato dal badge colorato nella riga badge.
+
+Fix: rimosso completamente il blocco `Surface { Icon(...) }`. La `Column` con titolo, badge e metadati ora usa direttamente il `weight(1f)` della `Row` esterna, guadagnando tutto lo spazio precedentemente occupato dall'icona. Rimossa anche la variabile locale `isUnidentified` (diventata inutilizzata dopo la rimozione).
+
+**Problema 2 — badge troppo verticali / non robuste con testi lunghi o localizzazioni**
+
+La `Row` che conteneva i badge (`Obbligatoria` + stato colonna) non faceva wrapping, potendo causare overflow o apparenza compressa su schermi piccoli o con localizzazioni verbose.
+
+Fix: sostituita con `FlowRow` (`horizontalArrangement = spacedBy(xs)`, `verticalArrangement = spacedBy(xs)`). I badge ora si affiancano orizzontalmente finché c'è spazio e scendono a riga successiva solo se necessario — robusto per tutte le localizzazioni. Aggiunta annotazione `@OptIn(ExperimentalLayoutApi::class)` a `PreGenerateColumnRow` (`FlowRow` e `ExperimentalLayoutApi` erano già importati nel file).
+
+**Cosa cambia per l'utente:**
+- Ogni riga colonna è più compatta verticalmente (niente più icona circolare sinistra).
+- Titolo colonna, badge e metadati hanno più spazio orizzontale.
+- I badge si affiancano sempre orizzontalmente, senza rischi di stacking verticale con testi lunghi.
+- Layout più pulito e vicino alla compattezza della UI iOS di riferimento.
+
+**Cosa NON cambia:**
+- Nessuna modifica a logica remap, toggle selezione, colonne obbligatorie, filtri, supplier/category, generate.
+- Tutti i parametri e il comportamento di `PreGenerateColumnRow` sono identici.
+- Nessun cambio a `ExcelViewModel`, DB, navigation o altra area funzionale.
+
+**Check obbligatori (pass 6):**
+| Check                    | Stato | Note |
+|--------------------------|-------|------|
+| Build Gradle             | ✅ ESEGUITO | `assembleDebug` → `BUILD SUCCESSFUL in 5s` |
+| Lint                     | ✅ ESEGUITO | `lintDebug` → `BUILD SUCCESSFUL in 16s`; nessun warning nuovo |
+| Warning nuovi            | ✅ ESEGUITO | Nessun warning introdotto; rimossa anche la variabile `isUnidentified` inutilizzata |
+| Coerenza con planning    | ✅ ESEGUITO | Pass interamente nel perimetro layout `PreGenerateColumnRow`; nessun cambio funzionale |
+| Criteri di accettazione  | ⚠️ NON ESEGUIBILE | Smoke manuale UI ancora pendente come nei pass precedenti |
+
+**Baseline regressione TASK-004 (pass 6):**
+- Non applicabile: il pass 6 tocca solo il rendering Compose di `PreGenerateColumnRow`; nessuna modifica a `ExcelViewModel`, `ExcelUtils`, import/export o logica coperta dalla baseline JVM.
+
+### Esecuzione — 2026-04-11 (pass 7, divider corretto + summary pills orizzontali)
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/PreGenerateScreen.kt` — due micro-fix nella sezione colonne di `PreGenerateColumnsSection`.
+
+**Problema 1 — divider "monco" (start padding stale)**
+
+Il `HorizontalDivider` tra le righe colonna aveva `modifier = Modifier.padding(start = 56.dp)`, offset ereditato dal pass precedente quando esisteva ancora il leading icon circle (~44dp). Rimosso l'icona nel pass 6, il divider risultava tagliato a sinistra di 56dp senza motivazione visiva.
+
+Fix: rimosso il padding stale → `HorizontalDivider()` senza modificatori. Il separatore ora copre tutta la larghezza del contenuto della card, coerente con il resto dei divider nella schermata.
+
+**Problema 2 — summary pills in verticale**
+
+I tre badge di riepilogo (`6 / 6`, `Identificate: 5`, `Da rivedere: 1`) erano figli diretti di un `Column` con `verticalArrangement = spacedBy(sm)`, risultando impilati uno sotto l'altro senza motivo.
+
+Fix: wrappati in un `FlowRow(horizontalArrangement = spacedBy(xs), verticalArrangement = spacedBy(xs))`. I badge si affiancano orizzontalmente su schermi normali; scendono a riga successiva solo se lo spazio è davvero insufficiente (es. font molto grandi o localizzazioni molto verbose). La seconda `FlowRow` esistente (Seleziona tutto / Solo obbligatorie) resta invariata sotto.
+
+**Cosa cambia per l'utente:**
+- Il separatore tra le righe colonna non ha più il taglio a sinistra — visivamente coerente con la card.
+- I tre badge di riepilogo (`6 / 6`, `Identificate`, `Da rivedere`) appaiono affiancati orizzontalmente come gruppo compatto, recuperando 2–3 altezze riga di spazio verticale nella parte alta della sezione colonne.
+- Layout più denso e più vicino alla compattezza della UI iOS di riferimento.
+
+**Cosa NON cambia:**
+- Nessuna modifica a logica remap, toggle, filtri, supplier/category, generate.
+- Nessun cambio a `ExcelViewModel`, Room, navigation.
+- Il fix precedente (pass 6) sui badge delle righe colonna (`FlowRow` + rimozione freccia) è intatto.
+
+**Check obbligatori (pass 7):**
+| Check                    | Stato | Note |
+|--------------------------|-------|------|
+| Build Gradle             | ✅ ESEGUITO | `assembleDebug` → `BUILD SUCCESSFUL in 4s` |
+| Lint                     | ✅ ESEGUITO | `lintDebug` → `BUILD SUCCESSFUL in 15s`; nessun warning nuovo |
+| Warning nuovi            | ✅ ESEGUITO | Nessun warning introdotto |
+| Coerenza con planning    | ✅ ESEGUITO | Pass interamente nel perimetro layout `PreGenerateColumnsSection`; nessun cambio funzionale |
+| Criteri di accettazione  | ⚠️ NON ESEGUIBILE | Smoke manuale UI ancora pendente come nei pass precedenti |
+
+**Baseline regressione TASK-004 (pass 7):**
+- Non applicabile: il pass 7 tocca solo il rendering Compose della sezione colonne; nessuna modifica a `ExcelViewModel`, `ExcelUtils`, import/export o logica coperta dalla baseline JVM.
+
 ---
 
 ## Review
 
-_(Vuoto)_
+### Review — 2026-04-11
+
+**Revisore:** Claude (planner)
+
+**Criteri di accettazione:**
+| # | Criterio | Stato | Note |
+|---|----------|-------|------|
+| 1 | Ordine sezioni conforme | ✅ | `LazyColumn` con ordine: preview → notice/status → colonne → supplier → category → CTA |
+| 2 | Preview non dominante, no `ZoomableExcelGrid` full-weight | ✅ | Preview compatta custom, max 20 righe, scroll orizzontale leggero |
+| 3 | Lista colonne con toggle, badge obbligatorio, esempi, remap, ordine file | ✅ | `headers.mapIndexed` preserva l'ordine; badge, esempi e switch presenti |
+| 4 | `toggleColumnSelection`, `toggleSelectAll`, `isColumnEssential` senza regressioni | ✅ | Wiring invariato; `ExcelViewModelTest` verde (45 test) |
+| 5 | Nessuna duplicazione stato dominio; preview/colonne/CTA coerenti dopo interazioni | ✅ | Tutti i derivati restano in UI con `remember`/`derivedStateOf`; fonte di verità: VM |
+| 6 | `loadFromMultipleUris` / `appendFromMultipleUris` funzionanti | ✅ | Launcher preservati; baseline JVM verde |
+| 7 | Supplier/category: ricerca, selezione, creazione | ⚠️ | Codice corretto; manca smoke manuale su keyboard/dropdown |
+| 8 | CTA narrativa, footer chiaro, stati abilitato/disabilitato comprensibili | ⚠️ | Implementato; manca verifica manuale con IME aperta |
+| 9 | `onGenerate` → `GeneratedScreen` invariato | ✅ | `NavGraph.kt` non toccato |
+| 10 | Messaggi bloccanti/warning (TASK-040) ancora visibili | ✅ | Notice card dedicate prima della sezione colonne e nella CTA |
+| 11 | Nessuna metrica affidabilità inventata | ✅ | Solo derivati da stato VM esistente |
+| 12 | Layout robusto con tastiera, dropdown e bottom nav | ⚠️ | `imePadding` + inset corretti a codice; manca smoke emulator |
+| 13 | Stati loading/error/empty/preview coerenti | ✅ | Tutti presenti e compilano |
+| 14 | CTA disabilitata espone reason utile | ✅ | `generateDisabledReason` visibile sia come notice card che nella CTA |
+| 15 | Stringhe coerenti in `values`, `values-en`, `values-es`, `values-zh` | ✅ | Tutte le chiavi `pre_generate_*` presenti e coerenti nelle 4 lingue |
+| 16 | `assembleDebug` OK | ✅ | `BUILD SUCCESSFUL in 4s` |
+| 17 | `lintDebug` OK senza nuovi warning | ✅ | `BUILD SUCCESSFUL in 15s`; nessun warning nuovo |
+| 18 | Baseline TASK-004 se `ExcelViewModel` toccato | ✅ | `ExcelViewModelTest` + `ExcelUtilsTest` verdi (45 + 40 test) |
+| 19 | Derivati presentazionali senza logica business superflua nel VM | ✅ | Tutto derivato in UI; VM non gonfiato |
+| 20 | Nessuno stato stale dopo append/reload | ⚠️ | A codice corretto; resta smoke manuale pendente |
+
+**Problemi trovati e corretti durante il review (pass 8):**
+
+1. **Dead code `PreviewCell` colore dati** — `if (isHeader) onSurface else onSurface`: il ramo `else` era identico. Corretto con `onSurfaceVariant` per le celle dati → gerarchia visiva header/dati ripristinata.
+2. **Header row preview non distinguibile** — la riga intestazione e il container della tabella usavano entrambi `surfaceContainerLowest`, rendendo il confine visivo nullo. Corretto: header usa `surfaceContainerLow`, dati usano `surfaceContainerLowest`.
+3. **`onKeepOnlyRequired` logica opaca** — doppio `toggleSelectAll()` con guard `hasOptionalColumnsSelected` nested era funzionalmente corretto ma illeggibile. Semplificato: rimosso il guard ridondante (il bottone è già `enabled = hasOptionalColumnsSelected`), aggiunto commento esplicativo sull'intenzione del doppio call.
+4. **`PreGenerateSectionLabel` tipografia invertita** — `headlineSmall` (24 sp) era più grande del titolo top bar (`titleLarge` 22 sp), creando gerarchia invertita. Corretto con `titleMedium` (16 sp SemiBold), coerente con il pattern Material3 per section headers in form grouped.
+5. **"Mostra tutto..." visibile dopo selezione valida** — il pulsante rimaneva visibile anche con supplier/category già confermati; un click accidentale su di esso azzerava `inputText` e invalidava la selezione. Corretto nascondendo il pulsante e il suo divider quando `isSelectionValid`.
+6. **CTA reason text troppo piccolo** — `generateDisabledReason` usava `bodySmall` (12 sp) vicino al bottone disabilitato. Portato a `bodyMedium` (14 sp) per migliorare la leggibilità del feedback nel punto in cui l'utente interagisce.
+
+**Verdetto:** APPROVED (con smoke manuali pendenti documentati)
+
+**Note per chiusura:**
+- I criteri `#7`, `#8`, `#12`, `#20` restano non verificabili senza emulator/device fisico: sono esplicitamente documentati come ⚠️ NON ESEGUIBILE dalla baseline di esecuzione e restano invariati rispetto ai pass precedenti. Non bloccano la chiusura del task lato codice.
+- Nessuna regressione funzionale introdotta dal review.
 
 ---
 
 ## Fix
 
-_(Vuoto)_
+### Fix — 2026-04-11 (pass 8, review fixes)
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/PreGenerateScreen.kt` — 6 fix mirati su problemi di qualità del codice e UX trovati durante il review.
+
+**Verifica:**
+- `assembleDebug` → `BUILD SUCCESSFUL in 4s`
+- `lintDebug` → `BUILD SUCCESSFUL in 15s`; nessun warning nuovo
 
 ---
 
@@ -513,16 +692,16 @@ _(Vuoto)_
 
 | Campo           | Valore |
 |-----------------|--------|
-| Stato finale    | — |
-| Data chiusura   | — |
-| Tutti i criteri | — |
-| Rischi residui  | — |
+| Stato finale    | **DONE** |
+| Data chiusura   | 2026-04-11 |
+| Tutti i criteri | ✅ verificati o ⚠️ NON ESEGUIBILE (smoke manuale device) come da policy task |
+| Rischi residui  | Smoke manuali UI su keyboard/dropdown/append-reload non eseguiti — vedi Handoff |
 
 ---
 
 ## Riepilogo finale
 
-_(Da compilare a task chiuso.)_
+Task completato con 8 pass di esecuzione + 1 pass di review/fix. La schermata `PreGenerateScreen` è stata riscritta completamente nel layout e nella UX avvicinandola al reference iOS: preview compatta, lista colonne verticale con filtri e badge stato, supplier/category inline con suggerimenti highlight e creazione diretta, CTA narrativa con summary finale. Il motore funzionale (`ExcelViewModel`, Room, navigation, import/export) è rimasto invariato. Tutti i derivati presentazionali restano in UI senza gonfiare il ViewModel. Build e lint verdi a ogni pass. Baseline JVM (45 + 40 test) verde.
 
 ---
 
