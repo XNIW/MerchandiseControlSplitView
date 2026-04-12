@@ -49,7 +49,9 @@ fun TableCell(
     val isDarkTheme = isSystemInDarkTheme()
     val defaultBackgroundColor = MaterialTheme.colorScheme.surface
     val searchStateAlpha = if (isDarkTheme) 0.34f else 0.16f
-    val rowFilledBackgroundAlpha = if (isDarkTheme) 0.58f else 0.42f
+    val rowFilledBackgroundAlpha = if (isDarkTheme) 0.42f else 0.26f
+    val rowCompleteBackgroundAlpha = if (isDarkTheme) 0.52f else 0.30f
+    val headerBackgroundAlpha = if (isDarkTheme) 0.92f else 0.62f
     val selectedColumnBorderAlpha = if (isDarkTheme) 0.82f else 0.60f
     val filledBorderAlpha = if (isDarkTheme) 0.92f else 0.72f
     val hasErrorOverride = overrideBackgroundColor != null && !isHeader
@@ -58,8 +60,8 @@ fun TableCell(
     // Search, selected column and rowFilled stay secondary via light tint and border only.
     val finalBackgroundColor = when {
         hasErrorOverride -> overrideBackgroundColor
-        isRowComplete -> appColors.successContainer
-        isHeader -> overrideBackgroundColor ?: MaterialTheme.colorScheme.surfaceVariant
+        isRowComplete -> appColors.successContainer.copy(alpha = rowCompleteBackgroundAlpha)
+        isHeader -> (overrideBackgroundColor ?: MaterialTheme.colorScheme.surfaceVariant).copy(alpha = headerBackgroundAlpha)
         isSearchMatch -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = searchStateAlpha)
         isRowFilled -> appColors.filledContainer.copy(alpha = rowFilledBackgroundAlpha)
         else -> defaultBackgroundColor
@@ -78,12 +80,13 @@ fun TableCell(
         isSearchMatch -> MaterialTheme.colorScheme.tertiary
         isSelectedColumn && !isRowComplete -> MaterialTheme.colorScheme.primary.copy(alpha = selectedColumnBorderAlpha)
         isRowFilled && !isRowComplete -> appColors.warning.copy(alpha = filledBorderAlpha)
-        else -> MaterialTheme.colorScheme.outlineVariant
+        isHeader -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)
+        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f)
     }
 
     val borderThickness = when {
         hasErrorOverride || isSearchMatch || (isSelectedColumn && !isRowComplete) || (isRowFilled && !isRowComplete) -> 1.dp
-        else -> 0.5.dp
+        else -> 0.35.dp
     }
 
     Box(
@@ -102,7 +105,7 @@ fun TableCell(
         // --- INIZIO MODIFICA ---
         // Usiamo una Row per affiancare testo e icona
         Row(
-            modifier = Modifier.padding(horizontal = spacing.xs),
+            modifier = Modifier.padding(horizontal = spacing.sm, vertical = spacing.xs),
             horizontalArrangement = Arrangement.spacedBy(spacing.xs),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -110,7 +113,7 @@ fun TableCell(
                 text = text,
                 color = textColor,
                 style = if (isHeader)
-                    MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)
+                    MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium)
                 else
                     MaterialTheme.typography.bodySmall,
                 maxLines = 2,

@@ -470,7 +470,5 @@
     <string name="summary_completed_label">Completadas</string>
     <string name="summary_pending_label">Pendientes</string>
     <string name="column_mapping_overflow">Asignación de columnas…</string>
-    <string name="generated_progress_section">Avance</string>
     <string name="initial_order_total_label">Total pedido inicial</string>
-    <string name="data_rows_label">Filas de datos</string>
 </resources>

@@ -471,7 +471,5 @@
     <string name="summary_completed_label">已完成</string>
     <string name="summary_pending_label">待处理</string>
     <string name="column_mapping_overflow">列映射…</string>
-    <string name="generated_progress_section">进度</string>
     <string name="initial_order_total_label">初始订单总额</string>
-    <string name="data_rows_label">数据行</string>
 </resources>

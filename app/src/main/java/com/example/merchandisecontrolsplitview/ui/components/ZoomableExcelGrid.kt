@@ -60,10 +60,10 @@ fun ZoomableExcelGrid(
     val appColors = MaterialTheme.appColors
     val isDarkTheme = isSystemInDarkTheme()
     val headerEssentialAlpha = if (isDarkTheme) 0.38f else 0.22f
-    val headerMetaAlpha = if (isDarkTheme) 0.28f else 0.14f
-    val rowErrorAlpha = if (isDarkTheme) 0.7f else 0.45f
+    val headerMetaAlpha = if (isDarkTheme) 0.24f else 0.10f
+    val rowErrorAlpha = if (isDarkTheme) 0.54f else 0.24f
     val selectedColumnBorderAlpha = if (isDarkTheme) 0.82f else 0.60f
-    val completeAccentAlpha = if (isDarkTheme) 0.34f else 0.18f
+    val completeAccentAlpha = if (isDarkTheme) 0.28f else 0.12f
 
     val columnCount = data[0].size
     if (selectedColumns.size != columnCount) {
@@ -84,7 +84,10 @@ fun ZoomableExcelGrid(
             .background(MaterialTheme.colorScheme.surface)
     ) {
         Box(modifier = Modifier.horizontalScroll(horizontalState)) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 104.dp)
+            ) {
                 // Header row
                 item {
                     Row {
@@ -113,7 +116,10 @@ fun ZoomableExcelGrid(
                             )
                         }
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 1.dp)
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
+                        thickness = 0.75.dp
+                    )
                 }
 
                 // Data rows
@@ -254,7 +260,10 @@ fun ZoomableExcelGrid(
                             }
                         }
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f),
+                        thickness = 0.5.dp
+                    )
                 }
             }
         }

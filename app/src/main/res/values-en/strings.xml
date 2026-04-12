@@ -472,7 +472,5 @@
     <string name="summary_completed_label">Completed</string>
     <string name="summary_pending_label">Pending</string>
     <string name="column_mapping_overflow">Column mapping…</string>
-    <string name="generated_progress_section">Progress</string>
     <string name="initial_order_total_label">Initial order total</string>
-    <string name="data_rows_label">Data rows</string>
 </resources>

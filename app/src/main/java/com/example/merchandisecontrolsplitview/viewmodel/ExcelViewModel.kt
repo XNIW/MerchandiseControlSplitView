@@ -845,7 +845,7 @@ class ExcelViewModel(
 
     /**
      * Read-only derived value: initial purchase-order total for the current [excelData].
-     * Exposed for display purposes only (GeneratedScreen summary footer).
+     * Exposed for display purposes only (GeneratedScreen progress card).
      * Delegates to [calculateInitialSummary] — no logic duplicated in the UI.
      */
     val initialOrderTotal: Double

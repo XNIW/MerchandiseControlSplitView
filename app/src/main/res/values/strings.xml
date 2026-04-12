@@ -464,9 +464,7 @@
     <string name="summary_completed_label">Completate</string>
     <string name="summary_pending_label">In sospeso</string>
     <string name="column_mapping_overflow">Mapping colonne…</string>
-    <string name="generated_progress_section">Avanzamento</string>
     <string name="initial_order_total_label">Totale ordine iniziale</string>
-    <string name="data_rows_label">Righe dati</string>
 
     <!-- Menu / azioni -->
     <string name="import_products_single_sheet">Importa prodotti (foglio singolo)</string>
