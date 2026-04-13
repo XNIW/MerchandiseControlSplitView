@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Search
@@ -69,7 +68,6 @@ import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -139,6 +137,7 @@ fun GeneratedScreen(
     val syncAnalysisStartedText = stringResource(R.string.sync_analysis_started)
     val noValidRowsToSyncText = stringResource(R.string.no_valid_rows_to_sync)
     val openDatabaseText = stringResource(R.string.open_database)
+    val generatedExitSaveFailedText = stringResource(R.string.generated_exit_save_failed)
     val exportDatabaseFilenamePrefix = stringResource(R.string.export_database_filename_prefix)
         .replace(Regex("""[\\/:*?"<>|]"""), "_")
     val historyActionMessage by excelViewModel.historyActionMessage
@@ -212,18 +211,15 @@ fun GeneratedScreen(
 
     var showGenericCalcDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
-    // Stato per il nuovo dialogo a 3 opzioni (quando si esce da una voce di cronologia)
-    var showExitFromHistoryDialog by remember { mutableStateOf(false) }
     // Stato per mostrare il caricamento durante il salvataggio o il ripristino
     var isSavingOrReverting by remember { mutableStateOf(false) }
+    var isExiting by remember { mutableStateOf(false) }
 
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
     var customHeader by remember { mutableStateOf("") }
 
     var isInfoDialogInEditMode by remember { mutableStateOf(false) }
-
-    var showExitToHomeDialog by remember { mutableStateOf(false) }
 
     // TASK-047: filter errori + column picker overflow
     var showOnlyErrorRows by remember { mutableStateOf(false) }
@@ -250,21 +246,46 @@ fun GeneratedScreen(
         "productName", "secondProductName", "itemNumber", "supplier", "rowNumber",
         "discount", "discountedPrice"
     )
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    val handleBackPress = {
+    val performGeneratedExit = exit@{
+        if (isSavingOrReverting || isExiting) return@exit
+
         // La bozza è considerata vuota se siamo in modalità manuale
         // e la griglia contiene solo la riga dell'intestazione (o nessuna riga).
         val isManualDraftEmpty = isManualEntry && excelViewModel.excelData.size <= 1
 
         if (isManualDraftEmpty) {
             showExitDialog = true // Mostra dialogo "Elimina bozza?"
-        } else if (isNewEntry) {
-            // Se è una nuova entry (da file) con dati, esce e basta
-            onBackToStart()
         } else {
-            // Se è una entry esistente (da cronologia) con modifiche,
-            // mostra il dialogo "Salva/Esci/Annulla"
-            showExitFromHistoryDialog = true
+            scope.launch {
+                isExiting = true
+                val saveSucceeded = try {
+                    excelViewModel.saveCurrentStateToHistory(entryUid)
+                } catch (_: Exception) {
+                    false
+                }
+
+                if (!saveSucceeded) {
+                    isExiting = false
+                    snackbarHostState.showSnackbar(
+                        message = generatedExitSaveFailedText,
+                        withDismissAction = true,
+                        duration = SnackbarDuration.Short
+                    )
+                    return@launch
+                }
+
+                try {
+                    when {
+                        !isNewEntry -> onBackToStart()
+                        isManualEntry -> onBackToStart()
+                        else -> onNavigateToHome()
+                    }
+                } finally {
+                    isExiting = false
+                }
+            }
         }
     }
 
@@ -290,7 +311,7 @@ fun GeneratedScreen(
     }
 
     BackHandler {
-        handleBackPress()
+        performGeneratedExit()
     }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -529,8 +550,6 @@ fun GeneratedScreen(
         }
     }
 
-    val snackbarHostState = remember { SnackbarHostState() }
-
     DisposableEffect(Unit) {
         onDispose { snackbarHostState.currentSnackbarData?.dismiss() }
     }
@@ -594,10 +613,9 @@ fun GeneratedScreen(
                 isGenerated = generated && excelData.isNotEmpty(),
                 wasExported = wasExported,
                 syncStatus = syncStatus,
-                onNavigateBack = handleBackPress,
-                onFinish = handleBackPress,
+                isActionEnabled = !isExiting && !isSavingOrReverting,
+                onFinish = performGeneratedExit,
                 onAnalyzeSync = { analyzeCurrentGrid() },
-                onNavigateHome = { showExitToHomeDialog = true },
                 onExport = requestExcelExport,
                 onShare = { shareXlsx() },
                 onRename = { openRenameDialog() },
@@ -703,36 +721,6 @@ fun GeneratedScreen(
                     onCancel = { if (!isSavingOrReverting) showExitDialog = false }
                 )
 
-                GeneratedScreenExitFromHistoryDialog(
-                    visible = showExitFromHistoryDialog,
-                    isSavingOrReverting = isSavingOrReverting,
-                    onDismissRequest = {
-                        if (!isSavingOrReverting) showExitFromHistoryDialog = false
-                    },
-                    onExitWithoutSaving = {
-                        showExitFromHistoryDialog = false
-                        scope.launch {
-                            isSavingOrReverting = true
-                            excelViewModel.revertDatabaseToOriginalState()
-                            excelViewModel.loadHistoryEntry(entryUid)
-                            isSavingOrReverting = false
-                            onBackToStart()
-                        }
-                    },
-                    onSaveAndExit = {
-                        showExitFromHistoryDialog = false
-                        scope.launch {
-                            isSavingOrReverting = true
-                            excelViewModel.saveCurrentStateToHistory(entryUid)
-                            isSavingOrReverting = false
-                            onBackToStart()
-                        }
-                    },
-                    onCancel = {
-                        if (!isSavingOrReverting) showExitFromHistoryDialog = false
-                    }
-                )
-
                 GeneratedScreenFabArea(
                     visible = excelData.isNotEmpty() && generated,
                     isManualEntry = isManualEntry,
@@ -779,26 +767,6 @@ fun GeneratedScreen(
                     onDismiss = { showSearchDialog = false },
                     onPerformSearch = { performSearch() },
                     onLaunchScanner = { launchMainScanner() }
-                )
-
-                GeneratedScreenExitToHomeDialog(
-                    visible = showExitToHomeDialog,
-                    isSavingOrReverting = isSavingOrReverting,
-                    onDismissRequest = {
-                        if (!isSavingOrReverting) showExitToHomeDialog = false
-                    },
-                    onSaveAndExitToHome = {
-                        showExitToHomeDialog = false
-                        scope.launch {
-                            isSavingOrReverting = true
-                            excelViewModel.saveCurrentStateToHistory(entryUid)
-                            isSavingOrReverting = false
-                            onNavigateToHome()
-                        }
-                    },
-                    onCancel = {
-                        if (!isSavingOrReverting) showExitToHomeDialog = false
-                    }
                 )
 
                 if (showInfoDialog && infoRowIndex in excelData.indices) {
@@ -1142,10 +1110,9 @@ private fun GeneratedScreenTopBar(
     isGenerated: Boolean,
     wasExported: Boolean,
     syncStatus: com.example.merchandisecontrolsplitview.data.SyncStatus,
-    onNavigateBack: () -> Unit,
+    isActionEnabled: Boolean,
     onFinish: () -> Unit,
     onAnalyzeSync: () -> Unit,
-    onNavigateHome: () -> Unit,
     onExport: () -> Unit,
     onShare: () -> Unit,
     onRename: () -> Unit,
@@ -1157,19 +1124,6 @@ private fun GeneratedScreenTopBar(
             containerColor = MaterialTheme.colorScheme.surface,
             scrolledContainerColor = MaterialTheme.colorScheme.surface,
         ),
-        navigationIcon = {
-            Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp)
-            ) {
-                IconButton(onClick = onNavigateBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.back)
-                    )
-                }
-            }
-        },
         title = {
             var tapKey by remember { mutableIntStateOf(0) }
             key(tapKey) {
@@ -1191,6 +1145,11 @@ private fun GeneratedScreenTopBar(
         actions = {
             if (isGenerated) {
                 var menuOpen by remember { mutableStateOf(false) }
+                LaunchedEffect(isActionEnabled) {
+                    if (!isActionEnabled) {
+                        menuOpen = false
+                    }
+                }
                 Box {
                     Surface(
                         shape = RoundedCornerShape(24.dp),
@@ -1202,6 +1161,7 @@ private fun GeneratedScreenTopBar(
                         ) {
                             IconButton(
                                 onClick = { menuOpen = true },
+                                enabled = isActionEnabled,
                                 modifier = Modifier.size(44.dp)
                             ) {
                                 Icon(
@@ -1215,6 +1175,7 @@ private fun GeneratedScreenTopBar(
                             )
                             TextButton(
                                 onClick = onFinish,
+                                enabled = isActionEnabled,
                                 contentPadding = PaddingValues(
                                     start = spacing.sm,
                                     end = spacing.md,
@@ -1251,7 +1212,8 @@ private fun GeneratedScreenTopBar(
                             onClick = {
                                 menuOpen = false
                                 onAnalyzeSync()
-                            }
+                            },
+                            enabled = isActionEnabled
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.export_file)) },
@@ -1264,7 +1226,8 @@ private fun GeneratedScreenTopBar(
                             onClick = {
                                 menuOpen = false
                                 onExport()
-                            }
+                            },
+                            enabled = isActionEnabled
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.share_xlsx)) },
@@ -1272,7 +1235,8 @@ private fun GeneratedScreenTopBar(
                             onClick = {
                                 menuOpen = false
                                 onShare()
-                            }
+                            },
+                            enabled = isActionEnabled
                         )
                         HorizontalDivider()
                         // Admin
@@ -1282,25 +1246,18 @@ private fun GeneratedScreenTopBar(
                             onClick = {
                                 menuOpen = false
                                 onRename()
-                            }
+                            },
+                            enabled = isActionEnabled
                         )
                         HorizontalDivider()
-                        // Legacy escape hatch + navigazione
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.column_mapping_overflow)) },
                             leadingIcon = { Icon(Icons.Default.Calculate, null) },
                             onClick = {
                                 menuOpen = false
                                 onOpenColumnMapping()
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.go_to_home)) },
-                            leadingIcon = { Icon(Icons.Default.Home, null) },
-                            onClick = {
-                                menuOpen = false
-                                onNavigateHome()
-                            }
+                            },
+                            enabled = isActionEnabled
                         )
                     }
                 }

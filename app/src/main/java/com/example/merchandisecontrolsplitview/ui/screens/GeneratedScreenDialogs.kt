@@ -1,12 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,7 +10,6 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,7 +20,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -79,126 +72,6 @@ fun GeneratedScreenDiscardDraftDialog(
                     stringResource(R.string.discard),
                     color = MaterialTheme.colorScheme.error
                 )
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onCancel,
-                enabled = !isSavingOrReverting
-            ) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
-    )
-}
-
-@Composable
-fun GeneratedScreenExitFromHistoryDialog(
-    visible: Boolean,
-    isSavingOrReverting: Boolean,
-    onDismissRequest: () -> Unit,
-    onExitWithoutSaving: () -> Unit,
-    onSaveAndExit: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    if (!visible) return
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(28.dp),
-        tonalElevation = 6.dp,
-        title = {
-            Text(
-                text = stringResource(R.string.exit_confirmation_title),
-                style = MaterialTheme.typography.titleLarge
-            )
-        },
-        text = {
-            if (isSavingOrReverting) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CircularProgressIndicator()
-                    Text(
-                        text = stringResource(R.string.saving_changes),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                Text(
-                    text = stringResource(R.string.exit_changes_question),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            Row(
-                horizontalArrangement = Arrangement.End,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                TextButton(
-                    onClick = onExitWithoutSaving,
-                    enabled = !isSavingOrReverting
-                ) {
-                    Text(
-                        stringResource(R.string.exit_without_saving),
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = onSaveAndExit,
-                    enabled = !isSavingOrReverting
-                ) {
-                    Text(stringResource(R.string.save_and_exit))
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onCancel,
-                enabled = !isSavingOrReverting
-            ) {
-                Text(stringResource(R.string.cancel))
-            }
-        }
-    )
-}
-
-@Composable
-fun GeneratedScreenExitToHomeDialog(
-    visible: Boolean,
-    isSavingOrReverting: Boolean,
-    onDismissRequest: () -> Unit,
-    onSaveAndExitToHome: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    if (!visible) return
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(28.dp),
-        tonalElevation = 6.dp,
-        title = {
-            Text(
-                text = stringResource(R.string.dialog_title_return_home),
-                style = MaterialTheme.typography.titleLarge
-            )
-        },
-        text = {
-            Text(
-                text = stringResource(R.string.dialog_message_save_and_return_home),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = onSaveAndExitToHome,
-                enabled = !isSavingOrReverting
-            ) {
-                Text(stringResource(R.string.save_and_exit))
             }
         },
         dismissButton = {

@@ -75,7 +75,6 @@
     <string name="generic_calculator_title">Calcolatrice</string>
     <string name="fast_calculator_desc">Calcolatrice Veloce</string>
     <string name="error_label">Errore</string>
-    <string name="go_to_home">Torna a Inventario</string>
 
     <!-- Icone accessibilità -->
     <string name="scan_icon_desc">Scannerizza codice</string>
@@ -206,7 +205,6 @@
 
     <string name="invalid_data_for_analysis">Dati non validi per l\'analisi.</string>
     <string name="sync_analysis_started">Analisi per la sincronizzazione avviata.</string>
-    <string name="exit_confirmation_title">Conferma uscita</string>
     <string name="exit_confirmation_message">Sei sicuro di voler uscire? I progressi inseriti sono stati salvati nella cronologia.</string>
     <string name="calculate_new_value">Calcola nuovo valore</string>
     <string name="status_completed">Completato</string>
@@ -338,19 +336,12 @@
     <string name="warning_duplicate_resolution">I dati dell\'ultima riga verranno usati e le quantità verranno sommate.</string>
     <string name="warning_duplicate_rows_truncated">Elenco righe troncato: altre %1$d non mostrate (totale %2$d).</string>
 
-    <string name="saving_changes">Salvataggio delle modifiche&#8230;</string>
     <string name="missing_items_label">Prodotti mancanti</string>
 
     <string name="discard_and_exit_title">Annulla e Torna Indietro</string>
     <string name="discard_and_exit_message">La voce di cronologia appena creata verrà eliminata. Continuare?</string>
     <string name="discard">Elimina</string>
-
-    <string name="exit_changes_question">Cosa vuoi fare con le modifiche apportate?</string>
-    <string name="exit_without_saving">Esci senza Salvare</string>
-    <string name="save_and_exit">Salva ed Esci</string>
-
-    <string name="dialog_title_return_home">Torna a Inventario</string>
-    <string name="dialog_message_save_and_return_home">Le modifiche verranno salvate. Vuoi continuare?</string>
+    <string name="generated_exit_save_failed">Impossibile salvare prima di uscire. Riprova.</string>
 
     <string name="edit_column_type">Modifica tipo colonna</string>
     <string name="error_missing_essential_columns_prompt">Colonne essenziali mancanti: %1$s. Apri "Colonne da usare" e correggi il tipo prima di continuare.</string>

@@ -73,7 +73,6 @@
     <string name="generic_calculator_title">Calculator</string>
     <string name="fast_calculator_desc">Quick Calculator</string>
     <string name="error_label">Error</string>
-    <string name="go_to_home">Go to Inventory</string>
 
     <!-- Icon accessibility -->
     <string name="scan_icon_desc">Scan code</string>
@@ -202,7 +201,6 @@
     <string name="field_supplier">Supplier</string>
     <string name="invalid_data_for_analysis">Invalid data for analysis.</string>
     <string name="sync_analysis_started">Sync analysis started.</string>
-    <string name="exit_confirmation_title">Exit Confirmation</string>
     <string name="exit_confirmation_message">Are you sure you want to exit? Progress has been saved to history.</string>
     <string name="calculate_new_value">Calculate new value</string>
     <string name="status_completed">Completed</string>
@@ -321,19 +319,12 @@
     <string name="warning_duplicate_found_in_rows">Found in rows: %1$s</string>
     <string name="warning_duplicate_resolution">The data from the last row will be used and the quantities will be summed.</string>
     <string name="warning_duplicate_rows_truncated">Row list truncated: %1$d more rows not shown (total %2$d).</string>
-    <string name="saving_changes">Saving changes&#8230;</string>
     <string name="missing_items_label">Missing products</string>
 
     <string name="discard_and_exit_title">Discard and Go Back</string>
     <string name="discard_and_exit_message">The newly created history entry will be deleted. Continue?</string>
     <string name="discard">Delete</string>
-
-    <string name="exit_changes_question">What do you want to do with your changes?</string>
-    <string name="exit_without_saving">Exit without Saving</string>
-    <string name="save_and_exit">Save and Exit</string>
-
-    <string name="dialog_title_return_home">Return to Inventory</string>
-    <string name="dialog_message_save_and_return_home">Changes will be saved. Do you want to continue?</string>
+    <string name="generated_exit_save_failed">Could not save before leaving. Try again.</string>
 
     <string name="edit_column_type">Edit column type</string>
     <string name="error_missing_essential_columns_prompt">Essential columns missing: %1$s. Open "Columns to use" and fix the type before continuing.</string>

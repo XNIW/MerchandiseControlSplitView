@@ -171,7 +171,12 @@ fun AppNavGraph() {
                     databaseViewModel = dbViewModel,
                     onBackToStart = { navController.popBackStack() },
                     onNavigateToHome = {
-                        navigateToRootTab(navController, rootTabs.first { it.screen == Screen.FilePicker })
+                        navController.navigate(Screen.FilePicker.route) {
+                            popUpTo(Screen.FilePicker.route) {
+                                inclusive = false
+                            }
+                            launchSingleTop = true
+                        }
                     },
                     onNavigateToDatabase = {
                         navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Database })

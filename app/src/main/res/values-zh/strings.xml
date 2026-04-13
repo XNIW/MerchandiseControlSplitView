@@ -72,7 +72,6 @@
     <string name="generic_calculator_title">计算器</string>
     <string name="fast_calculator_desc">快速计算器</string>
     <string name="error_label">错误</string>
-    <string name="go_to_home">返回库存</string>
 
     <!-- 图标无障碍 -->
     <string name="scan_icon_desc">扫码</string>
@@ -201,7 +200,6 @@
     <string name="field_supplier">供应商</string>
     <string name="invalid_data_for_analysis">数据无效，无法分析。</string>
     <string name="sync_analysis_started">同步分析已启动。</string>
-    <string name="exit_confirmation_title">退出确认</string>
     <string name="exit_confirmation_message">你确定要退出吗？进度已保存到历史记录。</string>
     <string name="calculate_new_value">计算新值</string>
     <string name="status_completed">已完成</string>
@@ -320,19 +318,12 @@
     <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
     <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>
     <string name="warning_duplicate_rows_truncated">行列表已截断：另有 %1$d 行未显示（共 %2$d 行）。</string>
-    <string name="saving_changes">正在保存更改&#8230;</string>
     <string name="missing_items_label">缺少商品</string>
 
     <string name="discard_and_exit_title">取消并返回</string>
     <string name="discard_and_exit_message">刚创建的历史记录将被删除。是否继续？</string>
     <string name="discard">删除</string>
-
-    <string name="exit_changes_question">你想如何处理所做的修改？</string>
-    <string name="exit_without_saving">不保存退出</string>
-    <string name="save_and_exit">保存并退出</string>
-
-    <string name="dialog_title_return_home">返回库存</string>
-    <string name="dialog_message_save_and_return_home">修改内容将被保存。是否继续？</string>
+    <string name="generated_exit_save_failed">退出前无法保存。请重试。</string>
 
     <string name="edit_column_type">编辑列类型</string>
     <string name="error_missing_essential_columns_prompt">缺少关键列：%1$s。请打开“要使用的列”并修正类型后再继续。</string>
