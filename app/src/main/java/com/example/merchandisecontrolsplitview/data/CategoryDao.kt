@@ -13,7 +13,7 @@ interface CategoryDao {
      * @param category La categoria da inserire.
      */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insert(category: Category)
+    suspend fun insert(category: Category): Long
 
     /**
      * Trova una categoria dal suo nome.
@@ -45,4 +45,24 @@ interface CategoryDao {
      */
     @Query("SELECT * FROM categories WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Category?
+
+    @Query(
+        """
+        SELECT c.id AS id,
+               c.name AS name,
+               COUNT(p.id) AS productCount
+        FROM categories c
+        LEFT JOIN products p ON p.categoryId = c.id
+        WHERE (:query IS NULL OR :query = '' OR c.name LIKE '%' || :query || '%')
+        GROUP BY c.id, c.name
+        ORDER BY c.name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getCatalogItems(query: String?): List<CatalogListItem>
+
+    @Query("UPDATE categories SET name = :name WHERE id = :id")
+    suspend fun rename(id: Long, name: String): Int
+
+    @Query("DELETE FROM categories WHERE id = :id")
+    suspend fun deleteById(id: Long): Int
 }

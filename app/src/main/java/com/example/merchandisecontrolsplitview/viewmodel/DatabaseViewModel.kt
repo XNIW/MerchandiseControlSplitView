@@ -133,12 +133,32 @@ class DatabaseViewModel(
     val importFlowState: StateFlow<ImportFlowState> = _importFlowState.asStateFlow()
     private val _exportUiState = MutableStateFlow(ExportUiState())
     val exportUiState: StateFlow<ExportUiState> = _exportUiState.asStateFlow()
+    private val _selectedHubTab = MutableStateFlow(DatabaseHubTab.PRODUCTS)
+    val selectedHubTab: StateFlow<DatabaseHubTab> = _selectedHubTab.asStateFlow()
 
     fun consumeUiState() { _uiState.value = UiState.Idle }
     private val _filter = MutableStateFlow<String?>(null)
 
     private val appContext = getApplication<Application>().applicationContext
     val filter: StateFlow<String?> = _filter.asStateFlow()
+
+    private val _supplierCatalogQuery = MutableStateFlow("")
+    private val _supplierCatalogRefresh = MutableStateFlow(0)
+    val supplierCatalogQuery: StateFlow<String> = _supplierCatalogQuery.asStateFlow()
+    val supplierCatalogSection: StateFlow<CatalogSectionUiState> = catalogSectionState(
+        kind = CatalogEntityKind.SUPPLIER,
+        queryFlow = _supplierCatalogQuery,
+        refreshFlow = _supplierCatalogRefresh
+    )
+
+    private val _categoryCatalogQuery = MutableStateFlow("")
+    private val _categoryCatalogRefresh = MutableStateFlow(0)
+    val categoryCatalogQuery: StateFlow<String> = _categoryCatalogQuery.asStateFlow()
+    val categoryCatalogSection: StateFlow<CatalogSectionUiState> = catalogSectionState(
+        kind = CatalogEntityKind.CATEGORY,
+        queryFlow = _categoryCatalogQuery,
+        refreshFlow = _categoryCatalogRefresh
+    )
 
     val pager = filter.flatMapLatest { filterStr ->
         Pager(PagingConfig(pageSize = 20)) {
@@ -153,15 +173,19 @@ class DatabaseViewModel(
         _supplierInputText.value = query
     }
 
-    val suppliers: StateFlow<List<Supplier>> = _supplierInputText
-        .debounce(300L)
-        .distinctUntilChanged()
-        .flatMapLatest { query ->
-            if (query.isBlank())
-                flow { emit(repository.getAllSuppliers()) }
-            else
-                flow { emit(repository.searchSuppliersByName(query)) }
-        }
+    val suppliers: StateFlow<List<Supplier>> = combine(
+        _supplierInputText
+            .debounce(300L)
+            .distinctUntilChanged(),
+        _supplierCatalogRefresh
+    ) { query, _ ->
+        query
+    }.flatMapLatest { query ->
+        if (query.isBlank())
+            flow { emit(repository.getAllSuppliers()) }
+        else
+            flow { emit(repository.searchSuppliersByName(query)) }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private val _categoryInputText = MutableStateFlow("")
@@ -172,15 +196,19 @@ class DatabaseViewModel(
     }
 
     // Replaced categoryDao calls with repository calls
-    val categories: StateFlow<List<Category>> = _categoryInputText
-        .debounce(300L)
-        .distinctUntilChanged()
-        .flatMapLatest { query ->
-            if (query.isBlank())
-                flow { emit(repository.getAllCategories()) }
-            else
-                flow { emit(repository.searchCategoriesByName(query)) }
-        }
+    val categories: StateFlow<List<Category>> = combine(
+        _categoryInputText
+            .debounce(300L)
+            .distinctUntilChanged(),
+        _categoryCatalogRefresh
+    ) { query, _ ->
+        query
+    }.flatMapLatest { query ->
+        if (query.isBlank())
+            flow { emit(repository.getAllCategories()) }
+        else
+            flow { emit(repository.searchCategoriesByName(query)) }
+    }
         // Removed .flowOn(Dispatchers.IO) as the repository handles threading
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
     // --- FIX END ---
@@ -230,6 +258,21 @@ class DatabaseViewModel(
 
     private fun clearExportUiState() {
         _exportUiState.value = ExportUiState()
+    }
+
+    fun selectHubTab(tab: DatabaseHubTab) {
+        _selectedHubTab.value = tab
+    }
+
+    fun onCatalogQueryChanged(kind: CatalogEntityKind, query: String) {
+        when (kind) {
+            CatalogEntityKind.SUPPLIER -> _supplierCatalogQuery.value = query
+            CatalogEntityKind.CATEGORY -> _categoryCatalogQuery.value = query
+        }
+    }
+
+    fun retryCatalogSection(kind: CatalogEntityKind) {
+        refreshCatalogSection(kind)
     }
 
     private fun allocatePreviewId(): Long = nextPreviewId++
@@ -340,6 +383,148 @@ class DatabaseViewModel(
 
     fun setFilter(text: String) {
         _filter.value = text.ifBlank { null }
+    }
+
+    private fun catalogSectionState(
+        kind: CatalogEntityKind,
+        queryFlow: StateFlow<String>,
+        refreshFlow: StateFlow<Int>
+    ): StateFlow<CatalogSectionUiState> {
+        val debouncedQuery = queryFlow
+            .debounce(250L)
+            .distinctUntilChanged()
+
+        return combine(debouncedQuery, refreshFlow) { query, _ ->
+            query
+        }.transformLatest { query ->
+            emit(
+                CatalogSectionUiState(
+                    query = query,
+                    isLoading = true
+                )
+            )
+
+            val trimmedQuery = query.trim().takeIf { it.isNotEmpty() }
+            val sectionState = try {
+                CatalogSectionUiState(
+                    query = query,
+                    items = repository.getCatalogItems(kind, trimmedQuery)
+                )
+            } catch (throwable: Throwable) {
+                Log.e("DATABASE_HUB", "Unable to load catalog section: $kind", throwable)
+                CatalogSectionUiState(
+                    query = query,
+                    errorMessage = catalogLoadErrorMessage(kind)
+                )
+            }
+
+            emit(sectionState)
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            initialValue = CatalogSectionUiState(isLoading = true)
+        )
+    }
+
+    private fun refreshCatalogSection(kind: CatalogEntityKind) {
+        when (kind) {
+            CatalogEntityKind.SUPPLIER -> _supplierCatalogRefresh.value += 1
+            CatalogEntityKind.CATEGORY -> _categoryCatalogRefresh.value += 1
+        }
+    }
+
+    private fun catalogEntityLabel(kind: CatalogEntityKind): String =
+        appContext.getString(
+            when (kind) {
+                CatalogEntityKind.SUPPLIER -> R.string.database_catalog_entity_supplier
+                CatalogEntityKind.CATEGORY -> R.string.database_catalog_entity_category
+            }
+        )
+
+    private fun catalogLoadErrorMessage(kind: CatalogEntityKind): String =
+        appContext.getString(
+            when (kind) {
+                CatalogEntityKind.SUPPLIER -> R.string.database_suppliers_load_failed
+                CatalogEntityKind.CATEGORY -> R.string.database_categories_load_failed
+            }
+        )
+
+    private fun catalogOperationErrorMessage(
+        kind: CatalogEntityKind,
+        throwable: Throwable
+    ): String = when (throwable) {
+        is CatalogBlankNameException -> appContext.getString(
+            R.string.database_catalog_name_required,
+            catalogEntityLabel(kind)
+        )
+
+        is CatalogNameConflictException -> appContext.getString(
+            R.string.database_catalog_name_exists,
+            catalogEntityLabel(kind)
+        )
+
+        is CatalogEntityInUseException -> appContext.getString(
+            R.string.database_catalog_delete_requires_resolution,
+            catalogEntityLabel(kind),
+            throwable.productCount
+        )
+
+        is CatalogInvalidReplacementException -> appContext.getString(
+            R.string.database_catalog_replacement_invalid,
+            catalogEntityLabel(kind)
+        )
+
+        is CatalogNotFoundException -> appContext.getString(
+            R.string.database_catalog_item_missing,
+            catalogEntityLabel(kind)
+        )
+
+        else -> appContext.getString(
+            R.string.database_catalog_operation_failed,
+            catalogEntityLabel(kind)
+        )
+    }
+
+    private fun catalogDeleteSuccessMessage(
+        kind: CatalogEntityKind,
+        result: CatalogDeleteResult
+    ): String = when (result.strategy) {
+        CatalogDeleteStrategy.DeleteIfUnused -> appContext.getString(
+            R.string.database_catalog_deleted,
+            catalogEntityLabel(kind)
+        )
+
+        is CatalogDeleteStrategy.ReplaceWithExisting,
+        is CatalogDeleteStrategy.CreateNewAndReplace -> appContext.getString(
+            R.string.database_catalog_deleted_reassigned,
+            catalogEntityLabel(kind),
+            result.affectedProducts,
+            result.replacementName.orEmpty()
+        )
+
+        CatalogDeleteStrategy.ClearAssignments -> appContext.getString(
+            R.string.database_catalog_deleted_cleared,
+            catalogEntityLabel(kind),
+            result.affectedProducts
+        )
+    }
+
+    private suspend fun <T> runCatalogMutation(
+        kind: CatalogEntityKind,
+        successMessage: (T) -> String,
+        action: suspend () -> T
+    ): T? = try {
+        val result = action()
+        refreshCatalogSection(kind)
+        _uiState.value = UiState.Success(successMessage(result))
+        result
+    } catch (throwable: Throwable) {
+        if (throwable is CancellationException) {
+            throw throwable
+        }
+        throwable.printStackTrace()
+        _uiState.value = UiState.Error(catalogOperationErrorMessage(kind, throwable))
+        null
     }
 
     private val _importAnalysisResult = MutableStateFlow<ImportAnalysis?>(null)
@@ -861,6 +1046,48 @@ class DatabaseViewModel(
 
     suspend fun addCategory(name: String): Category? {
         return repository.addCategory(name)
+    }
+
+    suspend fun createCatalogEntry(
+        kind: CatalogEntityKind,
+        name: String
+    ): CatalogListItem? = runCatalogMutation(
+        kind = kind,
+        successMessage = {
+            appContext.getString(
+                R.string.database_catalog_created,
+                catalogEntityLabel(kind)
+            )
+        }
+    ) {
+        repository.createCatalogEntry(kind, name)
+    }
+
+    suspend fun renameCatalogEntry(
+        kind: CatalogEntityKind,
+        id: Long,
+        newName: String
+    ): CatalogListItem? = runCatalogMutation(
+        kind = kind,
+        successMessage = {
+            appContext.getString(
+                R.string.database_catalog_renamed,
+                catalogEntityLabel(kind)
+            )
+        }
+    ) {
+        repository.renameCatalogEntry(kind, id, newName)
+    }
+
+    suspend fun deleteCatalogEntry(
+        kind: CatalogEntityKind,
+        id: Long,
+        strategy: CatalogDeleteStrategy
+    ): CatalogDeleteResult? = runCatalogMutation(
+        kind = kind,
+        successMessage = { result -> catalogDeleteSuccessMessage(kind, result) }
+    ) {
+        repository.deleteCatalogEntry(kind, id, strategy)
     }
 
     suspend fun getSupplierById(id: Long): Supplier? {

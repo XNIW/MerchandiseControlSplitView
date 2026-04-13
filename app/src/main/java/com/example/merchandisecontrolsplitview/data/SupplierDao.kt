@@ -21,11 +21,33 @@ interface SupplierDao {
     @Query("SELECT * FROM suppliers WHERE name = :name LIMIT 1")
     suspend fun findByName(name: String): Supplier?
 
+    @Query("SELECT * FROM suppliers WHERE LOWER(name) = LOWER(:name) LIMIT 1")
+    suspend fun findByNameIgnoreCase(name: String): Supplier?
+
     // --- QUESTA E' LA FUNZIONE MANCANTE ---
     @Query("SELECT * FROM suppliers WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Supplier?
 
+    @Query(
+        """
+        SELECT s.id AS id,
+               s.name AS name,
+               COUNT(p.id) AS productCount
+        FROM suppliers s
+        LEFT JOIN products p ON p.supplierId = s.id
+        WHERE (:query IS NULL OR :query = '' OR s.name LIKE '%' || :query || '%')
+        GROUP BY s.id, s.name
+        ORDER BY s.name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getCatalogItems(query: String?): List<CatalogListItem>
+
+    @Query("UPDATE suppliers SET name = :name WHERE id = :id")
+    suspend fun rename(id: Long, name: String): Int
+
+    @Query("DELETE FROM suppliers WHERE id = :id")
+    suspend fun deleteById(id: Long): Int
+
     @Query("SELECT * FROM suppliers ORDER BY name ASC")
     fun getAllFlow(): Flow<List<Supplier>>
-
 }

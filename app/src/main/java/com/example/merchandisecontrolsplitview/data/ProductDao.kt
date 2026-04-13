@@ -68,6 +68,24 @@ interface ProductDao {
     @Query("SELECT * FROM products")
     suspend fun getAll(): List<Product>
 
+    @Query("SELECT COUNT(*) FROM products WHERE supplierId = :supplierId")
+    suspend fun countLinkedToSupplier(supplierId: Long): Int
+
+    @Query("SELECT COUNT(*) FROM products WHERE categoryId = :categoryId")
+    suspend fun countLinkedToCategory(categoryId: Long): Int
+
+    @Query("UPDATE products SET supplierId = :replacementId WHERE supplierId = :supplierId")
+    suspend fun reassignSupplier(supplierId: Long, replacementId: Long): Int
+
+    @Query("UPDATE products SET categoryId = :replacementId WHERE categoryId = :categoryId")
+    suspend fun reassignCategory(categoryId: Long, replacementId: Long): Int
+
+    @Query("UPDATE products SET supplierId = NULL WHERE supplierId = :supplierId")
+    suspend fun clearSupplierAssignments(supplierId: Long): Int
+
+    @Query("UPDATE products SET categoryId = NULL WHERE categoryId = :categoryId")
+    suspend fun clearCategoryAssignments(categoryId: Long): Int
+
     /**
      * Elimina tutti i prodotti dalla tabella.
      * Utile per operazioni di reset o test.

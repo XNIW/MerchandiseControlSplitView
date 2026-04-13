@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -29,9 +32,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -56,6 +61,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.os.ConfigurationCompat
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
+import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
@@ -74,6 +81,11 @@ private val priceHistoryStorageFormatter: DateTimeFormatter =
 private const val LOADING_SAFETY_TIMEOUT_MS = 180_000L
 private const val PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH = 24
 private const val PRICE_HISTORY_ELLIPSIS = "\u2026"
+
+internal data class CatalogPickerOption(
+    val id: Long,
+    val name: String
+)
 
 @Composable
 internal fun LoadingDialog(
@@ -396,6 +408,463 @@ internal fun DeleteProductConfirmationDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+internal fun CatalogActionBottomSheet(
+    kind: CatalogEntityKind,
+    item: CatalogListItem,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = stringResource(
+                        R.string.database_catalog_linked_products,
+                        item.productCount
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            CatalogSheetActionButton(
+                title = stringResource(R.string.database_catalog_action_rename),
+                supporting = stringResource(
+                    R.string.database_catalog_action_rename_body,
+                    stringResource(kind.entityLabelRes())
+                ),
+                onClick = onRename
+            )
+
+            CatalogSheetActionButton(
+                title = stringResource(R.string.database_catalog_action_delete),
+                supporting = stringResource(
+                    R.string.database_catalog_action_delete_body,
+                    stringResource(kind.entityLabelRes())
+                ),
+                onClick = onDelete,
+                destructive = true
+            )
+        }
+    }
+}
+
+@Composable
+private fun CatalogSheetActionButton(
+    title: String,
+    supporting: String,
+    onClick: () -> Unit,
+    destructive: Boolean = false
+) {
+    Surface(
+        shape = RoundedCornerShape(22.dp),
+        color = if (destructive) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        },
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (destructive) {
+                MaterialTheme.colorScheme.error.copy(alpha = 0.22f)
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            }
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (destructive) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
+            )
+            Text(
+                text = supporting,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (destructive) {
+                    MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.86f)
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun CatalogNameDialog(
+    title: String,
+    fieldLabel: String,
+    confirmLabel: String,
+    initialValue: String,
+    supportingText: String? = null,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var value by remember(initialValue) { androidx.compose.runtime.mutableStateOf(initialValue) }
+    val trimmedValue = value.trim()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                supportingText?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text(fieldLabel) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = trimmedValue.isNotEmpty(),
+                onClick = { onConfirm(trimmedValue) }
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+internal fun CatalogDeleteConfirmationDialog(
+    kind: CatalogEntityKind,
+    item: CatalogListItem,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                stringResource(
+                    R.string.database_catalog_simple_delete_title,
+                    stringResource(kind.entityLabelRes())
+                )
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(
+                        R.string.database_catalog_simple_delete_body,
+                        stringResource(kind.entityLabelRes()),
+                        item.name
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.database_catalog_linked_products,
+                            item.productCount
+                        ),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Text(stringResource(R.string.delete))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+internal fun CatalogDeleteStrategyDialog(
+    kind: CatalogEntityKind,
+    item: CatalogListItem,
+    onReplaceWithExisting: () -> Unit,
+    onCreateReplacement: () -> Unit,
+    onClearAssignments: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                stringResource(
+                    R.string.database_catalog_guided_delete_title,
+                    stringResource(kind.entityLabelRes())
+                )
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = stringResource(
+                        R.string.database_catalog_guided_delete_body,
+                        item.name,
+                        item.productCount
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                CatalogSheetActionButton(
+                    title = stringResource(R.string.database_catalog_strategy_replace_existing),
+                    supporting = stringResource(
+                        R.string.database_catalog_strategy_replace_existing_body,
+                        stringResource(kind.entityLabelRes())
+                    ),
+                    onClick = onReplaceWithExisting
+                )
+                CatalogSheetActionButton(
+                    title = stringResource(R.string.database_catalog_strategy_create_new),
+                    supporting = stringResource(
+                        R.string.database_catalog_strategy_create_new_body,
+                        stringResource(kind.entityLabelRes())
+                    ),
+                    onClick = onCreateReplacement
+                )
+                CatalogSheetActionButton(
+                    title = stringResource(R.string.database_catalog_strategy_clear),
+                    supporting = stringResource(
+                        R.string.database_catalog_strategy_clear_body,
+                        stringResource(kind.entityLabelRes())
+                    ),
+                    onClick = onClearAssignments,
+                    destructive = true
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+internal fun CatalogClearAssignmentsConfirmationDialog(
+    kind: CatalogEntityKind,
+    item: CatalogListItem,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                stringResource(
+                    R.string.database_catalog_clear_assignments_title,
+                    stringResource(kind.entityLabelRes())
+                )
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(
+                    R.string.database_catalog_clear_assignments_body,
+                    item.name,
+                    item.productCount
+                ),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Text(stringResource(R.string.delete))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+internal fun CatalogReplacementPickerDialog(
+    kind: CatalogEntityKind,
+    options: List<CatalogPickerOption>,
+    onSelect: (CatalogPickerOption) -> Unit,
+    onDismiss: () -> Unit,
+    onCreateNew: ((String) -> Unit)? = null
+) {
+    var searchQuery by remember { androidx.compose.runtime.mutableStateOf("") }
+    val filteredOptions = remember(options, searchQuery) {
+        if (searchQuery.isBlank()) {
+            options
+        } else {
+            options.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                stringResource(
+                    R.string.database_catalog_replacement_picker_title,
+                    stringResource(kind.entityLabelRes())
+                )
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = {
+                        Text(
+                            stringResource(
+                                R.string.database_catalog_replacement_picker_hint,
+                                stringResource(kind.entityLabelRes())
+                            )
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = null)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (filteredOptions.isEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = stringResource(
+                                R.string.database_catalog_replacement_picker_empty,
+                                stringResource(kind.entityLabelRes())
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (onCreateNew != null && searchQuery.trim().isNotEmpty()) {
+                            TextButton(
+                                onClick = { onCreateNew(searchQuery.trim()) }
+                            ) {
+                                Text(
+                                    stringResource(
+                                        R.string.database_catalog_quick_create,
+                                        searchQuery.trim()
+                                    )
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredOptions, key = { it.id }) { option ->
+                            CatalogPickerOptionRow(
+                                option = option,
+                                onClick = { onSelect(option) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun CatalogPickerOptionRow(
+    option: CatalogPickerOption,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Text(
+            text = option.name,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 internal fun PriceHistoryBottomSheet(
     product: Product,
     purchase: List<ProductPrice>,
@@ -519,4 +988,9 @@ private fun String.toPriceHistoryCustomDisplaySegment(): String {
     }
 
     return take(PRICE_HISTORY_CUSTOM_SOURCE_MAX_LENGTH) + PRICE_HISTORY_ELLIPSIS
+}
+
+private fun CatalogEntityKind.entityLabelRes(): Int = when (this) {
+    CatalogEntityKind.SUPPLIER -> R.string.database_catalog_entity_supplier
+    CatalogEntityKind.CATEGORY -> R.string.database_catalog_entity_category
 }

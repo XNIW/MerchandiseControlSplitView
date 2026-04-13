@@ -6,6 +6,11 @@ import android.net.Uri
 import android.os.Looper
 import app.cash.turbine.test
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.CatalogBlankNameException
+import com.example.merchandisecontrolsplitview.data.CatalogDeleteResult
+import com.example.merchandisecontrolsplitview.data.CatalogDeleteStrategy
+import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
+import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.ImportApplyResult
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
@@ -72,10 +77,56 @@ class DatabaseViewModelTest {
         coEvery { repository.findCategoryByName(any()) } returns null
         coEvery { repository.addSupplier(any()) } returns null
         coEvery { repository.addCategory(any()) } returns null
+        coEvery { repository.getCatalogItems(any(), any()) } returns emptyList()
+        coEvery { repository.deleteCatalogEntry(any(), any(), any()) } returns CatalogDeleteResult(
+            affectedProducts = 0,
+            strategy = CatalogDeleteStrategy.DeleteIfUnused
+        )
         coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
         coEvery { repository.getPriceHistoryRowsPage(any(), any()) } returns emptyList()
 
         viewModel = DatabaseViewModel(app, repository)
+    }
+
+    @Test
+    fun `supplierCatalogSection emits loaded state from repository`() = runTest {
+        coEvery { repository.getCatalogItems(CatalogEntityKind.SUPPLIER, null) } returns listOf(
+            CatalogListItem(
+                id = 7L,
+                name = "North Supplier",
+                productCount = 3
+            )
+        )
+
+        viewModel.supplierCatalogSection.test {
+            assertTrue(awaitItem().isLoading)
+            val loaded = awaitItem()
+            assertEquals("", loaded.query)
+            assertEquals(1, loaded.items.size)
+            assertEquals("North Supplier", loaded.items.single().name)
+            assertEquals(3, loaded.items.single().productCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `createCatalogEntry blank name emits localized error`() = runTest {
+        coEvery {
+            repository.createCatalogEntry(CatalogEntityKind.CATEGORY, "   ")
+        } throws CatalogBlankNameException
+
+        val result = viewModel.createCatalogEntry(CatalogEntityKind.CATEGORY, "   ")
+
+        assertNull(result)
+        assertEquals(
+            UiState.Error(
+                app.getString(
+                    R.string.database_catalog_name_required,
+                    app.getString(R.string.database_catalog_entity_category)
+                )
+            ),
+            viewModel.uiState.value
+        )
     }
 
     @Test

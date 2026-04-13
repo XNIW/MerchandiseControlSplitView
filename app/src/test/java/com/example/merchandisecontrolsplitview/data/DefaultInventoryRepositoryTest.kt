@@ -338,6 +338,100 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `getCatalogItems reports linked product counts for suppliers and categories`() = runTest {
+        val supplier = repository.addSupplier("Alpha Supplier")!!
+        val category = repository.addCategory("Seasonal")!!
+        repository.addProduct(
+            Product(
+                barcode = "12121212",
+                productName = "Linked Product",
+                supplierId = supplier.id,
+                categoryId = category.id,
+                purchasePrice = 3.0,
+                retailPrice = 5.0
+            )
+        )
+
+        val supplierItems = repository.getCatalogItems(CatalogEntityKind.SUPPLIER)
+        val categoryItems = repository.getCatalogItems(CatalogEntityKind.CATEGORY)
+
+        assertEquals(1, supplierItems.single { it.id == supplier.id }.productCount)
+        assertEquals(1, categoryItems.single { it.id == category.id }.productCount)
+    }
+
+    @Test
+    fun `renameCatalogEntry keeps supplier id and refreshes linked product details`() = runTest {
+        val supplier = repository.addSupplier("Legacy Supplier")!!
+        repository.addProduct(
+            Product(
+                barcode = "34343434",
+                productName = "Rename Me",
+                supplierId = supplier.id,
+                purchasePrice = 2.0,
+                retailPrice = 4.0
+            )
+        )
+
+        val renamed = repository.renameCatalogEntry(
+            kind = CatalogEntityKind.SUPPLIER,
+            id = supplier.id,
+            newName = "Modern Supplier"
+        )
+        val productDetails = repository.getAllProductsWithDetails().single { it.product.barcode == "34343434" }
+
+        assertEquals(supplier.id, renamed.id)
+        assertEquals("Modern Supplier", repository.getSupplierById(supplier.id)?.name)
+        assertEquals("Modern Supplier", productDetails.supplierName)
+    }
+
+    @Test
+    fun `deleteCatalogEntry can reassign or clear linked products before deleting`() = runTest {
+        val oldSupplier = repository.addSupplier("Old Supplier")!!
+        val newSupplier = repository.addSupplier("New Supplier")!!
+        val category = repository.addCategory("Disposable Category")!!
+
+        repository.addProduct(
+            Product(
+                barcode = "56565656",
+                productName = "Supplier Product",
+                supplierId = oldSupplier.id,
+                purchasePrice = 2.0,
+                retailPrice = 3.0
+            )
+        )
+        repository.addProduct(
+            Product(
+                barcode = "78787878",
+                productName = "Category Product",
+                categoryId = category.id,
+                purchasePrice = 2.5,
+                retailPrice = 4.5
+            )
+        )
+
+        val supplierDelete = repository.deleteCatalogEntry(
+            kind = CatalogEntityKind.SUPPLIER,
+            id = oldSupplier.id,
+            strategy = CatalogDeleteStrategy.ReplaceWithExisting(newSupplier.id)
+        )
+        val categoryDelete = repository.deleteCatalogEntry(
+            kind = CatalogEntityKind.CATEGORY,
+            id = category.id,
+            strategy = CatalogDeleteStrategy.ClearAssignments
+        )
+
+        val supplierProduct = repository.findProductByBarcode("56565656")!!
+        val categoryProduct = repository.findProductByBarcode("78787878")!!
+
+        assertEquals(1, supplierDelete.affectedProducts)
+        assertEquals(1, categoryDelete.affectedProducts)
+        assertEquals(newSupplier.id, supplierProduct.supplierId)
+        assertNull(categoryProduct.categoryId)
+        assertNull(repository.getSupplierById(oldSupplier.id))
+        assertNull(repository.getCategoryById(category.id))
+    }
+
+    @Test
     fun `getFilteredHistoryFlow respects custom date range`() = runTest {
         repository.insertHistoryEntry(historyEntry(id = "JAN", timestamp = "2026-01-10 10:00:00"))
         repository.insertHistoryEntry(historyEntry(id = "FEB", timestamp = "2026-02-15 10:00:00"))
