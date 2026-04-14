@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,6 +13,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -80,6 +83,56 @@ fun GeneratedScreenDiscardDraftDialog(
                 enabled = !isSavingOrReverting
             ) {
                 Text(stringResource(R.string.cancel))
+            }
+        }
+    )
+}
+
+@Composable
+fun GeneratedScreenSyncBeforeExitDialog(
+    visible: Boolean,
+    syncActionEnabled: Boolean,
+    onDismissRequest: () -> Unit,
+    onConfirmSyncAndExit: () -> Unit,
+    onConfirmExit: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    if (!visible) return
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 6.dp,
+        title = {
+            Text(
+                text = stringResource(R.string.generated_complete_exit_sync_title),
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Text(
+                text = stringResource(R.string.generated_complete_exit_sync_message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirmSyncAndExit,
+                enabled = syncActionEnabled
+            ) {
+                Text(stringResource(R.string.generated_complete_exit_sync_confirm))
+            }
+        },
+        dismissButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.cancel))
+                }
+                FilledTonalButton(onClick = onConfirmExit) {
+                    Text(stringResource(R.string.exit))
+                }
             }
         }
     )

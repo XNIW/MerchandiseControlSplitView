@@ -49,11 +49,13 @@ import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.util.formatClCount
 import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
@@ -87,6 +89,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.ui.text.style.TextOverflow
@@ -211,6 +214,14 @@ fun GeneratedScreen(
 
     var showGenericCalcDialog by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
+    var showCompleteExitSyncDialog by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var pendingExitAfterSuccessfulSync by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var completionCardDismissedInVisit by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var completionCardResetCounter by rememberSaveable(entryUid) { mutableIntStateOf(0) }
+    var wasSheetCompleteInVisit by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var syncActionInFlight by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var syncLoadingObserved by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var exportActionPending by rememberSaveable(entryUid) { mutableStateOf(false) }
     // Stato per mostrare il caricamento durante il salvataggio o il ripristino
     var isSavingOrReverting by remember { mutableStateOf(false) }
     var isExiting by remember { mutableStateOf(false) }
@@ -247,51 +258,90 @@ fun GeneratedScreen(
         "discount", "discountedPrice"
     )
     val snackbarHostState = remember { SnackbarHostState() }
+    val importAnalysisResult by databaseViewModel.importAnalysisResult.collectAsState()
+    val dbUiState by databaseViewModel.uiState.collectAsState()
+    val isExporting by excelViewModel.isExporting
+    val exportProgress by excelViewModel.exportProgress
+    val isManualDraftEmpty = isManualEntry && excelData.size <= 1
+    val isSheetComplete by remember(generated, isManualEntry, excelData, completeStates) {
+        derivedStateOf {
+            val dataSize = excelData.size
+            val manualDraftEmpty = isManualEntry && dataSize <= 1
+            generated &&
+                dataSize > 1 &&
+                !manualDraftEmpty &&
+                completeStates.size >= dataSize &&
+                (1 until dataSize).all { row -> completeStates.getOrNull(row) == true }
+        }
+    }
+    val canOfferSync = syncStatus != SyncStatus.SYNCED_SUCCESSFULLY
+    val canOfferExport = !wasExported
+    val isExportActionInProgress = isExporting || exportActionPending
+    val canRunSyncAction = !syncActionInFlight && !pendingExitAfterSuccessfulSync && !isExiting && !isSavingOrReverting
+    val canRunExportAction = !isExportActionInProgress && !isExiting && !isSavingOrReverting
+    val shouldShowSyncBeforeExitDialog =
+        isSheetComplete &&
+            canOfferSync &&
+            !isManualDraftEmpty &&
+            !isExiting &&
+            !isSavingOrReverting &&
+            !pendingExitAfterSuccessfulSync
+    val showCompletionCard =
+        isSheetComplete &&
+            (canOfferSync || canOfferExport) &&
+            !completionCardDismissedInVisit &&
+            !isExiting &&
+            !isSavingOrReverting &&
+            !pendingExitAfterSuccessfulSync
+    val syncNowText = stringResource(R.string.sync_with_database)
+    val exportNowText = stringResource(R.string.export_now)
+    val completionCardTitle = stringResource(R.string.generated_complete_card_title)
+    val completionCardDismissText = stringResource(R.string.generated_complete_card_dismiss)
+    val completionCardMessage = when {
+        !canOfferSync && canOfferExport -> stringResource(R.string.generated_complete_card_message_export_only)
+        syncStatus == SyncStatus.ATTEMPTED_WITH_ERRORS && wasExported ->
+            stringResource(R.string.generated_complete_card_message_sync_retry_exported)
+        syncStatus == SyncStatus.ATTEMPTED_WITH_ERRORS ->
+            stringResource(R.string.generated_complete_card_message_sync_retry)
+        wasExported -> stringResource(R.string.generated_complete_card_message_sync_pending_exported)
+        else -> stringResource(R.string.generated_complete_card_message_sync_pending)
+    }
 
-    val performGeneratedExit = exit@{
-        if (isSavingOrReverting || isExiting) return@exit
+    fun performGeneratedExit() {
+        if (isSavingOrReverting || isExiting) return
 
-        // La bozza è considerata vuota se siamo in modalità manuale
-        // e la griglia contiene solo la riga dell'intestazione (o nessuna riga).
-        val isManualDraftEmpty = isManualEntry && excelViewModel.excelData.size <= 1
+        isExiting = true
+        scope.launch {
+            val saveSucceeded = try {
+                excelViewModel.saveCurrentStateToHistory(entryUid)
+            } catch (_: Exception) {
+                false
+            }
 
-        if (isManualDraftEmpty) {
-            showExitDialog = true // Mostra dialogo "Elimina bozza?"
-        } else {
-            scope.launch {
-                isExiting = true
-                val saveSucceeded = try {
-                    excelViewModel.saveCurrentStateToHistory(entryUid)
-                } catch (_: Exception) {
-                    false
+            if (!saveSucceeded) {
+                isExiting = false
+                pendingExitAfterSuccessfulSync = false
+                snackbarHostState.showSnackbar(
+                    message = generatedExitSaveFailedText,
+                    withDismissAction = true,
+                    duration = SnackbarDuration.Short
+                )
+                return@launch
+            }
+
+            try {
+                when {
+                    !isNewEntry -> onBackToStart()
+                    isManualEntry -> onBackToStart()
+                    else -> onNavigateToHome()
                 }
-
-                if (!saveSucceeded) {
-                    isExiting = false
-                    snackbarHostState.showSnackbar(
-                        message = generatedExitSaveFailedText,
-                        withDismissAction = true,
-                        duration = SnackbarDuration.Short
-                    )
-                    return@launch
-                }
-
-                try {
-                    when {
-                        !isNewEntry -> onBackToStart()
-                        isManualEntry -> onBackToStart()
-                        else -> onNavigateToHome()
-                    }
-                } finally {
-                    isExiting = false
-                }
+            } finally {
+                pendingExitAfterSuccessfulSync = false
+                isExiting = false
             }
         }
     }
 
-    val dbUiState by databaseViewModel.uiState.collectAsState()
-    val isExporting by excelViewModel.isExporting
-    val exportProgress by excelViewModel.exportProgress
     var exportLoadingTimedOut by remember { mutableStateOf(false) }
     var databaseLoadingTimedOut by remember { mutableStateOf(false) }
     val isDatabaseLoading = dbUiState is UiState.Loading
@@ -310,8 +360,71 @@ fun GeneratedScreen(
         }
     }
 
-    BackHandler {
+    LaunchedEffect(entryUid, isSheetComplete) {
+        if (isSheetComplete && !wasSheetCompleteInVisit) {
+            completionCardDismissedInVisit = false
+            completionCardResetCounter++
+        }
+        if (!isSheetComplete) {
+            showCompleteExitSyncDialog = false
+        }
+        wasSheetCompleteInVisit = isSheetComplete
+    }
+
+    LaunchedEffect(syncActionInFlight, importAnalysisResult, dbUiState) {
+        if (!syncActionInFlight) {
+            syncLoadingObserved = false
+            return@LaunchedEffect
+        }
+
+        when {
+            importAnalysisResult != null -> {
+                syncActionInFlight = false
+                syncLoadingObserved = false
+            }
+            dbUiState is UiState.Loading -> syncLoadingObserved = true
+            syncLoadingObserved -> {
+                syncActionInFlight = false
+                syncLoadingObserved = false
+            }
+        }
+    }
+
+    LaunchedEffect(syncStatus, importAnalysisResult, syncActionInFlight, pendingExitAfterSuccessfulSync) {
+        if (!pendingExitAfterSuccessfulSync) return@LaunchedEffect
+
+        when {
+            syncStatus == SyncStatus.SYNCED_SUCCESSFULLY -> performGeneratedExit()
+            !syncActionInFlight && importAnalysisResult == null -> pendingExitAfterSuccessfulSync = false
+        }
+    }
+
+    fun requestGeneratedExit() {
+        if (
+            isSavingOrReverting ||
+            isExiting ||
+            pendingExitAfterSuccessfulSync ||
+            showExitDialog ||
+            showCompleteExitSyncDialog
+        ) {
+            return
+        }
+
+        if (isManualDraftEmpty) {
+            showExitDialog = true
+            return
+        }
+
+        if (shouldShowSyncBeforeExitDialog) {
+            showCompleteExitSyncDialog = true
+            return
+        }
+
         performGeneratedExit()
+    }
+
+    BackHandler(enabled = !showExitDialog && !showCompleteExitSyncDialog && !pendingExitAfterSuccessfulSync) {
+        requestGeneratedExit()
     }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -380,47 +493,34 @@ fun GeneratedScreen(
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ) { uri ->
-        uri?.let {
-            scope.launch {
-                try {
-                    excelViewModel.exportToUri(context, it)
-                    excelViewModel.markCurrentEntryAsExported(entryUid)
-                    Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {
-                    Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
-                }
+        if (uri == null) {
+            exportActionPending = false
+            return@rememberLauncherForActivityResult
+        }
+
+        scope.launch {
+            try {
+                excelViewModel.exportToUri(context, uri)
+                excelViewModel.markCurrentEntryAsExported(entryUid)
+                Toast.makeText(context, fileExportedSuccessfullyText, Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {
+                Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
+            } finally {
+                exportActionPending = false
             }
         }
     }
-    val requestExcelExport: () -> Unit = { if (!isExporting) saveLauncher.launch(titleText) }
-    val showAllCompleteBanner by remember(generated, isManualEntry, excelData, completeStates) {
-        derivedStateOf {
-            val dataSize = excelData.size
-            val isManualDraftEmpty = isManualEntry && dataSize <= 1
-            generated &&
-                dataSize > 1 &&
-                !isManualDraftEmpty &&
-                completeStates.size >= dataSize &&
-                (1 until dataSize).all { row -> completeStates.getOrNull(row) == true }
+    val requestExcelExport: () -> Unit = {
+        if (canRunExportAction) {
+            exportActionPending = true
+            saveLauncher.launch(titleText)
         }
     }
-    val allCompleteBannerTitle = stringResource(
-        if (wasExported) {
-            R.string.all_complete_banner_title_exported
-        } else {
-            R.string.all_complete_banner_title
-        }
-    )
-    val allCompleteBannerSubtitle = stringResource(
-        if (wasExported) {
-            R.string.all_complete_banner_subtitle_exported
-        } else {
-            R.string.all_complete_banner_subtitle
-        }
-    )
-    val exportNowText = stringResource(R.string.export_now)
 
     fun shareXlsx() {
+        if (!canRunExportAction) return
+
+        exportActionPending = true
         scope.launch {
             try {
                 val dir = File(context.cacheDir, "exports").apply { mkdirs() }
@@ -440,6 +540,8 @@ fun GeneratedScreen(
                 excelViewModel.markCurrentEntryAsExported(entryUid)
             } catch (_: Exception) {
                 Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
+            } finally {
+                exportActionPending = false
             }
         }
     }
@@ -465,9 +567,9 @@ fun GeneratedScreen(
         showRenameDialog = true
     }
 
-    fun analyzeCurrentGrid() {
+    fun analyzeCurrentGrid(): Boolean {
         excelViewModel.errorRowIndexes.value = emptySet()
-        val header = excelData.firstOrNull() ?: return
+        val header = excelData.firstOrNull() ?: return false
         val barcodeIdx = header.indexOf("barcode")
         val productNameIdx = header.indexOf("productName")
         val quantityIdx = header.indexOf("quantity")
@@ -514,12 +616,28 @@ fun GeneratedScreen(
                 syncAnalysisStartedText,
                 Toast.LENGTH_SHORT
             ).show()
+            return true
         } else {
             Toast.makeText(
                 context,
                 noValidRowsToSyncText,
                 Toast.LENGTH_SHORT
             ).show()
+            return false
+        }
+    }
+
+    fun requestSyncAnalysis(exitAfterSuccess: Boolean = false) {
+        if (!canRunSyncAction) return
+
+        val didStart = analyzeCurrentGrid()
+        if (didStart) {
+            syncActionInFlight = true
+            syncLoadingObserved = false
+            pendingExitAfterSuccessfulSync = exitAfterSuccess
+            showCompleteExitSyncDialog = false
+        } else if (exitAfterSuccess) {
+            pendingExitAfterSuccessfulSync = false
         }
     }
 
@@ -602,7 +720,6 @@ fun GeneratedScreen(
     val completedCount = (1 until excelData.size).count { row ->
         completeStates.getOrNull(row) == true
     }
-    val isManualDraftEmpty = isManualEntry && excelData.size <= 1
     val showProgressCard = generated && excelData.size > 1 && !isManualDraftEmpty
 
     Scaffold(
@@ -614,8 +731,11 @@ fun GeneratedScreen(
                 wasExported = wasExported,
                 syncStatus = syncStatus,
                 isActionEnabled = !isExiting && !isSavingOrReverting,
-                onFinish = performGeneratedExit,
-                onAnalyzeSync = { analyzeCurrentGrid() },
+                isFinishEnabled = !pendingExitAfterSuccessfulSync,
+                isSyncActionEnabled = !syncActionInFlight && !pendingExitAfterSuccessfulSync,
+                isExportActionEnabled = !isExportActionInProgress,
+                onFinish = { requestGeneratedExit() },
+                onAnalyzeSync = { requestSyncAnalysis() },
                 onExport = requestExcelExport,
                 onShare = { shareXlsx() },
                 onRename = { openRenameDialog() },
@@ -631,22 +751,30 @@ fun GeneratedScreen(
                 .background(MaterialTheme.colorScheme.background),
             verticalArrangement = Arrangement.spacedBy(spacing.sm)
         ) {
-            // Banner completamento TASK-041 — solo quando semanticamente corretto
-            AnimatedVisibility(visible = showAllCompleteBanner) {
-                GeneratedScreenAllCompleteBanner(
-                    title = allCompleteBannerTitle,
-                    subtitle = allCompleteBannerSubtitle,
-                    ctaText = exportNowText,
-                    enabled = !isExporting,
-                    onExport = requestExcelExport,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(
-                            start = spacing.md,
-                            end = spacing.md,
-                            top = spacing.md
-                        )
-                )
+            AnimatedVisibility(visible = showCompletionCard) {
+                key(completionCardResetCounter) {
+                    GeneratedScreenCompletionCard(
+                        title = completionCardTitle,
+                        message = completionCardMessage,
+                        syncActionText = syncNowText,
+                        exportActionText = exportNowText,
+                        showSyncAction = canOfferSync,
+                        showExportAction = canOfferExport,
+                        syncEnabled = canRunSyncAction,
+                        exportEnabled = canRunExportAction,
+                        dismissContentDescription = completionCardDismissText,
+                        onSync = { requestSyncAnalysis() },
+                        onExport = requestExcelExport,
+                        onDismiss = { completionCardDismissedInVisit = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = spacing.md,
+                                end = spacing.md,
+                                top = spacing.md
+                            )
+                    )
+                }
             }
             // Progress card — stato lavoro sopra la griglia, con gerarchia più chiara e meno rumore.
             AnimatedVisibility(visible = showProgressCard) {
@@ -719,6 +847,20 @@ fun GeneratedScreen(
                         }
                     },
                     onCancel = { if (!isSavingOrReverting) showExitDialog = false }
+                )
+
+                GeneratedScreenSyncBeforeExitDialog(
+                    visible = showCompleteExitSyncDialog && !showExitDialog,
+                    syncActionEnabled = canRunSyncAction,
+                    onDismissRequest = {
+                        if (!pendingExitAfterSuccessfulSync) showCompleteExitSyncDialog = false
+                    },
+                    onConfirmSyncAndExit = { requestSyncAnalysis(exitAfterSuccess = true) },
+                    onConfirmExit = {
+                        showCompleteExitSyncDialog = false
+                        performGeneratedExit()
+                    },
+                    onCancel = { showCompleteExitSyncDialog = false }
                 )
 
                 GeneratedScreenFabArea(
@@ -992,110 +1134,182 @@ fun GeneratedScreen(
 
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GeneratedScreenAllCompleteBanner(
+private fun GeneratedScreenCompletionCard(
     title: String,
-    subtitle: String,
-    ctaText: String,
-    enabled: Boolean,
+    message: String,
+    syncActionText: String,
+    exportActionText: String,
+    showSyncAction: Boolean,
+    showExportAction: Boolean,
+    syncEnabled: Boolean,
+    exportEnabled: Boolean,
+    dismissContentDescription: String,
+    onSync: () -> Unit,
     onExport: () -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val spacing = MaterialTheme.appSpacing
     val appColors = MaterialTheme.appColors
-    val titleTextStyle = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
-    Surface(
-        modifier = modifier,
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp),
-        border = BorderStroke(
-            width = 1.dp,
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)
-        )
-    ) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = spacing.md, vertical = spacing.md)
-        ) {
-            val isCompact = maxWidth < 380.dp
-            val textBlock: @Composable (Modifier) -> Unit = { textModifier ->
-                Row(
-                    modifier = textModifier,
-                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = appColors.success,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(spacing.xxs)
-                    ) {
-                        Text(
-                            text = title,
-                            style = titleTextStyle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
+    val cardShape = MaterialTheme.shapes.extraLarge
+    val dismissState = rememberSwipeToDismissBoxState()
 
-            if (isCompact) {
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+            onDismiss()
+        }
+    }
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {},
+        modifier = modifier
+    ) {
+        Surface(
+            shape = cardShape,
+            color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
+            border = BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+            )
+        ) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.lg, vertical = spacing.lg)
+            ) {
+                val hasSecondaryAction = showSyncAction && showExportAction
+                val forceStackActions = hasSecondaryAction && maxWidth < 320.dp
+
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(spacing.md)
                 ) {
-                    textBlock(Modifier.fillMaxWidth())
-                    FilledTonalButton(
-                        onClick = onExport,
-                        enabled = enabled,
-                        modifier = Modifier.align(Alignment.End),
-                        contentPadding = PaddingValues(
-                            horizontal = spacing.md,
-                            vertical = spacing.sm
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+                        verticalAlignment = Alignment.Top
                     ) {
-                        Text(
-                            text = ctaText,
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = appColors.success.copy(alpha = 0.14f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = appColors.success,
+                                modifier = Modifier
+                                    .padding(spacing.sm)
+                                    .size(20.dp)
+                            )
+                        }
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(spacing.xxs)
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = dismissContentDescription
+                            )
+                        }
                     }
-                }
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(spacing.md),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    textBlock(Modifier.weight(1f))
-                    FilledTonalButton(
-                        onClick = onExport,
-                        enabled = enabled,
-                        contentPadding = PaddingValues(
-                            horizontal = spacing.md,
-                            vertical = spacing.sm
-                        )
-                    ) {
-                        Text(
-                            text = ctaText,
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+
+                    if (forceStackActions) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(spacing.sm)
+                        ) {
+                            if (showSyncAction) {
+                                Button(
+                                    onClick = onSync,
+                                    enabled = syncEnabled,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(syncActionText)
+                                }
+                            } else if (showExportAction) {
+                                Button(
+                                    onClick = onExport,
+                                    enabled = exportEnabled,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(exportActionText)
+                                }
+                            }
+
+                            if (hasSecondaryAction) {
+                                FilledTonalButton(
+                                    onClick = onExport,
+                                    enabled = exportEnabled,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(exportActionText)
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(spacing.sm, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (hasSecondaryAction) {
+                                FilledTonalButton(
+                                    onClick = onExport,
+                                    enabled = exportEnabled,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = exportActionText,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+
+                            if (showSyncAction) {
+                                Button(
+                                    onClick = onSync,
+                                    enabled = syncEnabled,
+                                    modifier = if (hasSecondaryAction) {
+                                        Modifier.weight(1f)
+                                    } else {
+                                        Modifier
+                                    }
+                                ) {
+                                    Text(
+                                        text = syncActionText,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            } else if (showExportAction) {
+                                Button(
+                                    onClick = onExport,
+                                    enabled = exportEnabled
+                                ) {
+                                    Text(exportActionText)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1109,8 +1323,11 @@ private fun GeneratedScreenTopBar(
     displayTitleText: String,
     isGenerated: Boolean,
     wasExported: Boolean,
-    syncStatus: com.example.merchandisecontrolsplitview.data.SyncStatus,
+    syncStatus: SyncStatus,
     isActionEnabled: Boolean,
+    isFinishEnabled: Boolean,
+    isSyncActionEnabled: Boolean,
+    isExportActionEnabled: Boolean,
     onFinish: () -> Unit,
     onAnalyzeSync: () -> Unit,
     onExport: () -> Unit,
@@ -1175,7 +1392,7 @@ private fun GeneratedScreenTopBar(
                             )
                             TextButton(
                                 onClick = onFinish,
-                                enabled = isActionEnabled,
+                                enabled = isActionEnabled && isFinishEnabled,
                                 contentPadding = PaddingValues(
                                     start = spacing.sm,
                                     end = spacing.md,
@@ -1202,9 +1419,9 @@ private fun GeneratedScreenTopBar(
                                 StatusIcon(
                                     baseIcon = Icons.Default.Sync,
                                     badgeType = when (syncStatus) {
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
-                                        com.example.merchandisecontrolsplitview.data.SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                                        SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
+                                        SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
+                                        SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
                                     },
                                     contentDescription = stringResource(R.string.sync_with_database)
                                 )
@@ -1213,7 +1430,7 @@ private fun GeneratedScreenTopBar(
                                 menuOpen = false
                                 onAnalyzeSync()
                             },
-                            enabled = isActionEnabled
+                            enabled = isActionEnabled && isSyncActionEnabled
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.export_file)) },
@@ -1227,7 +1444,7 @@ private fun GeneratedScreenTopBar(
                                 menuOpen = false
                                 onExport()
                             },
-                            enabled = isActionEnabled
+                            enabled = isActionEnabled && isExportActionEnabled
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.share_xlsx)) },
@@ -1236,7 +1453,7 @@ private fun GeneratedScreenTopBar(
                                 menuOpen = false
                                 onShare()
                             },
-                            enabled = isActionEnabled
+                            enabled = isActionEnabled && isExportActionEnabled
                         )
                         HorizontalDivider()
                         // Admin

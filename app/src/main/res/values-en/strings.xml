@@ -430,6 +430,16 @@
     <string name="all_complete_banner_title_exported">Export available</string>
     <string name="all_complete_banner_subtitle_exported">You can save a new copy of the Excel file.</string>
     <string name="export_now">Export now</string>
+    <string name="generated_complete_card_title">All set</string>
+    <string name="generated_complete_card_message_sync_pending">You can sync the database now or export the Excel file.</string>
+    <string name="generated_complete_card_message_sync_pending_exported">The file has already been exported. You can sync the database whenever you are ready.</string>
+    <string name="generated_complete_card_message_sync_retry">You can retry the sync or export the Excel file.</string>
+    <string name="generated_complete_card_message_sync_retry_exported">The file has already been exported. You can retry the database sync.</string>
+    <string name="generated_complete_card_message_export_only">The sync is complete. If you need it, you can still export the Excel file.</string>
+    <string name="generated_complete_card_dismiss">Dismiss completion card</string>
+    <string name="generated_complete_exit_sync_title">Sheet completed</string>
+    <string name="generated_complete_exit_sync_message">The database has not been synced with this sheet yet. Do you want to sync before leaving?</string>
+    <string name="generated_complete_exit_sync_confirm">Sync and exit</string>
     <string name="history_entry_renamed">File renamed.</string>
     <string name="history_entry_deleted">File deleted.</string>
     <string name="error_history_entry_rename">Could not rename the file.</string>

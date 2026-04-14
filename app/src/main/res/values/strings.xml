@@ -448,6 +448,16 @@
     <string name="all_complete_banner_title_exported">Esportazione disponibile</string>
     <string name="all_complete_banner_subtitle_exported">Puoi salvare una nuova copia del file Excel.</string>
     <string name="export_now">Esporta ora</string>
+    <string name="generated_complete_card_title">Tutto completato</string>
+    <string name="generated_complete_card_message_sync_pending">Puoi sincronizzare subito il database oppure esportare il file Excel.</string>
+    <string name="generated_complete_card_message_sync_pending_exported">Il file è già stato esportato. Puoi sincronizzare il database quando vuoi.</string>
+    <string name="generated_complete_card_message_sync_retry">Puoi riprovare la sincronizzazione oppure esportare il file Excel.</string>
+    <string name="generated_complete_card_message_sync_retry_exported">Il file è già stato esportato. Puoi riprovare la sincronizzazione del database.</string>
+    <string name="generated_complete_card_message_export_only">La sincronizzazione è completata. Se ti serve, puoi ancora esportare il file Excel.</string>
+    <string name="generated_complete_card_dismiss">Chiudi card completamento</string>
+    <string name="generated_complete_exit_sync_title">Foglio completato</string>
+    <string name="generated_complete_exit_sync_message">Il database non è ancora sincronizzato con questo foglio. Vuoi sincronizzare prima di uscire?</string>
+    <string name="generated_complete_exit_sync_confirm">Sincronizza e esci</string>
     <string name="history_entry_renamed">File rinominato.</string>
     <string name="history_entry_deleted">File eliminato.</string>
     <string name="error_history_entry_rename">Impossibile rinominare il file.</string>

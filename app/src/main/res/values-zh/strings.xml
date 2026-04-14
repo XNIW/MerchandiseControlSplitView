@@ -429,6 +429,16 @@
     <string name="all_complete_banner_title_exported">可导出副本</string>
     <string name="all_complete_banner_subtitle_exported">你可以保存 Excel 文件的新副本。</string>
     <string name="export_now">立即导出</string>
+    <string name="generated_complete_card_title">全部完成</string>
+    <string name="generated_complete_card_message_sync_pending">你现在可以同步数据库，或导出 Excel 文件。</string>
+    <string name="generated_complete_card_message_sync_pending_exported">文件已导出。你可以在方便时同步数据库。</string>
+    <string name="generated_complete_card_message_sync_retry">你可以重试同步，或导出 Excel 文件。</string>
+    <string name="generated_complete_card_message_sync_retry_exported">文件已导出。你可以重试数据库同步。</string>
+    <string name="generated_complete_card_message_export_only">同步已完成。如果需要，你仍然可以导出 Excel 文件。</string>
+    <string name="generated_complete_card_dismiss">关闭完成卡片</string>
+    <string name="generated_complete_exit_sync_title">表单已完成</string>
+    <string name="generated_complete_exit_sync_message">数据库尚未与此表单同步。要在退出前先同步吗？</string>
+    <string name="generated_complete_exit_sync_confirm">同步后退出</string>
     <string name="history_entry_renamed">文件已重命名。</string>
     <string name="history_entry_deleted">文件已删除。</string>
     <string name="error_history_entry_rename">无法重命名该文件。</string>

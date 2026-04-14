@@ -428,6 +428,16 @@
     <string name="all_complete_banner_title_exported">Exportación disponible</string>
     <string name="all_complete_banner_subtitle_exported">Puedes guardar una nueva copia del archivo Excel.</string>
     <string name="export_now">Exportar ahora</string>
+    <string name="generated_complete_card_title">Todo listo</string>
+    <string name="generated_complete_card_message_sync_pending">Puedes sincronizar la base de datos ahora o exportar el archivo Excel.</string>
+    <string name="generated_complete_card_message_sync_pending_exported">El archivo ya fue exportado. Puedes sincronizar la base de datos cuando quieras.</string>
+    <string name="generated_complete_card_message_sync_retry">Puedes reintentar la sincronización o exportar el archivo Excel.</string>
+    <string name="generated_complete_card_message_sync_retry_exported">El archivo ya fue exportado. Puedes reintentar la sincronización de la base de datos.</string>
+    <string name="generated_complete_card_message_export_only">La sincronización está completa. Si lo necesitas, todavía puedes exportar el archivo Excel.</string>
+    <string name="generated_complete_card_dismiss">Cerrar tarjeta de finalización</string>
+    <string name="generated_complete_exit_sync_title">Hoja completada</string>
+    <string name="generated_complete_exit_sync_message">La base de datos aún no está sincronizada con esta hoja. ¿Quieres sincronizar antes de salir?</string>
+    <string name="generated_complete_exit_sync_confirm">Sincronizar y salir</string>
     <string name="history_entry_renamed">Archivo renombrado.</string>
     <string name="history_entry_deleted">Archivo eliminado.</string>
     <string name="error_history_entry_rename">No se pudo renombrar el archivo.</string>
