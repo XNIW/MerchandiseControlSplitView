@@ -477,6 +477,11 @@
     <string name="no_errors_found">Sin errores</string>
     <string name="summary_completed_label">Completadas</string>
     <string name="summary_pending_label">Pendientes</string>
+    <string name="generated_progress_pending_compact">Quedan %1$s</string>
+    <string name="generated_progress_all_complete">Todo completo</string>
+    <string name="generated_progress_collapsed_state">Resumen compacto</string>
+    <string name="generated_progress_expanded_state">Detalles expandidos</string>
+    <string name="generated_progress_summary_content_description">Completadas %1$s de %2$s</string>
     <string name="column_mapping_overflow">Asignación de columnas…</string>
     <string name="initial_order_total_label">Total pedido inicial</string>
     <string name="add">Agregar</string>

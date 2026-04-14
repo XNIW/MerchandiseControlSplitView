@@ -12,14 +12,18 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +34,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -108,6 +116,49 @@ private fun oldPurchasePriceDiffersFromCurrent(current: String, old: String): Bo
     return !(cd != null && od != null && cd == od)
 }
 
+/**
+ * UI-local summary aligned with History `paymentTotal`, kept here to avoid widening the
+ * ViewModel API for a presentation-only refinement.
+ */
+private fun calculateCurrentEffectivePaymentTotal(
+    data: List<List<String>>,
+    editable: List<List<MutableState<String>>>,
+    complete: List<Boolean>
+): Double {
+    val header = data.firstOrNull() ?: return 0.0
+    val purchasePriceIndex = header.indexOf("purchasePrice")
+    val originalQuantityIndex = header.indexOf("quantity")
+    val discountedPriceIndex = header.indexOf("discountedPrice")
+    val discountIndex = header.indexOf("discount")
+    var paymentTotal = 0.0
+
+    data.drop(1).forEachIndexed { index, rowData ->
+        val modelIndex = index + 1
+        if (complete.getOrNull(modelIndex) != true) return@forEachIndexed
+
+        val effectiveQuantityInput = editable.getOrNull(modelIndex)?.getOrNull(0)?.value.orEmpty()
+        val originalQuantityInput = rowData.getOrNull(originalQuantityIndex).orEmpty()
+        val quantity = parseUserQuantityInput(
+            effectiveQuantityInput.ifBlank { originalQuantityInput }
+        ) ?: 0.0
+
+        if (quantity <= 0.0) return@forEachIndexed
+
+        val purchasePrice = parseUserPriceInput(rowData.getOrNull(purchasePriceIndex)) ?: 0.0
+        val discountedPrice = parseUserPriceInput(rowData.getOrNull(discountedPriceIndex))
+        val discountPercent = parseUserNumericInput(rowData.getOrNull(discountIndex))
+        val effectivePaymentPrice = when {
+            discountedPrice != null -> discountedPrice
+            discountPercent != null -> purchasePrice * (1 - (discountPercent / 100))
+            else -> purchasePrice
+        }
+
+        paymentTotal += effectivePaymentPrice * quantity
+    }
+
+    return paymentTotal
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GeneratedScreen(
@@ -160,6 +211,15 @@ fun GeneratedScreen(
     val errorIndexes by excelViewModel.errorRowIndexes
     val validErrorIndexes = remember(excelData, errorIndexes) {
         errorIndexes.filter { it in 1 until excelData.size }.toSet()
+    }
+    val currentEffectivePaymentTotal by remember(excelData, editableValues, completeStates) {
+        derivedStateOf {
+            calculateCurrentEffectivePaymentTotal(
+                data = excelData,
+                editable = editableValues,
+                complete = completeStates
+            )
+        }
     }
 
     // Dialog & search state
@@ -234,6 +294,7 @@ fun GeneratedScreen(
 
     // TASK-047: filter errori + column picker overflow
     var showOnlyErrorRows by remember { mutableStateOf(false) }
+    var progressCardExpanded by rememberSaveable(entryUid) { mutableStateOf(false) }
     var showColumnPickerDialog by remember { mutableStateOf(false) }
     // Auto-reset filter when there are no error rows
     LaunchedEffect(validErrorIndexes) {
@@ -747,9 +808,9 @@ fun GeneratedScreen(
             Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(top = spacing.xs)
+                .padding(top = spacing.xxs)
                 .background(MaterialTheme.colorScheme.background),
-            verticalArrangement = Arrangement.spacedBy(spacing.sm)
+            verticalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
             AnimatedVisibility(visible = showCompletionCard) {
                 key(completionCardResetCounter) {
@@ -771,7 +832,7 @@ fun GeneratedScreen(
                             .padding(
                                 start = spacing.md,
                                 end = spacing.md,
-                                top = spacing.md
+                                top = spacing.sm
                             )
                     )
                 }
@@ -784,10 +845,12 @@ fun GeneratedScreen(
                     completed = completedCount,
                     total = totalDataRows,
                     errorCount = validErrorIndexes.size,
-                    wasExported = wasExported,
                     showOnlyErrors = showOnlyErrorRows,
                     onToggleErrors = { showOnlyErrorRows = !showOnlyErrorRows },
                     initialOrderTotal = formatClSummaryMoney(excelViewModel.initialOrderTotal),
+                    currentEffectiveTotal = formatClSummaryMoney(currentEffectivePaymentTotal),
+                    isExpanded = progressCardExpanded,
+                    onExpandedChange = { progressCardExpanded = it },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = spacing.md)
@@ -798,39 +861,51 @@ fun GeneratedScreen(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                GeneratedScreenGridHost(
-                    excelData = excelData,
-                    selectedColumns = excelViewModel.selectedColumns,
-                    editableValues = editableValues,
-                    completeStates = completeStates,
-                    searchMatches = searchMatches,
-                    errorIndexes = validErrorIndexes,
-                    isManualEntry = isManualEntry,
-                    showOnlyErrors = showOnlyErrorRows,
-                    onCompleteToggle = { row ->
-                        completeStates[row] = !completeStates[row]
-                        excelViewModel.updateHistoryEntry(entryUid)
-                    },
-                    onQuantityClick = { row ->
-                        infoRowIndex = row
-                        infoDialogFocusField = 0
-                        showInfoDialog = true
-                    },
-                    onPriceClick = { row ->
-                        infoRowIndex = row
-                        infoDialogFocusField = 1
-                        showInfoDialog = true
-                    },
-                    onGeneratedRowClick = { row ->
-                        infoRowIndex = row
-                        infoDialogFocusField = 0
-                        showInfoDialog = true
-                    },
-                    onManualRowClick = { row ->
-                        productToEditIndex = row - 1
-                        showManualEntryDialog = true
-                    },
-                )
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = spacing.xxs),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    color = MaterialTheme.colorScheme.surfaceColorAtElevation(0.5.dp),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
+                    )
+                ) {
+                    GeneratedScreenGridHost(
+                        excelData = excelData,
+                        selectedColumns = excelViewModel.selectedColumns,
+                        editableValues = editableValues,
+                        completeStates = completeStates,
+                        searchMatches = searchMatches,
+                        errorIndexes = validErrorIndexes,
+                        isManualEntry = isManualEntry,
+                        showOnlyErrors = showOnlyErrorRows,
+                        onCompleteToggle = { row ->
+                            completeStates[row] = !completeStates[row]
+                            excelViewModel.updateHistoryEntry(entryUid)
+                        },
+                        onQuantityClick = { row ->
+                            infoRowIndex = row
+                            infoDialogFocusField = 0
+                            showInfoDialog = true
+                        },
+                        onPriceClick = { row ->
+                            infoRowIndex = row
+                            infoDialogFocusField = 1
+                            showInfoDialog = true
+                        },
+                        onGeneratedRowClick = { row ->
+                            infoRowIndex = row
+                            infoDialogFocusField = 0
+                            showInfoDialog = true
+                        },
+                        onManualRowClick = { row ->
+                            productToEditIndex = row - 1
+                            showManualEntryDialog = true
+                        },
+                    )
+                }
 
                 GeneratedScreenDiscardDraftDialog(
                     visible = showExitDialog,
@@ -1609,9 +1684,8 @@ private fun GeneratedScreenFabArea(
 // TASK-047 ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Calm top-of-screen status block inspired by the iOS hierarchy, but expressed with Material 3.
- * The primary focus is completed/total, with pending and initial total as supporting data.
- * The error filter lives in its own discrete row so it does not compete with the core metrics.
+ * Compact progress summary above the grid.
+ * Default collapsed keeps the card stable and lightweight; expanded reveals secondary context inline.
  */
 @Composable
 private fun GeneratedScreenProgressCard(
@@ -1620,10 +1694,12 @@ private fun GeneratedScreenProgressCard(
     completed: Int,
     total: Int,
     errorCount: Int,
-    wasExported: Boolean,
     showOnlyErrors: Boolean,
     onToggleErrors: () -> Unit,
     initialOrderTotal: String,
+    currentEffectiveTotal: String,
+    isExpanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = MaterialTheme.appSpacing
@@ -1634,9 +1710,29 @@ private fun GeneratedScreenProgressCard(
         supplierName?.let { add(it) }
         categoryName?.let { add(it) }
     }.joinToString(" · ")
+    val completedText = formatClCount(completed)
+    val totalText = formatClCount(total)
+    val toggleActionLabel = stringResource(if (isExpanded) R.string.collapse else R.string.expand)
+    val expansionStateLabel = stringResource(
+        if (isExpanded) {
+            R.string.generated_progress_expanded_state
+        } else {
+            R.string.generated_progress_collapsed_state
+        }
+    )
+    val progressSummaryContentDescription = stringResource(
+        R.string.generated_progress_summary_content_description,
+        completedText,
+        totalText
+    )
+    val supportText = if (pending > 0) {
+        stringResource(R.string.generated_progress_pending_compact, formatClCount(pending))
+    } else {
+        stringResource(R.string.generated_progress_all_complete)
+    }
 
     Surface(
-        modifier = modifier,
+        modifier = modifier.animateContentSize(),
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
         border = BorderStroke(
@@ -1647,131 +1743,47 @@ private fun GeneratedScreenProgressCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = spacing.lg, vertical = spacing.lg),
-            verticalArrangement = Arrangement.spacedBy(spacing.md)
+                .padding(horizontal = spacing.md, vertical = 9.dp),
+            verticalArrangement = Arrangement.spacedBy(spacing.xs)
         ) {
-            if (metaText.isNotBlank() || wasExported) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 46.dp)
+                    .clip(MaterialTheme.shapes.large)
+                    .clickable(
+                        role = Role.Button,
+                        onClickLabel = toggleActionLabel
+                    ) { onExpandedChange(!isExpanded) }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = progressSummaryContentDescription
+                        stateDescription = expansionStateLabel
+                    },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+            ) {
+                Text(
+                    text = "$completedText/$totalText",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                 ) {
-                    Text(
-                        text = metaText,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                    Icon(
+                        imageVector = if (isExpanded) {
+                            Icons.Filled.KeyboardArrowUp
+                        } else {
+                            Icons.Filled.KeyboardArrowDown
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(2.dp)
                     )
-                    if (wasExported) {
-                        Spacer(Modifier.width(spacing.sm))
-                        Text(
-                            text = stringResource(R.string.exported_short),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val compactLayout = maxWidth < 360.dp
-                if (compactLayout) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(spacing.md)
-                    ) {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(spacing.xxs)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.summary_completed_label),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(
-                                verticalAlignment = Alignment.Bottom,
-                                horizontalArrangement = Arrangement.spacedBy(spacing.xs)
-                            ) {
-                                Text(
-                                    text = formatClCount(completed),
-                                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "/${formatClCount(total)}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 2.dp)
-                                )
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            GeneratedScreenProgressSupportMetric(
-                                label = stringResource(R.string.summary_pending_label),
-                                value = formatClCount(pending),
-                                horizontalAlignment = Alignment.Start
-                            )
-                            GeneratedScreenProgressSupportMetric(
-                                label = stringResource(R.string.initial_order_total_label),
-                                value = initialOrderTotal,
-                                emphasize = true
-                            )
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(spacing.lg),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(spacing.xxs)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.summary_completed_label),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(
-                                verticalAlignment = Alignment.Bottom,
-                                horizontalArrangement = Arrangement.spacedBy(spacing.xs)
-                            ) {
-                                Text(
-                                    text = formatClCount(completed),
-                                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "/${formatClCount(total)}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(bottom = 2.dp)
-                                )
-                            }
-                        }
-                        Column(
-                            horizontalAlignment = Alignment.End,
-                            verticalArrangement = Arrangement.spacedBy(spacing.sm)
-                        ) {
-                            GeneratedScreenProgressSupportMetric(
-                                label = stringResource(R.string.summary_pending_label),
-                                value = formatClCount(pending),
-                            )
-                            GeneratedScreenProgressSupportMetric(
-                                label = stringResource(R.string.initial_order_total_label),
-                                value = initialOrderTotal,
-                                emphasize = true
-                            )
-                        }
-                    }
                 }
             }
 
@@ -1779,48 +1791,148 @@ private fun GeneratedScreenProgressCard(
                 progress = { progress },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(4.dp)
+                    .height(3.dp)
                     .clip(CircleShape),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
             )
 
-            if (hasErrors) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = spacing.xxs),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(spacing.md)
+            if (hasErrors && !isExpanded) {
+                GeneratedScreenProgressErrorToggle(
+                    errorCount = errorCount,
+                    showOnlyErrors = showOnlyErrors,
+                    expanded = isExpanded,
+                    onToggleErrors = onToggleErrors
+                )
+            } else if (!isExpanded) {
+                Text(
+                    text = supportText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(spacing.xs)
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.show_only_errors),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (showOnlyErrors) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
+                    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                        val stackedDetailsLayout = maxWidth < 352.dp
+                        val narrowDetailsLayout = maxWidth < 316.dp
+                        if (stackedDetailsLayout) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(spacing.xs)
+                            ) {
+                                GeneratedScreenProgressDetailTile(
+                                    label = stringResource(R.string.payment_total_label),
+                                    value = currentEffectiveTotal,
+                                    valueColor = MaterialTheme.colorScheme.primary,
+                                    emphasize = true,
+                                    prominent = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                if (narrowDetailsLayout) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(spacing.xs)
+                                    ) {
+                                        GeneratedScreenProgressDetailTile(
+                                            label = stringResource(R.string.summary_pending_label),
+                                            value = formatClCount(pending),
+                                            valueColor = MaterialTheme.colorScheme.onSurface,
+                                            compact = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                        GeneratedScreenProgressDetailTile(
+                                            label = stringResource(R.string.initial_order_total_label),
+                                            value = initialOrderTotal,
+                                            valueColor = MaterialTheme.colorScheme.onSurface,
+                                            compact = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                        )
+                                    }
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        GeneratedScreenProgressDetailTile(
+                                            label = stringResource(R.string.summary_pending_label),
+                                            value = formatClCount(pending),
+                                            valueColor = MaterialTheme.colorScheme.onSurface,
+                                            compact = true,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        GeneratedScreenProgressDetailTile(
+                                            label = stringResource(R.string.initial_order_total_label),
+                                            value = initialOrderTotal,
+                                            valueColor = MaterialTheme.colorScheme.onSurface,
+                                            compact = true,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
                             }
-                        )
-                        Text(
-                            text = if (showOnlyErrors) {
-                                stringResource(R.string.errors_filter_active)
-                            } else {
-                                stringResource(R.string.n_error_rows, errorCount)
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                GeneratedScreenProgressDetailTile(
+                                    label = stringResource(R.string.payment_total_label),
+                                    value = currentEffectiveTotal,
+                                    valueColor = MaterialTheme.colorScheme.primary,
+                                    emphasize = true,
+                                    prominent = true,
+                                    modifier = Modifier.weight(1.1f),
+                                )
+                                Column(
+                                    modifier = Modifier.weight(0.9f),
+                                    verticalArrangement = Arrangement.spacedBy(spacing.xs)
+                                ) {
+                                    GeneratedScreenProgressDetailTile(
+                                        label = stringResource(R.string.summary_pending_label),
+                                        value = formatClCount(pending),
+                                        valueColor = MaterialTheme.colorScheme.onSurface,
+                                        compact = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    GeneratedScreenProgressDetailTile(
+                                        label = stringResource(R.string.initial_order_total_label),
+                                        value = initialOrderTotal,
+                                        valueColor = MaterialTheme.colorScheme.onSurface,
+                                        compact = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (hasErrors) {
+                        GeneratedScreenProgressErrorToggle(
+                            errorCount = errorCount,
+                            showOnlyErrors = showOnlyErrors,
+                            expanded = true,
+                            onToggleErrors = onToggleErrors
                         )
                     }
-                    Switch(
-                        checked = showOnlyErrors,
-                        onCheckedChange = { onToggleErrors() }
-                    )
+
+                    if (metaText.isNotBlank()) {
+                        Text(
+                            text = metaText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -1828,32 +1940,216 @@ private fun GeneratedScreenProgressCard(
 }
 
 @Composable
-private fun GeneratedScreenProgressSupportMetric(
+private fun GeneratedScreenProgressDetailTile(
     label: String,
     value: String,
+    modifier: Modifier = Modifier,
+    valueColor: Color,
     emphasize: Boolean = false,
-    horizontalAlignment: Alignment.Horizontal = Alignment.End,
+    prominent: Boolean = false,
+    compact: Boolean = false,
 ) {
-    Column(
-        horizontalAlignment = horizontalAlignment,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleSmall.copy(
-                fontWeight = if (emphasize) FontWeight.SemiBold else FontWeight.Medium
-            ),
-            color = if (emphasize) {
-                MaterialTheme.colorScheme.primary
+    val spacing = MaterialTheme.appSpacing
+
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.large,
+        color = if (emphasize || prominent) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = if (prominent) 0.5f else 0.34f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (compact) 0.34f else 0.42f)
+        },
+        border = BorderStroke(
+            width = if (compact) 0.8.dp else 1.dp,
+            color = if (emphasize || prominent) {
+                MaterialTheme.colorScheme.primary.copy(alpha = if (prominent) 0.22f else 0.16f)
             } else {
-                MaterialTheme.colorScheme.onSurface
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (compact) 0.22f else 0.28f)
             }
         )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = if (compact) spacing.sm else spacing.md,
+                    vertical = if (compact) 8.dp else 10.dp
+                ),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = value,
+                style = when {
+                    prominent -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
+                    compact -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                    else -> MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = if (emphasize) FontWeight.SemiBold else FontWeight.Medium
+                    )
+                },
+                color = valueColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun GeneratedScreenProgressErrorToggle(
+    errorCount: Int,
+    showOnlyErrors: Boolean,
+    expanded: Boolean,
+    onToggleErrors: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val spacing = MaterialTheme.appSpacing
+
+    if (expanded) {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+            border = BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = spacing.sm, vertical = spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = if (showOnlyErrors) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Error,
+                        contentDescription = null,
+                        tint = if (showOnlyErrors) {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        modifier = Modifier.padding(6.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.n_error_rows, errorCount),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = if (showOnlyErrors) {
+                            stringResource(R.string.errors_filter_active)
+                        } else {
+                            stringResource(R.string.show_only_errors)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = showOnlyErrors,
+                    onCheckedChange = { onToggleErrors() }
+                )
+            }
+        }
+        return
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .toggleable(
+                value = showOnlyErrors,
+                role = Role.Switch,
+                onValueChange = { onToggleErrors() }
+            )
+            .semantics(mergeDescendants = true) {},
+        shape = MaterialTheme.shapes.large,
+        color = if (showOnlyErrors) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.88f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+        },
+        border = if (showOnlyErrors) {
+            null
+        } else {
+            BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f)
+            )
+        }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 34.dp)
+                .padding(horizontal = spacing.sm, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(spacing.sm)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Error,
+                contentDescription = null,
+                tint = if (showOnlyErrors) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+            )
+            Text(
+                text = stringResource(R.string.show_only_errors),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (showOnlyErrors) {
+                    MaterialTheme.colorScheme.onErrorContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Surface(
+                shape = CircleShape,
+                color = if (showOnlyErrors) {
+                    MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.14f)
+                } else {
+                    MaterialTheme.colorScheme.errorContainer
+                }
+            ) {
+                Text(
+                    text = formatClCount(errorCount),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(horizontal = spacing.xs, vertical = 2.dp)
+                )
+            }
+            if (showOnlyErrors) {
+                Icon(
+                    imageVector = Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
     }
 }
 

@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -61,6 +62,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,8 +74,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -83,12 +83,14 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Supplier
@@ -101,6 +103,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.launch
 import kotlin.math.min
+import java.util.Locale
 
 private val preGenerateMimeTypes = arrayOf(
     "application/vnd.ms-excel",
@@ -1630,21 +1633,30 @@ private fun PreGenerateNoticeCard(
 private fun PreGeneratePreviewTable(
     data: List<List<String>>
 ) {
+    val isDarkTheme = isSystemInDarkTheme()
     val horizontalScrollState = rememberScrollState()
     val verticalScrollState = rememberScrollState()
     val columnWidths = remember(data) { buildPreviewColumnWidths(data) }
+    val columnKeys = remember(data) {
+        data.firstOrNull().orEmpty().map { header ->
+            canonicalExcelHeaderKey(header).orEmpty()
+        }
+    }
     val tableWidth = remember(columnWidths) {
         columnWidths.fold(0.dp) { total, width -> total + width }
     }
-    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-    val headerDividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+    val outlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme) 0.22f else 0.16f)
+    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme) 0.14f else 0.08f)
+    val headerDividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme) 0.22f else 0.12f)
+    val headerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isDarkTheme) 0.44f else 0.32f)
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest,
-        border = BorderStroke(1.dp, dividerColor),
-        tonalElevation = 0.dp
+        color = MaterialTheme.colorScheme.surfaceColorAtElevation(0.5.dp),
+        border = BorderStroke(1.dp, outlineColor),
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
@@ -1660,11 +1672,7 @@ private fun PreGeneratePreviewTable(
                 data.forEachIndexed { rowIndex, row ->
                     Row(
                         modifier = Modifier.background(
-                            if (rowIndex == 0) {
-                                MaterialTheme.colorScheme.surfaceContainerLow
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerLowest
-                            }
+                            if (rowIndex == 0) headerBackgroundColor else Color.Transparent
                         )
                     ) {
                         row.forEachIndexed { columnIndex, cell ->
@@ -1674,15 +1682,15 @@ private fun PreGeneratePreviewTable(
                                     preGeneratePreviewRegularColumnWidth
                                 },
                                 isHeader = rowIndex == 0,
-                                dividerColor = dividerColor,
-                                showTrailingDivider = columnIndex != row.lastIndex
+                                columnKey = columnKeys.getOrNull(columnIndex)
                             )
                         }
                     }
 
                     if (rowIndex != data.lastIndex) {
                         HorizontalDivider(
-                            color = if (rowIndex == 0) headerDividerColor else dividerColor
+                            color = if (rowIndex == 0) headerDividerColor else dividerColor,
+                            thickness = if (rowIndex == 0) 0.45.dp else 0.3.dp
                         )
                     }
                 }
@@ -1696,42 +1704,79 @@ private fun PreviewCell(
     text: String,
     width: Dp,
     isHeader: Boolean,
-    dividerColor: Color,
-    showTrailingDivider: Boolean
+    columnKey: String?
 ) {
+    val normalizedColumnKey = columnKey?.lowercase(Locale.ROOT)
+    val isProductColumn = normalizedColumnKey == "productname" || normalizedColumnKey == "secondproductname"
+    val isQuantityColumn = normalizedColumnKey == "quantity" || normalizedColumnKey == "realquantity"
+    val isMoneyColumn = normalizedColumnKey == "purchaseprice" ||
+        normalizedColumnKey == "retailprice" ||
+        normalizedColumnKey == "totalprice" ||
+        normalizedColumnKey == "discountedprice" ||
+        normalizedColumnKey == "oldpurchaseprice" ||
+        normalizedColumnKey == "oldretailprice"
+    val isCodeColumn = normalizedColumnKey == "barcode" || normalizedColumnKey == "itemnumber"
+    val isStatusColumn = normalizedColumnKey == "complete"
+    val isTrailingValueColumn = isMoneyColumn ||
+        isCodeColumn ||
+        normalizedColumnKey == "discount" ||
+        normalizedColumnKey == "rownumber" ||
+        normalizedColumnKey == "supplierid" ||
+        normalizedColumnKey == "categoryid"
+    val isPrimaryContentColumn = isProductColumn || isQuantityColumn || isMoneyColumn
+    // Shared visual rule: text columns start, quantities/status center, numeric/id values trail.
+    val textAlign = when {
+        isQuantityColumn || isStatusColumn -> TextAlign.Center
+        isTrailingValueColumn -> TextAlign.End
+        else -> TextAlign.Start
+    }
+    val contentAlignment = when {
+        isQuantityColumn || isStatusColumn -> Alignment.Center
+        isTrailingValueColumn -> Alignment.CenterEnd
+        else -> Alignment.CenterStart
+    }
+    val textStyle = when {
+        isHeader -> MaterialTheme.typography.labelSmall.copy(
+            fontWeight = FontWeight.Medium,
+            lineHeight = 16.sp
+        )
+        isQuantityColumn -> MaterialTheme.typography.titleSmall.copy(
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 18.sp
+        )
+        isMoneyColumn -> MaterialTheme.typography.bodySmall.copy(
+            fontWeight = FontWeight.SemiBold,
+            lineHeight = 17.sp
+        )
+        isProductColumn -> MaterialTheme.typography.bodySmall.copy(
+            fontWeight = FontWeight.Medium,
+            lineHeight = 18.sp
+        )
+        else -> MaterialTheme.typography.bodySmall.copy(lineHeight = 17.sp)
+    }
+    val textColor = when {
+        isHeader -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.76f)
+        isCodeColumn -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
+        isPrimaryContentColumn -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f)
+    }
+
     Box(
         modifier = Modifier
             .width(width)
-            .defaultMinSize(minHeight = if (isHeader) 42.dp else 38.dp)
-            .drawBehind {
-                if (showTrailingDivider) {
-                    val strokeWidth = 1.dp.toPx()
-                    val x = size.width - strokeWidth / 2f
-                    drawLine(
-                        color = dividerColor,
-                        start = Offset(x, 0f),
-                        end = Offset(x, size.height),
-                        strokeWidth = strokeWidth
-                    )
-                }
-            }
-            .padding(horizontal = 12.dp, vertical = if (isHeader) 10.dp else 8.dp),
-        contentAlignment = Alignment.CenterStart
+            .defaultMinSize(minHeight = if (isHeader) 40.dp else 42.dp)
+            .padding(horizontal = 12.dp, vertical = if (isHeader) 10.dp else 9.dp),
+        contentAlignment = contentAlignment
     ) {
         Text(
             text = text.ifBlank { "—" },
-            style = if (isHeader) {
-                MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-            } else {
-                MaterialTheme.typography.bodySmall
-            },
-            color = if (isHeader) {
-                MaterialTheme.colorScheme.onSurface
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            maxLines = if (isHeader) 1 else 2,
-            overflow = TextOverflow.Ellipsis
+            style = textStyle,
+            color = textColor,
+            fontFamily = if (isCodeColumn && !isHeader) FontFamily.Monospace else null,
+            textAlign = textAlign,
+            maxLines = if (isHeader || isProductColumn) 2 else 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }

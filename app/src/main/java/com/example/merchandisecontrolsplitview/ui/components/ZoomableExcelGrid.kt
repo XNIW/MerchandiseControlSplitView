@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -14,11 +15,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -59,11 +62,11 @@ fun ZoomableExcelGrid(
 
     val appColors = MaterialTheme.appColors
     val isDarkTheme = isSystemInDarkTheme()
-    val headerEssentialAlpha = if (isDarkTheme) 0.38f else 0.22f
-    val headerMetaAlpha = if (isDarkTheme) 0.24f else 0.10f
-    val rowErrorAlpha = if (isDarkTheme) 0.54f else 0.24f
-    val selectedColumnBorderAlpha = if (isDarkTheme) 0.82f else 0.60f
-    val completeAccentAlpha = if (isDarkTheme) 0.28f else 0.12f
+    val headerEssentialAlpha = if (isDarkTheme) 0.22f else 0.10f
+    val headerMetaAlpha = if (isDarkTheme) 0.12f else 0.05f
+    val rowErrorAlpha = if (isDarkTheme) 0.40f else 0.18f
+    val selectedColumnBorderAlpha = if (isDarkTheme) 0.64f else 0.34f
+    val completeAccentAlpha = if (isDarkTheme) 0.44f else 0.26f
 
     val columnCount = data[0].size
     if (selectedColumns.size != columnCount) {
@@ -75,13 +78,14 @@ fun ZoomableExcelGrid(
     val indexPrezzo = columnCount - 2
     val indexCompleto = columnCount - 1
     val originalQuantityIndex = columnKeys?.indexOf("quantity") ?: -1
+    val headerHeight = (cellHeight - 6.dp).coerceAtLeast(40.dp)
 
     val horizontalState = rememberScrollState()
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
+            .background(MaterialTheme.colorScheme.surfaceColorAtElevation(0.5.dp))
     ) {
         Box(modifier = Modifier.horizontalScroll(horizontalState)) {
             LazyColumn(
@@ -107,18 +111,19 @@ fun ZoomableExcelGrid(
                             TableCell(
                                 text = data[0][ci],
                                 width = cellWidth,
-                                height = cellHeight,
+                                height = headerHeight,
                                 isHeader = true,
                                 onCellClick = if (onHeaderClick != null) { { onHeaderClick(ci) } } else null,
                                 onEditClick = if (onHeaderEditClick != null) { { onHeaderEditClick(ci) } } else null,
                                 overrideBackgroundColor = headerBgColor,
-                                isSelectedColumn = selectedColumns.getOrElse(ci) { false }
+                                isSelectedColumn = selectedColumns.getOrElse(ci) { false },
+                                columnKey = columnKeys?.getOrNull(ci)
                             )
                         }
                     }
                     HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.9f),
-                        thickness = 0.75.dp
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme) 0.22f else 0.12f),
+                        thickness = 0.45.dp
                     )
                 }
 
@@ -174,6 +179,7 @@ fun ZoomableExcelGrid(
                                     height = cellHeight,
                                     isSelectedColumn = selectedColumns.getOrElse(ci) { false },
                                     isSearchMatch = isMatch,
+                                    columnKey = columnKeys?.getOrNull(ci),
                                     // Per la modalità manuale, il click sulla riga apre il dialog di modifica.
                                     onCellClick = if (isManualEntry) { { onRowCellClick(r) } } else { { onHeaderClick?.invoke(ci) } },
                                     overrideBackgroundColor = highlightColor
@@ -192,6 +198,7 @@ fun ZoomableExcelGrid(
                                         TableCell(
                                             text = text, width = cellWidth, height = cellHeight,
                                             isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                            columnKey = columnKeys?.getOrNull(ci),
                                             onCellClick = { onCellEditRequest(r, ci) },
                                             overrideBackgroundColor = highlightColor
                                         )
@@ -203,6 +210,7 @@ fun ZoomableExcelGrid(
                                         ),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        columnKey = columnKeys?.getOrNull(ci),
                                         onCellClick = { onQuantityCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
@@ -213,6 +221,7 @@ fun ZoomableExcelGrid(
                                         ),
                                         width = cellWidth, height = cellHeight,
                                         isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        columnKey = columnKeys?.getOrNull(ci),
                                         onCellClick = { onPriceCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
@@ -221,38 +230,83 @@ fun ZoomableExcelGrid(
                                         val completeBackgroundColor = when {
                                             isErrorRow -> highlightColor!!
                                             isComplete -> appColors.successContainer.copy(alpha = completeAccentAlpha)
-                                            else -> MaterialTheme.colorScheme.surface
+                                            hasSecondaryRowState -> appColors.filledContainer.copy(alpha = if (isDarkTheme) 0.44f else 0.26f)
+                                            else -> Color.Transparent
                                         }
                                         val completeBorderColor = when {
+                                            isErrorRow -> MaterialTheme.colorScheme.error.copy(alpha = 0.24f)
+                                            isSelectedColumn -> MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
+                                            else -> Color.Transparent
+                                        }
+                                        val statusRingColor = when {
                                             isErrorRow -> MaterialTheme.colorScheme.error
                                             isComplete -> appColors.success
                                             isSelectedColumn -> MaterialTheme.colorScheme.primary.copy(alpha = selectedColumnBorderAlpha)
-                                            else -> MaterialTheme.colorScheme.outlineVariant
+                                            hasSecondaryRowState -> appColors.warning.copy(alpha = if (isDarkTheme) 1.0f else 0.94f)
+                                            else -> MaterialTheme.colorScheme.outline.copy(alpha = if (isDarkTheme) 0.34f else 0.20f)
+                                        }
+                                        val statusFillColor = when {
+                                            isComplete -> appColors.success.copy(alpha = 0.94f)
+                                            hasSecondaryRowState -> appColors.warning.copy(alpha = if (isDarkTheme) 0.40f else 0.30f)
+                                            isErrorRow -> Color.Transparent
+                                            else -> Color.Transparent
+                                        }
+                                        val completeCellBorderModifier = if (isErrorRow || isSelectedColumn) {
+                                            Modifier.border(0.45.dp, completeBorderColor)
+                                        } else {
+                                            Modifier
                                         }
                                         Box(
                                             modifier = Modifier
                                                 .width(cellWidth)
                                                 .height(cellHeight)
                                                 .background(completeBackgroundColor)
-                                                .border(if (isErrorRow || isSelectedColumn) 1.dp else 0.5.dp, completeBorderColor)
+                                                .then(completeCellBorderModifier)
                                                 .clickable { onCompleteToggle(r) },
                                             contentAlignment = Alignment.Center
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = stringResource(R.string.header_complete),
-                                                tint = when {
-                                                    isErrorRow -> MaterialTheme.colorScheme.onErrorContainer
-                                                    isComplete -> appColors.success
-                                                    isSelectedColumn -> MaterialTheme.colorScheme.primary
-                                                    else -> MaterialTheme.colorScheme.outline
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(27.dp)
+                                                    .background(
+                                                        color = statusFillColor,
+                                                        shape = CircleShape
+                                                    )
+                                                    .border(
+                                                        width = 1.2.dp,
+                                                        color = statusRingColor,
+                                                        shape = CircleShape
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                when {
+                                                    isComplete -> {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = stringResource(R.string.header_complete),
+                                                            tint = MaterialTheme.colorScheme.surface,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                    }
+
+                                                    isErrorRow -> {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(7.dp)
+                                                                .background(
+                                                                    color = MaterialTheme.colorScheme.error,
+                                                                    shape = CircleShape
+                                                                )
+                                                        )
+                                                    }
                                                 }
-                                            )
+                                            }
                                         }
                                     }
                                     else -> TableCell(
                                         text = formattedCell, width = cellWidth, height = cellHeight,
                                         isRowFilled = hasSecondaryRowState, isSearchMatch = isMatch, isRowComplete = isComplete,
+                                        columnKey = columnKeys?.getOrNull(ci),
                                         onCellClick = { onRowCellClick(r) },
                                         overrideBackgroundColor = highlightColor
                                     )
@@ -260,10 +314,12 @@ fun ZoomableExcelGrid(
                             }
                         }
                     }
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.58f),
-                        thickness = 0.5.dp
-                    )
+                    if (idx < data.size - 2) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDarkTheme) 0.14f else 0.08f),
+                            thickness = 0.3.dp
+                        )
+                    }
                 }
             }
         }

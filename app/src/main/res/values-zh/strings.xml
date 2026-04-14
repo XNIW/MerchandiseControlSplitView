@@ -478,6 +478,11 @@
     <string name="no_errors_found">无错误</string>
     <string name="summary_completed_label">已完成</string>
     <string name="summary_pending_label">待处理</string>
+    <string name="generated_progress_pending_compact">剩 %1$s</string>
+    <string name="generated_progress_all_complete">全部完成</string>
+    <string name="generated_progress_collapsed_state">摘要已收起</string>
+    <string name="generated_progress_expanded_state">详情已展开</string>
+    <string name="generated_progress_summary_content_description">已完成 %1$s，共 %2$s</string>
     <string name="column_mapping_overflow">列映射…</string>
     <string name="initial_order_total_label">初始订单总额</string>
     <string name="add">添加</string>

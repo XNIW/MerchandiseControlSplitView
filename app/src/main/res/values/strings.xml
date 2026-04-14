@@ -471,6 +471,11 @@
     <string name="no_errors_found">Nessun errore</string>
     <string name="summary_completed_label">Completate</string>
     <string name="summary_pending_label">In sospeso</string>
+    <string name="generated_progress_pending_compact">Restano %1$s</string>
+    <string name="generated_progress_all_complete">Tutto completato</string>
+    <string name="generated_progress_collapsed_state">Riepilogo compresso</string>
+    <string name="generated_progress_expanded_state">Dettagli espansi</string>
+    <string name="generated_progress_summary_content_description">Completate %1$s di %2$s</string>
     <string name="column_mapping_overflow">Mapping colonne…</string>
     <string name="initial_order_total_label">Totale ordine iniziale</string>
 

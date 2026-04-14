@@ -479,6 +479,11 @@
     <string name="no_errors_found">No errors</string>
     <string name="summary_completed_label">Completed</string>
     <string name="summary_pending_label">Pending</string>
+    <string name="generated_progress_pending_compact">Left %1$s</string>
+    <string name="generated_progress_all_complete">All complete</string>
+    <string name="generated_progress_collapsed_state">Summary collapsed</string>
+    <string name="generated_progress_expanded_state">Details expanded</string>
+    <string name="generated_progress_summary_content_description">Completed %1$s of %2$s</string>
     <string name="column_mapping_overflow">Column mapping…</string>
     <string name="initial_order_total_label">Initial order total</string>
     <string name="add">Add</string>
