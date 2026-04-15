@@ -452,16 +452,20 @@ class ExcelViewModelTest {
     @Test
     fun `renameHistoryEntry updates id supplier and category`() = runTest {
         val updatedEntry = slot<HistoryEntry>()
+        coEvery {
+            repository.getHistoryEntryByUid(30L)
+        } returns historyEntry(uid = 30L, supplier = "Old Supplier", category = "Old Category")
         coEvery { repository.updateHistoryEntry(capture(updatedEntry)) } just runs
 
         viewModel.renameHistoryEntry(
-            entry = historyEntry(uid = 30L, supplier = "Old Supplier", category = "Old Category"),
+            entryUid = 30L,
             newName = "new_name.xlsx",
             newSupplier = "New Supplier",
             newCategory = "New Category"
         )
         advanceUntilIdle()
 
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(30L) }
         coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
         assertEquals("new_name.xlsx", updatedEntry.captured.id)
         assertEquals("New Supplier", updatedEntry.captured.supplier)
@@ -498,10 +502,12 @@ class ExcelViewModelTest {
     @Test
     fun `deleteHistoryEntry delegates delete to repository`() = runTest {
         val entry = historyEntry(uid = 31L)
+        coEvery { repository.getHistoryEntryByUid(31L) } returns entry
 
-        viewModel.deleteHistoryEntry(entry)
+        viewModel.deleteHistoryEntry(31L)
         advanceUntilIdle()
 
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(31L) }
         coVerify(exactly = 1) { repository.deleteHistoryEntry(entry) }
         assertEquals(
             app.getString(R.string.history_entry_deleted),
@@ -511,14 +517,16 @@ class ExcelViewModelTest {
 
     @Test
     fun `renameHistoryEntry failure emits localized feedback`() = runTest {
+        coEvery { repository.getHistoryEntryByUid(32L) } returns historyEntry(uid = 32L)
         coEvery { repository.updateHistoryEntry(any()) } throws IllegalStateException("db unavailable")
 
         viewModel.renameHistoryEntry(
-            entry = historyEntry(uid = 32L),
+            entryUid = 32L,
             newName = "broken.xlsx"
         )
         advanceUntilIdle()
 
+        coVerify(exactly = 1) { repository.getHistoryEntryByUid(32L) }
         assertEquals(
             app.getString(R.string.error_history_entry_rename),
             viewModel.historyActionMessage.value

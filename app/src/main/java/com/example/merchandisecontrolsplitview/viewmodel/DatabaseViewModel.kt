@@ -195,7 +195,6 @@ class DatabaseViewModel(
         _categoryInputText.value = query
     }
 
-    // Replaced categoryDao calls with repository calls
     val categories: StateFlow<List<Category>> = combine(
         _categoryInputText
             .debounce(300L)
@@ -209,9 +208,7 @@ class DatabaseViewModel(
         else
             flow { emit(repository.searchCategoriesByName(query)) }
     }
-        // Removed .flowOn(Dispatchers.IO) as the repository handles threading
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
-    // --- FIX END ---
 
     private var pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList()
     private var pendingSupplierNames: Set<String> = emptySet()
@@ -973,11 +970,10 @@ class DatabaseViewModel(
         }
     }
 
-    // --- FIX START ---
     fun updateProduct(product: Product) {
-        viewModelScope.launch { // Removed Dispatchers.IO
+        viewModelScope.launch {
             try {
-                repository.updateProduct(product) // Replaced dao.update with repository.updateProduct
+                repository.updateProduct(product)
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
             } catch (e: android.database.sqlite.SQLiteConstraintException) {
                 e.printStackTrace()
@@ -988,13 +984,11 @@ class DatabaseViewModel(
             }
         }
     }
-    // --- FIX END ---
 
-    // --- FIX START ---
     fun deleteProduct(product: Product) {
-        viewModelScope.launch { // Removed Dispatchers.IO
+        viewModelScope.launch {
             try {
-                repository.deleteProduct(product) // Replaced dao.delete with repository.deleteProduct
+                repository.deleteProduct(product)
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_deleted))
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1002,7 +996,6 @@ class DatabaseViewModel(
             }
         }
     }
-    // --- FIX END ---
 
     fun analyzeGridData(gridData: List<Map<String, String>>) {
         if (importFlowState.value is ImportFlowState.Applying) return

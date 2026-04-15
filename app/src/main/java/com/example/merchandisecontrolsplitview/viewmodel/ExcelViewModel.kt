@@ -148,9 +148,6 @@ class ExcelViewModel(
         return resolveExcelFileErrorMessage(context, throwable, genericResId)
     }
 
-    // Removed repository instantiation as it is now injected via constructor
-
-
     // Stato privato che mantiene il filtro data. Alimenta le query Room.
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
 
@@ -362,14 +359,6 @@ class ExcelViewModel(
         _categoryFilter.value = filter.category
     }
 
-    /**
-     * Aggiorna solo il filtro data, mantenendo supplier e category correnti.
-     * Mantenuto per compatibilità con eventuali call site non migrati.
-     */
-    fun setDateFilter(filter: DateFilter) {
-        _dateFilter.value = filter
-    }
-
     fun loadHistoryEntry(entryUid: Long, onLoaded: (() -> Unit)? = null) {
         viewModelScope.launch {
             repository.getHistoryEntryByUid(entryUid)?.let { entry ->
@@ -515,12 +504,7 @@ class ExcelViewModel(
     private fun initPreGenerateState() {
         selectedColumns.clear()
         excelData.firstOrNull()?.size?.let { cols ->
-            repeat(cols) { _ ->
-                // MODIFICA: Semplifica l'espressione. L'obiettivo è che tutte le
-                // colonne partano come selezionate. La logica di blocco è gestita
-                // altrove (in toggleColumnSelection).
-                selectedColumns.add(true)
-            }
+            repeat(cols) { selectedColumns.add(true) }
         }
         editableValues.clear()
         repeat(excelData.size) { editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
@@ -731,7 +715,7 @@ class ExcelViewModel(
         }
     }
 
-    fun renameHistoryEntry(
+    private fun renameHistoryEntry(
         entry: HistoryEntry,
         newName: String,
         newSupplier: String? = null,
@@ -777,7 +761,7 @@ class ExcelViewModel(
         }
     }
 
-    fun deleteHistoryEntry(entry: HistoryEntry) {
+    private fun deleteHistoryEntry(entry: HistoryEntry) {
         viewModelScope.launch {
             try {
                 repository.deleteHistoryEntry(entry)
@@ -802,7 +786,7 @@ class ExcelViewModel(
     }
 
     fun updateHistoryEntry(entryUid: Long) {
-        viewModelScope.launch { // Rimuoviamo Dispatchers.IO
+        viewModelScope.launch {
             repository.getHistoryEntryByUid(entryUid)?.let { entryToUpdate ->
                 val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
                 val updatedEntry = entryToUpdate.copy(
@@ -817,7 +801,6 @@ class ExcelViewModel(
         }
     }
 
-    // 3. AGGIUNGI: Nuova funzione `suspend` per il salvataggio garantito
     suspend fun saveCurrentStateToHistory(entryUid: Long): Boolean = withContext(Dispatchers.IO) {
         val entryToUpdate = repository.getHistoryEntryByUid(entryUid) ?: return@withContext false
         val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
@@ -902,11 +885,11 @@ class ExcelViewModel(
         }
     }
 
-    fun markCurrentEntryAsSyncedSuccessfully(entryUid: Long) { // <-- Cambia firma
+    fun markCurrentEntryAsSyncedSuccessfully(entryUid: Long) {
         updateSyncStatus(entryUid, SyncStatus.SYNCED_SUCCESSFULLY)
     }
 
-    fun markCurrentEntryAsSyncedWithErrors(entryUid: Long) { // <-- Cambia firma
+    fun markCurrentEntryAsSyncedWithErrors(entryUid: Long) {
         updateSyncStatus(entryUid, SyncStatus.ATTEMPTED_WITH_ERRORS)
     }
 
@@ -956,9 +939,8 @@ class ExcelViewModel(
     }
 
     /**
-     * 💡 NUOVO: Calcola i dati FINALI e VARIABILI.
-     * Si basa solo sulle righe segnate come "complete".
-     * Restituisce: (Totale Pagamento Effettivo, Numero di Prodotti Mancanti)
+     * Calcola il totale finale di pagamento e il numero di prodotti mancanti.
+     * Si basa solo sulle righe segnate come complete.
      */
     private fun calculateFinalSummary(
         data: List<List<String>>,
@@ -971,18 +953,15 @@ class ExcelViewModel(
         val header = data.firstOrNull() ?: return Pair(0.0, 0)
         val purchasePriceIndex = header.indexOf("purchasePrice")
         val originalQuantityIndex = header.indexOf("quantity")
-        // Aggiungiamo indici per i prezzi scontati se presenti
         val discountedPriceIndex = header.indexOf("discountedPrice")
         val discountIndex = header.indexOf("discount")
 
         data.drop(1).forEachIndexed { index, rowData ->
             val modelIndex = index + 1 // L'indice per le liste di stato (editable, complete)
 
-            // Calcola solo se la riga è segnata come "completa"
             if (complete.getOrNull(modelIndex) == true) {
                 completedItems++
 
-                // Usa la quantità contata dall'utente, altrimenti quella originale
                 val realQuantityStr = editable.getOrNull(modelIndex)?.getOrNull(0)?.value ?: ""
                 val originalQuantityStr = if (originalQuantityIndex != -1) rowData.getOrNull(originalQuantityIndex) ?: "0" else "0"
                 val quantityToUseStr = realQuantityStr.ifBlank { originalQuantityStr }
@@ -991,7 +970,6 @@ class ExcelViewModel(
                 if (quantity > 0) {
                     val purchasePrice = parseUserPriceInput(rowData.getOrNull(purchasePriceIndex)) ?: 0.0
 
-                    // Logica per calcolare il prezzo finale di pagamento
                     val discountedPrice = parseUserPriceInput(rowData.getOrNull(discountedPriceIndex))
                     val discountPercent = parseUserNumericInput(rowData.getOrNull(discountIndex))
 
@@ -1057,12 +1035,6 @@ class ExcelViewModel(
     fun addManualRow(entryUid: Long, rowData: List<String>, categoryName: String) {
         viewModelScope.launch {
             excelData.add(rowData)
-
-            // CORREZIONE: Le entry manuali non usano la stessa logica di
-            // editableValues e completeStates delle entry da file.
-            // Quando si aggiunge una riga, queste liste devono essere aggiornate
-            // per mantenere la coerenza degli indici, anche se non usate.
-            // Aggiungiamo uno stato "vuoto" per la nuova riga.
             editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
             completeStates.add(false)
 
@@ -1096,7 +1068,6 @@ class ExcelViewModel(
             if (dataIndex in excelData.indices) {
                 excelData.removeAt(dataIndex)
 
-                // CORREZIONE: Rimuovi anche lo stato corrispondente per evitare IndexOutOfBounds
                 if (dataIndex in editableValues.indices) {
                     editableValues.removeAt(dataIndex)
                 }
@@ -1173,21 +1144,17 @@ private fun saveExcelFileInternal(
         headerRow.createCell(newIndex).setCellValue(getLocalizedHeader(context, headerKey))
     }
 
-    // --- INIZIO MODIFICA: Logica di esportazione robusta ---
     val originalHeaderKeysSet = originalHeader.toSet()
     var extraCellIndex = filteredHeaderKeys.size
 
-    // Aggiungi l'intestazione fornitore solo se non esiste già
     if ("supplier" !in originalHeaderKeysSet) {
         headerRow.createCell(extraCellIndex).setCellValue(getLocalizedHeader(context, "supplier"))
         extraCellIndex++
     }
 
-    // Aggiungi l'intestazione categoria solo se non esiste già
     if ("category" !in originalHeaderKeysSet) {
         headerRow.createCell(extraCellIndex).setCellValue(getLocalizedHeader(context, "category"))
     }
-    // --- FINE MODIFICA ---
 
     data.drop(1).forEachIndexed { rowIndex, rowData ->
         val excelRow = sheet.createRow(rowIndex + 1)
@@ -1221,14 +1188,11 @@ private fun saveExcelFileInternal(
             }
         }
 
-        // --- INIZIO MODIFICA: Aggiunta condizionale dei dati per fornitore e categoria ---
-        extraCellIndex = filteredHeaderKeys.size // Resetta l'indice per la riga corrente
+        extraCellIndex = filteredHeaderKeys.size
 
-        // Aggiungi i dati del fornitore solo se la colonna è stata creata ex novo
         if ("supplier" !in originalHeaderKeysSet) {
             val supplierCell = excelRow.createCell(extraCellIndex)
             supplierCell.setCellValue(supplier)
-            // Applica stile
             if (complete.getOrNull(rowIndex + 1) == true) {
                 supplierCell.cellStyle = styleComplete
             } else if (hasEditableValues) {
@@ -1237,19 +1201,15 @@ private fun saveExcelFileInternal(
             extraCellIndex++
         }
 
-        // Aggiungi i dati della categoria solo se la colonna è stata creata ex novo
         if ("category" !in originalHeaderKeysSet) {
             val categoryCell = excelRow.createCell(extraCellIndex)
-            // Se la colonna non esisteva, usiamo il valore di fallback passato alla funzione
             categoryCell.setCellValue(category)
-            // Applica stile
             if (complete.getOrNull(rowIndex + 1) == true) {
                 categoryCell.cellStyle = styleComplete
             } else if (hasEditableValues) {
                 categoryCell.cellStyle = styleFilled
             }
         }
-        // --- FINE MODIFICA ---
     }
 
     val totalRows = (data.size - 1).coerceAtLeast(1)

@@ -11,18 +11,17 @@ interface ProductDao {
      * @param filter La stringa di ricerca. Se null, restituisce tutti i prodotti.
      * @return Un PagingSource per l'integrazione con la libreria Paging 3.
      */
-    // --- QUERY MODIFICATA E CORRETTA ---
     @Query("""
     SELECT p.* 
     FROM products p
     LEFT JOIN suppliers s ON p.supplierId = s.id
-    LEFT JOIN categories c ON p.categoryId = c.id         -- ⬅️ aggiunta
+    LEFT JOIN categories c ON p.categoryId = c.id
     WHERE (:filter IS NULL OR 
            p.barcode LIKE '%' || :filter || '%' OR 
            p.productName LIKE '%' || :filter || '%' OR 
            s.name LIKE '%' || :filter || '%' OR
            p.itemNumber LIKE '%' || :filter || '%' OR
-           c.name LIKE '%' || :filter || '%')              -- ⬅️ aggiunta
+           c.name LIKE '%' || :filter || '%')
     ORDER BY p.id ASC
 """)
     fun getAllPaged(filter: String?): PagingSource<Int, Product>
@@ -94,7 +93,7 @@ interface ProductDao {
     suspend fun deleteAll()
 
     /**
-     * NUOVA FUNZIONE: Esegue una sostituzione completa dei dati in un'unica transazione.
+     * Sostituisce completamente i dati in un'unica transazione.
      * Prima cancella tutti i prodotti esistenti e poi inserisce la nuova lista.
      * Questo garantisce che l'operazione sia atomica: o va a buon fine interamente, o non fa nulla.
      * @param products La nuova lista di prodotti che sostituirà completamente i dati esistenti.
@@ -149,7 +148,6 @@ ORDER BY p.id ASC
         val prevRetail: Double?
     )
 
-    // 2. La query SQL DEVE selezionare 'p.barcode'
     @Query("""
     SELECT 
         p.barcode AS barcode,

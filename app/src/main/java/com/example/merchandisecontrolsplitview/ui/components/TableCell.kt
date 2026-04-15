@@ -48,7 +48,7 @@ fun TableCell(
     isSearchMatch: Boolean = false,
     isRowComplete: Boolean = false,
     onCellClick: (() -> Unit)? = null,
-    onEditClick: (() -> Unit)? = null, // <-- NUOVO: Parametro per il click sull'icona
+    onEditClick: (() -> Unit)? = null,
     columnKey: String? = null,
     overrideBackgroundColor: Color? = null
 ) {

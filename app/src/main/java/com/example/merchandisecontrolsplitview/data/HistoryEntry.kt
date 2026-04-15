@@ -3,10 +3,10 @@ package com.example.merchandisecontrolsplitview.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "history_entries") // <-- Dice a Room che questa è una tabella
+@Entity(tableName = "history_entries")
 data class HistoryEntry(
     @PrimaryKey(autoGenerate = true)
-    val uid: Long = 0, // <-- Chiave primaria unica, gestita dal database
+    val uid: Long = 0,
 
     val id: String, // Il vecchio ID (nome file)
     val timestamp: String,

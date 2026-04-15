@@ -47,7 +47,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
-import com.example.merchandisecontrolsplitview.PortraitCaptureActivity // se hai questa classe nel tuo package
+import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.ui.components.ZoomableExcelGrid
 import com.example.merchandisecontrolsplitview.ui.theme.appColors

@@ -50,7 +50,6 @@ fun ZoomableExcelGrid(
     headerTypes: List<String>? = null,
     columnKeys: List<String>? = null,
     onHeaderClick: ((colIndex: Int) -> Unit)?,
-    // --- NUOVO: Parametri per gestire le colonne essenziali ---
     isColumnEssential: (colIndex: Int) -> Boolean,
     onHeaderEditClick: ((colIndex: Int) -> Unit)?,
     isManualEntry: Boolean,
@@ -96,7 +95,6 @@ fun ZoomableExcelGrid(
                 item {
                     Row {
                         repeat(columnCount) { ci ->
-                            // --- NUOVO: Verifica se la colonna è essenziale ---
                             val isEssential = isColumnEssential(ci)
 
                             // Header/meta-state remain intentionally lighter than data-row priorities.
@@ -107,7 +105,6 @@ fun ZoomableExcelGrid(
                                 else -> null
                             }
 
-                            // --- MODIFICA: La chiamata a TableCell ora passa anche onEditClick ---
                             TableCell(
                                 text = data[0][ci],
                                 width = cellWidth,

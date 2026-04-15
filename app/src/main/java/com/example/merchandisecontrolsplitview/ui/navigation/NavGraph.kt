@@ -73,7 +73,6 @@ fun AppNavGraph() {
     }
 
     LaunchedEffect(navController, lifecycleOwner) {
-        // aspetta che il grafo sia attaccato
         navController.currentBackStackEntryFlow.first()
 
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -84,7 +83,7 @@ fun AppNavGraph() {
                     }
                     excelViewModel.resetState()
                     excelViewModel.loadFromMultipleUris(context, uris)
-                    MainActivity.ShareBus.uris.tryEmit(emptyList()) // ok svuotare ora
+                    MainActivity.ShareBus.uris.tryEmit(emptyList())
                 }
             }
         }
