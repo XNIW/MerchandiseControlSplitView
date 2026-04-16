@@ -27,7 +27,10 @@ import androidx.room.PrimaryKey
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["historyEntryUid"], unique = true)]
+    indices = [
+        Index(value = ["historyEntryUid"], unique = true),
+        Index(value = ["remoteId"], unique = true)
+    ]
 )
 data class HistoryEntryRemoteRef(
     @PrimaryKey(autoGenerate = true)

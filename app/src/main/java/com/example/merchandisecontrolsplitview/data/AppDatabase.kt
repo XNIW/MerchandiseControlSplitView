@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class, HistoryEntryRemoteRef::class],
     views = [ProductPriceSummary::class],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -93,6 +93,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 8 → 9: aggiunge indice unico su remoteId nel bridge per garantire dedup affidabile
+        // a livello DB (task 008 / pull remoto controllato). Non tocca history_entries né navigation.
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_remoteId`
+                    ON `history_entry_remote_refs` (`remoteId`)
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -101,7 +112,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "app_database"
                 )
                     .addMigrations(
-                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

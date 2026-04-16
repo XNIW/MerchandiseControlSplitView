@@ -652,6 +652,29 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `getOrCreateRemoteId returns same remote_id under concurrent calls and stores one bridge row`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+
+        val firstDeferred = async { repository.getOrCreateRemoteId(uid) }
+        val secondDeferred = async { repository.getOrCreateRemoteId(uid) }
+
+        val first = firstDeferred.await()
+        val second = secondDeferred.await()
+
+        assertNotNull(first)
+        assertEquals(first, second)
+        assertNotNull(repository.getRemoteRef(uid))
+
+        val bridgeCount = db.openHelper.writableDatabase
+            .query("SELECT COUNT(*) FROM history_entry_remote_refs WHERE historyEntryUid = $uid")
+            .use { cursor ->
+                cursor.moveToFirst()
+                cursor.getInt(0)
+            }
+        assertEquals(1, bridgeCount)
+    }
+
+    @Test
     fun `remote_id is stable after rename — uid stays local navigation key`() = runTest {
         val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("original_name.xlsx"))
         val remoteIdBefore = repository.getOrCreateRemoteId(uid)
@@ -717,5 +740,233 @@ class DefaultInventoryRepositoryTest {
         assertTrue(payload.isManualEntry)
         // data non è vuota
         assertTrue(payload.data.isNotEmpty())
+    }
+
+    // --- Test pull remoto controllato (task 008) ---
+
+    private fun remotePayload(
+        remoteId: String = java.util.UUID.randomUUID().toString(),
+        timestamp: String = "2026-04-15 12:00:00",
+        supplier: String = "RemoteSupplier",
+        category: String = "RemoteCat",
+        isManualEntry: Boolean = false,
+        data: List<List<String>> = listOf(listOf("barcode", "qty"), listOf("111", "2"))
+    ) = SessionRemotePayload(
+        remoteId = remoteId,
+        payloadVersion = SESSION_PAYLOAD_VERSION,
+        timestamp = timestamp,
+        supplier = supplier,
+        category = category,
+        isManualEntry = isManualEntry,
+        data = data
+    )
+
+    @Test
+    fun `applyRemoteSessionPayload inserts new entry and bridge for unknown remoteId`() = runTest {
+        val payload = remotePayload()
+        val outcome = repository.applyRemoteSessionPayload(payload)
+
+        assertEquals(RemoteSessionApplyOutcome.Inserted, outcome)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)
+        assertNotNull(ref)
+        val entry = repository.getHistoryEntryByUid(ref!!.historyEntryUid)
+        assertNotNull(entry)
+        assertEquals(payload.supplier, entry!!.supplier)
+        assertEquals(payload.category, entry.category)
+        assertEquals(payload.timestamp, entry.timestamp)
+        assertEquals(payload.data, entry.data)
+        assertEquals(payload.isManualEntry, entry.isManualEntry)
+        // id usa remoteId (convenzione stabile non tecnica)
+        assertEquals(payload.remoteId, entry.id)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload returns Skipped on identical reapply`() = runTest {
+        val payload = remotePayload()
+        val first = repository.applyRemoteSessionPayload(payload)
+        val second = repository.applyRemoteSessionPayload(payload)
+
+        assertEquals(RemoteSessionApplyOutcome.Inserted, first)
+        assertEquals(RemoteSessionApplyOutcome.Skipped, second)
+        // Nessun duplicato: una sola entry con quel remoteId
+        val count = db.historyEntryRemoteRefDao()
+            .run { getByRemoteId(payload.remoteId) }
+        assertNotNull(count)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload updates existing entry on changed payload`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        val original = remotePayload(remoteId = remoteId, supplier = "Fornitore A")
+        repository.applyRemoteSessionPayload(original)
+
+        val updated = original.copy(supplier = "Fornitore B", timestamp = "2026-04-16 10:00:00")
+        val outcome = repository.applyRemoteSessionPayload(updated)
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)
+        val entry = repository.getHistoryEntryByUid(ref!!.historyEntryUid)!!
+        assertEquals("Fornitore B", entry.supplier)
+        assertEquals("2026-04-16 10:00:00", entry.timestamp)
+        // uid locale invariato dopo update
+        assertEquals(ref.historyEntryUid, entry.uid)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload returns UnsupportedVersion for unknown payloadVersion`() = runTest {
+        val payload = remotePayload().copy(payloadVersion = 99)
+        val outcome = repository.applyRemoteSessionPayload(payload)
+        assertEquals(RemoteSessionApplyOutcome.UnsupportedVersion, outcome)
+        // Nessuna entry creata
+        assertNull(db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId))
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload materializes local defaults and initial summary for payload v1`() = runTest {
+        val data = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "10", "3")
+        )
+        val payload = remotePayload(data = data)
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)
+        val entry = repository.getHistoryEntryByUid(ref!!.historyEntryUid)!!
+
+        // editable: due celle locali per riga (quantita/prezzo finale), non mirror della larghezza data
+        assertEquals(List(data.size) { listOf("", "") }, entry.editable)
+        // complete: false per ogni riga
+        assertEquals(List(data.size) { false }, entry.complete)
+        assertEquals(1, entry.totalItems)
+        assertEquals(30.0, entry.orderTotal, 0.0001)
+        assertEquals(30.0, entry.paymentTotal, 0.0001)
+        assertEquals(1, entry.missingItems)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload does not delete local entry absent from fetch`() = runTest {
+        val local = buildMinimalHistoryEntry("local_session.xlsx")
+        val localUid = repository.insertHistoryEntry(local)
+
+        // Apply di un payload con remoteId diverso
+        repository.applyRemoteSessionPayload(remotePayload())
+
+        // L'entry locale non è stata toccata
+        assertNotNull(repository.getHistoryEntryByUid(localUid))
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload timestamp is materialized but not used as conflict rule`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        // Prima apply: timestamp remoto recente
+        val payloadNew = remotePayload(remoteId = remoteId, timestamp = "2026-12-01 10:00:00")
+        repository.applyRemoteSessionPayload(payloadNew)
+
+        // Seconda apply: timestamp remoto più vecchio ma altri campi diversi
+        val payloadOld = payloadNew.copy(timestamp = "2026-01-01 08:00:00", supplier = "NuovoFornitore")
+        val outcome = repository.applyRemoteSessionPayload(payloadOld)
+
+        // L'update avviene comunque — il timestamp non decide chi vince
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)
+        val entry = repository.getHistoryEntryByUid(ref!!.historyEntryUid)!!
+        assertEquals("NuovoFornitore", entry.supplier)
+        assertEquals("2026-01-01 08:00:00", entry.timestamp)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload resets local scaffolding when remote data changes`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        val originalData = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "5", "2")
+        )
+        repository.applyRemoteSessionPayload(remotePayload(remoteId = remoteId, data = originalData))
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        val locallyEdited = repository.getHistoryEntryByUid(ref.historyEntryUid)!!.copy(
+            editable = listOf(listOf("header", "header"), listOf("99", "88")),
+            complete = listOf(true, true),
+            totalItems = 99,
+            orderTotal = 999.0,
+            paymentTotal = 777.0,
+            missingItems = 0
+        )
+        repository.updateHistoryEntry(locallyEdited)
+
+        val changedData = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "12", "3"),
+            listOf("BBB", "4", "1")
+        )
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                supplier = "RemoteUpdated",
+                data = changedData
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals(changedData, entry.data)
+        assertEquals(List(changedData.size) { listOf("", "") }, entry.editable)
+        assertEquals(List(changedData.size) { false }, entry.complete)
+        assertEquals(2, entry.totalItems)
+        assertEquals(40.0, entry.orderTotal, 0.0001)
+        assertEquals(40.0, entry.paymentTotal, 0.0001)
+        assertEquals(2, entry.missingItems)
+    }
+
+    @Test
+    fun `applyRemoteSessionPayloadBatch applies valid records and counts unsupported separately`() = runTest {
+        val valid1 = remotePayload(supplier = "A")
+        val valid2 = remotePayload(supplier = "B")
+        val unsupported = remotePayload().copy(payloadVersion = 99)
+
+        val result = repository.applyRemoteSessionPayloadBatch(listOf(valid1, valid2, unsupported))
+
+        assertEquals(2, result.inserted)
+        assertEquals(0, result.updated)
+        assertEquals(0, result.skipped)
+        assertEquals(1, result.unsupported)
+        assertEquals(0, result.failed)
+        assertEquals(3, result.totalProcessed)
+        // Le entry valide sono presenti
+        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(valid1.remoteId))
+        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(valid2.remoteId))
+        // Il payload non supportato non ha creato nulla
+        assertNull(db.historyEntryRemoteRefDao().getByRemoteId(unsupported.remoteId))
+    }
+
+    @Test
+    fun `applyRemoteSessionPayloadBatch one failed record does not block others`() = runTest {
+        val valid = remotePayload(supplier = "GoodRecord")
+        val orphanRemoteId = java.util.UUID.randomUUID().toString()
+        val orphanPayload = remotePayload(remoteId = orphanRemoteId, supplier = "Orphan")
+        repository.applyRemoteSessionPayload(orphanPayload)
+
+        val orphanRef = db.historyEntryRemoteRefDao().getByRemoteId(orphanRemoteId)!!
+        val sqliteDb = db.openHelper.writableDatabase
+        sqliteDb.execSQL("PRAGMA foreign_keys = OFF")
+        sqliteDb.execSQL("DELETE FROM history_entries WHERE uid = ${orphanRef.historyEntryUid}")
+        sqliteDb.execSQL("PRAGMA foreign_keys = ON")
+
+        val result = repository.applyRemoteSessionPayloadBatch(listOf(orphanPayload, valid))
+
+        assertEquals(1, result.failed)
+        assertEquals(1, result.inserted)
+        // L'entry valida è stata comunque inserita
+        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(valid.remoteId))
+    }
+
+    @Test
+    fun `applyRemoteSessionPayload new entry is visible in user-visible history flow`() = runTest {
+        val payload = remotePayload(supplier = "VisibleSupplier", timestamp = "2026-04-15 14:00:00")
+        repository.applyRemoteSessionPayload(payload)
+
+        val entries = repository.getFilteredHistoryFlow(DateFilter.All).first()
+
+        assertTrue(entries.any { it.supplier == "VisibleSupplier" })
     }
 }

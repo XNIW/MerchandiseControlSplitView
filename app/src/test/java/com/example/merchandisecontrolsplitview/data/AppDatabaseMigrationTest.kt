@@ -3,6 +3,9 @@ package com.example.merchandisecontrolsplitview.data
 import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import java.io.File
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -23,6 +26,7 @@ class AppDatabaseMigrationTest {
 
     private lateinit var app: Application
     private val openedDatabases = mutableListOf<AppDatabase>()
+    private val openedSupportHelpers = mutableListOf<SupportSQLiteOpenHelper>()
     private val databaseNames = mutableSetOf<String>()
 
     companion object {
@@ -38,6 +42,8 @@ class AppDatabaseMigrationTest {
     fun tearDown() {
         openedDatabases.asReversed().forEach(AppDatabase::close)
         openedDatabases.clear()
+        openedSupportHelpers.asReversed().forEach(SupportSQLiteOpenHelper::close)
+        openedSupportHelpers.clear()
         databaseNames.forEach(app::deleteDatabase)
         databaseNames.clear()
     }
@@ -174,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("8", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -519,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("8", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -557,7 +563,7 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun `migration 7 to 8 adds history_entry_remote_refs table with correct schema and preserves existing data`() = runTest {
+    fun `migration 7 chain to current schema preserves history_entry_remote_refs and existing data`() = runTest {
         val migratedName = "task007-migrated-v7-to-v8.db"
         val freshName = "task007-fresh-v8.db"
 
@@ -674,8 +680,8 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        // Versione aggiornata a 8
-        assertEquals("8", querySingleValue(migrated, "PRAGMA user_version"))
+        // Versione aggiornata allo schema corrente (v9)
+        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -707,6 +713,261 @@ class AppDatabaseMigrationTest {
         assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
     }
 
+    @Test
+    fun `migration 7 to 8 directly creates bridge table with unique historyEntryUid and cascade FK`() = runTest {
+        val migratedName = "task007-direct-v7-to-v8.db"
+
+        createLegacyDatabase(migratedName, version = 7) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO history_entries(
+                    uid, id, timestamp, data, editable, complete,
+                    supplier, category, wasExported, syncStatus,
+                    orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+                ) VALUES (
+                    42,
+                    'session-007-direct',
+                    '2026-04-15 09:00:00',
+                    '[["barcode"],["8050000000042"]]',
+                    '[["",""]]',
+                    '[false]',
+                    'Fornitore Test',
+                    'Categoria Test',
+                    0,
+                    'NOT_ATTEMPTED',
+                    10.0,
+                    8.5,
+                    0,
+                    1,
+                    0
+                )
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openSupportMigratedDatabase(
+            name = migratedName,
+            targetVersion = 8
+        ) { db, oldVersion, newVersion ->
+            assertEquals(7, oldVersion)
+            assertEquals(8, newVersion)
+            AppDatabase.MIGRATION_7_8.migrate(db)
+        }
+
+        assertEquals(8, migrated.version)
+        assertTrue(tableExists(migrated, "history_entry_remote_refs"))
+
+        val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
+        assertTrue(
+            bridgeIndexes.any { it.columns == listOf("historyEntryUid") && it.unique }
+        )
+        assertFalse(
+            bridgeIndexes.any { it.columns == listOf("remoteId") }
+        )
+
+        migrated.execSQL(
+            """
+            INSERT INTO history_entry_remote_refs(id, historyEntryUid, remoteId)
+            VALUES (1, 42, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+            """.trimIndent()
+        )
+        assertEquals(1, queryCount(migrated, "SELECT COUNT(*) FROM history_entry_remote_refs"))
+
+        migrated.execSQL("DELETE FROM history_entries WHERE uid = 42")
+        assertEquals(0, queryCount(migrated, "SELECT COUNT(*) FROM history_entry_remote_refs"))
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+    }
+
+    @Test
+    fun `migration 8 to 9 adds unique remoteId index and preserves existing bridge rows`() = runTest {
+        val migratedName = "task008-migrated-v8-to-v9.db"
+        val freshName = "task008-fresh-v9.db"
+
+        createLegacyDatabase(migratedName, version = 8) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL,
+                    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
+                    FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+            db.execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+            // Tabella bridge già presente (v8)
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `history_entry_remote_refs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `historyEntryUid` INTEGER NOT NULL,
+                    `remoteId` TEXT NOT NULL,
+                    FOREIGN KEY(`historyEntryUid`) REFERENCES `history_entries`(`uid`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_historyEntryUid` ON `history_entry_remote_refs` (`historyEntryUid`)")
+            // Riga di history e bridge preesistente da preservare
+            db.execSQL(
+                """
+                INSERT INTO history_entries(
+                    uid, id, timestamp, data, editable, complete,
+                    supplier, category, wasExported, syncStatus,
+                    orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+                ) VALUES (
+                    10,
+                    'session-008-pre',
+                    '2026-04-15 09:00:00',
+                    '[["barcode"],["999"]]',
+                    '[["",""]]',
+                    '[false]',
+                    'Fornitore 008',
+                    'Cat 008',
+                    0,
+                    'NOT_ATTEMPTED',
+                    5.0, 4.0, 0, 1, 0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO `history_entry_remote_refs`(id, historyEntryUid, remoteId)
+                VALUES (1, 10, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openMigratedDatabase(migratedName)
+        val fresh = openFreshDatabase(freshName)
+
+        // Versione aggiornata a 9
+        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
+
+        // L'indice unico su remoteId ora esiste
+        val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
+        val remoteIdIndex = bridgeIndexes.find { it.columns == listOf("remoteId") }
+        assertNotNull(remoteIdIndex)
+        assertTrue(remoteIdIndex!!.unique)
+
+        // Schema bridge allineato con fresh install v9
+        assertEquals(
+            indexInfo(fresh, "history_entry_remote_refs"),
+            indexInfo(migrated, "history_entry_remote_refs")
+        )
+
+        // La riga bridge preesistente è intatta
+        val bridgeRow = querySingleRow(
+            migrated,
+            "SELECT historyEntryUid, remoteId FROM history_entry_remote_refs WHERE id = 1"
+        )
+        assertEquals("10", bridgeRow["historyEntryUid"])
+        assertEquals("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", bridgeRow["remoteId"])
+
+        // I dati history preesistenti sono intatti
+        val historyRow = querySingleRow(
+            migrated,
+            "SELECT uid, id, supplier FROM history_entries WHERE uid = 10"
+        )
+        assertEquals("10", historyRow["uid"])
+        assertEquals("session-008-pre", historyRow["id"])
+        assertEquals("Fornitore 008", historyRow["supplier"])
+
+        // Integrità DB
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+    }
+
     private fun createLegacyDatabase(
         name: String,
         version: Int,
@@ -730,9 +991,41 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_4_5,
                 AppDatabase.MIGRATION_5_6,
                 AppDatabase.MIGRATION_6_7,
-                AppDatabase.MIGRATION_7_8
+                AppDatabase.MIGRATION_7_8,
+                AppDatabase.MIGRATION_8_9
             )
         }
+
+    private fun openSupportMigratedDatabase(
+        name: String,
+        targetVersion: Int,
+        onUpgrade: (SupportSQLiteDatabase, Int, Int) -> Unit
+    ): SupportSQLiteDatabase {
+        trackDatabase(name)
+        val configuration = SupportSQLiteOpenHelper.Configuration.builder(app)
+            .name(name)
+            .callback(
+                object : SupportSQLiteOpenHelper.Callback(targetVersion) {
+                    override fun onCreate(db: SupportSQLiteDatabase) = Unit
+
+                    override fun onConfigure(db: SupportSQLiteDatabase) {
+                        db.execSQL("PRAGMA foreign_keys = ON")
+                    }
+
+                    override fun onUpgrade(
+                        db: SupportSQLiteDatabase,
+                        oldVersion: Int,
+                        newVersion: Int
+                    ) {
+                        onUpgrade(db, oldVersion, newVersion)
+                    }
+                }
+            )
+            .build()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
+        openedSupportHelpers += helper
+        return helper.writableDatabase
+    }
 
     private fun openFreshDatabase(name: String): AppDatabase =
         openDatabase(name, resetBeforeOpen = true) {}
@@ -780,6 +1073,12 @@ class AppDatabaseMigrationTest {
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table'"
         ) == 1
 
+    private fun tableExists(db: SupportSQLiteDatabase, table: String): Boolean =
+        queryCount(
+            db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table'"
+        ) == 1
+
     private fun viewExists(db: AppDatabase, view: String): Boolean =
         queryCount(
             db,
@@ -797,8 +1096,19 @@ class AppDatabaseMigrationTest {
             if (cursor.moveToFirst()) cursor.getInt(0) else 0
         }
 
+    private fun queryCount(db: SupportSQLiteDatabase, sql: String): Int =
+        db.query(sql).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        }
+
     private fun querySingleValue(db: AppDatabase, sql: String): String =
         db.openHelper.writableDatabase.query(sql).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getString(0)
+        }
+
+    private fun querySingleValue(db: SupportSQLiteDatabase, sql: String): String =
+        db.query(sql).use { cursor ->
             cursor.moveToFirst()
             cursor.getString(0)
         }
@@ -853,6 +1163,28 @@ class AppDatabaseMigrationTest {
                                         }
                                     }
                                 }
+                        )
+                    )
+                }
+            }.sortedBy { it.name }
+        }
+
+    private fun indexInfo(db: SupportSQLiteDatabase, table: String): List<IndexSnapshot> =
+        db.query("PRAGMA index_list(`$table`)").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val indexName = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                    add(
+                        IndexSnapshot(
+                            name = indexName,
+                            unique = cursor.getInt(cursor.getColumnIndexOrThrow("unique")) == 1,
+                            columns = db.query("PRAGMA index_info(`$indexName`)").use { indexCursor ->
+                                buildList {
+                                    while (indexCursor.moveToNext()) {
+                                        add(indexCursor.getString(indexCursor.getColumnIndexOrThrow("name")))
+                                    }
+                                }
+                            }
                         )
                     )
                 }
