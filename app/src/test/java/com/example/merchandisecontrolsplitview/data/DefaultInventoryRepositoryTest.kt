@@ -622,4 +622,100 @@ class DefaultInventoryRepositoryTest {
         pendingTempCategories = pendingTempCategories,
         pendingPriceHistory = pendingPriceHistory
     )
+
+    // --- Test bridge locale: identità remota stabile (task 007 / DEC-017) ---
+
+    private fun buildMinimalHistoryEntry(id: String = "test_entry.xlsx"): HistoryEntry =
+        HistoryEntry(
+            id = id,
+            timestamp = "2026-04-15 10:00:00",
+            data = listOf(listOf("barcode", "productName")),
+            editable = listOf(listOf("", "")),
+            complete = listOf(false)
+        )
+
+    @Test
+    fun `getOrCreateRemoteId returns non-null UUID for existing entry`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        val remoteId = repository.getOrCreateRemoteId(uid)
+        assertNotNull(remoteId)
+        assertTrue(remoteId!!.isNotBlank())
+    }
+
+    @Test
+    fun `getOrCreateRemoteId returns same remote_id on repeated calls`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        val first = repository.getOrCreateRemoteId(uid)
+        val second = repository.getOrCreateRemoteId(uid)
+        assertNotNull(first)
+        assertEquals(first, second)
+    }
+
+    @Test
+    fun `remote_id is stable after rename — uid stays local navigation key`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("original_name.xlsx"))
+        val remoteIdBefore = repository.getOrCreateRemoteId(uid)
+
+        // Simula rename: modifica id e supplier, lascia uid invariato
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        val renamed = entry.copy(id = "renamed_name.xlsx", supplier = "NuovoFornitore")
+        repository.updateHistoryEntry(renamed)
+
+        val remoteIdAfter = repository.getOrCreateRemoteId(uid)
+        assertEquals("remote_id deve restare stabile dopo rename", remoteIdBefore, remoteIdAfter)
+
+        // uid rimane la chiave locale — non cambia
+        val reloaded = repository.getHistoryEntryByUid(uid)
+        assertNotNull(reloaded)
+        assertEquals(uid, reloaded!!.uid)
+    }
+
+    @Test
+    fun `getOrCreateRemoteId returns null for non-existent uid`() = runTest {
+        val remoteId = repository.getOrCreateRemoteId(historyEntryUid = 99999L)
+        assertNull(remoteId)
+    }
+
+    @Test
+    fun `deleteHistoryEntry also removes the bridge row`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        repository.getOrCreateRemoteId(uid) // crea il bridge
+
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        assertNotNull(repository.getRemoteRef(uid))
+
+        repository.deleteHistoryEntry(entry)
+
+        assertNull(repository.getHistoryEntryByUid(uid))
+        assertNull(repository.getRemoteRef(uid))
+    }
+
+    @Test
+    fun `getRemoteRef returns null before first getOrCreateRemoteId call`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        assertNull(repository.getRemoteRef(uid))
+    }
+
+    @Test
+    fun `toRemotePayload builds autosufficiente payload from entry and remoteId`() = runTest {
+        val entry = buildMinimalHistoryEntry().copy(
+            supplier = "Fornitore Test",
+            category = "Cat Test",
+            isManualEntry = true
+        )
+        val uid = repository.insertHistoryEntry(entry)
+        val remoteId = repository.getOrCreateRemoteId(uid)!!
+
+        val persisted = repository.getHistoryEntryByUid(uid)!!
+        val payload = persisted.toRemotePayload(remoteId)
+
+        assertEquals(remoteId, payload.remoteId)
+        assertEquals(SESSION_PAYLOAD_VERSION, payload.payloadVersion)
+        assertEquals("2026-04-15 10:00:00", payload.timestamp)
+        assertEquals("Fornitore Test", payload.supplier)
+        assertEquals("Cat Test", payload.category)
+        assertTrue(payload.isManualEntry)
+        // data non è vuota
+        assertTrue(payload.data.isNotEmpty())
+    }
 }

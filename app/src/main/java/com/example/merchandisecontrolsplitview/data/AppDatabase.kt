@@ -11,9 +11,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 // 1. Aggiungi Category::class alla lista delle entità.
 // 2. Incrementa la versione a 4.
 @Database(
-    entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class],
+    entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class, HistoryEntryRemoteRef::class],
     views = [ProductPriceSummary::class],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -23,6 +23,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun historyEntryDao(): HistoryEntryDao
     abstract fun categoryDao(): CategoryDao
     abstract fun productPriceDao(): ProductPriceDao
+    abstract fun historyEntryRemoteRefDao(): HistoryEntryRemoteRefDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -73,6 +74,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 7 → 8: aggiunge la tabella bridge locale per identità remota stabile (DEC-017 / task 007).
+        // Non tocca history_entries né la navigation esistente.
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `history_entry_remote_refs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `historyEntryUid` INTEGER NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        FOREIGN KEY(`historyEntryUid`) REFERENCES `history_entries`(`uid`) ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_historyEntryUid`
+                    ON `history_entry_remote_refs` (`historyEntryUid`)
+                """.trimIndent())
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -81,7 +101,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "app_database"
                 )
                     .addMigrations(
-                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

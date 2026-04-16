@@ -94,6 +94,18 @@ interface InventoryRepository {
 
     /** Snapshot “tutto il listino attuale” (utile per export/listino) */
     suspend fun getCurrentPriceSnapshot(): List<CurrentPriceRow>
+
+    // --- Bridge locale: identità remota stabile (task 007 / DEC-017) ---
+
+    /**
+     * Restituisce il [remote_id] associato a questa entry, creandolo una sola volta se
+     * non esiste ancora. Il [remote_id] è un UUID client-side, stabile rispetto a rename,
+     * re-export e navigation locale. Restituisce null se l'entry non esiste.
+     */
+    suspend fun getOrCreateRemoteId(historyEntryUid: Long): String?
+
+    /** Legge il [HistoryEntryRemoteRef] senza creare nulla. Null se non ancora generato. */
+    suspend fun getRemoteRef(historyEntryUid: Long): HistoryEntryRemoteRef?
 }
 
 internal object DefaultInventoryRepositoryTestHooks {
@@ -112,6 +124,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private val categoryDao: CategoryDao = db.categoryDao()
     private val historyDao: HistoryEntryDao = db.historyEntryDao()
     private val priceDao: ProductPriceDao = db.productPriceDao()
+    private val remoteRefDao: HistoryEntryRemoteRefDao = db.historyEntryRemoteRefDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     // --- Product Implementations ---
@@ -405,7 +418,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
     override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.update(entry) }
-    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.delete(entry) }
+    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
+        remoteRefDao.deleteByHistoryEntryUid(entry.uid)
+        historyDao.delete(entry)
+    }
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
     override suspend fun getAllPriceHistoryRows(): List<PriceHistoryExportRow> =
         withContext(Dispatchers.IO) {
@@ -500,6 +516,32 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             )
         }
     }
+
+    // --- Bridge locale (task 007 / DEC-017) ---
+
+    override suspend fun getOrCreateRemoteId(historyEntryUid: Long): String? =
+        withContext(Dispatchers.IO) {
+            val existing = remoteRefDao.getByHistoryEntryUid(historyEntryUid)
+            if (existing != null) return@withContext existing.remoteId
+
+            // Verifica che l'entry esista prima di creare il bridge
+            historyDao.getByUid(historyEntryUid) ?: return@withContext null
+
+            val newRef = HistoryEntryRemoteRef(
+                historyEntryUid = historyEntryUid,
+                remoteId = java.util.UUID.randomUUID().toString()
+            )
+            val inserted = remoteRefDao.insert(newRef)
+            if (inserted > 0L) {
+                remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
+            } else {
+                // Race condition: un'altra chiamata concorrente ha già inserito; rilegge
+                remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
+            }
+        }
+
+    override suspend fun getRemoteRef(historyEntryUid: Long): HistoryEntryRemoteRef? =
+        withContext(Dispatchers.IO) { remoteRefDao.getByHistoryEntryUid(historyEntryUid) }
 
     private suspend fun applyImportAtomically(request: ImportApplyRequest) {
         val supplierIdsByName = supplierDao.getAll()
