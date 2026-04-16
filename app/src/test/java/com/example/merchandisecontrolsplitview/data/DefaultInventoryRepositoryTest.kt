@@ -943,15 +943,23 @@ class DefaultInventoryRepositoryTest {
     fun `applyRemoteSessionPayloadBatch one failed record does not block others`() = runTest {
         val valid = remotePayload(supplier = "GoodRecord")
         val orphanRemoteId = java.util.UUID.randomUUID().toString()
-        val orphanPayload = remotePayload(remoteId = orphanRemoteId, supplier = "Orphan")
-        repository.applyRemoteSessionPayload(orphanPayload)
+        val initialOrphanPayload = remotePayload(remoteId = orphanRemoteId, supplier = "Orphan")
+        repository.applyRemoteSessionPayload(initialOrphanPayload)
 
         val orphanRef = db.historyEntryRemoteRefDao().getByRemoteId(orphanRemoteId)!!
         val sqliteDb = db.openHelper.writableDatabase
         sqliteDb.execSQL("PRAGMA foreign_keys = OFF")
-        sqliteDb.execSQL("DELETE FROM history_entries WHERE uid = ${orphanRef.historyEntryUid}")
+        // Costruisce un orphan ref in modo deterministico senza dipendere dal cascade FK
+        // su connessioni Room/SQLite diverse.
+        sqliteDb.execSQL(
+            "UPDATE history_entry_remote_refs " +
+                "SET historyEntryUid = 999999999 " +
+                "WHERE id = ${orphanRef.id}"
+        )
         sqliteDb.execSQL("PRAGMA foreign_keys = ON")
 
+        // Cambia fingerprint per evitare il fast-path Skipped sui bridge gia` allineati.
+        val orphanPayload = initialOrphanPayload.copy(supplier = "OrphanChanged")
         val result = repository.applyRemoteSessionPayloadBatch(listOf(orphanPayload, valid))
 
         assertEquals(1, result.failed)

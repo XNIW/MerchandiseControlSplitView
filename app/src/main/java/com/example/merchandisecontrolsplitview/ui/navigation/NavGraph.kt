@@ -32,6 +32,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
@@ -45,12 +46,10 @@ fun AppNavGraph() {
     val navController = rememberNavController()
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
-    val app = context.applicationContext as android.app.Application
-    val repository = androidx.compose.runtime.remember {
-        com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository(
-            com.example.merchandisecontrolsplitview.data.AppDatabase.getDatabase(app)
-        )
-    }
+    val app = context.applicationContext as? MerchandiseControlApplication
+        ?: error("MerchandiseControlApplication non configurata nel Manifest")
+    // Repository singleton dall'Application (task 010): owner unico, nessuna duplicazione.
+    val repository = app.repository
 
     val excelViewModel: ExcelViewModel = viewModel(
         factory = ExcelViewModel.factory(app, repository)

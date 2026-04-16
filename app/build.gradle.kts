@@ -1,9 +1,29 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
+
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.exists()) {
+        propertiesFile.inputStream().use(::load)
+    }
+}
+
+fun readLocalOrEnv(name: String): String =
+    System.getenv(name)
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: localProperties.getProperty(name)?.trim().orEmpty()
+
+fun String.toBuildConfigLiteral(): String =
+    "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -19,6 +39,16 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField(
+            "String",
+            "SUPABASE_URL",
+            readLocalOrEnv("SUPABASE_URL").toBuildConfigLiteral()
+        )
+        buildConfigField(
+            "String",
+            "SUPABASE_PUBLISHABLE_KEY",
+            readLocalOrEnv("SUPABASE_PUBLISHABLE_KEY").toBuildConfigLiteral()
+        )
     }
 
     buildTypes {
@@ -33,6 +63,7 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
@@ -53,6 +84,7 @@ tasks.withType<Test>().configureEach {
 dependencies {
     // BOM
     implementation(platform(libs.androidx.compose.bom))
+    implementation(platform(libs.supabase.bom))
 
     // Core Compose
     implementation(libs.androidx.ui)
@@ -73,7 +105,9 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.ktor.client.okhttp)
 
     // Room & Paging
     implementation(libs.androidx.room.runtime)
@@ -91,6 +125,8 @@ dependencies {
     implementation(libs.commons.collections4)
     implementation(libs.gson)
     implementation(libs.material)
+    implementation(libs.supabase.kt)
+    implementation(libs.supabase.realtime.kt)
 
     // Test
     testImplementation(libs.junit)

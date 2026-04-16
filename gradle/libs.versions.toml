@@ -25,10 +25,13 @@ coroutinesTest = "1.10.2"
 turbine = "1.2.1"
 mockk = "1.14.9"
 coreTesting = "2.2.0"
+supabase = "3.2.6"
+ktor = "3.3.1"
 
 [libraries]
 androidx-core-ktx               = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx  = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-lifecycle-process      = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose       = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-navigation-compose     = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 
@@ -72,9 +75,14 @@ kotlinx-coroutines-test        = { group = "org.jetbrains.kotlinx", name = "kotl
 turbine                        = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 mockk                          = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 androidx-core-testing          = { group = "androidx.arch.core", name = "core-testing", version.ref = "coreTesting" }
+supabase-bom                   = { group = "io.github.jan-tennert.supabase", name = "bom", version.ref = "supabase" }
+supabase-kt                    = { group = "io.github.jan-tennert.supabase", name = "supabase-kt" }
+supabase-realtime-kt           = { group = "io.github.jan-tennert.supabase", name = "realtime-kt" }
+ktor-client-okhttp             = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
