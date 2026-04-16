@@ -969,4 +969,149 @@ class DefaultInventoryRepositoryTest {
 
         assertTrue(entries.any { it.supplier == "VisibleSupplier" })
     }
+
+    // --- Test sync state locale minimo (task 009 / baseline conflitti) ---
+
+    @Test
+    fun `Inserted bridge has correct initial sync state`() = runTest {
+        val payload = remotePayload()
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(0, ref.localChangeRevision)
+        assertEquals(0, ref.lastSyncedLocalRevision)
+        assertNotNull(ref.lastRemoteAppliedAt)
+        assertEquals(payload.payloadFingerprint(), ref.lastRemotePayloadFingerprint)
+    }
+
+    @Test
+    fun `Updated bridge has synced revision and updated fingerprint`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        repository.applyRemoteSessionPayload(remotePayload(remoteId = remoteId, supplier = "A"))
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+
+        // Modifica locale payload-rilevante: entry diventa dirty
+        repository.updateHistoryEntry(entry.copy(supplier = "Local"))
+
+        val dirtyRef = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        assertEquals(1, dirtyRef.localChangeRevision)
+        assertEquals(0, dirtyRef.lastSyncedLocalRevision)
+
+        // Apply remoto con payload diverso: riallinea
+        val newPayload = remotePayload(remoteId = remoteId, supplier = "B")
+        val outcome = repository.applyRemoteSessionPayload(newPayload)
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val syncedRef = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        assertEquals(1, syncedRef.localChangeRevision)        // invariato: apply non è modifica locale
+        assertEquals(1, syncedRef.lastSyncedLocalRevision)   // allineato alla revisione corrente
+        assertNotNull(syncedRef.lastRemoteAppliedAt)
+        assertEquals(newPayload.payloadFingerprint(), syncedRef.lastRemotePayloadFingerprint)
+    }
+
+    @Test
+    fun `localChangeRevision increments on payload-relevant local update after bridge creation`() = runTest {
+        val payload = remotePayload(supplier = "Initial")
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(0, ref.localChangeRevision)
+
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        repository.updateHistoryEntry(entry.copy(supplier = "Modified"))
+
+        val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(1, updatedRef.localChangeRevision)
+        // lastSyncedLocalRevision non cambia con le modifiche locali
+        assertEquals(0, updatedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `localChangeRevision does not increment for non-payload-relevant changes`() = runTest {
+        val payload = remotePayload()
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+
+        // wasExported non è un campo payload: non deve incrementare la revisione
+        repository.updateHistoryEntry(entry.copy(wasExported = true))
+
+        val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(0, updatedRef.localChangeRevision)
+
+        // syncStatus non è un campo payload: non deve incrementare la revisione
+        repository.updateHistoryEntry(entry.copy(syncStatus = SyncStatus.SYNCED_SUCCESSFULLY))
+
+        val refAfterSync = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(0, refAfterSync.localChangeRevision)
+    }
+
+    @Test
+    fun `state machine allineato after Inserted`() = runTest {
+        val payload = remotePayload()
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        // allineato: localChangeRevision == lastSyncedLocalRevision
+        assertEquals(ref.localChangeRevision, ref.lastSyncedLocalRevision)
+        assertNotNull(ref.lastRemoteAppliedAt)
+    }
+
+    @Test
+    fun `state machine dirty locale after payload-relevant local change`() = runTest {
+        val payload = remotePayload(data = listOf(listOf("barcode"), listOf("AAA")))
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+
+        repository.updateHistoryEntry(entry.copy(data = listOf(listOf("barcode"), listOf("BBB"))))
+
+        val dirtyRef = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        // dirty: localChangeRevision > lastSyncedLocalRevision
+        assertTrue(dirtyRef.localChangeRevision > dirtyRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `fast-path Skipped does not modify bridge state`() = runTest {
+        val payload = remotePayload()
+        repository.applyRemoteSessionPayload(payload) // Inserted: fingerprint settato
+
+        val refBefore = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+
+        val outcome = repository.applyRemoteSessionPayload(payload) // stesso payload → Skipped fast-path
+        assertEquals(RemoteSessionApplyOutcome.Skipped, outcome)
+
+        val refAfter = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        // Bridge immutato
+        assertEquals(refBefore.localChangeRevision, refAfter.localChangeRevision)
+        assertEquals(refBefore.lastSyncedLocalRevision, refAfter.lastSyncedLocalRevision)
+        assertEquals(refBefore.lastRemotePayloadFingerprint, refAfter.lastRemotePayloadFingerprint)
+        assertEquals(refBefore.lastRemoteAppliedAt, refAfter.lastRemoteAppliedAt)
+    }
+
+    @Test
+    fun `Skipped on dirty entry falls through to field comparison and applies remote payload`() = runTest {
+        // Scenario: entry dirty + remote re-invia lo stesso payload precedente → Updated (remote wins)
+        val remoteId = java.util.UUID.randomUUID().toString()
+        val original = remotePayload(remoteId = remoteId, supplier = "Original")
+        repository.applyRemoteSessionPayload(original) // Inserted
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+
+        // Modifica locale: dirty
+        repository.updateHistoryEntry(entry.copy(supplier = "LocalChange"))
+
+        // Il remote re-invia lo stesso payload originale: fingerprint uguale MA entry è dirty
+        // → fast-path non scatta → field comparison → supplier locale diverso → Updated (remote wins)
+        val outcome = repository.applyRemoteSessionPayload(original)
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+
+        val updatedEntry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals("Original", updatedEntry.supplier) // remote ha vinto
+    }
 }

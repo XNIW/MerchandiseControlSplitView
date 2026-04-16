@@ -24,4 +24,23 @@ interface HistoryEntryRemoteRefDao {
 
     @Query("DELETE FROM history_entry_remote_refs WHERE historyEntryUid = :uid")
     suspend fun deleteByHistoryEntryUid(uid: Long)
+
+    // --- Sync state locale minimo (task 009 / baseline conflitti) ---
+
+    /**
+     * Incrementa [HistoryEntryRemoteRef.localChangeRevision] di 1.
+     * Chiamato da [DefaultInventoryRepository.updateHistoryEntry] in modo centralizzato
+     * quando un campo payload-rilevante di [HistoryEntry] viene modificato localmente.
+     */
+    @Query("UPDATE history_entry_remote_refs SET localChangeRevision = localChangeRevision + 1 WHERE historyEntryUid = :uid")
+    suspend fun incrementLocalRevision(uid: Long)
+
+    /**
+     * Aggiorna lo stato di sync dopo un apply remoto riuscito (Inserted o Updated).
+     *
+     * Imposta [HistoryEntryRemoteRef.lastSyncedLocalRevision] alla revisione locale corrente
+     * così che [localChangeRevision] == [lastSyncedLocalRevision] → entry allineata.
+     */
+    @Query("UPDATE history_entry_remote_refs SET lastSyncedLocalRevision = :rev, lastRemoteAppliedAt = :appliedAt, lastRemotePayloadFingerprint = :fingerprint WHERE historyEntryUid = :uid")
+    suspend fun updateRemoteApplyState(uid: Long, rev: Int, appliedAt: Long, fingerprint: String)
 }

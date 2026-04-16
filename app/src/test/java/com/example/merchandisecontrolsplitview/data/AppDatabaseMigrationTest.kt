@@ -982,6 +982,175 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun `migration 9 to 10 adds sync state columns to bridge and preserves existing rows`() = runTest {
+        val migratedName = "task009-migrated-v9-to-v10.db"
+        val freshName = "task009-fresh-v10.db"
+
+        createLegacyDatabase(migratedName, version = 9) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL,
+                    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
+                    FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+            db.execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+            // Bridge v9: solo id, historyEntryUid, remoteId
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `history_entry_remote_refs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `historyEntryUid` INTEGER NOT NULL,
+                    `remoteId` TEXT NOT NULL,
+                    FOREIGN KEY(`historyEntryUid`) REFERENCES `history_entries`(`uid`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_historyEntryUid` ON `history_entry_remote_refs` (`historyEntryUid`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_remoteId` ON `history_entry_remote_refs` (`remoteId`)")
+
+            // Riga history + bridge preesistente da preservare
+            db.execSQL(
+                """
+                INSERT INTO history_entries(
+                    uid, id, timestamp, data, editable, complete,
+                    supplier, category, wasExported, syncStatus,
+                    orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+                ) VALUES (
+                    5,
+                    'session-009-pre',
+                    '2026-04-15 09:00:00',
+                    '[["barcode"],["8050000000005"]]',
+                    '[["",""]]',
+                    '[false]',
+                    'Fornitore 009',
+                    'Cat 009',
+                    0,
+                    'NOT_ATTEMPTED',
+                    7.0, 5.5, 0, 1, 0
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO history_entry_remote_refs(id, historyEntryUid, remoteId)
+                VALUES (1, 5, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff')
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openMigratedDatabase(migratedName)
+        val fresh = openFreshDatabase(freshName)
+
+        // Versione aggiornata a 10
+        assertEquals("10", querySingleValue(migrated, "PRAGMA user_version"))
+
+        // Schema bridge allineato con fresh install v10
+        assertEquals(
+            columnShape(fresh, "history_entry_remote_refs"),
+            columnShape(migrated, "history_entry_remote_refs")
+        )
+
+        // Riga bridge preesistente: nuove colonne con valori default
+        val bridgeRow = querySingleRow(
+            migrated,
+            "SELECT historyEntryUid, remoteId, localChangeRevision, lastSyncedLocalRevision, lastRemoteAppliedAt, lastRemotePayloadFingerprint FROM history_entry_remote_refs WHERE id = 1"
+        )
+        assertEquals("5", bridgeRow["historyEntryUid"])
+        assertEquals("bbbbbbbb-cccc-dddd-eeee-ffffffffffff", bridgeRow["remoteId"])
+        // Colonne aggiunte dalla migrazione: default 0 per le Integer, null (→ "") per le nullable
+        assertEquals("0", bridgeRow["localChangeRevision"])
+        assertEquals("0", bridgeRow["lastSyncedLocalRevision"])
+        assertEquals("", bridgeRow["lastRemoteAppliedAt"])          // null → ""
+        assertEquals("", bridgeRow["lastRemotePayloadFingerprint"]) // null → ""
+
+        // Dati history preesistenti intatti
+        val historyRow = querySingleRow(
+            migrated,
+            "SELECT uid, id, supplier FROM history_entries WHERE uid = 5"
+        )
+        assertEquals("5", historyRow["uid"])
+        assertEquals("session-009-pre", historyRow["id"])
+        assertEquals("Fornitore 009", historyRow["supplier"])
+
+        // Integrità DB
+        assertTrue(queryCount(migrated, "PRAGMA foreign_key_check") == 0)
+        assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -992,7 +1161,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_5_6,
                 AppDatabase.MIGRATION_6_7,
                 AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9
+                AppDatabase.MIGRATION_8_9,
+                AppDatabase.MIGRATION_9_10
             )
         }
 

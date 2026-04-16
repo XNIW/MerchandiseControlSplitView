@@ -479,7 +479,31 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
-    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.update(entry) }
+    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
+        val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
+        if (bridgeRef != null) {
+            // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
+            // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
+            val old = historyDao.getByUid(entry.uid)
+            historyDao.update(entry)
+            if (old != null && isPayloadRelevantChange(old, entry)) {
+                remoteRefDao.incrementLocalRevision(entry.uid)
+            }
+        } else {
+            historyDao.update(entry)
+        }
+    }
+
+    /**
+     * Restituisce true se la modifica tocca almeno un campo incluso in [SessionRemotePayload] v1.
+     * Usata da [updateHistoryEntry] per decidere se incrementare [HistoryEntryRemoteRef.localChangeRevision].
+     */
+    private fun isPayloadRelevantChange(old: HistoryEntry, new: HistoryEntry): Boolean =
+        old.timestamp != new.timestamp ||
+        old.supplier != new.supplier ||
+        old.category != new.category ||
+        old.isManualEntry != new.isManualEntry ||
+        old.data != new.data
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         db.withTransaction {
             remoteRefDao.deleteByHistoryEntryUid(entry.uid)
@@ -624,13 +648,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         }
 
     private suspend fun applySingleRemotePayload(payload: SessionRemotePayload): RemoteSessionApplyOutcome {
+        val fp = payload.payloadFingerprint()
         val existingRef = remoteRefDao.getByRemoteId(payload.remoteId)
         if (existingRef != null) {
+            // Fast-path: fingerprint match + entry allineata → Skipped senza caricare HistoryEntry.
+            // Evita una lettura del blob data per payload identici già applicati.
+            if (existingRef.lastRemotePayloadFingerprint == fp &&
+                existingRef.localChangeRevision == existingRef.lastSyncedLocalRevision) {
+                return RemoteSessionApplyOutcome.Skipped
+            }
+
             val existingEntry = historyDao.getByUid(existingRef.historyEntryUid)
                 ?: return RemoteSessionApplyOutcome.Failed(
                     IllegalStateException("Bridge esiste ma HistoryEntry uid=${existingRef.historyEntryUid} mancante")
                 )
-            // Nessuna scrittura se il payload è materialmente invariato
+            // Nessuna scrittura se il payload è materialmente invariato (slow-path fallback).
             if (existingEntry.timestamp == payload.timestamp &&
                 existingEntry.supplier == payload.supplier &&
                 existingEntry.category == payload.category &&
@@ -641,6 +673,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             val refreshedLocalState =
                 buildRemoteSessionLocalState(payload.data).takeIf { existingEntry.data != payload.data }
             // Aggiorna i campi payload e riallinea lo scaffolding locale solo se la griglia remota cambia.
+            // Chiama historyDao.update() direttamente (non updateHistoryEntry) per non incrementare
+            // localChangeRevision: il remote apply non è una modifica locale.
             historyDao.update(
                 existingEntry.copy(
                     timestamp = payload.timestamp,
@@ -656,10 +690,16 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                     missingItems = refreshedLocalState?.missingItems ?: existingEntry.missingItems
                 )
             )
+            // Allinea la revisione: dopo l'apply remoto l'entry è di nuovo allineata.
+            remoteRefDao.updateRemoteApplyState(
+                uid = existingRef.historyEntryUid,
+                rev = existingRef.localChangeRevision,
+                appliedAt = System.currentTimeMillis(),
+                fingerprint = fp
+            )
             return RemoteSessionApplyOutcome.Updated
         }
-        // Insert path: remoteId sconosciuto → nuova entry + bridge
-        // editable/complete + summary: materializzazione locale prudente coerente con HistoryEntry.
+        // Insert path: remoteId sconosciuto → nuova entry + bridge con sync state inizializzato.
         val localState = buildRemoteSessionLocalState(payload.data)
         val newEntry = HistoryEntry(
             uid = 0,
@@ -682,9 +722,18 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                 IllegalStateException("insert ha restituito uid non valido: $newUid")
             )
         }
-        check(remoteRefDao.insert(HistoryEntryRemoteRef(historyEntryUid = newUid, remoteId = payload.remoteId)) > 0L) {
-            "insert bridge ignorato per remoteId=${payload.remoteId}"
-        }
+        check(
+            remoteRefDao.insert(
+                HistoryEntryRemoteRef(
+                    historyEntryUid = newUid,
+                    remoteId = payload.remoteId,
+                    localChangeRevision = 0,
+                    lastSyncedLocalRevision = 0,
+                    lastRemoteAppliedAt = System.currentTimeMillis(),
+                    lastRemotePayloadFingerprint = fp
+                )
+            ) > 0L
+        ) { "insert bridge ignorato per remoteId=${payload.remoteId}" }
         return RemoteSessionApplyOutcome.Inserted
     }
 

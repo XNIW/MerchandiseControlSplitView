@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class, HistoryEntryRemoteRef::class],
     views = [ProductPriceSummary::class],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -104,6 +104,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 9 → 10: aggiunge colonne sync state al bridge (task 009 / baseline conflitti).
+        // Traccia revisione locale e stato ultimo apply remoto per state machine per-record.
+        // Non tocca history_entries né la navigation esistente.
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE history_entry_remote_refs ADD COLUMN localChangeRevision INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE history_entry_remote_refs ADD COLUMN lastSyncedLocalRevision INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE history_entry_remote_refs ADD COLUMN lastRemoteAppliedAt INTEGER")
+                db.execSQL("ALTER TABLE history_entry_remote_refs ADD COLUMN lastRemotePayloadFingerprint TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -112,7 +124,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "app_database"
                 )
                     .addMigrations(
-                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

@@ -37,5 +37,45 @@ data class HistoryEntryRemoteRef(
     val id: Long = 0,
     val historyEntryUid: Long,
     /** UUID v4 generato client-side; stabile per tutta la vita dell'entry locale. */
-    val remoteId: String
+    val remoteId: String,
+
+    // --- Sync state locale minimo (task 009 / baseline conflitti) ---
+
+    /**
+     * Revisione locale: incrementata ogni volta che un campo payload-rilevante
+     * di [HistoryEntry] viene modificato localmente dopo la creazione del bridge.
+     * Campi rilevanti: [HistoryEntry.timestamp], [HistoryEntry.supplier],
+     * [HistoryEntry.category], [HistoryEntry.isManualEntry], [HistoryEntry.data].
+     *
+     * Non è un contatore assoluto di modifiche: misura la divergenza rispetto a
+     * [lastSyncedLocalRevision]. Se uguale → entry allineata; se maggiore → dirty.
+     */
+    val localChangeRevision: Int = 0,
+
+    /**
+     * Revisione locale al momento dell'ultimo apply/push remoto riuscito.
+     *
+     * State machine per-record derivata:
+     * - [localChangeRevision] == [lastSyncedLocalRevision] → allineato
+     * - [localChangeRevision] > [lastSyncedLocalRevision] → dirty locale
+     */
+    val lastSyncedLocalRevision: Int = 0,
+
+    /**
+     * Epoch milliseconds dell'ultimo payload remoto applicato con successo
+     * ([RemoteSessionApplyOutcome.Inserted] o [RemoteSessionApplyOutcome.Updated]).
+     * Null se il bridge è stato creato localmente e nessun apply remoto è ancora avvenuto.
+     */
+    val lastRemoteAppliedAt: Long? = null,
+
+    /**
+     * Fingerprint dell'ultimo payload remoto applicato con successo.
+     * Calcolato con [SessionRemotePayload.payloadFingerprint].
+     *
+     * Fast-path di skip inbound: se il fingerprint coincide con il payload in arrivo
+     * E l'entry è allineata ([localChangeRevision] == [lastSyncedLocalRevision]),
+     * l'apply può essere skippato senza caricare [HistoryEntry] dal DB.
+     * Null se nessun apply remoto è ancora avvenuto.
+     */
+    val lastRemotePayloadFingerprint: String? = null
 )

@@ -31,6 +31,22 @@ data class SessionRemotePayload(
 const val SESSION_PAYLOAD_VERSION = 1
 
 /**
+ * Fingerprint deterministico dei campi payload-rilevanti (task 009 / baseline conflitti).
+ *
+ * Usato per la fast-path di skip inbound: se il fingerprint coincide con
+ * [HistoryEntryRemoteRef.lastRemotePayloadFingerprint] e l'entry è allineata
+ * ([HistoryEntryRemoteRef.localChangeRevision] == [HistoryEntryRemoteRef.lastSyncedLocalRevision]),
+ * l'apply può essere skippato senza caricare [HistoryEntry] dal DB.
+ *
+ * La funzione è deterministica: stesso payload → stesso fingerprint.
+ * Basata su hashCode: sufficiente per la baseline; in caso di collisione il fallback
+ * field-by-field nel repository produce comunque il risultato corretto.
+ */
+fun SessionRemotePayload.payloadFingerprint(): String =
+    "$timestamp|$supplier|$category|$isManualEntry|${data.flatten().joinToString(",")}"
+        .hashCode().toString()
+
+/**
  * Costruisce il [SessionRemotePayload] da questa entry e dal suo [remoteId] già persistito.
  * Non leggere [remoteId] da [HistoryEntry.uid] o [HistoryEntry.id].
  */
