@@ -49,6 +49,11 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
             "SUPABASE_PUBLISHABLE_KEY",
             readLocalOrEnv("SUPABASE_PUBLISHABLE_KEY").toBuildConfigLiteral()
         )
+        buildConfigField(
+            "String",
+            "GOOGLE_WEB_CLIENT_ID",
+            readLocalOrEnv("GOOGLE_WEB_CLIENT_ID").toBuildConfigLiteral()
+        )
     }
 
     buildTypes {
@@ -127,6 +132,10 @@ dependencies {
     implementation(libs.material)
     implementation(libs.supabase.kt)
     implementation(libs.supabase.realtime.kt)
+    implementation(libs.supabase.auth.kt)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.google.id)
 
     // Test
     testImplementation(libs.junit)

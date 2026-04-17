@@ -559,4 +559,13 @@
     <string name="database_catalog_replacement_picker_title">Sostituisci con un altro %1$s</string>
     <string name="database_catalog_replacement_picker_hint">Cerca %1$s esistente</string>
     <string name="database_catalog_replacement_picker_empty">Nessun %1$s disponibile con questo filtro.</string>
+
+    <!-- Schermata Opzioni — Account (task 011) -->
+    <string name="account_section_title">Account</string>
+    <string name="account_signed_in_as">Accesso effettuato come %1$s</string>
+    <string name="account_signed_in">Accesso effettuato</string>
+    <string name="account_not_signed_in">Nessun accesso</string>
+    <string name="account_checking">Verifica in corso\u2026</string>
+    <string name="account_sign_in_google">Accedi con Google</string>
+    <string name="account_sign_out">Esci dall\'account</string>
 </resources>

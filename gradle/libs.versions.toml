@@ -27,6 +27,8 @@ mockk = "1.14.9"
 coreTesting = "2.2.0"
 supabase = "3.2.6"
 ktor = "3.3.1"
+credentials = "1.5.0"
+googleid = "1.1.1"
 
 [libraries]
 androidx-core-ktx               = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -78,7 +80,11 @@ androidx-core-testing          = { group = "androidx.arch.core", name = "core-te
 supabase-bom                   = { group = "io.github.jan-tennert.supabase", name = "bom", version.ref = "supabase" }
 supabase-kt                    = { group = "io.github.jan-tennert.supabase", name = "supabase-kt" }
 supabase-realtime-kt           = { group = "io.github.jan-tennert.supabase", name = "realtime-kt" }
+supabase-auth-kt               = { group = "io.github.jan-tennert.supabase", name = "auth-kt" }
 ktor-client-okhttp             = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
+androidx-credentials            = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+google-id                      = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

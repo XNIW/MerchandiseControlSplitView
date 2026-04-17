@@ -541,4 +541,13 @@
     <string name="database_catalog_replacement_picker_title">Replace with another %1$s</string>
     <string name="database_catalog_replacement_picker_hint">Search existing %1$s</string>
     <string name="database_catalog_replacement_picker_empty">No %1$s available for this filter.</string>
+
+    <!-- Options Screen — Account (task 011) -->
+    <string name="account_section_title">Account</string>
+    <string name="account_signed_in_as">Signed in as %1$s</string>
+    <string name="account_signed_in">Signed in</string>
+    <string name="account_not_signed_in">Not signed in</string>
+    <string name="account_checking">Checking\u2026</string>
+    <string name="account_sign_in_google">Sign in with Google</string>
+    <string name="account_sign_out">Sign out</string>
 </resources>

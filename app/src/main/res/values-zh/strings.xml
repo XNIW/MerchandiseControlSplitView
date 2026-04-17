@@ -540,4 +540,13 @@
     <string name="database_catalog_replacement_picker_title">替换为另一个%1$s</string>
     <string name="database_catalog_replacement_picker_hint">搜索现有%1$s</string>
     <string name="database_catalog_replacement_picker_empty">当前筛选下没有可用的%1$s。</string>
+
+    <!-- 设置页面 — 账户 (task 011) -->
+    <string name="account_section_title">账户</string>
+    <string name="account_signed_in_as">已登录：%1$s</string>
+    <string name="account_signed_in">已登录</string>
+    <string name="account_not_signed_in">未登录</string>
+    <string name="account_checking">验证中\u2026</string>
+    <string name="account_sign_in_google">使用 Google 登录</string>
+    <string name="account_sign_out">退出登录</string>
 </resources>

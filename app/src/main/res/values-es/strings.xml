@@ -539,4 +539,13 @@
     <string name="database_catalog_replacement_picker_title">Reemplazar con otro %1$s</string>
     <string name="database_catalog_replacement_picker_hint">Buscar %1$s existente</string>
     <string name="database_catalog_replacement_picker_empty">No hay %1$s disponibles con este filtro.</string>
+
+    <!-- Pantalla Opciones — Cuenta (task 011) -->
+    <string name="account_section_title">Cuenta</string>
+    <string name="account_signed_in_as">Sesion iniciada como %1$s</string>
+    <string name="account_signed_in">Sesion iniciada</string>
+    <string name="account_not_signed_in">Sin sesion</string>
+    <string name="account_checking">Verificando\u2026</string>
+    <string name="account_sign_in_google">Iniciar sesion con Google</string>
+    <string name="account_sign_out">Cerrar sesion</string>
 </resources>

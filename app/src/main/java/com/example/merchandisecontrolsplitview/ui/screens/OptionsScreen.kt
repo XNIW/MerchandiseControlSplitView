@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -18,14 +19,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,12 +47,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.setLocale
 
 @Composable
 fun OptionsScreen(
-    contentPadding: PaddingValues = PaddingValues()
+    contentPadding: PaddingValues = PaddingValues(),
+    authState: AuthState = AuthState.SignedOut,
+    authEnabled: Boolean = false,
+    onSignIn: (Context) -> Unit = {},
+    onSignOut: () -> Unit = {},
+    onDismissError: () -> Unit = {}
 ) {
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -138,6 +149,15 @@ fun OptionsScreen(
                 }
             }
         }
+
+        if (authEnabled) {
+            AccountSection(
+                authState = authState,
+                onSignIn = { onSignIn(context) },
+                onSignOut = onSignOut,
+                onDismissError = onDismissError
+            )
+        }
     }
 }
 
@@ -227,5 +247,87 @@ private fun SelectableOptionRow(
             selected = selected,
             onClick = null
         )
+    }
+}
+
+/**
+ * Sezione account nella schermata Opzioni (task 011).
+ *
+ * Mostra lo stato auth corrente e le CTA login/logout.
+ * Nessuna logica auth nel composable: solo trigger (click) e binding stato.
+ */
+@Composable
+private fun AccountSection(
+    authState: AuthState,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onDismissError: () -> Unit
+) {
+    val subtitle = when (authState) {
+        is AuthState.Checking -> stringResource(R.string.account_checking)
+        is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
+        is AuthState.SignedIn -> if (authState.email != null) {
+            stringResource(R.string.account_signed_in_as, authState.email)
+        } else {
+            stringResource(R.string.account_signed_in)
+        }
+        is AuthState.ErrorRecoverable -> authState.message
+    }
+
+    OptionsGroup(
+        title = stringResource(R.string.account_section_title),
+        subtitle = subtitle,
+        icon = Icons.Default.AccountCircle
+    ) {
+        when (authState) {
+            is AuthState.Checking -> {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.width(24.dp).height(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
+            is AuthState.SignedOut -> {
+                Button(
+                    onClick = onSignIn,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.account_sign_in_google))
+                }
+            }
+            is AuthState.SignedIn -> {
+                OutlinedButton(
+                    onClick = onSignOut,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.account_sign_out))
+                }
+            }
+            is AuthState.ErrorRecoverable -> {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            onDismissError()
+                            onSignIn()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.account_sign_in_google))
+                    }
+                    OutlinedButton(
+                        onClick = onDismissError,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.close))
+                    }
+                }
+            }
+        }
     }
 }

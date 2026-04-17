@@ -38,7 +38,9 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
 import com.example.merchandisecontrolsplitview.MainActivity
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @Composable
 fun AppNavGraph() {
@@ -57,6 +59,10 @@ fun AppNavGraph() {
     val dbViewModel: DatabaseViewModel = viewModel(
         factory = DatabaseViewModel.factory(app, repository)
     )
+
+    // Auth state (task 011): unica fonte di verita' per lo stato sessione.
+    val authState by app.authManager.state.collectAsState()
+    val authScope = rememberCoroutineScope()
 
     val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -227,7 +233,18 @@ fun AppNavGraph() {
             }
 
             composable(Screen.Options.route) {
-                OptionsScreen(contentPadding = innerPadding)
+                OptionsScreen(
+                    contentPadding = innerPadding,
+                    authState = authState,
+                    authEnabled = app.authManager.isEnabled,
+                    onSignIn = { activityContext ->
+                        authScope.launch { app.authManager.signInWithGoogle(activityContext) }
+                    },
+                    onSignOut = {
+                        authScope.launch { app.authManager.signOut() }
+                    },
+                    onDismissError = { app.authManager.dismissError() }
+                )
             }
 
             composable(Screen.ImportAnalysis.route) {
