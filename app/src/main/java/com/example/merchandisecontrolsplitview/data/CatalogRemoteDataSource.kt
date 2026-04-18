@@ -15,4 +15,11 @@ interface CatalogRemoteDataSource {
     suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit>
 
     suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle>
+
+    /** UPDATE tombstone: solo righe ancora attive (`deleted_at` null). Idempotente se già tombstonato. */
+    suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit>
+
+    suspend fun markCategoryTombstoned(patch: CatalogTombstonePatch): Result<Unit>
+
+    suspend fun markProductTombstoned(patch: CatalogTombstonePatch): Result<Unit>
 }

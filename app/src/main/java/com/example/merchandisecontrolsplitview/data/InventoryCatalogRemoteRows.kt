@@ -1,5 +1,6 @@
 package com.example.merchandisecontrolsplitview.data
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -7,14 +8,21 @@ import kotlinx.serialization.Serializable
 data class InventorySupplierRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
-    val name: String
+    val name: String,
+    /** Null = attivo; valorizzato = tombstone remoto (task 019). */
+    @SerialName("deleted_at")
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val deletedAt: String? = null
 )
 
 @Serializable
 data class InventoryCategoryRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
-    val name: String
+    val name: String,
+    @SerialName("deleted_at")
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val deletedAt: String? = null
 )
 
 @Serializable
@@ -29,7 +37,18 @@ data class InventoryProductRow(
     @SerialName("retail_price") val retailPrice: Double? = null,
     @SerialName("supplier_id") val supplierId: String? = null,
     @SerialName("category_id") val categoryId: String? = null,
-    @SerialName("stock_quantity") val stockQuantity: Double? = null
+    @SerialName("stock_quantity") val stockQuantity: Double? = null,
+    @SerialName("deleted_at")
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val deletedAt: String? = null
+)
+
+/** Patch minimo per tombstone remoto (UPDATE `deleted_at` / `updated_at`). */
+data class CatalogTombstonePatch(
+    val id: String,
+    val ownerUserId: String,
+    val deletedAt: String,
+    val updatedAt: String
 )
 
 data class InventoryCatalogFetchBundle(
@@ -73,6 +92,12 @@ internal fun fingerprintSupplierName(name: String): String = "s:" + name.trim().
 
 internal fun fingerprintCategoryName(name: String): String = "c:" + name.trim().lowercase()
 
+internal fun fingerprintSupplierInbound(row: InventorySupplierRow): String =
+    fingerprintSupplierName(row.name) + "|d:" + row.deletedAt
+
+internal fun fingerprintCategoryInbound(row: InventoryCategoryRow): String =
+    fingerprintCategoryName(row.name) + "|d:" + row.deletedAt
+
 internal fun fingerprintProductRow(p: Product, supplierRemoteId: String?, categoryRemoteId: String?): String =
     buildString {
         append("p:")
@@ -115,4 +140,6 @@ internal fun fingerprintProductInbound(row: InventoryProductRow): String =
         append(row.categoryId)
         append('|')
         append(row.stockQuantity)
+        append("|d:")
+        append(row.deletedAt)
     }

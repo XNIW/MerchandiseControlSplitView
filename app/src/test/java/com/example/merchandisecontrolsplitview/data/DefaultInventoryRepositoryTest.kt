@@ -2,7 +2,9 @@ package com.example.merchandisecontrolsplitview.data
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
+import java.io.IOException
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -1279,6 +1281,123 @@ class DefaultInventoryRepositoryTest {
         assertTrue(result.isSuccess)
         assertTrue(result.getOrThrow().deferredProductPricesNoProductRef >= 2)
     }
+
+    @Test
+    fun `019 delete supplier with remote ref enqueues tombstone and sync drains it`() = runTest {
+        val s = repository.addSupplier("Tomb supplier019")!!
+        val rid = "00000000-0000-4000-8000-000000000099"
+        db.openHelper.writableDatabase.execSQL("DELETE FROM supplier_remote_refs WHERE supplierId = ${s.id}")
+        db.supplierRemoteRefDao().insert(SupplierRemoteRef(supplierId = s.id, remoteId = rid))
+        repository.deleteCatalogEntry(
+            CatalogEntityKind.SUPPLIER,
+            s.id,
+            CatalogDeleteStrategy.DeleteIfUnused
+        )
+        assertNull(repository.getSupplierById(s.id))
+        val pending = db.pendingCatalogTombstoneDao().listPendingOrdered()
+        assertEquals(1, pending.size)
+        assertEquals(PendingCatalogTombstoneEntityTypes.SUPPLIER, pending[0].entityType)
+        assertEquals(rid, pending[0].remoteId)
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val owner = "00000000-0000-4000-8000-0000000000aa"
+        val result = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+        assertTrue(result.isSuccess)
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+        assertEquals(1, remote.supplierTombstones.size)
+        assertEquals(rid, remote.supplierTombstones[0].id)
+        assertEquals(owner, remote.supplierTombstones[0].ownerUserId)
+    }
+
+    @Test
+    fun `019 tombstone outbox dedup unique entity type and remote id`() = runTest {
+        db.withTransaction {
+            val dao = db.pendingCatalogTombstoneDao()
+            dao.insert(
+                PendingCatalogTombstone(
+                    entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                    remoteId = "00000000-0000-4000-8000-00000000ded1",
+                    enqueuedAtMs = 1L,
+                    attemptCount = 0
+                )
+            )
+            dao.insert(
+                PendingCatalogTombstone(
+                    entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                    remoteId = "00000000-0000-4000-8000-00000000ded1",
+                    enqueuedAtMs = 2L,
+                    attemptCount = 0
+                )
+            )
+        }
+        assertEquals(1, db.pendingCatalogTombstoneDao().count())
+    }
+
+    @Test
+    fun `019 drain failure increments attempt count and leaves row`() = runTest {
+        db.pendingCatalogTombstoneDao().insert(
+            PendingCatalogTombstone(
+                entityType = PendingCatalogTombstoneEntityTypes.SUPPLIER,
+                remoteId = "00000000-0000-4000-8000-00000000bad1",
+                enqueuedAtMs = 1L,
+                attemptCount = 0
+            )
+        )
+        val remote = FakeCatalogRemote016().apply {
+            failNextSupplierTombstone = IOException("network")
+        }
+        val result = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(),
+            "00000000-0000-4000-8000-0000000000bb"
+        )
+        assertTrue(result.isFailure)
+        val row = db.pendingCatalogTombstoneDao().listPendingOrdered().single()
+        assertEquals(1, row.attemptCount)
+    }
+
+    @Test
+    fun `019 inbound tombstone without bridge does not delete local suppliers`() = runTest {
+        repository.addSupplier("Local only")!!
+        val before = repository.getAllSuppliers().size
+        val bundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(
+                    id = "00000000-0000-4000-8000-00000000dead",
+                    ownerUserId = "00000000-0000-4000-8000-000000000001",
+                    name = "Ghost",
+                    deletedAt = "2026-04-18T10:00:00Z"
+                )
+            ),
+            categories = emptyList(),
+            products = emptyList()
+        )
+        val remote = FakeCatalogRemote016(bundle)
+        val result = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(),
+            "00000000-0000-4000-8000-000000000002"
+        )
+        assertTrue(result.isSuccess)
+        assertEquals(before, repository.getAllSuppliers().size)
+    }
+
+    @Test
+    fun `019 deleteProduct with remote ref enqueues product tombstone`() = runTest {
+        repository.addProduct(
+            Product(barcode = "tomb-p1", productName = "P")
+        )
+        val p = repository.findProductByBarcode("tomb-p1")!!
+        val rid = "00000000-0000-4000-8000-00000000cafe"
+        db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId = ${p.id}")
+        db.productRemoteRefDao().insert(ProductRemoteRef(productId = p.id, remoteId = rid))
+        repository.deleteProduct(p)
+        assertNull(repository.findProductByBarcode("tomb-p1"))
+        val pending = db.pendingCatalogTombstoneDao().listPendingOrdered()
+        assertEquals(1, pending.size)
+        assertEquals(PendingCatalogTombstoneEntityTypes.PRODUCT, pending[0].entityType)
+        assertEquals(rid, pending[0].remoteId)
+    }
 }
 
 private class FakeCatalogRemote016(
@@ -1289,10 +1408,30 @@ private class FakeCatalogRemote016(
     )
 ) : CatalogRemoteDataSource {
     override val isConfigured get() = true
+    val supplierTombstones = mutableListOf<CatalogTombstonePatch>()
+    val categoryTombstones = mutableListOf<CatalogTombstonePatch>()
+    val productTombstones = mutableListOf<CatalogTombstonePatch>()
+    var failNextSupplierTombstone: Throwable? = null
     override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>) = Result.success(Unit)
     override suspend fun upsertCategories(rows: List<InventoryCategoryRow>) = Result.success(Unit)
     override suspend fun upsertProducts(rows: List<InventoryProductRow>) = Result.success(Unit)
     override suspend fun fetchCatalog() = Result.success(bundle)
+    override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> {
+        failNextSupplierTombstone?.let { t ->
+            failNextSupplierTombstone = null
+            return Result.failure(t)
+        }
+        supplierTombstones.add(patch)
+        return Result.success(Unit)
+    }
+    override suspend fun markCategoryTombstoned(patch: CatalogTombstonePatch): Result<Unit> {
+        categoryTombstones.add(patch)
+        return Result.success(Unit)
+    }
+    override suspend fun markProductTombstoned(patch: CatalogTombstonePatch): Result<Unit> {
+        productTombstones.add(patch)
+        return Result.success(Unit)
+    }
 }
 
 private class RecordingPriceRemote016 : ProductPriceRemoteDataSource {

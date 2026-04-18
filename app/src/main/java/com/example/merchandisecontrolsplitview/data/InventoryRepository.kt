@@ -216,6 +216,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private val categoryRemoteRefDao: CategoryRemoteRefDao = db.categoryRemoteRefDao()
     private val productRemoteRefDao: ProductRemoteRefDao = db.productRemoteRefDao()
     private val productPriceRemoteRefDao: ProductPriceRemoteRefDao = db.productPriceRemoteRefDao()
+    private val pendingCatalogTombstoneDao: PendingCatalogTombstoneDao = db.pendingCatalogTombstoneDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     // --- Product Implementations ---
@@ -251,7 +252,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     override suspend fun getProductsWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getWithDetailsPage(limit, offset) }
-    override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) { productDao.delete(product) }
+    override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            productRemoteRefDao.getByProductId(product.id)?.remoteId?.let { rid ->
+                pendingCatalogTombstoneDao.insert(
+                    PendingCatalogTombstone(
+                        entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                        remoteId = rid,
+                        enqueuedAtMs = System.currentTimeMillis(),
+                        attemptCount = 0
+                    )
+                )
+            }
+            productDao.delete(product)
+        }
+    }
     override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =
         withContext(Dispatchers.IO) {
             if (!applyImportMutex.tryLock()) {
@@ -1096,8 +1111,37 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     private suspend fun deleteCatalogEntity(
         kind: CatalogEntityKind,
-        id: Long
+        id: Long,
+        enqueueCloudTombstone: Boolean = true
     ) {
+        if (enqueueCloudTombstone) {
+            when (kind) {
+                CatalogEntityKind.SUPPLIER -> {
+                    supplierRemoteRefDao.getBySupplierId(id)?.remoteId?.let { rid ->
+                        pendingCatalogTombstoneDao.insert(
+                            PendingCatalogTombstone(
+                                entityType = PendingCatalogTombstoneEntityTypes.SUPPLIER,
+                                remoteId = rid,
+                                enqueuedAtMs = System.currentTimeMillis(),
+                                attemptCount = 0
+                            )
+                        )
+                    }
+                }
+                CatalogEntityKind.CATEGORY -> {
+                    categoryRemoteRefDao.getByCategoryId(id)?.remoteId?.let { rid ->
+                        pendingCatalogTombstoneDao.insert(
+                            PendingCatalogTombstone(
+                                entityType = PendingCatalogTombstoneEntityTypes.CATEGORY,
+                                remoteId = rid,
+                                enqueuedAtMs = System.currentTimeMillis(),
+                                attemptCount = 0
+                            )
+                        )
+                    }
+                }
+            }
+        }
         val deletedRows = when (kind) {
             CatalogEntityKind.SUPPLIER -> supplierDao.deleteById(id)
             CatalogEntityKind.CATEGORY -> categoryDao.deleteById(id)
@@ -1151,6 +1195,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     // --- Sync catalogo cloud (task 013) ---
 
     override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = withContext(Dispatchers.IO) {
+        if (pendingCatalogTombstoneDao.count() > 0) return@withContext true
         if (supplierRemoteRefDao.hasPendingWork()) return@withContext true
         if (categoryRemoteRefDao.hasPendingWork()) return@withContext true
         if (productRemoteRefDao.hasPendingWork()) return@withContext true
@@ -1170,6 +1215,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         ownerUserId: String
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         try {
+            drainPendingCatalogTombstones(remote, ownerUserId)
             // Snapshot iniziale (prima di ensure/push catalogo): righe prezzo senza bridge prodotto.
             val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
             val pushedSuppliers = pushCatalogSuppliers(remote, ownerUserId)
@@ -1180,13 +1226,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             var pulledCategories = 0
             var pulledProducts = 0
             db.withTransaction {
-                for (row in bundle.suppliers) {
+                val tombstoneProducts = bundle.products.filter { !it.deletedAt.isNullOrBlank() }
+                val tombstoneCategories = bundle.categories.filter { !it.deletedAt.isNullOrBlank() }
+                val tombstoneSuppliers = bundle.suppliers.filter { !it.deletedAt.isNullOrBlank() }
+                for (row in tombstoneProducts) {
+                    if (applyInboundProductTombstone(row)) pulledProducts++
+                }
+                for (row in tombstoneCategories) {
+                    if (applyInboundCategoryTombstone(row)) pulledCategories++
+                }
+                for (row in tombstoneSuppliers) {
+                    if (applyInboundSupplierTombstone(row)) pulledSuppliers++
+                }
+                for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() }) {
                     if (applyRemoteSupplierInbound(row)) pulledSuppliers++
                 }
-                for (row in bundle.categories) {
+                for (row in bundle.categories.filter { it.deletedAt.isNullOrBlank() }) {
                     if (applyRemoteCategoryInbound(row)) pulledCategories++
                 }
-                for (row in bundle.products) {
+                for (row in bundle.products.filter { it.deletedAt.isNullOrBlank() }) {
                     if (applyRemoteProductInbound(row)) pulledProducts++
                 }
             }
@@ -1412,9 +1470,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         for (s in supplierDao.getAll()) {
             val ref = ensureSupplierRefForPush(s.id)
             if (!supplierNeedsPush(ref)) continue
-            val row = InventorySupplierRow(id = ref.remoteId, ownerUserId = ownerUserId, name = s.name)
+            val row = InventorySupplierRow(
+                id = ref.remoteId,
+                ownerUserId = ownerUserId,
+                name = s.name,
+                deletedAt = null
+            )
             remote.upsertSuppliers(listOf(row)).getOrThrow()
-            val fp = fingerprintSupplierName(s.name)
+            val fp = fingerprintSupplierInbound(row)
             supplierRemoteRefDao.updateRemoteApplyState(
                 s.id,
                 ref.localChangeRevision,
@@ -1434,9 +1497,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         for (c in categoryDao.getAll()) {
             val ref = ensureCategoryRefForPush(c.id)
             if (!categoryNeedsPush(ref)) continue
-            val row = InventoryCategoryRow(id = ref.remoteId, ownerUserId = ownerUserId, name = c.name)
+            val row = InventoryCategoryRow(
+                id = ref.remoteId,
+                ownerUserId = ownerUserId,
+                name = c.name,
+                deletedAt = null
+            )
             remote.upsertCategories(listOf(row)).getOrThrow()
-            val fp = fingerprintCategoryName(c.name)
+            val fp = fingerprintCategoryInbound(row)
             categoryRemoteRefDao.updateRemoteApplyState(
                 c.id,
                 ref.localChangeRevision,
@@ -1469,10 +1537,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                 retailPrice = p.retailPrice,
                 supplierId = supR,
                 categoryId = catR,
-                stockQuantity = p.stockQuantity
+                stockQuantity = p.stockQuantity,
+                deletedAt = null
             )
             remote.upsertProducts(listOf(row)).getOrThrow()
-            val fp = fingerprintProductRow(p, supR, catR)
+            val fp = fingerprintProductInbound(row)
             productRemoteRefDao.updateRemoteApplyState(
                 p.id,
                 ref.localChangeRevision,
@@ -1484,8 +1553,66 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         return n
     }
 
+    private suspend fun drainPendingCatalogTombstones(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ) {
+        val pending = pendingCatalogTombstoneDao.listPendingOrdered()
+        for (row in pending) {
+            val deletedAt = java.time.Instant.now().toString()
+            val patch = CatalogTombstonePatch(
+                id = row.remoteId,
+                ownerUserId = ownerUserId,
+                deletedAt = deletedAt,
+                updatedAt = deletedAt
+            )
+            val outcome = when (row.entityType) {
+                PendingCatalogTombstoneEntityTypes.SUPPLIER -> remote.markSupplierTombstoned(patch)
+                PendingCatalogTombstoneEntityTypes.CATEGORY -> remote.markCategoryTombstoned(patch)
+                PendingCatalogTombstoneEntityTypes.PRODUCT -> remote.markProductTombstoned(patch)
+                else -> Result.success(Unit)
+            }
+            outcome.onFailure {
+                pendingCatalogTombstoneDao.incrementAttempt(row.id)
+                throw it
+            }
+            pendingCatalogTombstoneDao.deleteById(row.id)
+        }
+    }
+
+    private suspend fun applyInboundSupplierTombstone(row: InventorySupplierRow): Boolean {
+        if (row.deletedAt.isNullOrBlank()) return false
+        val ref = supplierRemoteRefDao.getByRemoteId(row.id) ?: return false
+        return try {
+            deleteCatalogEntity(CatalogEntityKind.SUPPLIER, ref.supplierId, enqueueCloudTombstone = false)
+            true
+        } catch (_: CatalogNotFoundException) {
+            false
+        }
+    }
+
+    private suspend fun applyInboundCategoryTombstone(row: InventoryCategoryRow): Boolean {
+        if (row.deletedAt.isNullOrBlank()) return false
+        val ref = categoryRemoteRefDao.getByRemoteId(row.id) ?: return false
+        return try {
+            deleteCatalogEntity(CatalogEntityKind.CATEGORY, ref.categoryId, enqueueCloudTombstone = false)
+            true
+        } catch (_: CatalogNotFoundException) {
+            false
+        }
+    }
+
+    private suspend fun applyInboundProductTombstone(row: InventoryProductRow): Boolean {
+        if (row.deletedAt.isNullOrBlank()) return false
+        val ref = productRemoteRefDao.getByRemoteId(row.id) ?: return false
+        val p = productDao.getById(ref.productId) ?: return false
+        productDao.delete(p)
+        return true
+    }
+
     private suspend fun applyRemoteSupplierInbound(row: InventorySupplierRow): Boolean {
-        val fp = fingerprintSupplierName(row.name)
+        if (!row.deletedAt.isNullOrBlank()) return false
+        val fp = fingerprintSupplierInbound(row)
         val existingRef = supplierRemoteRefDao.getByRemoteId(row.id)
         if (existingRef != null) {
             if (existingRef.lastRemotePayloadFingerprint == fp &&
@@ -1534,7 +1661,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     }
 
     private suspend fun applyRemoteCategoryInbound(row: InventoryCategoryRow): Boolean {
-        val fp = fingerprintCategoryName(row.name)
+        if (!row.deletedAt.isNullOrBlank()) return false
+        val fp = fingerprintCategoryInbound(row)
         val existingRef = categoryRemoteRefDao.getByRemoteId(row.id)
         if (existingRef != null) {
             if (existingRef.lastRemotePayloadFingerprint == fp &&
@@ -1583,6 +1711,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     }
 
     private suspend fun applyRemoteProductInbound(row: InventoryProductRow): Boolean {
+        if (!row.deletedAt.isNullOrBlank()) return false
         val fp = fingerprintProductInbound(row)
         val supLocal = row.supplierId?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
         val catLocal = row.categoryId?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }

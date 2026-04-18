@@ -21,10 +21,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SupplierRemoteRef::class,
         CategoryRemoteRef::class,
         ProductRemoteRef::class,
-        ProductPriceRemoteRef::class
+        ProductPriceRemoteRef::class,
+        PendingCatalogTombstone::class
     ],
     views = [ProductPriceSummary::class],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -39,6 +40,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryRemoteRefDao(): CategoryRemoteRefDao
     abstract fun productRemoteRefDao(): ProductRemoteRefDao
     abstract fun productPriceRemoteRefDao(): ProductPriceRemoteRefDao
+    abstract fun pendingCatalogTombstoneDao(): PendingCatalogTombstoneDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -243,6 +245,29 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 12 → 13: coda tombstone catalogo offline-first (task 019)
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `pending_catalog_tombstones` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `entityType` TEXT NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        `enqueuedAtMs` INTEGER NOT NULL,
+                        `attemptCount` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_pending_catalog_tombstones_entity_remote`
+                    ON `pending_catalog_tombstones` (`entityType`, `remoteId`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -261,7 +286,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
-                        MIGRATION_11_12
+                        MIGRATION_11_12,
+                        MIGRATION_12_13
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }
