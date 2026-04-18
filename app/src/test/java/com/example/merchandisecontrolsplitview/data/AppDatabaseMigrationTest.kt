@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -680,8 +680,8 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        // Versione aggiornata allo schema corrente (v9)
-        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
+        // Versione aggiornata allo schema corrente (v11)
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -931,8 +931,8 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        // Versione aggiornata a 9
-        assertEquals("9", querySingleValue(migrated, "PRAGMA user_version"))
+        // Versione aggiornata allo schema Room corrente (v11; include 8→9 …10→11)
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -940,7 +940,7 @@ class AppDatabaseMigrationTest {
         assertNotNull(remoteIdIndex)
         assertTrue(remoteIdIndex!!.unique)
 
-        // Schema bridge allineato con fresh install v9
+        // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
             indexInfo(fresh, "history_entry_remote_refs"),
             indexInfo(migrated, "history_entry_remote_refs")
@@ -1115,10 +1115,10 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        // Versione aggiornata a 10
-        assertEquals("10", querySingleValue(migrated, "PRAGMA user_version"))
+        // Versione aggiornata allo schema Room corrente (v11)
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
 
-        // Schema bridge allineato con fresh install v10
+        // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
             columnShape(fresh, "history_entry_remote_refs"),
             columnShape(migrated, "history_entry_remote_refs")
@@ -1277,7 +1277,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_6_7,
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
-                AppDatabase.MIGRATION_9_10
+                AppDatabase.MIGRATION_9_10,
+                AppDatabase.MIGRATION_10_11
             )
         }
 

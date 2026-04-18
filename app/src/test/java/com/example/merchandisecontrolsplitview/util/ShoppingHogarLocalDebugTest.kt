@@ -3,7 +3,7 @@ package com.example.merchandisecontrolsplitview.util
 import android.net.Uri
 import java.io.File
 import org.apache.poi.ss.usermodel.DataFormatter
-import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -18,7 +18,10 @@ class ShoppingHogarLocalDebugTest {
     fun dumpShoppingHogarCurrentMapping() {
         val context = RuntimeEnvironment.getApplication()
         val file = File("/Users/minxiang/Downloads/20260404-Shopping Hogar.xls")
-        assertTrue("Fixture locale mancante: ${file.absolutePath}", file.exists())
+        assumeTrue(
+            "Fixture locale opzionale assente (test ignorato): ${file.absolutePath}",
+            file.exists()
+        )
 
         val bytes = file.readBytes()
         createWorkbookWithLegacyFallback(bytes).use { workbook ->

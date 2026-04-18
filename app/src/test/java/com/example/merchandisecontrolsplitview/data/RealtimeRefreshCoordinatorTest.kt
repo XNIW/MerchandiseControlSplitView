@@ -238,6 +238,22 @@ class RealtimeRefreshCoordinatorTest {
             )
         }
 
+        override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = false
+
+        override suspend fun syncCatalogWithRemote(
+            remote: CatalogRemoteDataSource,
+            ownerUserId: String
+        ): Result<CatalogSyncSummary> = Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0
+            )
+        )
+
         // --- Stub: non usati in questi test ---
 
         override fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails> =
