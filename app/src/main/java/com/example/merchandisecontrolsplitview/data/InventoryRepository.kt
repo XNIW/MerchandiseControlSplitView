@@ -176,10 +176,12 @@ interface InventoryRepository {
 
     /**
      * Push pendenti verso il cloud poi pull/applica remoto in ordine FK (fornitori → categorie → prodotti).
-     * Solo [CatalogRemoteDataSource] esegue rete; qui solo Room e bridge.
+     * Subito dopo: sync storico prezzi (task 016) se [priceRemote] configurato — ordine catalogo prima, poi prezzi.
+     * Solo i transport eseguono rete; Room e bridge restano nel repository.
      */
     suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String
     ): Result<CatalogSyncSummary>
 }
@@ -213,6 +215,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private val supplierRemoteRefDao: SupplierRemoteRefDao = db.supplierRemoteRefDao()
     private val categoryRemoteRefDao: CategoryRemoteRefDao = db.categoryRemoteRefDao()
     private val productRemoteRefDao: ProductRemoteRefDao = db.productRemoteRefDao()
+    private val productPriceRemoteRefDao: ProductPriceRemoteRefDao = db.productPriceRemoteRefDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     // --- Product Implementations ---
@@ -1151,6 +1154,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         if (supplierRemoteRefDao.hasPendingWork()) return@withContext true
         if (categoryRemoteRefDao.hasPendingWork()) return@withContext true
         if (productRemoteRefDao.hasPendingWork()) return@withContext true
+        if (priceDao.countPriceRowsPendingPriceBridge() > 0) return@withContext true
+        if (priceDao.countPriceRowsWithoutProductRemote() > 0) return@withContext true
         if (supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0) {
             return@withContext false
         }
@@ -1161,9 +1166,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     override suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         try {
+            // Snapshot iniziale (prima di ensure/push catalogo): righe prezzo senza bridge prodotto.
+            val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
             val pushedSuppliers = pushCatalogSuppliers(remote, ownerUserId)
             val pushedCategories = pushCatalogCategories(remote, ownerUserId)
             val pushedProducts = pushCatalogProducts(remote, ownerUserId)
@@ -1182,6 +1190,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                     if (applyRemoteProductInbound(row)) pulledProducts++
                 }
             }
+            var pushedPrices = 0
+            var pulledPrices = 0
+            var skippedPullPrices = 0
+            var priceSyncFailed = false
+            if (priceRemote.isConfigured) {
+                try {
+                    val pullOutcome = pullProductPricesFromRemote(priceRemote)
+                    pulledPrices = pullOutcome.first
+                    skippedPullPrices = pullOutcome.second
+                    pushedPrices = pushProductPricesToRemote(priceRemote, ownerUserId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Throwable) {
+                    priceSyncFailed = true
+                }
+            }
             Result.success(
                 CatalogSyncSummary(
                     pushedSuppliers = pushedSuppliers,
@@ -1189,7 +1213,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                     pushedProducts = pushedProducts,
                     pulledSuppliers = pulledSuppliers,
                     pulledCategories = pulledCategories,
-                    pulledProducts = pulledProducts
+                    pulledProducts = pulledProducts,
+                    pushedProductPrices = pushedPrices,
+                    pulledProductPrices = pulledPrices,
+                    deferredProductPricesNoProductRef = deferredPrices,
+                    skippedProductPricesPullNoProductRef = skippedPullPrices,
+                    priceSyncFailed = priceSyncFailed
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -1197,6 +1226,101 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         } catch (t: Throwable) {
             Result.failure(t)
         }
+    }
+
+    private companion object {
+        const val PRODUCT_PRICE_PUSH_CHUNK = 80
+    }
+
+    /** Push bulk: una query candidati + chunk verso PostgREST; bridge solo per righe senza remote ancora. */
+    private suspend fun pushProductPricesToRemote(
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String
+    ): Int {
+        val rows = priceDao.getAllForCloudPush()
+        if (rows.isEmpty()) return 0
+        var pushed = 0
+        for (chunk in rows.chunked(PRODUCT_PRICE_PUSH_CHUNK)) {
+            val pairs = chunk.map { r ->
+                val rid = r.existingPriceRemoteId ?: java.util.UUID.randomUUID().toString()
+                r to rid
+            }
+            val upsertRows = pairs.map { (r, rid) ->
+                InventoryProductPriceRow(
+                    id = rid,
+                    ownerUserId = ownerUserId,
+                    productId = r.productRemoteId,
+                    type = r.type,
+                    price = r.price,
+                    effectiveAt = r.effectiveAt,
+                    source = r.source,
+                    note = r.note,
+                    createdAt = r.createdAt
+                )
+            }
+            priceRemote.upsertProductPrices(upsertRows).getOrThrow()
+            db.withTransaction {
+                for ((r, rid) in pairs) {
+                    if (r.existingPriceRemoteId == null) {
+                        productPriceRemoteRefDao.insert(
+                            ProductPriceRemoteRef(productPriceId = r.id, remoteId = rid)
+                        )
+                    }
+                }
+            }
+            pushed += chunk.size
+        }
+        return pushed
+    }
+
+    /**
+     * Pull idempotente: dedup su `(productId,type,effectiveAt)` e su `remoteId`; nessun `insertIfChanged`;
+     * non aggiorna `products.purchasePrice` / `retailPrice`.
+     */
+    private suspend fun pullProductPricesFromRemote(
+        priceRemote: ProductPriceRemoteDataSource
+    ): Pair<Int, Int> {
+        val remotes = priceRemote.fetchProductPrices().getOrThrow()
+        var pulled = 0
+        var skippedNoLocalProduct = 0
+        db.withTransaction {
+            for (row in remotes) {
+                if (productPriceRemoteRefDao.getByRemoteId(row.id) != null) continue
+                val pref = productRemoteRefDao.getByRemoteId(row.productId) ?: run {
+                    skippedNoLocalProduct++
+                    continue
+                }
+                val localProductId = pref.productId
+                val existing = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
+                if (existing != null) {
+                    if (productPriceRemoteRefDao.getByProductPriceId(existing.id) == null) {
+                        productPriceRemoteRefDao.insert(
+                            ProductPriceRemoteRef(productPriceId = existing.id, remoteId = row.id)
+                        )
+                        pulled++
+                    }
+                    continue
+                }
+                priceDao.insert(
+                    ProductPrice(
+                        productId = localProductId,
+                        type = row.type,
+                        price = row.price,
+                        effectiveAt = row.effectiveAt,
+                        source = row.source,
+                        note = row.note,
+                        createdAt = row.createdAt
+                    )
+                )
+                val inserted = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
+                    ?: continue
+                productPriceRemoteRefDao.insert(
+                    ProductPriceRemoteRef(productPriceId = inserted.id, remoteId = row.id)
+                )
+                pulled++
+            }
+        }
+        return pulled to skippedNoLocalProduct
     }
 
     private suspend fun markEntireCatalogDirtyForCloud() {

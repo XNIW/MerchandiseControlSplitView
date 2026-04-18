@@ -560,4 +560,5 @@
     <string name="catalog_cloud_state_session_required">Vuelve a iniciar sesion para sincronizar</string>
     <string name="catalog_cloud_not_configured">La sincronizacion en la nube no esta disponible</string>
     <string name="catalog_cloud_last_ok">Ultima sincronizacion correcta: %1$s</string>
+    <string name="catalog_cloud_prices_sync_hint">Historial de precios: enviados %1$d, recibidos %2$d · pendiente (catalogo): %3$d</string>
 </resources>

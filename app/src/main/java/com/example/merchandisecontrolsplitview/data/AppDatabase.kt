@@ -20,10 +20,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HistoryEntryRemoteRef::class,
         SupplierRemoteRef::class,
         CategoryRemoteRef::class,
-        ProductRemoteRef::class
+        ProductRemoteRef::class,
+        ProductPriceRemoteRef::class
     ],
     views = [ProductPriceSummary::class],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -37,6 +38,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun supplierRemoteRefDao(): SupplierRemoteRefDao
     abstract fun categoryRemoteRefDao(): CategoryRemoteRefDao
     abstract fun productRemoteRefDao(): ProductRemoteRefDao
+    abstract fun productPriceRemoteRefDao(): ProductPriceRemoteRefDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -213,6 +215,34 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 11 → 12: bridge storico prezzi cloud (task 016 / DEC-021). Tabella vuota; nessun backfill dati.
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `product_price_remote_refs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `productPriceId` INTEGER NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        FOREIGN KEY(`productPriceId`) REFERENCES `product_prices`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_product_price_remote_refs_productPriceId`
+                    ON `product_price_remote_refs` (`productPriceId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_product_price_remote_refs_remoteId`
+                    ON `product_price_remote_refs` (`remoteId`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -230,7 +260,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_7_8,
                         MIGRATION_8_9,
                         MIGRATION_9_10,
-                        MIGRATION_10_11
+                        MIGRATION_10_11,
+                        MIGRATION_11_12
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

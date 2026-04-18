@@ -9,8 +9,10 @@ import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
 import io.github.jan.supabase.SupabaseClient
@@ -127,6 +129,11 @@ class MerchandiseControlApplication : Application() {
     /** Transport PostgREST catalogo (task 013); null client → [CatalogRemoteDataSource.isConfigured] falso. */
     val catalogRemoteDataSource: CatalogRemoteDataSource by lazy {
         SupabaseCatalogRemoteDataSource(supabaseClient)
+    }
+
+    /** Transport PostgREST storico prezzi (task 016). */
+    val productPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
+        SupabaseProductPriceRemoteDataSource(supabaseClient)
     }
 
     override fun onCreate() {

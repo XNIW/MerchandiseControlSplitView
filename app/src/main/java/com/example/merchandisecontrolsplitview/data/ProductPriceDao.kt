@@ -19,6 +19,34 @@ data class LatestPriceRow(
     val price: Double
 )
 
+/**
+ * Una riga `product_prices` con `product_remote_refs.remoteId` e opzionale bridge prezzo già noto.
+ * Usata per push bulk senza N+1 (task 016).
+ */
+data class ProductPricePushRow(
+    val id: Long,
+    val productId: Long,
+    val type: String,
+    val price: Double,
+    val effectiveAt: String,
+    val source: String?,
+    val note: String?,
+    val createdAt: String,
+    val productRemoteId: String,
+    val existingPriceRemoteId: String?
+) {
+    fun toProductPrice(): ProductPrice = ProductPrice(
+        id = id,
+        productId = productId,
+        type = type,
+        price = price,
+        effectiveAt = effectiveAt,
+        source = source,
+        note = note,
+        createdAt = createdAt
+    )
+}
+
 @Dao
 interface ProductPriceDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -26,6 +54,53 @@ interface ProductPriceDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAll(points: List<ProductPrice>)
+
+    /**
+     * Candidati push: solo righe con `product_remote_refs` gia' noto (INNER JOIN) e **senza** bridge prezzo.
+     * Lo storico prezzi e' immutabile per design (`insertIfChanged` crea righe nuove, non aggiorna), quindi
+     * l'esistenza del bridge e' evidenza robusta di "gia' pushed" -> evita re-upsert rumorosi ad ogni sync
+     * e allinea naturalmente il candidato push a [countPriceRowsPendingPriceBridge].
+     */
+    @Query(
+        """
+        SELECT pr.id AS id, pr.productId AS productId, pr.type AS type, pr.price AS price,
+               pr.effectiveAt AS effectiveAt, pr.source AS source, pr.note AS note, pr.createdAt AS createdAt,
+               pref.remoteId AS productRemoteId, NULL AS existingPriceRemoteId
+        FROM product_prices pr
+        INNER JOIN product_remote_refs pref ON pref.productId = pr.productId
+        LEFT JOIN product_price_remote_refs pprf ON pprf.productPriceId = pr.id
+        WHERE pprf.id IS NULL
+        """
+    )
+    suspend fun getAllForCloudPush(): List<ProductPricePushRow>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM product_prices pr
+        LEFT JOIN product_remote_refs pref ON pref.productId = pr.productId
+        WHERE pref.productId IS NULL
+        """
+    )
+    suspend fun countPriceRowsWithoutProductRemote(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM product_prices pr
+        INNER JOIN product_remote_refs pref ON pref.productId = pr.productId
+        LEFT JOIN product_price_remote_refs pprf ON pprf.productPriceId = pr.id
+        WHERE pprf.id IS NULL
+        """
+    )
+    suspend fun countPriceRowsPendingPriceBridge(): Int
+
+    @Query(
+        """
+        SELECT * FROM product_prices
+        WHERE productId = :productId AND type = :type AND effectiveAt = :effectiveAt
+        LIMIT 1
+        """
+    )
+    suspend fun findByBusinessKey(productId: Long, type: String, effectiveAt: String): ProductPrice?
 
     @Query("""
     SELECT * FROM product_prices 

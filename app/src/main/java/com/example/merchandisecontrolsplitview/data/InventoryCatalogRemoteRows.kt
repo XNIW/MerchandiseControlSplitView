@@ -38,13 +38,35 @@ data class InventoryCatalogFetchBundle(
     val products: List<InventoryProductRow>
 )
 
+@Serializable
+data class InventoryProductPriceRow(
+    val id: String,
+    @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("product_id") val productId: String,
+    val type: String,
+    val price: Double,
+    @SerialName("effective_at") val effectiveAt: String,
+    val source: String? = null,
+    val note: String? = null,
+    @SerialName("created_at") val createdAt: String
+)
+
 data class CatalogSyncSummary(
     val pushedSuppliers: Int,
     val pushedCategories: Int,
     val pushedProducts: Int,
     val pulledSuppliers: Int,
     val pulledCategories: Int,
-    val pulledProducts: Int
+    val pulledProducts: Int,
+    /** Task 016: conteggi storico prezzi (0 se transport non configurato o errore prima del blocco prezzi). */
+    val pushedProductPrices: Int = 0,
+    val pulledProductPrices: Int = 0,
+    /** Righe `product_prices` il cui prodotto non ha ancora `product_remote_refs`. */
+    val deferredProductPricesNoProductRef: Int = 0,
+    /** Righe remote il cui `product_id` non risolve un bridge locale (catalogo non allineato). */
+    val skippedProductPricesPullNoProductRef: Int = 0,
+    /** true se il blocco sync prezzi ha fallito dopo un catalogo considerato applicato. */
+    val priceSyncFailed: Boolean = false
 )
 
 internal fun fingerprintSupplierName(name: String): String = "s:" + name.trim().lowercase()

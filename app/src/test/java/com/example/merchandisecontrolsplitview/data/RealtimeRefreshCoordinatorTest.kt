@@ -242,6 +242,7 @@ class RealtimeRefreshCoordinatorTest {
 
         override suspend fun syncCatalogWithRemote(
             remote: CatalogRemoteDataSource,
+            priceRemote: ProductPriceRemoteDataSource,
             ownerUserId: String
         ): Result<CatalogSyncSummary> = Result.success(
             CatalogSyncSummary(

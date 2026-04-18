@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -1171,4 +1172,136 @@ class DefaultInventoryRepositoryTest {
         )
         assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
     }
+
+    @Test
+    fun `syncCatalogWithRemote pushes product prices when product_remote_refs exists`() = runTest {
+        val priceRemote = RecordingPriceRemote016()
+        repository.addProduct(
+            Product(
+                barcode = "price-push-1",
+                productName = "P",
+                purchasePrice = 3.0,
+                retailPrice = 4.0
+            )
+        )
+        val p = repository.findProductByBarcode("price-push-1")!!
+        db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId = ${p.id}")
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(productId = p.id, remoteId = "00000000-0000-4000-8000-0000000000aa")
+        )
+        val result = repository.syncCatalogWithRemote(FakeCatalogRemote016(), priceRemote, "00000000-0000-4000-8000-0000000000bb")
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertTrue(summary.pushedProductPrices >= 1)
+        assertFalse(summary.priceSyncFailed)
+        assertTrue(priceRemote.upsertBatches.isNotEmpty())
+        val totalUpserted = priceRemote.upsertBatches.sumOf { it.size }
+        assertTrue(totalUpserted >= 2)
+        val bridgeDao = db.productPriceRemoteRefDao()
+        val purchase = repository.getPriceSeries(p.id, "PURCHASE").first().first()
+        assertNotNull(bridgeDao.getByProductPriceId(purchase.id))
+    }
+
+    @Test
+    fun `pull product price links bridge when local business key already exists`() = runTest {
+        val priceRemote = RecordingPriceRemote016()
+        repository.addProduct(
+            Product(
+                barcode = "price-pull-dedup",
+                productName = "D",
+                purchasePrice = 5.0,
+                retailPrice = 6.0
+            )
+        )
+        val p = repository.findProductByBarcode("price-pull-dedup")!!
+        val prodRemote = "00000000-0000-4000-8000-0000000000cc"
+        db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId = ${p.id}")
+        db.productRemoteRefDao().insert(ProductRemoteRef(productId = p.id, remoteId = prodRemote))
+        val purchase = repository.getPriceSeries(p.id, "PURCHASE").first().first()
+        val eff = purchase.effectiveAt
+        priceRemote.fetchRows = listOf(
+            InventoryProductPriceRow(
+                id = "00000000-0000-4000-8000-0000000000dd",
+                ownerUserId = "00000000-0000-4000-8000-0000000000ee",
+                productId = prodRemote,
+                type = "PURCHASE",
+                price = purchase.price,
+                effectiveAt = eff,
+                source = "MANUAL",
+                note = null,
+                createdAt = eff
+            )
+        )
+        val result = repository.syncCatalogWithRemote(FakeCatalogRemote016(), priceRemote, "00000000-0000-4000-8000-0000000000ee")
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.getOrThrow().pulledProductPrices)
+        assertEquals(1, repository.getPriceSeries(p.id, "PURCHASE").first().size)
+        assertEquals(
+            "00000000-0000-4000-8000-0000000000dd",
+            db.productPriceRemoteRefDao().getByProductPriceId(purchase.id)!!.remoteId
+        )
+    }
+
+    @Test
+    fun `syncCatalogWithRemote reports deferred prices when product has no remote ref`() = runTest {
+        val priceRemote = RecordingPriceRemote016()
+        val now = LocalDateTime.now().format(timestampFormatter)
+        db.productDao().insert(
+            Product(
+                barcode = "def-1",
+                productName = "X",
+                purchasePrice = 1.0,
+                retailPrice = 2.0
+            )
+        )
+        val p = repository.findProductByBarcode("def-1")!!
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = p.id,
+                type = "PURCHASE",
+                price = 1.0,
+                effectiveAt = now,
+                source = "MANUAL",
+                createdAt = now
+            )
+        )
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = p.id,
+                type = "RETAIL",
+                price = 2.0,
+                effectiveAt = now,
+                source = "MANUAL",
+                createdAt = now
+            )
+        )
+        val result = repository.syncCatalogWithRemote(FakeCatalogRemote016(), priceRemote, "00000000-0000-4000-8000-0000000000ff")
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrThrow().deferredProductPricesNoProductRef >= 2)
+    }
+}
+
+private class FakeCatalogRemote016(
+    private val bundle: InventoryCatalogFetchBundle = InventoryCatalogFetchBundle(
+        emptyList(),
+        emptyList(),
+        emptyList()
+    )
+) : CatalogRemoteDataSource {
+    override val isConfigured get() = true
+    override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>) = Result.success(Unit)
+    override suspend fun upsertCategories(rows: List<InventoryCategoryRow>) = Result.success(Unit)
+    override suspend fun upsertProducts(rows: List<InventoryProductRow>) = Result.success(Unit)
+    override suspend fun fetchCatalog() = Result.success(bundle)
+}
+
+private class RecordingPriceRemote016 : ProductPriceRemoteDataSource {
+    val upsertBatches = mutableListOf<List<InventoryProductPriceRow>>()
+    var fetchRows: List<InventoryProductPriceRow> = emptyList()
+    override val isConfigured = true
+    override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>) = run {
+        upsertBatches.add(rows)
+        Result.success(Unit)
+    }
+    override suspend fun fetchProductPrices() = Result.success(fetchRows)
 }

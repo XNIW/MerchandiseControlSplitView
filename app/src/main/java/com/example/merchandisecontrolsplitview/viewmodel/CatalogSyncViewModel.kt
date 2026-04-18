@@ -10,7 +10,9 @@ import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
+import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import java.io.IOException
 import java.net.UnknownHostException
@@ -33,31 +35,9 @@ class CatalogSyncViewModel(
     application: Application,
     private val repository: InventoryRepository,
     private val remote: CatalogRemoteDataSource,
+    private val priceRemote: ProductPriceRemoteDataSource,
     private val authFlow: StateFlow<AuthState>
 ) : AndroidViewModel(application) {
-
-    private val busy = MutableStateFlow(false)
-    private val lastErrorKind = MutableStateFlow<ErrorKind?>(null)
-    private val lastSuccessAt = MutableStateFlow<Long?>(null)
-    private val pendingHint = MutableStateFlow(false)
-
-    val uiState: StateFlow<CatalogSyncUiState> = combine(
-        authFlow,
-        busy,
-        lastErrorKind,
-        lastSuccessAt,
-        pendingHint
-    ) { auth, isBusy, err, successAt, pending ->
-        buildUi(auth, isBusy, err, successAt, pending)
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        buildUi(authFlow.value, false, null, null, false)
-    )
-
-    private fun str(@StringRes id: Int, vararg args: Any): String =
-        if (args.isEmpty()) getApplication<Application>().getString(id)
-        else getApplication<Application>().getString(id, *args)
 
     private enum class ErrorKind {
         Offline,
@@ -65,12 +45,44 @@ class CatalogSyncViewModel(
         Generic
     }
 
+    private data class SyncInputs(
+        val auth: AuthState,
+        val isBusy: Boolean,
+        val err: ErrorKind?,
+        val successAt: Long?,
+        val pending: Boolean
+    )
+
+    private val busy = MutableStateFlow(false)
+    private val lastErrorKind = MutableStateFlow<ErrorKind?>(null)
+    private val lastSuccessAt = MutableStateFlow<Long?>(null)
+    private val pendingHint = MutableStateFlow(false)
+    private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
+
+    val uiState: StateFlow<CatalogSyncUiState> = combine(
+        combine(authFlow, busy, lastErrorKind, lastSuccessAt, pendingHint) { auth, isBusy, err, successAt, pending ->
+            SyncInputs(auth, isBusy, err, successAt, pending)
+        },
+        lastCatalogSyncSummary
+    ) { inputs, summary ->
+        buildUi(inputs.auth, inputs.isBusy, inputs.err, inputs.successAt, inputs.pending, summary)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        buildUi(authFlow.value, false, null, null, false, null)
+    )
+
+    private fun str(@StringRes id: Int, vararg args: Any): String =
+        if (args.isEmpty()) getApplication<Application>().getString(id)
+        else getApplication<Application>().getString(id, *args)
+
     private fun buildUi(
         auth: AuthState,
         isBusy: Boolean,
         err: ErrorKind?,
         successAt: Long?,
-        pending: Boolean
+        pending: Boolean,
+        lastSummary: CatalogSyncSummary?
     ): CatalogSyncUiState {
         if (!remote.isConfigured) {
             return CatalogSyncUiState(
@@ -143,7 +155,7 @@ class CatalogSyncViewModel(
                     }
                     null -> { /* below */ }
                 }
-                val secondary = successAt?.let { str(R.string.catalog_cloud_last_ok, formatTime(it)) }
+                val secondary = buildSecondarySuccessLine(successAt, lastSummary)
                 if (pending) {
                     return CatalogSyncUiState(
                         primaryMessage = str(R.string.catalog_cloud_state_pending),
@@ -167,6 +179,26 @@ class CatalogSyncViewModel(
         return sdf.format(java.util.Date(epochMs))
     }
 
+    private fun buildSecondarySuccessLine(successAt: Long?, lastSummary: CatalogSyncSummary?): String? {
+        val parts = mutableListOf<String>()
+        successAt?.let { parts.add(str(R.string.catalog_cloud_last_ok, formatTime(it))) }
+        lastSummary?.let { s ->
+            if (s.pushedProductPrices > 0 || s.pulledProductPrices > 0 ||
+                s.deferredProductPricesNoProductRef > 0 || s.skippedProductPricesPullNoProductRef > 0
+            ) {
+                parts.add(
+                    str(
+                        R.string.catalog_cloud_prices_sync_hint,
+                        s.pushedProductPrices,
+                        s.pulledProductPrices,
+                        s.deferredProductPricesNoProductRef
+                    )
+                )
+            }
+        }
+        return parts.joinToString("\n").takeIf { it.isNotEmpty() }
+    }
+
     fun onOptionsScreenVisible() {
         viewModelScope.launch {
             pendingHint.value = repository.hasCatalogCloudPendingWorkInclusive()
@@ -181,10 +213,16 @@ class CatalogSyncViewModel(
             busy.value = true
             lastErrorKind.value = null
             try {
-                val result = repository.syncCatalogWithRemote(remote, auth.userId)
+                val result = repository.syncCatalogWithRemote(remote, priceRemote, auth.userId)
                 result.fold(
-                    onSuccess = {
-                        lastSuccessAt.value = System.currentTimeMillis()
+                    onSuccess = { summary ->
+                        lastCatalogSyncSummary.value = summary
+                        if (summary.priceSyncFailed) {
+                            lastErrorKind.value = ErrorKind.Generic
+                        } else {
+                            lastSuccessAt.value = System.currentTimeMillis()
+                            lastErrorKind.value = null
+                        }
                         pendingHint.value = repository.hasCatalogCloudPendingWorkInclusive()
                     },
                     onFailure = { e ->
@@ -223,6 +261,7 @@ class CatalogSyncViewModel(
                         app,
                         app.repository,
                         app.catalogRemoteDataSource,
+                        app.productPriceRemoteDataSource,
                         app.authManager.state
                     ) as T
             }

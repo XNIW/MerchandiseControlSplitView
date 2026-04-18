@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente (v11)
-        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente (v11; include 8→9 …10→11)
-        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente (v11)
-        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1266,6 +1266,127 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 11 to 12 adds product_price_remote_refs bridge`() = runTest {
+        val dbName = "task016-migrate-11-to-12.db"
+        createLegacyDatabase(dbName, version = 10) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL,
+                    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
+                    FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+            db.execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `history_entry_remote_refs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `historyEntryUid` INTEGER NOT NULL,
+                    `remoteId` TEXT NOT NULL,
+                    `localChangeRevision` INTEGER NOT NULL DEFAULT 0,
+                    `lastSyncedLocalRevision` INTEGER NOT NULL DEFAULT 0,
+                    `lastRemoteAppliedAt` INTEGER,
+                    `lastRemotePayloadFingerprint` TEXT,
+                    FOREIGN KEY(`historyEntryUid`) REFERENCES `history_entries`(`uid`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_historyEntryUid` ON `history_entry_remote_refs` (`historyEntryUid`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_remoteId` ON `history_entry_remote_refs` (`remoteId`)")
+            db.execSQL("INSERT INTO products(id, barcode, stockQuantity) VALUES (1, 'b016', 0.0)")
+            db.execSQL(
+                """INSERT INTO product_prices(id, productId, type, price, effectiveAt, source, createdAt)
+ VALUES (7, 1, 'PURCHASE', 9.99, '2026-04-17 10:00:00', 'MANUAL', '2026-04-17 10:00:00')"""
+            )
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 12) { database, oldVersion, newVersion ->
+            assertEquals(10, oldVersion)
+            assertEquals(12, newVersion)
+            AppDatabase.MIGRATION_10_11.migrate(database)
+            AppDatabase.MIGRATION_11_12.migrate(database)
+        }
+        assertEquals("12", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "product_price_remote_refs"))
+        val priceCount = queryCount(migrated, "SELECT COUNT(*) FROM product_prices WHERE id = 7")
+        assertEquals(1, priceCount)
+        assertEquals(0, queryCount(migrated, "PRAGMA foreign_key_check"))
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1278,7 +1399,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
                 AppDatabase.MIGRATION_9_10,
-                AppDatabase.MIGRATION_10_11
+                AppDatabase.MIGRATION_10_11,
+                AppDatabase.MIGRATION_11_12
             )
         }
 

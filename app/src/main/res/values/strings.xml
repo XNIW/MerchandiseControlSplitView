@@ -581,4 +581,5 @@
     <string name="catalog_cloud_state_session_required">Serve accedere di nuovo per sincronizzare</string>
     <string name="catalog_cloud_not_configured">Sincronizzazione cloud non disponibile su questo dispositivo</string>
     <string name="catalog_cloud_last_ok">Ultimo aggiornamento riuscito: %1$s</string>
+    <string name="catalog_cloud_prices_sync_hint">Storico prezzi: inviati %1$d, ricevuti %2$d · in sospeso (catalogo): %3$d</string>
 </resources>

@@ -561,4 +561,5 @@
     <string name="catalog_cloud_state_session_required">请重新登录以同步</string>
     <string name="catalog_cloud_not_configured">此设备未配置云端同步</string>
     <string name="catalog_cloud_last_ok">上次成功同步：%1$s</string>
+    <string name="catalog_cloud_prices_sync_hint">价格历史：已上传 %1$d，已下载 %2$d · 待处理（目录）：%3$d</string>
 </resources>
