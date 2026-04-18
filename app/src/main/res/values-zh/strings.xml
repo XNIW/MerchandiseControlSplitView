@@ -549,4 +549,16 @@
     <string name="account_checking">验证中\u2026</string>
     <string name="account_sign_in_google">使用 Google 登录</string>
     <string name="account_sign_out">退出登录</string>
+
+    <string name="catalog_cloud_section_title">云端目录</string>
+    <string name="catalog_cloud_refresh">从云端更新</string>
+    <string name="catalog_cloud_state_syncing">正在同步\u2026</string>
+    <string name="catalog_cloud_state_synced">已同步</string>
+    <string name="catalog_cloud_state_pending">待同步</string>
+    <string name="catalog_cloud_state_last_failed">上次未成功</string>
+    <string name="catalog_cloud_state_offline">网络不可用或不稳定</string>
+    <string name="catalog_cloud_state_sign_in_required">登录后即可同步目录</string>
+    <string name="catalog_cloud_state_session_required">请重新登录以同步</string>
+    <string name="catalog_cloud_not_configured">此设备未配置云端同步</string>
+    <string name="catalog_cloud_last_ok">上次成功同步：%1$s</string>
 </resources>

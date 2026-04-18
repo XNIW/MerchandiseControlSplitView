@@ -34,6 +34,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.ui.screens.*
+import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
@@ -233,6 +234,13 @@ fun AppNavGraph() {
             }
 
             composable(Screen.Options.route) {
+                val catalogSyncViewModel: CatalogSyncViewModel = viewModel(
+                    factory = CatalogSyncViewModel.factory(app)
+                )
+                val catalogSyncUi by catalogSyncViewModel.uiState.collectAsState()
+                LaunchedEffect(Unit) {
+                    catalogSyncViewModel.onOptionsScreenVisible()
+                }
                 OptionsScreen(
                     contentPadding = innerPadding,
                     authState = authState,
@@ -243,7 +251,9 @@ fun AppNavGraph() {
                     onSignOut = {
                         authScope.launch { app.authManager.signOut() }
                     },
-                    onDismissError = { app.authManager.dismissError() }
+                    onDismissError = { app.authManager.dismissError() },
+                    catalogSyncUi = if (app.authManager.isEnabled) catalogSyncUi else null,
+                    onCatalogRefresh = { catalogSyncViewModel.refreshCatalog() }
                 )
             }
 

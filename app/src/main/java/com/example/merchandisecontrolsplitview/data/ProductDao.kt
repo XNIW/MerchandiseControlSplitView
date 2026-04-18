@@ -59,6 +59,9 @@ interface ProductDao {
     @Query("SELECT * FROM products WHERE barcode = :barcode LIMIT 1")
     suspend fun findByBarcode(barcode: String): Product?
 
+    @Query("SELECT * FROM products WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): Product?
+
     /**
      * Recupera tutti i prodotti presenti nel database.
      * Utile per operazioni di confronto in memoria, come l'analisi pre-importazione.
@@ -66,6 +69,15 @@ interface ProductDao {
      */
     @Query("SELECT * FROM products")
     suspend fun getAll(): List<Product>
+
+    @Query("SELECT id FROM products WHERE supplierId = :supplierId")
+    suspend fun getIdsForSupplier(supplierId: Long): List<Long>
+
+    @Query("SELECT id FROM products WHERE categoryId = :categoryId")
+    suspend fun getIdsForCategory(categoryId: Long): List<Long>
+
+    @Query("SELECT COUNT(*) FROM products")
+    suspend fun count(): Int
 
     @Query("SELECT COUNT(*) FROM products WHERE supplierId = :supplierId")
     suspend fun countLinkedToSupplier(supplierId: Long): Int

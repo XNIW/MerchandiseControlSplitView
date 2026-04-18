@@ -133,6 +133,7 @@ dependencies {
     implementation(libs.supabase.kt)
     implementation(libs.supabase.realtime.kt)
     implementation(libs.supabase.auth.kt)
+    implementation(libs.supabase.postgrest.kt)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)
     implementation(libs.google.id)

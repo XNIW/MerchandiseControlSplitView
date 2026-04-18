@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +50,7 @@ import androidx.core.content.edit
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
+import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncUiState
 import com.example.merchandisecontrolsplitview.util.setLocale
 
 @Composable
@@ -58,7 +60,9 @@ fun OptionsScreen(
     authEnabled: Boolean = false,
     onSignIn: (Context) -> Unit = {},
     onSignOut: () -> Unit = {},
-    onDismissError: () -> Unit = {}
+    onDismissError: () -> Unit = {},
+    catalogSyncUi: CatalogSyncUiState? = null,
+    onCatalogRefresh: () -> Unit = {}
 ) {
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -157,6 +161,53 @@ fun OptionsScreen(
                 onSignOut = onSignOut,
                 onDismissError = onDismissError
             )
+            catalogSyncUi?.let { sync ->
+                CatalogCloudSection(
+                    state = sync,
+                    onRefresh = onCatalogRefresh
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogCloudSection(
+    state: CatalogSyncUiState,
+    onRefresh: () -> Unit
+) {
+    OptionsGroup(
+        title = stringResource(R.string.catalog_cloud_section_title),
+        subtitle = state.primaryMessage,
+        icon = Icons.Default.Sync
+    ) {
+        state.secondaryMessage?.let { secondary ->
+            Text(
+                text = secondary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (state.isSyncing) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.width(24.dp).height(24.dp),
+                    strokeWidth = 2.dp
+                )
+            }
+        } else {
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = state.canRefresh,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.catalog_cloud_refresh))
+            }
         }
     }
 }

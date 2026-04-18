@@ -1151,6 +1151,121 @@ class AppDatabaseMigrationTest {
         assertEquals("ok", querySingleValue(migrated, "PRAGMA integrity_check"))
     }
 
+    @Test
+    fun `migration 10 to 11 adds catalog bridge tables`() = runTest {
+        val dbName = "task013-migrate-10-to-11.db"
+        createLegacyDatabase(dbName, version = 10) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_categories_name ON categories(name)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS history_entries(
+                    uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    editable TEXT NOT NULL,
+                    complete TEXT NOT NULL,
+                    supplier TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    wasExported INTEGER NOT NULL,
+                    syncStatus TEXT NOT NULL,
+                    orderTotal REAL NOT NULL,
+                    paymentTotal REAL NOT NULL,
+                    missingItems INTEGER NOT NULL,
+                    totalItems INTEGER NOT NULL,
+                    isManualEntry INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL,
+                    FOREIGN KEY(supplierId) REFERENCES suppliers(id) ON DELETE SET NULL,
+                    FOREIGN KEY(categoryId) REFERENCES categories(id) ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_products_barcode ON products(barcode)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_supplierId ON products(supplierId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_products_categoryId ON products(categoryId)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_prices(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    effectiveAt TEXT NOT NULL,
+                    source TEXT,
+                    note TEXT,
+                    createdAt TEXT NOT NULL,
+                    FOREIGN KEY(productId) REFERENCES products(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_product_prices_productId_type_effectiveAt ON product_prices(productId,type,effectiveAt)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_product_prices_productId_type_createdAt ON product_prices(productId,type,createdAt)")
+            db.execSQL("CREATE VIEW `product_price_summary` AS $PRODUCT_PRICE_SUMMARY_QUERY")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `history_entry_remote_refs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `historyEntryUid` INTEGER NOT NULL,
+                    `remoteId` TEXT NOT NULL,
+                    `localChangeRevision` INTEGER NOT NULL DEFAULT 0,
+                    `lastSyncedLocalRevision` INTEGER NOT NULL DEFAULT 0,
+                    `lastRemoteAppliedAt` INTEGER,
+                    `lastRemotePayloadFingerprint` TEXT,
+                    FOREIGN KEY(`historyEntryUid`) REFERENCES `history_entries`(`uid`) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_historyEntryUid` ON `history_entry_remote_refs` (`historyEntryUid`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_history_entry_remote_refs_remoteId` ON `history_entry_remote_refs` (`remoteId`)")
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 11) { database, oldVersion, newVersion ->
+            assertEquals(10, oldVersion)
+            assertEquals(11, newVersion)
+            AppDatabase.MIGRATION_10_11.migrate(database)
+        }
+        assertEquals("11", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "supplier_remote_refs"))
+        assertTrue(tableExists(migrated, "category_remote_refs"))
+        assertTrue(tableExists(migrated, "product_remote_refs"))
+        assertEquals(0, queryCount(migrated, "PRAGMA foreign_key_check"))
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(

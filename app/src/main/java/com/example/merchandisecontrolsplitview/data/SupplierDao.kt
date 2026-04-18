@@ -48,6 +48,9 @@ interface SupplierDao {
     @Query("DELETE FROM suppliers WHERE id = :id")
     suspend fun deleteById(id: Long): Int
 
+    @Query("SELECT COUNT(*) FROM suppliers")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM suppliers ORDER BY name ASC")
     fun getAllFlow(): Flow<List<Supplier>>
 }

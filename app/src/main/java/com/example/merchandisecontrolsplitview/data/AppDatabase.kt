@@ -11,9 +11,19 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 // 1. Aggiungi Category::class alla lista delle entità.
 // 2. Incrementa la versione a 4.
 @Database(
-    entities = [Product::class, Supplier::class, Category::class, HistoryEntry::class, ProductPrice::class, HistoryEntryRemoteRef::class],
+    entities = [
+        Product::class,
+        Supplier::class,
+        Category::class,
+        HistoryEntry::class,
+        ProductPrice::class,
+        HistoryEntryRemoteRef::class,
+        SupplierRemoteRef::class,
+        CategoryRemoteRef::class,
+        ProductRemoteRef::class
+    ],
     views = [ProductPriceSummary::class],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -24,6 +34,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryDao(): CategoryDao
     abstract fun productPriceDao(): ProductPriceDao
     abstract fun historyEntryRemoteRefDao(): HistoryEntryRemoteRefDao
+    abstract fun supplierRemoteRefDao(): SupplierRemoteRefDao
+    abstract fun categoryRemoteRefDao(): CategoryRemoteRefDao
+    abstract fun productRemoteRefDao(): ProductRemoteRefDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -116,6 +129,90 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 10 → 11: bridge catalogo (task 013 / DEC-020). Nessun cambio a entities core catalogo.
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `supplier_remote_refs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `supplierId` INTEGER NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        `localChangeRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastSyncedLocalRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastRemoteAppliedAt` INTEGER,
+                        `lastRemotePayloadFingerprint` TEXT,
+                        FOREIGN KEY(`supplierId`) REFERENCES `suppliers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_supplier_remote_refs_supplierId`
+                    ON `supplier_remote_refs` (`supplierId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_supplier_remote_refs_remoteId`
+                    ON `supplier_remote_refs` (`remoteId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `category_remote_refs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `categoryId` INTEGER NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        `localChangeRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastSyncedLocalRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastRemoteAppliedAt` INTEGER,
+                        `lastRemotePayloadFingerprint` TEXT,
+                        FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_category_remote_refs_categoryId`
+                    ON `category_remote_refs` (`categoryId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_category_remote_refs_remoteId`
+                    ON `category_remote_refs` (`remoteId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `product_remote_refs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `productId` INTEGER NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        `localChangeRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastSyncedLocalRevision` INTEGER NOT NULL DEFAULT 0,
+                        `lastRemoteAppliedAt` INTEGER,
+                        `lastRemotePayloadFingerprint` TEXT,
+                        FOREIGN KEY(`productId`) REFERENCES `products`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_product_remote_refs_productId`
+                    ON `product_remote_refs` (`productId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_product_remote_refs_remoteId`
+                    ON `product_remote_refs` (`remoteId`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -124,7 +221,16 @@ abstract class AppDatabase : RoomDatabase() {
                     "app_database"
                 )
                     .addMigrations(
-                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7,
+                        MIGRATION_7_8,
+                        MIGRATION_8_9,
+                        MIGRATION_9_10,
+                        MIGRATION_10_11
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

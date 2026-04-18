@@ -7,13 +7,16 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
+import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +98,7 @@ class MerchandiseControlApplication : Application() {
                     supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
                 ) {
                     install(Auth)
+                    install(Postgrest)
                     install(Realtime) {
                         reconnectDelay = 5.seconds
                     }
@@ -118,6 +122,11 @@ class MerchandiseControlApplication : Application() {
             client = supabaseClient,
             coordinator = realtimeRefreshCoordinator
         )
+    }
+
+    /** Transport PostgREST catalogo (task 013); null client → [CatalogRemoteDataSource.isConfigured] falso. */
+    val catalogRemoteDataSource: CatalogRemoteDataSource by lazy {
+        SupabaseCatalogRemoteDataSource(supabaseClient)
     }
 
     override fun onCreate() {

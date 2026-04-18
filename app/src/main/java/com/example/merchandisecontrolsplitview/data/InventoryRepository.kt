@@ -159,6 +159,20 @@ interface InventoryRepository {
      * Non simula una full sync: non elimina entry locali assenti dalla lista.
      */
     suspend fun applyRemoteSessionPayloadBatch(payloads: List<SessionRemotePayload>): RemoteSessionBatchResult
+
+    // --- Catalogo cloud (task 013 / DEC-020) ---
+
+    /** True se esiste lavoro pendente (revisioni bridge o righe senza bridge con catalogo non vuoto). */
+    suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean
+
+    /**
+     * Push pendenti verso il cloud poi pull/applica remoto in ordine FK (fornitori → categorie → prodotti).
+     * Solo [CatalogRemoteDataSource] esegue rete; qui solo Room e bridge.
+     */
+    suspend fun syncCatalogWithRemote(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ): Result<CatalogSyncSummary>
 }
 
 internal object DefaultInventoryRepositoryTestHooks {
@@ -187,6 +201,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private val historyDao: HistoryEntryDao = db.historyEntryDao()
     private val priceDao: ProductPriceDao = db.productPriceDao()
     private val remoteRefDao: HistoryEntryRemoteRefDao = db.historyEntryRemoteRefDao()
+    private val supplierRemoteRefDao: SupplierRemoteRefDao = db.supplierRemoteRefDao()
+    private val categoryRemoteRefDao: CategoryRemoteRefDao = db.categoryRemoteRefDao()
+    private val productRemoteRefDao: ProductRemoteRefDao = db.productRemoteRefDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     // --- Product Implementations ---
@@ -203,6 +220,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
             product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
             product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
+            touchProductDirty(persisted.id)
         }
     }
     override suspend fun updateProduct(product: Product) {
@@ -213,6 +231,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
             product.purchasePrice?.let { priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL") }
             product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
+            touchProductDirty(product.id)
         }
     }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
@@ -255,15 +274,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         val normalizedName = name.trim()
         if (normalizedName.isBlank()) return@withContext null
         supplierMutex.withLock {
-            supplierDao.findByNameIgnoreCase(normalizedName) ?: run {
-                val newSupplier = Supplier(name = normalizedName)
-                val insertedId = supplierDao.insert(newSupplier)
-                if (insertedId > 0L) {
-                    supplierDao.getById(insertedId)
-                } else {
-                    supplierDao.findByNameIgnoreCase(normalizedName)
-                }
+            supplierDao.findByNameIgnoreCase(normalizedName)?.let { return@withLock it }
+            val newSupplier = Supplier(name = normalizedName)
+            val insertedId = supplierDao.insert(newSupplier)
+            val created = if (insertedId > 0L) {
+                supplierDao.getById(insertedId)
+            } else {
+                supplierDao.findByNameIgnoreCase(normalizedName)
             }
+            created?.also { touchSupplierDirty(it.id) }
         }
     }
 
@@ -283,7 +302,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         name: String
     ): CatalogListItem = withContext(Dispatchers.IO) {
         withCatalogMutationLock(kind) {
-            createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
+            val item = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
+            when (kind) {
+                CatalogEntityKind.SUPPLIER -> touchSupplierDirty(item.id)
+                CatalogEntityKind.CATEGORY -> touchCategoryDirty(item.id)
+            }
+            item
         }
     }
 
@@ -298,6 +322,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             val normalizedName = normalizedNameFor(kind, newName, currentId = id)
             if (current.name != normalizedName) {
                 renameCatalogEntity(kind, id, normalizedName)
+            }
+            when (kind) {
+                CatalogEntityKind.SUPPLIER -> touchSupplierDirty(id)
+                CatalogEntityKind.CATEGORY -> touchCategoryDirty(id)
             }
             CatalogListItem(
                 id = id,
@@ -420,15 +448,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         val normalizedName = name.trim()
         if (normalizedName.isBlank()) return@withContext null
         categoryMutex.withLock {
-            categoryDao.findByName(normalizedName) ?: run {
-                val newCategory = Category(name = normalizedName)
-                val insertedId = categoryDao.insert(newCategory)
-                if (insertedId > 0L) {
-                    categoryDao.getById(insertedId)
-                } else {
-                    categoryDao.findByName(normalizedName)
-                }
+            categoryDao.findByName(normalizedName)?.let { return@withLock it }
+            val newCategory = Category(name = normalizedName)
+            val insertedId = categoryDao.insert(newCategory)
+            val created = if (insertedId > 0L) {
+                categoryDao.getById(insertedId)
+            } else {
+                categoryDao.findByName(normalizedName)
             }
+            created?.also { touchCategoryDirty(it.id) }
         }
     }
 
@@ -925,6 +953,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         if (pendingPriceHistoryPoints.isNotEmpty()) {
             priceDao.insertAll(pendingPriceHistoryPoints)
         }
+        markEntireCatalogDirtyForCloud()
     }
 
     private suspend fun normalizedNameFor(
@@ -1047,17 +1076,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         kind: CatalogEntityKind,
         sourceId: Long,
         replacementId: Long
-    ): Int = when (kind) {
-        CatalogEntityKind.SUPPLIER -> productDao.reassignSupplier(sourceId, replacementId)
-        CatalogEntityKind.CATEGORY -> productDao.reassignCategory(sourceId, replacementId)
+    ): Int {
+        val touchedIds = when (kind) {
+            CatalogEntityKind.SUPPLIER -> productDao.getIdsForSupplier(sourceId)
+            CatalogEntityKind.CATEGORY -> productDao.getIdsForCategory(sourceId)
+        }
+        val n = when (kind) {
+            CatalogEntityKind.SUPPLIER -> productDao.reassignSupplier(sourceId, replacementId)
+            CatalogEntityKind.CATEGORY -> productDao.reassignCategory(sourceId, replacementId)
+        }
+        touchedIds.forEach { touchProductDirty(it) }
+        return n
     }
 
     private suspend fun clearCatalogAssignments(
         kind: CatalogEntityKind,
         id: Long
-    ): Int = when (kind) {
-        CatalogEntityKind.SUPPLIER -> productDao.clearSupplierAssignments(id)
-        CatalogEntityKind.CATEGORY -> productDao.clearCategoryAssignments(id)
+    ): Int {
+        val touchedIds = when (kind) {
+            CatalogEntityKind.SUPPLIER -> productDao.getIdsForSupplier(id)
+            CatalogEntityKind.CATEGORY -> productDao.getIdsForCategory(id)
+        }
+        val n = when (kind) {
+            CatalogEntityKind.SUPPLIER -> productDao.clearSupplierAssignments(id)
+            CatalogEntityKind.CATEGORY -> productDao.clearCategoryAssignments(id)
+        }
+        touchedIds.forEach { touchProductDirty(it) }
+        return n
     }
 
     private suspend fun <T> withCatalogMutationLock(
@@ -1066,5 +1111,409 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     ): T = when (kind) {
         CatalogEntityKind.SUPPLIER -> supplierMutex.withLock { block() }
         CatalogEntityKind.CATEGORY -> categoryMutex.withLock { block() }
+    }
+
+    // --- Sync catalogo cloud (task 013) ---
+
+    override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = withContext(Dispatchers.IO) {
+        if (supplierRemoteRefDao.hasPendingWork()) return@withContext true
+        if (categoryRemoteRefDao.hasPendingWork()) return@withContext true
+        if (productRemoteRefDao.hasPendingWork()) return@withContext true
+        if (supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0) {
+            return@withContext false
+        }
+        supplierRemoteRefDao.countRows() < supplierDao.count() ||
+            categoryRemoteRefDao.countRows() < categoryDao.count() ||
+            productRemoteRefDao.countRows() < productDao.count()
+    }
+
+    override suspend fun syncCatalogWithRemote(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
+        try {
+            val pushedSuppliers = pushCatalogSuppliers(remote, ownerUserId)
+            val pushedCategories = pushCatalogCategories(remote, ownerUserId)
+            val pushedProducts = pushCatalogProducts(remote, ownerUserId)
+            val bundle = remote.fetchCatalog().getOrElse { return@withContext Result.failure(it) }
+            var pulledSuppliers = 0
+            var pulledCategories = 0
+            var pulledProducts = 0
+            db.withTransaction {
+                for (row in bundle.suppliers) {
+                    if (applyRemoteSupplierInbound(row)) pulledSuppliers++
+                }
+                for (row in bundle.categories) {
+                    if (applyRemoteCategoryInbound(row)) pulledCategories++
+                }
+                for (row in bundle.products) {
+                    if (applyRemoteProductInbound(row)) pulledProducts++
+                }
+            }
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = pushedSuppliers,
+                    pushedCategories = pushedCategories,
+                    pushedProducts = pushedProducts,
+                    pulledSuppliers = pulledSuppliers,
+                    pulledCategories = pulledCategories,
+                    pulledProducts = pulledProducts
+                )
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun markEntireCatalogDirtyForCloud() {
+        supplierDao.getAll().forEach { touchSupplierDirty(it.id) }
+        categoryDao.getAll().forEach { touchCategoryDirty(it.id) }
+        productDao.getAll().forEach { touchProductDirty(it.id) }
+    }
+
+    private suspend fun touchSupplierDirty(supplierId: Long) {
+        if (supplierRemoteRefDao.getBySupplierId(supplierId) == null) {
+            supplierRemoteRefDao.insert(
+                SupplierRemoteRef(
+                    supplierId = supplierId,
+                    remoteId = java.util.UUID.randomUUID().toString()
+                )
+            )
+        } else {
+            supplierRemoteRefDao.incrementLocalRevision(supplierId)
+        }
+    }
+
+    private suspend fun touchCategoryDirty(categoryId: Long) {
+        if (categoryRemoteRefDao.getByCategoryId(categoryId) == null) {
+            categoryRemoteRefDao.insert(
+                CategoryRemoteRef(
+                    categoryId = categoryId,
+                    remoteId = java.util.UUID.randomUUID().toString()
+                )
+            )
+        } else {
+            categoryRemoteRefDao.incrementLocalRevision(categoryId)
+        }
+    }
+
+    private suspend fun touchProductDirty(productId: Long) {
+        if (productRemoteRefDao.getByProductId(productId) == null) {
+            productRemoteRefDao.insert(
+                ProductRemoteRef(
+                    productId = productId,
+                    remoteId = java.util.UUID.randomUUID().toString()
+                )
+            )
+        } else {
+            productRemoteRefDao.incrementLocalRevision(productId)
+        }
+    }
+
+    private fun supplierNeedsPush(ref: SupplierRemoteRef): Boolean =
+        ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
+
+    private fun categoryNeedsPush(ref: CategoryRemoteRef): Boolean =
+        ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
+
+    private fun productNeedsPush(ref: ProductRemoteRef): Boolean =
+        ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
+
+    private suspend fun ensureSupplierRefForPush(supplierId: Long): SupplierRemoteRef {
+        supplierRemoteRefDao.getBySupplierId(supplierId)?.let { return it }
+        supplierRemoteRefDao.insert(
+            SupplierRemoteRef(supplierId = supplierId, remoteId = java.util.UUID.randomUUID().toString())
+        )
+        return supplierRemoteRefDao.getBySupplierId(supplierId)
+            ?: error("supplier_remote_refs: insert fallito per supplierId=$supplierId")
+    }
+
+    private suspend fun ensureCategoryRefForPush(categoryId: Long): CategoryRemoteRef {
+        categoryRemoteRefDao.getByCategoryId(categoryId)?.let { return it }
+        categoryRemoteRefDao.insert(
+            CategoryRemoteRef(categoryId = categoryId, remoteId = java.util.UUID.randomUUID().toString())
+        )
+        return categoryRemoteRefDao.getByCategoryId(categoryId)
+            ?: error("category_remote_refs: insert fallito per categoryId=$categoryId")
+    }
+
+    private suspend fun ensureProductRefForPush(productId: Long): ProductRemoteRef {
+        productRemoteRefDao.getByProductId(productId)?.let { return it }
+        productRemoteRefDao.insert(
+            ProductRemoteRef(productId = productId, remoteId = java.util.UUID.randomUUID().toString())
+        )
+        return productRemoteRefDao.getByProductId(productId)
+            ?: error("product_remote_refs: insert fallito per productId=$productId")
+    }
+
+    private suspend fun pushCatalogSuppliers(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ): Int {
+        var n = 0
+        for (s in supplierDao.getAll()) {
+            val ref = ensureSupplierRefForPush(s.id)
+            if (!supplierNeedsPush(ref)) continue
+            val row = InventorySupplierRow(id = ref.remoteId, ownerUserId = ownerUserId, name = s.name)
+            remote.upsertSuppliers(listOf(row)).getOrThrow()
+            val fp = fingerprintSupplierName(s.name)
+            supplierRemoteRefDao.updateRemoteApplyState(
+                s.id,
+                ref.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            n++
+        }
+        return n
+    }
+
+    private suspend fun pushCatalogCategories(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ): Int {
+        var n = 0
+        for (c in categoryDao.getAll()) {
+            val ref = ensureCategoryRefForPush(c.id)
+            if (!categoryNeedsPush(ref)) continue
+            val row = InventoryCategoryRow(id = ref.remoteId, ownerUserId = ownerUserId, name = c.name)
+            remote.upsertCategories(listOf(row)).getOrThrow()
+            val fp = fingerprintCategoryName(c.name)
+            categoryRemoteRefDao.updateRemoteApplyState(
+                c.id,
+                ref.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            n++
+        }
+        return n
+    }
+
+    private suspend fun pushCatalogProducts(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String
+    ): Int {
+        var n = 0
+        for (p in productDao.getAll()) {
+            val ref = ensureProductRefForPush(p.id)
+            if (!productNeedsPush(ref)) continue
+            val supR = p.supplierId?.let { ensureSupplierRefForPush(it).remoteId }
+            val catR = p.categoryId?.let { ensureCategoryRefForPush(it).remoteId }
+            val row = InventoryProductRow(
+                id = ref.remoteId,
+                ownerUserId = ownerUserId,
+                barcode = p.barcode,
+                itemNumber = p.itemNumber,
+                productName = p.productName,
+                secondProductName = p.secondProductName,
+                purchasePrice = p.purchasePrice,
+                retailPrice = p.retailPrice,
+                supplierId = supR,
+                categoryId = catR,
+                stockQuantity = p.stockQuantity
+            )
+            remote.upsertProducts(listOf(row)).getOrThrow()
+            val fp = fingerprintProductRow(p, supR, catR)
+            productRemoteRefDao.updateRemoteApplyState(
+                p.id,
+                ref.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            n++
+        }
+        return n
+    }
+
+    private suspend fun applyRemoteSupplierInbound(row: InventorySupplierRow): Boolean {
+        val fp = fingerprintSupplierName(row.name)
+        val existingRef = supplierRemoteRefDao.getByRemoteId(row.id)
+        if (existingRef != null) {
+            if (existingRef.lastRemotePayloadFingerprint == fp &&
+                existingRef.localChangeRevision == existingRef.lastSyncedLocalRevision
+            ) {
+                return false
+            }
+            supplierDao.getById(existingRef.supplierId) ?: return false
+            val name = row.name.trim()
+            try {
+                supplierDao.rename(existingRef.supplierId, name)
+            } catch (_: SQLiteConstraintException) {
+                return false
+            }
+            supplierRemoteRefDao.updateRemoteApplyState(
+                existingRef.supplierId,
+                existingRef.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            return true
+        }
+        val name = row.name.trim()
+        val local = supplierDao.findByNameIgnoreCase(name)
+        val localId = local?.id ?: run {
+            val ins = supplierDao.insert(Supplier(name = name))
+            when {
+                ins > 0L -> ins
+                else -> supplierDao.findByNameIgnoreCase(name)?.id ?: return false
+            }
+        }
+        val bridgeForRow = supplierRemoteRefDao.getBySupplierId(localId)
+        if (bridgeForRow != null && bridgeForRow.remoteId != row.id) return false
+        if (bridgeForRow != null) return false
+        supplierRemoteRefDao.insert(
+            SupplierRemoteRef(
+                supplierId = localId,
+                remoteId = row.id,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = System.currentTimeMillis(),
+                lastRemotePayloadFingerprint = fp
+            )
+        )
+        return true
+    }
+
+    private suspend fun applyRemoteCategoryInbound(row: InventoryCategoryRow): Boolean {
+        val fp = fingerprintCategoryName(row.name)
+        val existingRef = categoryRemoteRefDao.getByRemoteId(row.id)
+        if (existingRef != null) {
+            if (existingRef.lastRemotePayloadFingerprint == fp &&
+                existingRef.localChangeRevision == existingRef.lastSyncedLocalRevision
+            ) {
+                return false
+            }
+            categoryDao.getById(existingRef.categoryId) ?: return false
+            val name = row.name.trim()
+            try {
+                categoryDao.rename(existingRef.categoryId, name)
+            } catch (_: SQLiteConstraintException) {
+                return false
+            }
+            categoryRemoteRefDao.updateRemoteApplyState(
+                existingRef.categoryId,
+                existingRef.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            return true
+        }
+        val name = row.name.trim()
+        val local = categoryDao.findByName(name)
+        val localId = local?.id ?: run {
+            val ins = categoryDao.insert(Category(name = name))
+            when {
+                ins > 0L -> ins
+                else -> categoryDao.findByName(name)?.id ?: return false
+            }
+        }
+        val bridgeForRow = categoryRemoteRefDao.getByCategoryId(localId)
+        if (bridgeForRow != null && bridgeForRow.remoteId != row.id) return false
+        if (bridgeForRow != null) return false
+        categoryRemoteRefDao.insert(
+            CategoryRemoteRef(
+                categoryId = localId,
+                remoteId = row.id,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = System.currentTimeMillis(),
+                lastRemotePayloadFingerprint = fp
+            )
+        )
+        return true
+    }
+
+    private suspend fun applyRemoteProductInbound(row: InventoryProductRow): Boolean {
+        val fp = fingerprintProductInbound(row)
+        val supLocal = row.supplierId?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
+        val catLocal = row.categoryId?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }
+        val existingRef = productRemoteRefDao.getByRemoteId(row.id)
+        if (existingRef != null) {
+            if (existingRef.lastRemotePayloadFingerprint == fp &&
+                existingRef.localChangeRevision == existingRef.lastSyncedLocalRevision
+            ) {
+                return false
+            }
+            val cur = productDao.getById(existingRef.productId) ?: return false
+            val merged = cur.copy(
+                barcode = row.barcode.trim(),
+                itemNumber = row.itemNumber,
+                productName = row.productName,
+                secondProductName = row.secondProductName,
+                purchasePrice = row.purchasePrice,
+                retailPrice = row.retailPrice,
+                supplierId = supLocal,
+                categoryId = catLocal,
+                stockQuantity = row.stockQuantity ?: cur.stockQuantity
+            )
+            try {
+                productDao.update(merged)
+            } catch (_: SQLiteConstraintException) {
+                return false
+            }
+            productRemoteRefDao.updateRemoteApplyState(
+                existingRef.productId,
+                existingRef.localChangeRevision,
+                System.currentTimeMillis(),
+                fp
+            )
+            return true
+        }
+        val bc = row.barcode.trim()
+        val localByBarcode = productDao.findByBarcode(bc)
+        val targetId: Long
+        if (localByBarcode != null) {
+            val other = productRemoteRefDao.getByProductId(localByBarcode.id)
+            if (other != null && other.remoteId != row.id) return false
+            targetId = localByBarcode.id
+            val merged = localByBarcode.copy(
+                itemNumber = row.itemNumber,
+                productName = row.productName,
+                secondProductName = row.secondProductName,
+                purchasePrice = row.purchasePrice,
+                retailPrice = row.retailPrice,
+                supplierId = supLocal,
+                categoryId = catLocal,
+                stockQuantity = row.stockQuantity ?: localByBarcode.stockQuantity
+            )
+            try {
+                productDao.update(merged)
+            } catch (_: SQLiteConstraintException) {
+                return false
+            }
+        } else {
+            val inserted = Product(
+                barcode = bc,
+                itemNumber = row.itemNumber,
+                productName = row.productName,
+                secondProductName = row.secondProductName,
+                purchasePrice = row.purchasePrice,
+                retailPrice = row.retailPrice,
+                supplierId = supLocal,
+                categoryId = catLocal,
+                stockQuantity = row.stockQuantity ?: 0.0
+            )
+            try {
+                productDao.insert(inserted)
+            } catch (_: SQLiteConstraintException) {
+                return false
+            }
+            targetId = productDao.findByBarcode(bc)?.id ?: return false
+        }
+        if (productRemoteRefDao.getByProductId(targetId) != null) return false
+        productRemoteRefDao.insert(
+            ProductRemoteRef(
+                productId = targetId,
+                remoteId = row.id,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = System.currentTimeMillis(),
+                lastRemotePayloadFingerprint = fp
+            )
+        )
+        return true
     }
 }

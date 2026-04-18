@@ -568,4 +568,17 @@
     <string name="account_checking">Verifica in corso\u2026</string>
     <string name="account_sign_in_google">Accedi con Google</string>
     <string name="account_sign_out">Esci dall\'account</string>
+
+    <!-- Catalogo cloud (task 013) — messaggi non tecnici -->
+    <string name="catalog_cloud_section_title">Catalogo sul cloud</string>
+    <string name="catalog_cloud_refresh">Aggiorna dal cloud</string>
+    <string name="catalog_cloud_state_syncing">Sincronizzazione in corso\u2026</string>
+    <string name="catalog_cloud_state_synced">Sincronizzato</string>
+    <string name="catalog_cloud_state_pending">Da sincronizzare</string>
+    <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
+    <string name="catalog_cloud_state_offline">Connessione assente o instabile</string>
+    <string name="catalog_cloud_state_sign_in_required">Accedi per sincronizzare il catalogo</string>
+    <string name="catalog_cloud_state_session_required">Serve accedere di nuovo per sincronizzare</string>
+    <string name="catalog_cloud_not_configured">Sincronizzazione cloud non disponibile su questo dispositivo</string>
+    <string name="catalog_cloud_last_ok">Ultimo aggiornamento riuscito: %1$s</string>
 </resources>

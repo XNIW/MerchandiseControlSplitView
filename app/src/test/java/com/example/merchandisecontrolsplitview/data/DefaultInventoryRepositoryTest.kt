@@ -1122,4 +1122,15 @@ class DefaultInventoryRepositoryTest {
         val updatedEntry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
         assertEquals("Original", updatedEntry.supplier) // remote ha vinto
     }
+
+    @Test
+    fun `addProduct registers catalog cloud pending work`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "catalog-cloud-pending-1",
+                productName = "Pending cloud"
+            )
+        )
+        assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+    }
 }
