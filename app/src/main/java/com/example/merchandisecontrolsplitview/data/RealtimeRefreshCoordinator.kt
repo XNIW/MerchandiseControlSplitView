@@ -57,7 +57,12 @@ import kotlinx.coroutines.launch
 class RealtimeRefreshCoordinator(
     private val repository: InventoryRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
-    val debounceMs: Long = DEBOUNCE_MS
+    val debounceMs: Long = DEBOUNCE_MS,
+    // Logger diagnostico iniettato: default no-op per restare compatibile con i test JVM
+    // esistenti che non includono Robolectric (il coordinator non usa android.util.Log
+    // direttamente). L'app reale inietta un wrapper su android.util.Log in
+    // MerchandiseControlApplication per osservabilità del percorso Realtime → Room.
+    private val logger: (String) -> Unit = {}
 ) {
     companion object {
         /** Finestra di debounce: nessun apply prima che trascorrano 2s dall'ultimo segnale. */
@@ -97,10 +102,16 @@ class RealtimeRefreshCoordinator(
     fun onRemoteSignal(signal: RemoteSignal) {
         when (signal) {
             is RemoteSignal.PayloadAvailable -> {
-                synchronized(bufferLock) {
+                val bufferedSize = synchronized(bufferLock) {
                     pendingBuffer[signal.payload.remoteId] = signal.payload // coalescing: l'ultimo vince
+                    pendingBuffer.size
                 }
                 _tickle.tryEmit(Unit)
+                logger(
+                    "onRemoteSignal accettato: remoteId=${signal.payload.remoteId} " +
+                        "payloadVersion=${signal.payload.payloadVersion} bufferSize=$bufferedSize " +
+                        "isForeground=$isForeground"
+                )
             }
         }
     }
@@ -142,13 +153,17 @@ class RealtimeRefreshCoordinator(
      * (il collect blocca finché runDrain non ritorna), quindi non ci sono catene concorrenti.
      */
     internal suspend fun runDrain() {
-        if (!isForeground) return
+        if (!isForeground) {
+            logger("runDrain saltato: app in background (buffer trattenuto)")
+            return
+        }
         val toApply: List<SessionRemotePayload>
         synchronized(bufferLock) {
             if (pendingBuffer.isEmpty()) return
             toApply = pendingBuffer.values.toList()
             pendingBuffer.clear()
         }
+        logger("runDrain: applying batch size=${toApply.size}")
         applyBatch(toApply)
     }
 
@@ -166,11 +181,17 @@ class RealtimeRefreshCoordinator(
 
     private suspend fun applyBatch(payloads: List<SessionRemotePayload>) {
         try {
-            repository.applyRemoteSessionPayloadBatch(payloads)
+            val result = repository.applyRemoteSessionPayloadBatch(payloads)
+            logger(
+                "applyBatch done: inserted=${result.inserted} updated=${result.updated} " +
+                    "skipped=${result.skipped} failed=${result.failed} " +
+                    "unsupported=${result.unsupported}"
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             // Swallow non-cancellation errors: a transient apply failure must not crash the coordinator.
+            logger("applyBatch error (swallowed): ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 }

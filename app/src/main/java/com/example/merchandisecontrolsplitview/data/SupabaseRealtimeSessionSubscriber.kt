@@ -38,8 +38,8 @@ import kotlin.time.Duration.Companion.seconds
  * locali: l'app resta pienamente offline-first.
  */
 class SupabaseRealtimeSessionSubscriber(
+    private val client: io.github.jan.supabase.SupabaseClient?,
     private val coordinator: RealtimeRefreshCoordinator,
-    private val config: SupabaseRealtimeConfig,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
@@ -60,22 +60,13 @@ class SupabaseRealtimeSessionSubscriber(
     private var subscribeJob: Job? = null
 
     fun start() {
-        if (!config.isEnabled) {
-            Log.i(TAG, "Supabase Realtime disabilitato: config assente")
+        if (client == null) {
+            Log.i(TAG, "Supabase Realtime disabilitato: client assente")
             return
         }
 
         synchronized(stateLock) {
             if (started) return
-
-            val client = createSupabaseClient(
-                supabaseUrl = config.projectUrl,
-                supabaseKey = config.publishableKey
-            ) {
-                install(Realtime) {
-                    reconnectDelay = 5.seconds
-                }
-            }
 
             val realtimeChannel = client.channel(CHANNEL_NAME)
             collectorJob = realtimeChannel
@@ -110,7 +101,7 @@ class SupabaseRealtimeSessionSubscriber(
         } ?: false
     }
 
-    fun shutdown() {
+    fun stop() {
         val realtimeChannel = synchronized(stateLock) {
             if (!started) return
             started = false
@@ -126,15 +117,18 @@ class SupabaseRealtimeSessionSubscriber(
                 throw cancelled
             } catch (error: Throwable) {
                 Log.w(TAG, "Errore durante unsubscribe realtime", error)
-            } finally {
-                try {
-                    realtimeChannel?.realtime?.disconnect()
-                } catch (error: Throwable) {
-                    Log.w(TAG, "Errore durante disconnect realtime", error)
-                }
-                scope.cancel()
             }
         }
+    }
+
+    fun shutdown() {
+        stop()
+        try {
+            client?.realtime?.disconnect()
+        } catch (error: Throwable) {
+            Log.w(TAG, "Errore durante disconnect realtime", error)
+        }
+        scope.cancel()
     }
 
     private suspend fun subscribeLoop(realtimeChannel: RealtimeChannel) {
@@ -157,11 +151,17 @@ class SupabaseRealtimeSessionSubscriber(
     }
 
     private fun forwardPayload(action: HasRecord) {
+        val actionKind = action::class.simpleName ?: "UnknownAction"
         val record = action.decodeRecordOrNull<SharedSheetSessionRecord>()
         if (record == null) {
-            Log.w(TAG, "Evento realtime ignorato: record non decodificabile")
+            Log.w(TAG, "Evento realtime ignorato: record non decodificabile (action=$actionKind)")
             return
         }
+        Log.i(
+            TAG,
+            "Evento realtime ricevuto: action=$actionKind remoteId=${record.remoteId} " +
+                "payloadVersion=${record.payloadVersion} → forward a coordinator"
+        )
         coordinator.onRemoteSignal(
             RemoteSignal.PayloadAvailable(record.toSessionRemotePayload())
         )

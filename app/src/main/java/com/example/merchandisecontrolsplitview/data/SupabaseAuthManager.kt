@@ -44,8 +44,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Non scrive Room, non altera repository, non gestisce dati business.
  */
 class SupabaseAuthManager(
-    supabaseUrl: String,
-    supabaseKey: String,
+    private val client: io.github.jan.supabase.SupabaseClient?,
     private val googleWebClientId: String,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
@@ -54,23 +53,7 @@ class SupabaseAuthManager(
         internal const val RESTORE_TIMEOUT_MS = 10_000L
     }
 
-    private val configPresent = supabaseUrl.isNotBlank()
-        && supabaseKey.isNotBlank()
-        && googleWebClientId.isNotBlank()
-
-    private val client = if (configPresent) {
-        try {
-            createSupabaseClient(supabaseUrl, supabaseKey) {
-                install(Auth)
-            }
-        } catch (e: Throwable) {
-            // Robolectric / ambienti senza SettingsSessionManager: degrada a disabilitato.
-            Log.w(TAG, "Creazione client Supabase Auth fallita, auth disabilitato", e)
-            null
-        }
-    } else null
-
-    /** true se configurazione presente E client creato con successo. */
+    /** true se il client è stato iniettato con successo e ha il modulo Auth. */
     val isEnabled: Boolean = client != null
 
     private val _state = MutableStateFlow<AuthState>(

@@ -67,10 +67,11 @@ class SupabaseRealtimeSessionSubscriberLiveTest {
 
     @Test
     fun `live realtime insert is materialized into Room`() = runBlocking {
-        val config = SupabaseRealtimeConfig.fromBuildConfig()
+        val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val isEnabled = application.supabaseClient != null
         val remoteId = System.getenv(TEST_REMOTE_ID_ENV)?.trim().orEmpty()
 
-        assumeTrue("SUPABASE realtime config assente", config.isEnabled)
+        assumeTrue("SUPABASE realtime config assente", isEnabled)
         assumeTrue("SUPABASE_TEST_REMOTE_ID mancante", remoteId.isNotBlank())
 
         val coordinator = RealtimeRefreshCoordinator(
@@ -78,8 +79,8 @@ class SupabaseRealtimeSessionSubscriberLiveTest {
             debounceMs = 50L
         )
         val subscriber = SupabaseRealtimeSessionSubscriber(
-            coordinator = coordinator,
-            config = config
+            client = application.supabaseClient,
+            coordinator = coordinator
         )
 
         try {

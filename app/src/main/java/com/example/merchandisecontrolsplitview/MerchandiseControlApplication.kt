@@ -10,13 +10,17 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
-import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeConfig
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.realtime.Realtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Application class singleton (task 010, task 011).
@@ -41,12 +45,12 @@ import kotlinx.coroutines.launch
  * source of truth per lo stato sessione. Se la configurazione è assente,
  * si auto-disabilita e l'app resta in puro offline-first.
  *
- * ## Wiring auth → componenti remoti (task 011, patch 5)
+ * ## Wiring auth → componenti remoti (task 011 patch 5, task 012)
  * [observeAuthForRemoteComponents] è il punto architetturale unico dove i cambi
- * di stato auth controllano il lifecycle dei componenti remoti. Attualmente il
- * subscriber usa anon key su tabella condivisa e viene avviato indipendentemente
- * dallo stato auth. Task 012 (RLS/ownership) aggiungerà qui la logica di
- * auth-gating quando le tabelle richiederanno JWT utente.
+ * di stato auth controllano il lifecycle dei componenti remoti. Dopo il task 012
+ * (RLS/ownership su `shared_sheet_sessions` con policy `auth.uid() = owner_user_id`)
+ * il subscriber viene avviato solo in `SignedIn` e fermato in `SignedOut` /
+ * `ErrorRecoverable`: il canale Realtime usa il JWT del client Supabase condiviso.
  */
 class MerchandiseControlApplication : Application() {
 
@@ -76,21 +80,43 @@ class MerchandiseControlApplication : Application() {
     }
 
     val realtimeRefreshCoordinator: RealtimeRefreshCoordinator by lazy {
-        RealtimeRefreshCoordinator(repository)
+        RealtimeRefreshCoordinator(
+            repository = repository,
+            logger = { message -> Log.i("RealtimeCoordinator", message) }
+        )
+    }
+
+    val supabaseClient: SupabaseClient? by lazy {
+        val configPresent = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()
+        if (configPresent) {
+            try {
+                createSupabaseClient(
+                    supabaseUrl = BuildConfig.SUPABASE_URL,
+                    supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
+                ) {
+                    install(Auth)
+                    install(Realtime) {
+                        reconnectDelay = 5.seconds
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Creazione client Supabase fallita", e)
+                null
+            }
+        } else null
     }
 
     val authManager: SupabaseAuthManager by lazy {
         SupabaseAuthManager(
-            supabaseUrl = BuildConfig.SUPABASE_URL,
-            supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
+            client = supabaseClient,
             googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
         )
     }
 
     val realtimeSessionSubscriber: SupabaseRealtimeSessionSubscriber by lazy {
         SupabaseRealtimeSessionSubscriber(
-            coordinator = realtimeRefreshCoordinator,
-            config = SupabaseRealtimeConfig.fromBuildConfig()
+            client = supabaseClient,
+            coordinator = realtimeRefreshCoordinator
         )
     }
 
@@ -120,13 +146,14 @@ class MerchandiseControlApplication : Application() {
     /**
      * Punto unico di riallineamento componenti remoti al cambio stato auth.
      *
-     * Osserva [authManager].[state][SupabaseAuthManager.state] e avvia i componenti
-     * remoti quando lo stato auth si stabilizza. Attualmente il subscriber usa anon key
-     * su `shared_sheet_sessions` (tabella condivisa), quindi viene avviato
-     * indipendentemente dallo stato auth.
-     *
-     * **Task 012 (RLS/ownership):** qui si aggiungerà la logica di auth-gating
-     * (es. avviare il subscriber solo con sessione valida, fermarlo al logout).
+     * Osserva [authManager].[state][SupabaseAuthManager.state] e controlla il
+     * lifecycle del subscriber Realtime in funzione della sessione:
+     * - `SignedIn` → `start()` del subscriber (il canale Realtime usa il JWT
+     *   del client condiviso, coerente con la policy RLS `auth.uid() = owner_user_id`
+     *   introdotta in task 012);
+     * - `SignedOut` / `ErrorRecoverable` → `stop()` prudenziale per evitare che
+     *   un socket Realtime orfano resti attivo senza sessione valida;
+     * - `Checking` → no-op (stato transitorio durante bootstrap/sign-in).
      */
     private fun observeAuthForRemoteComponents() {
         appScope.launch {
@@ -137,28 +164,18 @@ class MerchandiseControlApplication : Application() {
                     }
                     is AuthState.SignedIn -> {
                         Log.i(TAG, "Auth: sessione attiva (userId=${state.userId})")
-                        ensureRealtimeStarted()
+                        realtimeSessionSubscriber.start()
                     }
                     is AuthState.SignedOut -> {
-                        Log.i(TAG, "Auth: nessuna sessione")
-                        ensureRealtimeStarted()
+                        Log.i(TAG, "Auth: nessuna sessione, fermo realtime")
+                        realtimeSessionSubscriber.stop()
                     }
                     is AuthState.ErrorRecoverable -> {
-                        Log.w(TAG, "Auth: errore recuperabile")
-                        ensureRealtimeStarted()
+                        Log.w(TAG, "Auth: errore recuperabile, fermo realtime prudenzialmente")
+                        realtimeSessionSubscriber.stop()
                     }
                 }
             }
         }
-    }
-
-    /**
-     * Avvia il subscriber Realtime se non già attivo.
-     *
-     * Idempotente: [SupabaseRealtimeSessionSubscriber.start] è no-op se già avviato.
-     * Task 012: sostituire con logica condizionale basata su [AuthState].
-     */
-    private fun ensureRealtimeStarted() {
-        realtimeSessionSubscriber.start()
     }
 }
