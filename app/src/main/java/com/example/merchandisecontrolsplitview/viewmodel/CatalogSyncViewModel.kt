@@ -175,6 +175,14 @@ class CatalogSyncViewModel(
                         canRefresh = true
                     )
                 }
+                if (successAt == null) {
+                    return CatalogSyncUiState(
+                        primaryMessage = str(R.string.catalog_cloud_state_pending),
+                        secondaryMessage = null,
+                        isSyncing = false,
+                        canRefresh = true
+                    )
+                }
                 return CatalogSyncUiState(
                     primaryMessage = str(R.string.catalog_cloud_state_synced),
                     secondaryMessage = secondary,

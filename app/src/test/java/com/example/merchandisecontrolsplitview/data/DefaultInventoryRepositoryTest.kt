@@ -1279,7 +1279,215 @@ class DefaultInventoryRepositoryTest {
         )
         val result = repository.syncCatalogWithRemote(FakeCatalogRemote016(), priceRemote, "00000000-0000-4000-8000-0000000000ff")
         assertTrue(result.isSuccess)
-        assertTrue(result.getOrThrow().deferredProductPricesNoProductRef >= 2)
+        val summary = result.getOrThrow()
+        assertTrue(summary.deferredProductPricesNoProductRef >= 2)
+        assertTrue(summary.pushedProductPrices >= 2)
+        val purchase = repository.getPriceSeries(p.id, "PURCHASE").first().first()
+        val retail = repository.getPriceSeries(p.id, "RETAIL").first().first()
+        assertNotNull(db.productRemoteRefDao().getByProductId(p.id))
+        assertNotNull(db.productPriceRemoteRefDao().getByProductPriceId(purchase.id))
+        assertNotNull(db.productPriceRemoteRefDao().getByProductPriceId(retail.id))
+    }
+
+    @Test
+    fun `021 bootstrap on empty Room with populated cloud materializes catalog prices and bridges`() = runTest {
+        val owner = OWNER_021
+        val bundle = bootstrapBundle021(owner)
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(bootstrapPurchasePrice021(owner))
+        }
+
+        val result = repository.syncCatalogWithRemote(
+            FakeCatalogRemote016(bundle),
+            priceRemote,
+            owner
+        )
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pulledSuppliers)
+        assertEquals(1, summary.pulledCategories)
+        assertEquals(1, summary.pulledProducts)
+        assertEquals(1, summary.pulledProductPrices)
+        assertEquals(0, summary.pushedProductPrices)
+        assertFalse(summary.priceSyncFailed)
+        val supplier = repository.getAllSuppliers().single()
+        val category = repository.getAllCategories().single()
+        val product = repository.findProductByBarcode(BOOTSTRAP_BARCODE_021)!!
+        val purchaseHistory = repository.getPriceSeries(product.id, "PURCHASE").first()
+        assertEquals("Bootstrap Supplier 021", supplier.name)
+        assertEquals("Bootstrap Category 021", category.name)
+        assertEquals(supplier.id, product.supplierId)
+        assertEquals(category.id, product.categoryId)
+        assertEquals(1, purchaseHistory.size)
+        assertEquals(12.34, purchaseHistory.single().price, 0.0001)
+        assertEquals(BOOTSTRAP_SUPPLIER_REMOTE_021, db.supplierRemoteRefDao().getBySupplierId(supplier.id)!!.remoteId)
+        assertEquals(BOOTSTRAP_CATEGORY_REMOTE_021, db.categoryRemoteRefDao().getByCategoryId(category.id)!!.remoteId)
+        assertEquals(BOOTSTRAP_PRODUCT_REMOTE_021, db.productRemoteRefDao().getByProductId(product.id)!!.remoteId)
+        assertEquals(BOOTSTRAP_PRICE_REMOTE_021, db.productPriceRemoteRefDao().getByProductPriceId(purchaseHistory.single().id)!!.remoteId)
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `021 reinstall with same account and populated cloud is equivalent to empty Room bootstrap`() = runTest {
+        val owner = OWNER_021
+        val remote = FakeCatalogRemote016(bootstrapBundle021(owner))
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(bootstrapPurchasePrice021(owner))
+        }
+
+        val result = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, repository.getAllSuppliers().size)
+        assertEquals(1, repository.getAllCategories().size)
+        assertEquals(1, repository.getAllProducts().size)
+        assertEquals(1, repository.getPriceSeries(repository.findProductByBarcode(BOOTSTRAP_BARCODE_021)!!.id, "PURCHASE").first().size)
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `021 second manual refresh after bootstrap is idempotent without duplicated catalog or prices`() = runTest {
+        val owner = OWNER_021
+        val remote = FakeCatalogRemote016(bootstrapBundle021(owner))
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(bootstrapPurchasePrice021(owner))
+        }
+
+        val first = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+        assertTrue(first.isSuccess)
+        val product = repository.findProductByBarcode(BOOTSTRAP_BARCODE_021)!!
+        val firstPriceId = repository.getPriceSeries(product.id, "PURCHASE").first().single().id
+
+        val second = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+
+        assertTrue(second.isSuccess)
+        val summary = second.getOrThrow()
+        assertEquals(0, summary.pushedSuppliers)
+        assertEquals(0, summary.pushedCategories)
+        assertEquals(0, summary.pushedProducts)
+        assertEquals(0, summary.pulledSuppliers)
+        assertEquals(0, summary.pulledCategories)
+        assertEquals(0, summary.pulledProducts)
+        assertEquals(0, summary.pulledProductPrices)
+        assertEquals(0, summary.pushedProductPrices)
+        assertFalse(summary.priceSyncFailed)
+        assertEquals(1, repository.getAllSuppliers().size)
+        assertEquals(1, repository.getAllCategories().size)
+        assertEquals(1, repository.getAllProducts().size)
+        assertEquals(listOf(firstPriceId), repository.getPriceSeries(product.id, "PURCHASE").first().map { it.id })
+        assertTrue(priceRemote.upsertBatches.isEmpty())
+    }
+
+    @Test
+    fun `021 price remote not configured still completes catalog bootstrap`() = runTest {
+        val owner = OWNER_021
+        val priceRemote = RecordingPriceRemote016(configured = false).apply {
+            failIfCalled = true
+        }
+
+        val result = repository.syncCatalogWithRemote(
+            FakeCatalogRemote016(bootstrapBundle021(owner)),
+            priceRemote,
+            owner
+        )
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pulledProducts)
+        assertEquals(0, summary.pulledProductPrices)
+        assertEquals(0, summary.pushedProductPrices)
+        assertFalse(summary.priceSyncFailed)
+        assertNotNull(repository.findProductByBarcode(BOOTSTRAP_BARCODE_021))
+        assertEquals(0, priceRemote.fetchCount)
+        assertTrue(priceRemote.upsertBatches.isEmpty())
+    }
+
+    @Test
+    fun `021 aligned catalog with zero remote price rows does not become price failure`() = runTest {
+        val owner = OWNER_021
+        val result = repository.syncCatalogWithRemote(
+            FakeCatalogRemote016(bootstrapBundle021(owner)),
+            RecordingPriceRemote016(),
+            owner
+        )
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pulledProducts)
+        assertEquals(0, summary.pulledProductPrices)
+        assertEquals(0, summary.pushedProductPrices)
+        assertFalse(summary.priceSyncFailed)
+        val product = repository.findProductByBarcode(BOOTSTRAP_BARCODE_021)!!
+        assertTrue(repository.getPriceSeries(product.id, "PURCHASE").first().isEmpty())
+    }
+
+    @Test
+    fun `021 price sync failure preserves catalog apply and manual retry pulls prices`() = runTest {
+        val owner = OWNER_021
+        val remote = FakeCatalogRemote016(bootstrapBundle021(owner))
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(bootstrapPurchasePrice021(owner))
+            failNextFetch = IOException("price network")
+        }
+
+        val first = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+
+        assertTrue(first.isSuccess)
+        assertTrue(first.getOrThrow().priceSyncFailed)
+        val product = repository.findProductByBarcode(BOOTSTRAP_BARCODE_021)!!
+        assertTrue(repository.getPriceSeries(product.id, "PURCHASE").first().isEmpty())
+        assertNotNull(db.productRemoteRefDao().getByProductId(product.id))
+
+        val second = repository.syncCatalogWithRemote(remote, priceRemote, owner)
+
+        assertTrue(second.isSuccess)
+        val summary = second.getOrThrow()
+        assertFalse(summary.priceSyncFailed)
+        assertEquals(1, summary.pulledProductPrices)
+        assertEquals(1, repository.getPriceSeries(product.id, "PURCHASE").first().size)
+    }
+
+    @Test
+    fun `021 drain tombstone failure aborts then manual retry drains and applies catalog once`() = runTest {
+        val owner = OWNER_021
+        val local = repository.addSupplier("Retry Tombstone 021")!!
+        val tombstoneRemoteId = "00000000-0000-4000-8000-000000000219"
+        db.openHelper.writableDatabase.execSQL("DELETE FROM supplier_remote_refs WHERE supplierId = ${local.id}")
+        db.supplierRemoteRefDao().insert(SupplierRemoteRef(supplierId = local.id, remoteId = tombstoneRemoteId))
+        repository.deleteCatalogEntry(
+            CatalogEntityKind.SUPPLIER,
+            local.id,
+            CatalogDeleteStrategy.DeleteIfUnused
+        )
+        val remote = FakeCatalogRemote016(bootstrapBundle021(owner)).apply {
+            failNextSupplierTombstone = IOException("network")
+        }
+
+        val first = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(), owner)
+
+        assertTrue(first.isFailure)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, repository.getAllProducts().size)
+        val pendingAfterFailure = db.pendingCatalogTombstoneDao().listPendingOrdered().single()
+        assertEquals(1, pendingAfterFailure.attemptCount)
+
+        val second = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(), owner)
+
+        assertTrue(second.isSuccess)
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+        assertEquals(1, remote.supplierTombstones.size)
+        assertEquals(tombstoneRemoteId, remote.supplierTombstones.single().id)
+        assertEquals(1, remote.fetchCount)
+        assertEquals(1, repository.getAllProducts().size)
+
+        val third = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(), owner)
+
+        assertTrue(third.isSuccess)
+        assertEquals(2, remote.fetchCount)
+        assertEquals(1, repository.getAllProducts().size)
+        assertEquals(0, third.getOrThrow().pulledProducts)
     }
 
     @Test
@@ -1411,11 +1619,32 @@ private class FakeCatalogRemote016(
     val supplierTombstones = mutableListOf<CatalogTombstonePatch>()
     val categoryTombstones = mutableListOf<CatalogTombstonePatch>()
     val productTombstones = mutableListOf<CatalogTombstonePatch>()
+    val upsertedSuppliers = mutableListOf<List<InventorySupplierRow>>()
+    val upsertedCategories = mutableListOf<List<InventoryCategoryRow>>()
+    val upsertedProducts = mutableListOf<List<InventoryProductRow>>()
+    var fetchCount = 0
+    var failNextFetch: Throwable? = null
     var failNextSupplierTombstone: Throwable? = null
-    override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>) = Result.success(Unit)
-    override suspend fun upsertCategories(rows: List<InventoryCategoryRow>) = Result.success(Unit)
-    override suspend fun upsertProducts(rows: List<InventoryProductRow>) = Result.success(Unit)
-    override suspend fun fetchCatalog() = Result.success(bundle)
+    override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
+        upsertedSuppliers.add(rows)
+        return Result.success(Unit)
+    }
+    override suspend fun upsertCategories(rows: List<InventoryCategoryRow>): Result<Unit> {
+        upsertedCategories.add(rows)
+        return Result.success(Unit)
+    }
+    override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+        upsertedProducts.add(rows)
+        return Result.success(Unit)
+    }
+    override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> {
+        fetchCount++
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(bundle)
+    }
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> {
         failNextSupplierTombstone?.let { t ->
             failNextSupplierTombstone = null
@@ -1434,13 +1663,83 @@ private class FakeCatalogRemote016(
     }
 }
 
-private class RecordingPriceRemote016 : ProductPriceRemoteDataSource {
+private class RecordingPriceRemote016(
+    private val configured: Boolean = true
+) : ProductPriceRemoteDataSource {
     val upsertBatches = mutableListOf<List<InventoryProductPriceRow>>()
     var fetchRows: List<InventoryProductPriceRow> = emptyList()
-    override val isConfigured = true
-    override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>) = run {
+    var fetchCount = 0
+    var failIfCalled = false
+    var failNextFetch: Throwable? = null
+    var failNextUpsert: Throwable? = null
+    override val isConfigured get() = configured
+    override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>): Result<Unit> {
+        if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
+        failNextUpsert?.let { t ->
+            failNextUpsert = null
+            return Result.failure(t)
+        }
         upsertBatches.add(rows)
-        Result.success(Unit)
+        return Result.success(Unit)
     }
-    override suspend fun fetchProductPrices() = Result.success(fetchRows)
+    override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> {
+        if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
+        fetchCount++
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(fetchRows)
+    }
 }
+
+private const val OWNER_021 = "00000000-0000-4000-8000-000000000210"
+private const val BOOTSTRAP_SUPPLIER_REMOTE_021 = "00000000-0000-4000-8000-000000000211"
+private const val BOOTSTRAP_CATEGORY_REMOTE_021 = "00000000-0000-4000-8000-000000000212"
+private const val BOOTSTRAP_PRODUCT_REMOTE_021 = "00000000-0000-4000-8000-000000000213"
+private const val BOOTSTRAP_PRICE_REMOTE_021 = "00000000-0000-4000-8000-000000000214"
+private const val BOOTSTRAP_BARCODE_021 = "bootstrap-021"
+
+private fun bootstrapBundle021(owner: String): InventoryCatalogFetchBundle =
+    InventoryCatalogFetchBundle(
+        suppliers = listOf(
+            InventorySupplierRow(
+                id = BOOTSTRAP_SUPPLIER_REMOTE_021,
+                ownerUserId = owner,
+                name = "Bootstrap Supplier 021"
+            )
+        ),
+        categories = listOf(
+            InventoryCategoryRow(
+                id = BOOTSTRAP_CATEGORY_REMOTE_021,
+                ownerUserId = owner,
+                name = "Bootstrap Category 021"
+            )
+        ),
+        products = listOf(
+            InventoryProductRow(
+                id = BOOTSTRAP_PRODUCT_REMOTE_021,
+                ownerUserId = owner,
+                barcode = BOOTSTRAP_BARCODE_021,
+                productName = "Bootstrap Product 021",
+                purchasePrice = 12.34,
+                retailPrice = 18.99,
+                supplierId = BOOTSTRAP_SUPPLIER_REMOTE_021,
+                categoryId = BOOTSTRAP_CATEGORY_REMOTE_021,
+                stockQuantity = 7.0
+            )
+        )
+    )
+
+private fun bootstrapPurchasePrice021(owner: String): InventoryProductPriceRow =
+    InventoryProductPriceRow(
+        id = BOOTSTRAP_PRICE_REMOTE_021,
+        ownerUserId = owner,
+        productId = BOOTSTRAP_PRODUCT_REMOTE_021,
+        type = "PURCHASE",
+        price = 12.34,
+        effectiveAt = "2026-04-18 10:00:00",
+        source = "REMOTE_BOOTSTRAP",
+        note = null,
+        createdAt = "2026-04-18 10:00:00"
+    )
