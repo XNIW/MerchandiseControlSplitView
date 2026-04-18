@@ -556,6 +556,7 @@
     <string name="catalog_cloud_state_synced">已同步</string>
     <string name="catalog_cloud_state_pending">待同步</string>
     <string name="catalog_cloud_state_last_failed">上次未成功</string>
+    <string name="catalog_cloud_state_prices_incomplete">目录已更新；价格历史未完成。可再次刷新重试。</string>
     <string name="catalog_cloud_state_offline">网络不可用或不稳定</string>
     <string name="catalog_cloud_state_sign_in_required">登录后即可同步目录</string>
     <string name="catalog_cloud_state_session_required">请重新登录以同步</string>

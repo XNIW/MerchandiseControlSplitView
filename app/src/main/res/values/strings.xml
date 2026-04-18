@@ -576,6 +576,7 @@
     <string name="catalog_cloud_state_synced">Sincronizzato</string>
     <string name="catalog_cloud_state_pending">Da sincronizzare</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
+    <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; storico prezzi non completato. Puoi riprovare.</string>
     <string name="catalog_cloud_state_offline">Connessione assente o instabile</string>
     <string name="catalog_cloud_state_sign_in_required">Accedi per sincronizzare il catalogo</string>
     <string name="catalog_cloud_state_session_required">Serve accedere di nuovo per sincronizzare</string>

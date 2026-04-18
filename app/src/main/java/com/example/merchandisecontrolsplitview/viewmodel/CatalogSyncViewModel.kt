@@ -42,6 +42,8 @@ class CatalogSyncViewModel(
     private enum class ErrorKind {
         Offline,
         Session,
+        /** Catalog cloud sync completed; price-history block failed (task 017 — partial success). */
+        CatalogOkPricesIncomplete,
         Generic
     }
 
@@ -145,6 +147,15 @@ class CatalogSyncViewModel(
                             canRefresh = true
                         )
                     }
+                    ErrorKind.CatalogOkPricesIncomplete -> {
+                        val secondary = buildSecondaryAfterSync(successAt, lastSummary)
+                        return CatalogSyncUiState(
+                            primaryMessage = str(R.string.catalog_cloud_state_prices_incomplete),
+                            secondaryMessage = secondary,
+                            isSyncing = false,
+                            canRefresh = true
+                        )
+                    }
                     ErrorKind.Generic -> {
                         return CatalogSyncUiState(
                             primaryMessage = str(R.string.catalog_cloud_state_last_failed),
@@ -155,7 +166,7 @@ class CatalogSyncViewModel(
                     }
                     null -> { /* below */ }
                 }
-                val secondary = buildSecondarySuccessLine(successAt, lastSummary)
+                val secondary = buildSecondaryAfterSync(successAt, lastSummary)
                 if (pending) {
                     return CatalogSyncUiState(
                         primaryMessage = str(R.string.catalog_cloud_state_pending),
@@ -179,7 +190,8 @@ class CatalogSyncViewModel(
         return sdf.format(java.util.Date(epochMs))
     }
 
-    private fun buildSecondarySuccessLine(successAt: Long?, lastSummary: CatalogSyncSummary?): String? {
+    /** Secondary lines after a sync attempt: last-ok time + optional price stats from summary. */
+    private fun buildSecondaryAfterSync(successAt: Long?, lastSummary: CatalogSyncSummary?): String? {
         val parts = mutableListOf<String>()
         successAt?.let { parts.add(str(R.string.catalog_cloud_last_ok, formatTime(it))) }
         lastSummary?.let { s ->
@@ -218,7 +230,8 @@ class CatalogSyncViewModel(
                     onSuccess = { summary ->
                         lastCatalogSyncSummary.value = summary
                         if (summary.priceSyncFailed) {
-                            lastErrorKind.value = ErrorKind.Generic
+                            lastSuccessAt.value = System.currentTimeMillis()
+                            lastErrorKind.value = ErrorKind.CatalogOkPricesIncomplete
                         } else {
                             lastSuccessAt.value = System.currentTimeMillis()
                             lastErrorKind.value = null

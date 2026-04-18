@@ -555,6 +555,7 @@
     <string name="catalog_cloud_state_synced">Actualizado</string>
     <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
     <string name="catalog_cloud_state_last_failed">El ultimo intento fallo</string>
+    <string name="catalog_cloud_state_prices_incomplete">Catalogo actualizado; el historial de precios no termino. Toca actualizar para reintentar.</string>
     <string name="catalog_cloud_state_offline">Sin conexion estable</string>
     <string name="catalog_cloud_state_sign_in_required">Inicia sesion para sincronizar el catalogo</string>
     <string name="catalog_cloud_state_session_required">Vuelve a iniciar sesion para sincronizar</string>

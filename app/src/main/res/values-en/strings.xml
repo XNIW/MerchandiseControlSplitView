@@ -557,6 +557,7 @@
     <string name="catalog_cloud_state_synced">Up to date</string>
     <string name="catalog_cloud_state_pending">Waiting to sync</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>
+    <string name="catalog_cloud_state_prices_incomplete">Catalog updated; price history did not finish. Tap refresh to retry.</string>
     <string name="catalog_cloud_state_offline">No stable connection</string>
     <string name="catalog_cloud_state_sign_in_required">Sign in to sync your catalog</string>
     <string name="catalog_cloud_state_session_required">Sign in again to sync</string>
