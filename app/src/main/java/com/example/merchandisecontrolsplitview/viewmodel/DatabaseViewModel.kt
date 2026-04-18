@@ -173,19 +173,10 @@ class DatabaseViewModel(
         _supplierInputText.value = query
     }
 
-    val suppliers: StateFlow<List<Supplier>> = combine(
-        _supplierInputText
-            .debounce(300L)
-            .distinctUntilChanged(),
-        _supplierCatalogRefresh
-    ) { query, _ ->
-        query
-    }.flatMapLatest { query ->
-        if (query.isBlank())
-            flow { emit(repository.getAllSuppliers()) }
-        else
-            flow { emit(repository.searchSuppliersByName(query)) }
-    }
+    val suppliers: StateFlow<List<Supplier>> = _supplierInputText
+        .debounce(300L)
+        .distinctUntilChanged()
+        .flatMapLatest { query -> repository.observeSuppliersForHubSearch(query) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private val _categoryInputText = MutableStateFlow("")
@@ -195,19 +186,10 @@ class DatabaseViewModel(
         _categoryInputText.value = query
     }
 
-    val categories: StateFlow<List<Category>> = combine(
-        _categoryInputText
-            .debounce(300L)
-            .distinctUntilChanged(),
-        _categoryCatalogRefresh
-    ) { query, _ ->
-        query
-    }.flatMapLatest { query ->
-        if (query.isBlank())
-            flow { emit(repository.getAllCategories()) }
-        else
-            flow { emit(repository.searchCategoriesByName(query)) }
-    }
+    val categories: StateFlow<List<Category>> = _categoryInputText
+        .debounce(300L)
+        .distinctUntilChanged()
+        .flatMapLatest { query -> repository.observeCategoriesForHubSearch(query) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private var pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList()
@@ -391,32 +373,27 @@ class DatabaseViewModel(
             .debounce(250L)
             .distinctUntilChanged()
 
-        return combine(debouncedQuery, refreshFlow) { query, _ ->
-            query
-        }.transformLatest { query ->
-            emit(
-                CatalogSectionUiState(
-                    query = query,
-                    isLoading = true
-                )
-            )
-
-            val trimmedQuery = query.trim().takeIf { it.isNotEmpty() }
-            val sectionState = try {
-                CatalogSectionUiState(
-                    query = query,
-                    items = repository.getCatalogItems(kind, trimmedQuery)
-                )
-            } catch (throwable: Throwable) {
-                Log.e("DATABASE_HUB", "Unable to load catalog section: $kind", throwable)
-                CatalogSectionUiState(
-                    query = query,
-                    errorMessage = catalogLoadErrorMessage(kind)
-                )
-            }
-
-            emit(sectionState)
-        }.stateIn(
+        return combine(debouncedQuery, refreshFlow) { query, _ -> query }
+            .flatMapLatest { query ->
+                val trimmedQuery = query.trim().takeIf { it.isNotEmpty() }
+                repository.observeCatalogItems(kind, trimmedQuery)
+                    .map { items ->
+                        CatalogSectionUiState(query = query, isLoading = false, items = items)
+                    }
+                    .onStart {
+                        emit(CatalogSectionUiState(query = query, isLoading = true))
+                    }
+                    .catch { throwable ->
+                        Log.e("DATABASE_HUB", "Unable to load catalog section: $kind", throwable)
+                        emit(
+                            CatalogSectionUiState(
+                                query = query,
+                                isLoading = false,
+                                errorMessage = catalogLoadErrorMessage(kind)
+                            )
+                        )
+                    }
+            }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = CatalogSectionUiState(isLoading = true)
@@ -512,7 +489,6 @@ class DatabaseViewModel(
         action: suspend () -> T
     ): T? = try {
         val result = action()
-        refreshCatalogSection(kind)
         _uiState.value = UiState.Success(successMessage(result))
         result
     } catch (throwable: Throwable) {

@@ -42,6 +42,23 @@ interface SupplierDao {
     )
     suspend fun getCatalogItems(query: String?): List<CatalogListItem>
 
+    @Query(
+        """
+        SELECT s.id AS id,
+               s.name AS name,
+               COUNT(p.id) AS productCount
+        FROM suppliers s
+        LEFT JOIN products p ON p.supplierId = s.id
+        WHERE (:query IS NULL OR :query = '' OR s.name LIKE '%' || :query || '%')
+        GROUP BY s.id, s.name
+        ORDER BY s.name COLLATE NOCASE ASC
+        """
+    )
+    fun getCatalogItemsFlow(query: String?): Flow<List<CatalogListItem>>
+
+    @Query("SELECT * FROM suppliers WHERE name LIKE '%' || :query || '%' ORDER BY name ASC")
+    fun searchByNameFlow(query: String): Flow<List<Supplier>>
+
     @Query("UPDATE suppliers SET name = :name WHERE id = :id")
     suspend fun rename(id: Long, name: String): Int
 

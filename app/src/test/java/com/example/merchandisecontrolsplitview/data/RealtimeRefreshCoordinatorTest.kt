@@ -322,6 +322,15 @@ class RealtimeRefreshCoordinatorTest {
         override suspend fun addCategory(name: String): Category? =
             throw UnsupportedOperationException()
 
+        override fun observeSuppliersForHubSearch(query: String): Flow<List<Supplier>> =
+            flow { throw UnsupportedOperationException() }
+
+        override fun observeCategoriesForHubSearch(query: String): Flow<List<Category>> =
+            flow { throw UnsupportedOperationException() }
+
+        override fun observeCatalogItems(kind: CatalogEntityKind, query: String?): Flow<List<CatalogListItem>> =
+            flow { throw UnsupportedOperationException() }
+
         override fun getFilteredHistoryFlow(filter: com.example.merchandisecontrolsplitview.viewmodel.DateFilter): Flow<List<HistoryEntry>> =
             flow { throw UnsupportedOperationException() }
 

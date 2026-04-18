@@ -360,6 +360,44 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `observeSuppliersForHubSearch emits when suppliers table changes`() = runTest {
+        assertTrue(repository.observeSuppliersForHubSearch("").first().isEmpty())
+        repository.addSupplier("Acme")
+        assertEquals("Acme", repository.observeSuppliersForHubSearch("").first().single().name)
+    }
+
+    @Test
+    fun `observeCategoriesForHubSearch emits when categories table changes`() = runTest {
+        assertTrue(repository.observeCategoriesForHubSearch("").first().isEmpty())
+        repository.addCategory("Season")
+        assertEquals("Season", repository.observeCategoriesForHubSearch("").first().single().name)
+    }
+
+    @Test
+    fun `observeCatalogItems updates product counts when products change`() = runTest {
+        val supplier = repository.addSupplier("Count Supplier")!!
+        assertEquals(
+            0,
+            repository.observeCatalogItems(CatalogEntityKind.SUPPLIER, null).first()
+                .single { it.id == supplier.id }.productCount
+        )
+        repository.addProduct(
+            Product(
+                barcode = "88880001",
+                productName = "Item",
+                supplierId = supplier.id,
+                purchasePrice = 1.0,
+                retailPrice = 2.0
+            )
+        )
+        assertEquals(
+            1,
+            repository.observeCatalogItems(CatalogEntityKind.SUPPLIER, null).first()
+                .single { it.id == supplier.id }.productCount
+        )
+    }
+
+    @Test
     fun `renameCatalogEntry keeps supplier id and refreshes linked product details`() = runTest {
         val supplier = repository.addSupplier("Legacy Supplier")!!
         repository.addProduct(

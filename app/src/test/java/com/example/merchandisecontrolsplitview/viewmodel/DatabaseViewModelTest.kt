@@ -73,6 +73,9 @@ class DatabaseViewModelTest {
 
         coEvery { repository.getAllSuppliers() } returns emptyList()
         coEvery { repository.getAllCategories() } returns emptyList()
+        every { repository.observeSuppliersForHubSearch(any()) } returns flowOf(emptyList())
+        every { repository.observeCategoriesForHubSearch(any()) } returns flowOf(emptyList())
+        every { repository.observeCatalogItems(any(), any()) } returns flowOf(emptyList())
         coEvery { repository.findSupplierByName(any()) } returns null
         coEvery { repository.findCategoryByName(any()) } returns null
         coEvery { repository.addSupplier(any()) } returns null
@@ -90,11 +93,13 @@ class DatabaseViewModelTest {
 
     @Test
     fun `supplierCatalogSection emits loaded state from repository`() = runTest {
-        coEvery { repository.getCatalogItems(CatalogEntityKind.SUPPLIER, null) } returns listOf(
-            CatalogListItem(
-                id = 7L,
-                name = "North Supplier",
-                productCount = 3
+        every { repository.observeCatalogItems(CatalogEntityKind.SUPPLIER, null) } returns flowOf(
+            listOf(
+                CatalogListItem(
+                    id = 7L,
+                    name = "North Supplier",
+                    productCount = 3
+                )
             )
         )
 

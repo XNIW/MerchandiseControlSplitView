@@ -92,6 +92,15 @@ interface InventoryRepository {
     suspend fun searchCategoriesByName(query: String): List<Category>
     suspend fun addCategory(name: String): Category?
 
+    /** Database hub: supplier rows for current search; re-emits when Room `suppliers` (and for search, matching rows) change. */
+    fun observeSuppliersForHubSearch(query: String): Flow<List<Supplier>>
+
+    /** Database hub: category rows for current search; re-emits when Room `categories` change. */
+    fun observeCategoriesForHubSearch(query: String): Flow<List<Category>>
+
+    /** Database hub: catalog cards with product counts; re-emits when linked Room tables change. */
+    fun observeCatalogItems(kind: CatalogEntityKind, query: String?): Flow<List<CatalogListItem>>
+
     // User-visible history methods. Technical import audit rows stay in logcat and are excluded
     // at the DAO source from the normal History flows.
     fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>>
@@ -269,6 +278,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         withContext(Dispatchers.IO) { supplierDao.getAll() }
     override suspend fun searchSuppliersByName(query: String) = withContext(Dispatchers.IO) { supplierDao.searchByName(query) }
 
+    override fun observeSuppliersForHubSearch(query: String): Flow<List<Supplier>> {
+        val trimmed = query.trim()
+        return if (trimmed.isEmpty()) supplierDao.getAllFlow()
+        else supplierDao.searchByNameFlow(trimmed)
+    }
+
     private val supplierMutex = Mutex()
     override suspend fun addSupplier(name: String): Supplier? = withContext(Dispatchers.IO) {
         val normalizedName = name.trim()
@@ -294,6 +309,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         when (kind) {
             CatalogEntityKind.SUPPLIER -> supplierDao.getCatalogItems(normalizedQuery)
             CatalogEntityKind.CATEGORY -> categoryDao.getCatalogItems(normalizedQuery)
+        }
+    }
+
+    override fun observeCatalogItems(
+        kind: CatalogEntityKind,
+        query: String?
+    ): Flow<List<CatalogListItem>> {
+        val normalizedQuery = query?.trim().takeUnless { it.isNullOrEmpty() }
+        return when (kind) {
+            CatalogEntityKind.SUPPLIER -> supplierDao.getCatalogItemsFlow(normalizedQuery)
+            CatalogEntityKind.CATEGORY -> categoryDao.getCatalogItemsFlow(normalizedQuery)
         }
     }
 
@@ -442,6 +468,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     override suspend fun findCategoryByName(name: String): Category? = withContext(Dispatchers.IO) { categoryDao.findByName(name) }
     override suspend fun getAllCategories(): List<Category> = withContext(Dispatchers.IO) { categoryDao.getAll() }
     override suspend fun searchCategoriesByName(query: String) = withContext(Dispatchers.IO) { categoryDao.searchByName(query) }
+
+    override fun observeCategoriesForHubSearch(query: String): Flow<List<Category>> {
+        val trimmed = query.trim()
+        return if (trimmed.isEmpty()) categoryDao.getAllFlow()
+        else categoryDao.searchByNameFlow(trimmed)
+    }
 
     private val categoryMutex = Mutex()
     override suspend fun addCategory(name: String): Category? = withContext(Dispatchers.IO) {

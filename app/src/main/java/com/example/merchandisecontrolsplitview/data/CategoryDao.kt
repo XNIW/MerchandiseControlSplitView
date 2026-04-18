@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CategoryDao {
@@ -59,6 +60,26 @@ interface CategoryDao {
         """
     )
     suspend fun getCatalogItems(query: String?): List<CatalogListItem>
+
+    @Query(
+        """
+        SELECT c.id AS id,
+               c.name AS name,
+               COUNT(p.id) AS productCount
+        FROM categories c
+        LEFT JOIN products p ON p.categoryId = c.id
+        WHERE (:query IS NULL OR :query = '' OR c.name LIKE '%' || :query || '%')
+        GROUP BY c.id, c.name
+        ORDER BY c.name COLLATE NOCASE ASC
+        """
+    )
+    fun getCatalogItemsFlow(query: String?): Flow<List<CatalogListItem>>
+
+    @Query("SELECT * FROM categories ORDER BY name ASC")
+    fun getAllFlow(): Flow<List<Category>>
+
+    @Query("SELECT * FROM categories WHERE name LIKE '%' || :query || '%' ORDER BY name ASC")
+    fun searchByNameFlow(query: String): Flow<List<Category>>
 
     @Query("UPDATE categories SET name = :name WHERE id = :id")
     suspend fun rename(id: Long, name: String): Int
