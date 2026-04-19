@@ -19,8 +19,16 @@ import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSourc
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionUpsertRow
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
+import io.ktor.client.call.HttpClientCall
+import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.request.HttpRequest
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,6 +37,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -187,8 +196,9 @@ class CatalogSyncViewModelTest {
         )
         assertEquals(
             app.getString(R.string.catalog_cloud_sessions_sync_hint, 1, 1),
-            viewModel.uiState.value.secondaryMessage
+            viewModel.uiState.value.sessionDetail
         )
+        assertEquals(null, viewModel.uiState.value.catalogDetail)
         coVerify(exactly = 1) {
             repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
         }
@@ -198,6 +208,259 @@ class CatalogSyncViewModelTest {
         coVerify(exactly = 1) {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         }
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `031 catalog failure with reliable forbidden status uses permissions copy`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.failure(statusException(HttpStatusCode.Forbidden))
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_forbidden),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertNull(viewModel.uiState.value.catalogDetail)
+        assertNull(viewModel.uiState.value.sessionDetail)
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `031 catalog ok with price issue keeps price partial success state`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                priceSyncFailed = true
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_prices_incomplete),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(viewModel.uiState.value.catalogDetail?.isNotBlank() == true)
+        assertNull(viewModel.uiState.value.sessionDetail)
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `031 catalog ok with session issue keeps session partial success state`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.failure(IOException("session push"))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_sessions_incomplete),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(
+            viewModel.uiState.value.sessionDetail?.contains(
+                app.getString(R.string.catalog_cloud_sessions_issue_hint, 1)
+            ) == true
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `031 catalog ok with price and session issue prioritizes session partial state`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                priceSyncFailed = true
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.failure(IOException("session push"))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_sessions_incomplete),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(viewModel.uiState.value.catalogDetail?.isNotBlank() == true)
+        assertTrue(viewModel.uiState.value.sessionDetail?.isNotBlank() == true)
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `026 skipped remote price rows surface in catalogDetail`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                skippedProductPricesPullNoProductRef = 2
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "u@t.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        val detail = viewModel.uiState.value.catalogDetail
+        assertTrue(
+            detail?.contains(app.getString(R.string.catalog_cloud_prices_skipped_hint, 2)) == true
+        )
+        assertNull(viewModel.uiState.value.sessionDetail)
 
         collectJob.cancel()
     }
@@ -250,6 +513,18 @@ private class ViewModelSessionRemote024 : SessionBackupRemoteDataSource {
 
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =
         Result.success(Unit)
+}
+
+private fun statusException(status: HttpStatusCode): ClientRequestException {
+    val response = mockk<HttpResponse>()
+    val call = mockk<HttpClientCall>()
+    val request = mockk<HttpRequest>()
+    every { response.status } returns status
+    every { response.call } returns call
+    every { call.request } returns request
+    every { request.url } returns Url("https://example.test")
+    every { request.method } returns HttpMethod.Get
+    return ClientRequestException(response, status.description)
 }
 
 private const val OWNER_VM_021 = "00000000-0000-4000-8000-000000000240"

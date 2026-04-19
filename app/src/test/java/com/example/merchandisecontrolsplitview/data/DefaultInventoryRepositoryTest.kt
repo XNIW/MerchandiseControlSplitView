@@ -1683,6 +1683,67 @@ class DefaultInventoryRepositoryTest {
         assertEquals(rid, pending[0].remoteId)
     }
 
+    // --- Pending breakdown snapshot (task 030, repository-first) ---
+
+    @Test
+    fun `030 getCatalogCloudPendingBreakdown reflects tombstone and aggregate price counts`() = runTest {
+        val empty = repository.getCatalogCloudPendingBreakdown()
+        assertEquals(0, empty.pendingCatalogTombstones)
+        assertEquals(0, empty.productPricesPendingPriceBridge)
+        assertEquals(0, empty.productPricesBlockedWithoutProductRemote)
+        assertFalse(empty.hasTombstoneOrPriceRelatedPending)
+
+        db.pendingCatalogTombstoneDao().insert(
+            PendingCatalogTombstone(
+                entityType = PendingCatalogTombstoneEntityTypes.SUPPLIER,
+                remoteId = "00000000-0000-4000-8000-000000000301",
+                enqueuedAtMs = 1L
+            )
+        )
+        val withTomb = repository.getCatalogCloudPendingBreakdown()
+        assertEquals(1, withTomb.pendingCatalogTombstones)
+        assertEquals(0, withTomb.productPricesPendingPriceBridge)
+        assertEquals(0, withTomb.productPricesBlockedWithoutProductRemote)
+        assertTrue(withTomb.hasTombstoneOrPriceRelatedPending)
+
+        repository.addProduct(
+            Product(
+                barcode = "bd-price-bridge",
+                productName = "Price bridge",
+                purchasePrice = 10.0,
+                retailPrice = 12.0
+            )
+        )
+        val withPriceBridgePending = repository.getCatalogCloudPendingBreakdown()
+        assertEquals(1, withPriceBridgePending.pendingCatalogTombstones)
+        assertEquals(2, withPriceBridgePending.productPricesPendingPriceBridge)
+        assertEquals(0, withPriceBridgePending.productPricesBlockedWithoutProductRemote)
+
+        db.productDao().insert(
+            Product(
+                barcode = "bd-price-blocked",
+                productName = "Price blocked",
+                purchasePrice = 20.0
+            )
+        )
+        val blockedProduct = repository.findProductByBarcode("bd-price-blocked")!!
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = blockedProduct.id,
+                type = "PURCHASE",
+                price = 20.0,
+                effectiveAt = "2026-04-19 10:00:00",
+                source = "MANUAL",
+                createdAt = "2026-04-19 10:00:00"
+            )
+        )
+        val withBlockedPrice = repository.getCatalogCloudPendingBreakdown()
+        assertEquals(1, withBlockedPrice.pendingCatalogTombstones)
+        assertEquals(2, withBlockedPrice.productPricesPendingPriceBridge)
+        assertEquals(1, withBlockedPrice.productPricesBlockedWithoutProductRemote)
+        assertTrue(withBlockedPrice.hasTombstoneOrPriceRelatedPending)
+    }
+
     // --- Backup sessioni cloud (task 023) ---
 
     @Test

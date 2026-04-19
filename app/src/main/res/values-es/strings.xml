@@ -555,6 +555,8 @@
     <string name="catalog_cloud_state_synced">Actualizado</string>
     <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
     <string name="catalog_cloud_state_last_failed">El ultimo intento fallo</string>
+    <string name="catalog_cloud_state_forbidden">Revisa los permisos de la nube</string>
+    <string name="catalog_cloud_state_config_problem">Revisa la configuracion de la nube</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalogo actualizado; el historial de precios no termino. Toca actualizar para reintentar.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Nube actualizada; las sesiones de historial no terminaron. Toca actualizar para reintentar.</string>
     <string name="catalog_cloud_state_offline">Sin conexion estable</string>
@@ -565,4 +567,7 @@
     <string name="catalog_cloud_prices_sync_hint">Historial de precios: enviados %1$d, recibidos %2$d · pendiente (catalogo): %3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">Sesiones de historial: restauradas %1$d, enviadas %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">Sesiones de historial incompletas: %1$d</string>
+    <string name="catalog_cloud_pending_catalog_hint">En cola: cambios de catalogo/precios o eliminaciones pendientes de subir.</string>
+    <string name="catalog_cloud_prices_skipped_hint">Filas de precio remotas no importadas (sin producto local vinculado): %1$d</string>
+    <string name="catalog_cloud_detail_sessions_title">Copia de sesiones de historial</string>
 </resources>

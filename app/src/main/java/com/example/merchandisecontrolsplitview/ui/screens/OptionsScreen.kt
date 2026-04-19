@@ -181,9 +181,27 @@ private fun CatalogCloudSection(
         subtitle = state.primaryMessage,
         icon = Icons.Default.Sync
     ) {
-        state.secondaryMessage?.let { secondary ->
+        val spacing = MaterialTheme.appSpacing
+        state.catalogDetail?.let { detail ->
             Text(
-                text = secondary,
+                text = detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        state.sessionDetail?.let { sessionText ->
+            if (state.catalogDetail != null) {
+                Spacer(Modifier.height(spacing.sm))
+            }
+            Text(
+                text = stringResource(R.string.catalog_cloud_detail_sessions_title),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = sessionText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

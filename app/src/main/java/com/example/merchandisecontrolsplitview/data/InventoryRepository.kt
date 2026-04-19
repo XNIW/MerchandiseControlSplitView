@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
 import android.database.sqlite.SQLiteConstraintException
+import android.util.Log
 import androidx.paging.PagingSource
 import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
@@ -181,6 +182,12 @@ interface InventoryRepository {
 
     /** True se esiste lavoro pendente (revisioni bridge o righe senza bridge con catalogo non vuoto). */
     suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean
+
+    /**
+     * Breakdown sintetico tombstone + prezzi (task 030): stessi conteggi usati nel check inclusivo
+     * per quelle due famiglie, senza full scan del catalogo.
+     */
+    suspend fun getCatalogCloudPendingBreakdown(): CatalogCloudPendingBreakdown
 
     /**
      * Push pendenti verso il cloud poi pull/applica remoto in ordine FK (fornitori → categorie → prodotti).
@@ -1230,6 +1237,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     // --- Sync catalogo cloud (task 013) ---
 
+    override suspend fun getCatalogCloudPendingBreakdown(): CatalogCloudPendingBreakdown = withContext(Dispatchers.IO) {
+        CatalogCloudPendingBreakdown(
+            pendingCatalogTombstones = pendingCatalogTombstoneDao.count(),
+            productPricesPendingPriceBridge = priceDao.countPriceRowsPendingPriceBridge(),
+            productPricesBlockedWithoutProductRemote = priceDao.countPriceRowsWithoutProductRemote()
+        )
+    }
+
     override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = withContext(Dispatchers.IO) {
         if (pendingCatalogTombstoneDao.count() > 0) return@withContext true
         if (supplierRemoteRefDao.hasPendingWork()) return@withContext true
@@ -1370,7 +1385,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                     pushedPrices = pushProductPricesToRemote(priceRemote, ownerUserId)
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Throwable) {
+                } catch (t: Throwable) {
+                    logSyncTransportFailure("price_sync", t)
                     priceSyncFailed = true
                 }
             }
@@ -1397,8 +1413,18 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     }
 
     private companion object {
+        const val TAG = "CatalogCloudSync"
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
         const val SESSION_BACKUP_PUSH_CHUNK = 80
+    }
+
+    private fun logSyncTransportFailure(phase: String, throwable: Throwable) {
+        val classification = SyncErrorClassifier.classify(throwable)
+        Log.w(
+            TAG,
+            "phase=$phase category=${classification.category} httpStatus=${classification.httpStatus} " +
+                "postgrestCode=${classification.postgrestCode} type=${throwable::class.java.simpleName}"
+        )
     }
 
     /** Push bulk: una query candidati + chunk verso PostgREST; bridge solo per righe senza remote ancora. */
@@ -1685,6 +1711,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             }
             outcome.onFailure {
                 pendingCatalogTombstoneDao.incrementAttempt(row.id)
+                logSyncTransportFailure("catalog_tombstone_drain_${row.entityType}", it)
                 throw it
             }
             pendingCatalogTombstoneDao.deleteById(row.id)

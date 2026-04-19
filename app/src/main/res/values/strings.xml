@@ -576,6 +576,8 @@
     <string name="catalog_cloud_state_synced">Sincronizzato</string>
     <string name="catalog_cloud_state_pending">Da sincronizzare</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
+    <string name="catalog_cloud_state_forbidden">Permessi cloud da verificare</string>
+    <string name="catalog_cloud_state_config_problem">Configurazione cloud da verificare</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; storico prezzi non completato. Puoi riprovare.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Cloud aggiornato; sessioni history non completate. Puoi riprovare.</string>
     <string name="catalog_cloud_state_offline">Connessione assente o instabile</string>
@@ -586,4 +588,7 @@
     <string name="catalog_cloud_prices_sync_hint">Storico prezzi: inviati %1$d, ricevuti %2$d · in sospeso (catalogo): %3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">Sessioni history: ripristinate %1$d, inviate %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">Sessioni history non completate: %1$d</string>
+    <string name="catalog_cloud_pending_catalog_hint">In coda: modifiche catalogo/prezzi o eliminazioni da inviare al cloud.</string>
+    <string name="catalog_cloud_prices_skipped_hint">Righe prezzo remote non importate (prodotto non collegato in locale): %1$d</string>
+    <string name="catalog_cloud_detail_sessions_title">Backup sessioni history</string>
 </resources>

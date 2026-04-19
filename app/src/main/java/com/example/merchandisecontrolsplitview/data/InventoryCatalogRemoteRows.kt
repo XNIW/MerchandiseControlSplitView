@@ -70,6 +70,32 @@ data class InventoryProductPriceRow(
     @SerialName("created_at") val createdAt: String
 )
 
+/**
+ * Snapshot read-only del pending **tombstone catalogo** + **prezzi** verso il cloud (task 030).
+ * Derivato da query aggregate su `pending_catalog_tombstones` e `product_prices`↔bridge,
+ * allineate alle prime condizioni pertinenti di [InventoryRepository.hasCatalogCloudPendingWorkInclusive].
+ * Non include bridge fornitore/categoria/prodotto né mismatch bootstrap — restano coperti dal booleano inclusivo.
+ */
+data class CatalogCloudPendingBreakdown(
+    /** Righe in [pending_catalog_tombstones] da drenare. */
+    val pendingCatalogTombstones: Int,
+    /**
+     * Righe `product_prices` con `product_remote_refs` ma senza `product_price_remote_refs`
+     * (candidate push storico prezzo — stesso filtro di [ProductPriceDao.getAllForCloudPush]).
+     */
+    val productPricesPendingPriceBridge: Int,
+    /**
+     * Righe `product_prices` il cui prodotto non ha ancora bridge cloud (`product_remote_refs`).
+     * Stesso conteggio di [ProductPriceDao.countPriceRowsWithoutProductRemote] (gating / DEC-029).
+     */
+    val productPricesBlockedWithoutProductRemote: Int
+) {
+    val hasTombstoneOrPriceRelatedPending: Boolean
+        get() = pendingCatalogTombstones > 0 ||
+            productPricesPendingPriceBridge > 0 ||
+            productPricesBlockedWithoutProductRemote > 0
+}
+
 data class CatalogSyncSummary(
     val pushedSuppliers: Int,
     val pushedCategories: Int,
