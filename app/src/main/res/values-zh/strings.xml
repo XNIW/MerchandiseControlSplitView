@@ -557,10 +557,13 @@
     <string name="catalog_cloud_state_pending">待同步</string>
     <string name="catalog_cloud_state_last_failed">上次未成功</string>
     <string name="catalog_cloud_state_prices_incomplete">目录已更新；价格历史未完成。可再次刷新重试。</string>
+    <string name="catalog_cloud_state_sessions_incomplete">云端已更新；历史会话未完成。可再次刷新重试。</string>
     <string name="catalog_cloud_state_offline">网络不可用或不稳定</string>
     <string name="catalog_cloud_state_sign_in_required">登录后即可同步目录</string>
     <string name="catalog_cloud_state_session_required">请重新登录以同步</string>
     <string name="catalog_cloud_not_configured">此设备未配置云端同步</string>
     <string name="catalog_cloud_last_ok">上次成功同步：%1$s</string>
     <string name="catalog_cloud_prices_sync_hint">价格历史：已上传 %1$d，已下载 %2$d · 待处理（目录）：%3$d</string>
+    <string name="catalog_cloud_sessions_sync_hint">历史会话：已恢复 %1$d，已上传 %2$d</string>
+    <string name="catalog_cloud_sessions_issue_hint">历史会话未完成：%1$d</string>
 </resources>

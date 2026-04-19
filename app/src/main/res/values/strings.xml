@@ -577,10 +577,13 @@
     <string name="catalog_cloud_state_pending">Da sincronizzare</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; storico prezzi non completato. Puoi riprovare.</string>
+    <string name="catalog_cloud_state_sessions_incomplete">Cloud aggiornato; sessioni history non completate. Puoi riprovare.</string>
     <string name="catalog_cloud_state_offline">Connessione assente o instabile</string>
     <string name="catalog_cloud_state_sign_in_required">Accedi per sincronizzare il catalogo</string>
     <string name="catalog_cloud_state_session_required">Serve accedere di nuovo per sincronizzare</string>
     <string name="catalog_cloud_not_configured">Sincronizzazione cloud non disponibile su questo dispositivo</string>
     <string name="catalog_cloud_last_ok">Ultimo aggiornamento riuscito: %1$s</string>
     <string name="catalog_cloud_prices_sync_hint">Storico prezzi: inviati %1$d, ricevuti %2$d · in sospeso (catalogo): %3$d</string>
+    <string name="catalog_cloud_sessions_sync_hint">Sessioni history: ripristinate %1$d, inviate %2$d</string>
+    <string name="catalog_cloud_sessions_issue_hint">Sessioni history non completate: %1$d</string>
 </resources>

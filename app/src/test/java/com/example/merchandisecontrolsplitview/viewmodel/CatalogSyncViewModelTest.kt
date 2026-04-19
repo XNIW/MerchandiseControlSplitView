@@ -6,6 +6,7 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
+import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryCatalogFetchBundle
 import com.example.merchandisecontrolsplitview.data.InventoryCategoryRow
@@ -13,10 +14,15 @@ import com.example.merchandisecontrolsplitview.data.InventoryProductPriceRow
 import com.example.merchandisecontrolsplitview.data.InventoryProductRow
 import com.example.merchandisecontrolsplitview.data.InventorySupplierRow
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
+import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
+import com.example.merchandisecontrolsplitview.data.SharedSheetSessionUpsertRow
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import java.io.IOException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -51,6 +57,9 @@ class CatalogSyncViewModelTest {
     fun `021 fresh signed-in state waits for first manual refresh instead of claiming synced`() = runTest {
         val repository = mockk<InventoryRepository>()
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -59,6 +68,7 @@ class CatalogSyncViewModelTest {
             repository = repository,
             remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
             priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
             authFlow = auth
         )
 
@@ -71,6 +81,9 @@ class CatalogSyncViewModelTest {
             viewModel.uiState.value.primaryMessage
         )
         assertTrue(viewModel.uiState.value.canRefresh)
+        coVerify(exactly = 1) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
 
         collectJob.cancel()
     }
@@ -91,6 +104,12 @@ class CatalogSyncViewModelTest {
                 pulledProductPrices = 1
             )
         )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
@@ -100,9 +119,11 @@ class CatalogSyncViewModelTest {
             repository = repository,
             remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
             priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
             authFlow = auth
         )
         val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
 
         viewModel.refreshCatalog()
         advanceUntilIdle()
@@ -114,8 +135,68 @@ class CatalogSyncViewModelTest {
         coVerify(exactly = 1) {
             repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
         }
+        coVerify(exactly = 2) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
+        coVerify(exactly = 1) {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        }
         coVerify(exactly = 1) {
             repository.hasCatalogCloudPendingWorkInclusive()
+        }
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `024 manual refresh attempts session bootstrap and push even when catalog fails`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.failure(IOException("catalog unavailable"))
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(1, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(1, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_offline),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertEquals(
+            app.getString(R.string.catalog_cloud_sessions_sync_hint, 1, 1),
+            viewModel.uiState.value.secondaryMessage
+        )
+        coVerify(exactly = 1) {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        }
+        coVerify(exactly = 2) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
+        coVerify(exactly = 1) {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         }
 
         collectJob.cancel()
@@ -159,6 +240,16 @@ private class ViewModelPriceRemote021(
 
     override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> =
         Result.success(fetchRows)
+}
+
+private class ViewModelSessionRemote024 : SessionBackupRemoteDataSource {
+    override val isConfigured: Boolean get() = true
+
+    override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
+        Result.success(emptyList())
+
+    override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =
+        Result.success(Unit)
 }
 
 private const val OWNER_VM_021 = "00000000-0000-4000-8000-000000000240"

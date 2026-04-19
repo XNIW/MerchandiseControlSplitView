@@ -558,10 +558,13 @@
     <string name="catalog_cloud_state_pending">Waiting to sync</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalog updated; price history did not finish. Tap refresh to retry.</string>
+    <string name="catalog_cloud_state_sessions_incomplete">Cloud updated; history sessions did not finish. Tap refresh to retry.</string>
     <string name="catalog_cloud_state_offline">No stable connection</string>
     <string name="catalog_cloud_state_sign_in_required">Sign in to sync your catalog</string>
     <string name="catalog_cloud_state_session_required">Sign in again to sync</string>
     <string name="catalog_cloud_not_configured">Cloud sync is not available on this device</string>
     <string name="catalog_cloud_last_ok">Last successful sync: %1$s</string>
     <string name="catalog_cloud_prices_sync_hint">Price history: sent %1$d, received %2$d · pending (catalog): %3$d</string>
+    <string name="catalog_cloud_sessions_sync_hint">History sessions: restored %1$d, sent %2$d</string>
+    <string name="catalog_cloud_sessions_issue_hint">History sessions incomplete: %1$d</string>
 </resources>
