@@ -7,7 +7,7 @@ private const val PRICE_UPSERT_CHUNK = 80
 
 /**
  * Implementazione PostgREST per `inventory_product_prices` (task 016).
- * Batching confinato qui; full-select v1 (volume tipico inventario personale).
+ * Batching confinato qui; task 022: fetch paginato completo (stesso schema catalogo).
  */
 class SupabaseProductPriceRemoteDataSource(
     private val client: SupabaseClient?,
@@ -31,7 +31,6 @@ class SupabaseProductPriceRemoteDataSource(
 
     override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> =
         runCatching {
-            requireClient().postgrest["inventory_product_prices"].select()
-                .decodeList<InventoryProductPriceRow>()
+            requireClient().postgrest.fetchInventoryTableAllPagesOrderedById("inventory_product_prices")
         }
 }

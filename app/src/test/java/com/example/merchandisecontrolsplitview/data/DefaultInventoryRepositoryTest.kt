@@ -1490,6 +1490,85 @@ class DefaultInventoryRepositoryTest {
         assertEquals(0, third.getOrThrow().pulledProducts)
     }
 
+    /**
+     * D-022-T0 (obbligatorio): bundle aggregato equivalente a catalogo multipagina — fornitori/categorie/prodotti
+     * “in coda” per ordinamento `id` e prezzi remoti che referenziano solo il prodotto tardivo.
+     * Verifica che, dopo fetch catalogo completo + apply + pull prezzi, non compaia un falso positivo
+     * [CatalogSyncSummary.skippedProductPricesPullNoProductRef] dovuto a catalogo incompleto.
+     */
+    @Test
+    fun `D-022-T0 late catalog rows and prices only for last product no false skipped price refs`() = runTest {
+        val owner = "00000000-0000-4000-8000-0000000000d0"
+        val supplierEarlyId = "10000000-0000-4000-8000-000000000001"
+        val categoryEarlyId = "20000000-0000-4000-8000-000000000001"
+        val supplierLateId = "ffffffff-ffff-4fff-8fff-fffffffffff1"
+        val categoryLateId = "ffffffff-ffff-4fff-8fff-fffffffffff2"
+        val productEarlyId = "30000000-0000-4000-8000-000000000001"
+        val productLateId = "ffffffff-ffff-4fff-8fff-fffffffffff3"
+        val bundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(id = supplierEarlyId, ownerUserId = owner, name = "Early S"),
+                InventorySupplierRow(id = supplierLateId, ownerUserId = owner, name = "Late S")
+            ),
+            categories = listOf(
+                InventoryCategoryRow(id = categoryEarlyId, ownerUserId = owner, name = "Early C"),
+                InventoryCategoryRow(id = categoryLateId, ownerUserId = owner, name = "Late C")
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = productEarlyId,
+                    ownerUserId = owner,
+                    barcode = "022-page-a",
+                    productName = "Early row",
+                    supplierId = supplierEarlyId,
+                    categoryId = categoryEarlyId,
+                    purchasePrice = 1.0,
+                    retailPrice = 2.0
+                ),
+                InventoryProductRow(
+                    id = productLateId,
+                    ownerUserId = owner,
+                    barcode = "022-page-b",
+                    productName = "Late row",
+                    supplierId = supplierLateId,
+                    categoryId = categoryLateId,
+                    purchasePrice = 10.0,
+                    retailPrice = 20.0
+                )
+            )
+        )
+        val eff = "2026-04-18 12:00:00"
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = "40000000-0000-4000-8000-000000000001",
+                    ownerUserId = owner,
+                    productId = productLateId,
+                    type = "PURCHASE",
+                    price = 9.5,
+                    effectiveAt = eff,
+                    source = "CLOUD",
+                    note = null,
+                    createdAt = eff
+                )
+            )
+        }
+        val result = repository.syncCatalogWithRemote(FakeCatalogRemote016(bundle), priceRemote, owner)
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(
+            "catalog completo deve risolvere product_remote_refs per il prezzo tardivo",
+            0,
+            summary.skippedProductPricesPullNoProductRef
+        )
+        assertFalse(summary.priceSyncFailed)
+        assertEquals(1, summary.pulledProductPrices)
+        val lateLocal = repository.findProductByBarcode("022-page-b")!!
+        assertEquals("Late S", repository.getSupplierById(lateLocal.supplierId!!)!!.name)
+        assertEquals("Late C", repository.getCategoryById(lateLocal.categoryId!!)!!.name)
+        assertNotNull(db.productPriceRemoteRefDao().getByRemoteId("40000000-0000-4000-8000-000000000001"))
+    }
+
     @Test
     fun `019 delete supplier with remote ref enqueues tombstone and sync drains it`() = runTest {
         val s = repository.addSupplier("Tomb supplier019")!!

@@ -6,6 +6,7 @@ import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 
 /**
  * Transport PostgREST per il catalogo (task 013). Nessun accesso a Room.
+ * Task 022: fetch catalogo paginato (`order id` + range) per superare `max_rows` PostgREST.
  */
 class SupabaseCatalogRemoteDataSource(
     private val client: SupabaseClient?,
@@ -42,13 +43,10 @@ class SupabaseCatalogRemoteDataSource(
 
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         runCatching {
-            val supabase = requireClient()
-            val suppliers = supabase.postgrest["inventory_suppliers"].select()
-                .decodeList<InventorySupplierRow>()
-            val categories = supabase.postgrest["inventory_categories"].select()
-                .decodeList<InventoryCategoryRow>()
-            val products = supabase.postgrest["inventory_products"].select()
-                .decodeList<InventoryProductRow>()
+            val pg = requireClient().postgrest
+            val suppliers = pg.fetchInventoryTableAllPagesOrderedById<InventorySupplierRow>("inventory_suppliers")
+            val categories = pg.fetchInventoryTableAllPagesOrderedById<InventoryCategoryRow>("inventory_categories")
+            val products = pg.fetchInventoryTableAllPagesOrderedById<InventoryProductRow>("inventory_products")
             InventoryCatalogFetchBundle(suppliers, categories, products)
         }
 
