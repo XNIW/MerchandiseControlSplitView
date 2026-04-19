@@ -1048,16 +1048,16 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, dirtyRef.localChangeRevision)
         assertEquals(0, dirtyRef.lastSyncedLocalRevision)
 
-        // Apply remoto con payload diverso: riallinea
+        // Apply remoto con payload diverso: policy conservativa — salta se il locale è ancora "dirty"
         val newPayload = remotePayload(remoteId = remoteId, supplier = "B")
         val outcome = repository.applyRemoteSessionPayload(newPayload)
 
-        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        assertEquals(RemoteSessionApplyOutcome.Skipped, outcome)
         val syncedRef = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
-        assertEquals(1, syncedRef.localChangeRevision)        // invariato: apply non è modifica locale
-        assertEquals(1, syncedRef.lastSyncedLocalRevision)   // allineato alla revisione corrente
-        assertNotNull(syncedRef.lastRemoteAppliedAt)
-        assertEquals(newPayload.payloadFingerprint(), syncedRef.lastRemotePayloadFingerprint)
+        assertEquals(1, syncedRef.localChangeRevision)
+        assertEquals(0, syncedRef.lastSyncedLocalRevision)
+        val entryAfter = repository.getHistoryEntryByUid(syncedRef.historyEntryUid)!!
+        assertEquals("Local", entryAfter.supplier)
     }
 
     @Test
@@ -1143,8 +1143,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `Skipped on dirty entry falls through to field comparison and applies remote payload`() = runTest {
-        // Scenario: entry dirty + remote re-invia lo stesso payload precedente → Updated (remote wins)
+    fun `applyRemoteSessionPayload skips inbound when local payload edits are still pending sync`() = runTest {
         val remoteId = java.util.UUID.randomUUID().toString()
         val original = remotePayload(remoteId = remoteId, supplier = "Original")
         repository.applyRemoteSessionPayload(original) // Inserted
@@ -1152,16 +1151,14 @@ class DefaultInventoryRepositoryTest {
         val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
         val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
 
-        // Modifica locale: dirty
         repository.updateHistoryEntry(entry.copy(supplier = "LocalChange"))
 
-        // Il remote re-invia lo stesso payload originale: fingerprint uguale MA entry è dirty
-        // → fast-path non scatta → field comparison → supplier locale diverso → Updated (remote wins)
+        // Remote re-invia il payload precedente: non sovrascrivere silenziosamente il locale dirty
         val outcome = repository.applyRemoteSessionPayload(original)
-        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        assertEquals(RemoteSessionApplyOutcome.Skipped, outcome)
 
         val updatedEntry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
-        assertEquals("Original", updatedEntry.supplier) // remote ha vinto
+        assertEquals("LocalChange", updatedEntry.supplier)
     }
 
     @Test
@@ -1684,6 +1681,164 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, pending.size)
         assertEquals(PendingCatalogTombstoneEntityTypes.PRODUCT, pending[0].entityType)
         assertEquals(rid, pending[0].remoteId)
+    }
+
+    // --- Backup sessioni cloud (task 023) ---
+
+    @Test
+    fun `023 pushHistorySessionsToRemote uploads dirty user-visible entry`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        repository.getOrCreateRemoteId(uid)
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        repository.updateHistoryEntry(entry.copy(supplier = "PushMe"))
+        val fake = FakeSessionBackupRemote023()
+        val owner = "00000000-0000-4000-8000-0000000000aa"
+        val result = repository.pushHistorySessionsToRemote(fake, owner)
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.uploaded)
+        assertEquals(0, summary.skippedAlreadySynced)
+        assertEquals(1, fake.upsertedChunks.flatten().size)
+        val row = fake.upsertedChunks.single().single()
+        assertEquals("PushMe", row.supplier)
+        assertEquals(owner, row.ownerUserId)
+    }
+
+    @Test
+    fun `023 push skips technical import rows`() = runTest {
+        val technical = buildMinimalHistoryEntry("APPLY_IMPORT_audit.xlsx")
+        val uid = repository.insertHistoryEntry(technical)
+        repository.getOrCreateRemoteId(uid)
+        val fake = FakeSessionBackupRemote023()
+        val result = repository.pushHistorySessionsToRemote(fake, "00000000-0000-4000-8000-0000000000bb")
+        assertTrue(result.isSuccess)
+        assertEquals(0, result.getOrThrow().uploaded)
+        assertTrue(fake.upsertedChunks.isEmpty())
+    }
+
+    @Test
+    fun `023 push skips already synced sessions`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        repository.getOrCreateRemoteId(uid)
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        repository.updateHistoryEntry(entry.copy(supplier = "Once"))
+        val fake = FakeSessionBackupRemote023()
+        val owner = "00000000-0000-4000-8000-0000000000cc"
+        assertEquals(1, repository.pushHistorySessionsToRemote(fake, owner).getOrThrow().uploaded)
+        val second = repository.pushHistorySessionsToRemote(fake, owner).getOrThrow()
+        assertEquals(0, second.uploaded)
+        assertEquals(1, second.skippedAlreadySynced)
+    }
+
+    @Test
+    fun `023 pushHistorySessionsToRemote chunks upserts`() = runTest {
+        val fake = FakeSessionBackupRemote023()
+        val owner = "00000000-0000-4000-8000-00000000dd01"
+        repeat(81) { i ->
+            val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("chunk_$i.xlsx"))
+            repository.getOrCreateRemoteId(uid)
+            val e = repository.getHistoryEntryByUid(uid)!!
+            repository.updateHistoryEntry(e.copy(supplier = "S$i"))
+        }
+        val result = repository.pushHistorySessionsToRemote(fake, owner).getOrThrow()
+        assertEquals(81, result.uploaded)
+        assertEquals(2, fake.upsertedChunks.size)
+        assertEquals(80, fake.upsertedChunks[0].size)
+        assertEquals(1, fake.upsertedChunks[1].size)
+    }
+
+    @Test
+    fun `023 push keeps newer local edit dirty when it happens during upload`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
+        repository.getOrCreateRemoteId(uid)
+        repository.updateHistoryEntry(repository.getHistoryEntryByUid(uid)!!.copy(supplier = "First"))
+
+        val fake = FakeSessionBackupRemote023(
+            onUpsert = {
+                val liveEntry = repository.getHistoryEntryByUid(uid)!!
+                repository.updateHistoryEntry(liveEntry.copy(supplier = "Second"))
+            }
+        )
+        val owner = "00000000-0000-4000-8000-0000000000ef"
+
+        val first = repository.pushHistorySessionsToRemote(fake, owner).getOrThrow()
+
+        assertEquals(1, first.uploaded)
+        val dirtyRef = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)!!
+        assertTrue(dirtyRef.localChangeRevision > dirtyRef.lastSyncedLocalRevision)
+
+        val secondFake = FakeSessionBackupRemote023()
+        val second = repository.pushHistorySessionsToRemote(secondFake, owner).getOrThrow()
+
+        assertEquals(1, second.uploaded)
+        assertEquals("Second", secondFake.upsertedChunks.single().single().supplier)
+        val syncedRef = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)!!
+        assertEquals(syncedRef.localChangeRevision, syncedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `023 bootstrapHistorySessionsFromRemote applies remote records`() = runTest {
+        val rid1 = java.util.UUID.randomUUID().toString()
+        val rid2 = java.util.UUID.randomUUID().toString()
+        val fake = FakeSessionBackupRemote023(
+            records = listOf(
+                SharedSheetSessionRecord(
+                    remoteId = rid1,
+                    payloadVersion = 1,
+                    timestamp = "2026-04-01 10:00:00",
+                    supplier = "S1",
+                    category = "C1",
+                    isManualEntry = true,
+                    data = listOf(listOf("h"))
+                ),
+                SharedSheetSessionRecord(
+                    remoteId = rid2,
+                    payloadVersion = 1,
+                    timestamp = "2026-04-02 10:00:00",
+                    supplier = "S2",
+                    category = "C2",
+                    isManualEntry = false,
+                    data = listOf(listOf("h"))
+                )
+            )
+        )
+        val batch = repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
+        assertEquals(2, batch.inserted)
+        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(rid1))
+        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(rid2))
+    }
+
+    @Test
+    fun `023 bootstrap twice skips identical payloads`() = runTest {
+        val rid = java.util.UUID.randomUUID().toString()
+        val rec = SharedSheetSessionRecord(
+            remoteId = rid,
+            payloadVersion = 1,
+            timestamp = "2026-04-01 10:00:00",
+            supplier = "S",
+            category = "C",
+            isManualEntry = true,
+            data = listOf(listOf("x"))
+        )
+        val fake = FakeSessionBackupRemote023(records = listOf(rec))
+        repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
+        val second = repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
+        assertEquals(1, second.skipped)
+    }
+}
+
+private class FakeSessionBackupRemote023(
+    val records: List<SharedSheetSessionRecord> = emptyList(),
+    private val onUpsert: (suspend (List<SharedSheetSessionUpsertRow>) -> Unit)? = null
+) : SessionBackupRemoteDataSource {
+    override val isConfigured = true
+    val upsertedChunks = mutableListOf<List<SharedSheetSessionUpsertRow>>()
+    override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
+        Result.success(records)
+    override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> {
+        upsertedChunks.add(rows)
+        onUpsert?.invoke(rows)
+        return Result.success(Unit)
     }
 }
 

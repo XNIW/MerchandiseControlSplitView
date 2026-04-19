@@ -11,8 +11,10 @@ import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
+import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseSessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
 import io.github.jan.supabase.SupabaseClient
@@ -134,6 +136,11 @@ class MerchandiseControlApplication : Application() {
     /** Transport PostgREST storico prezzi (task 016). */
     val productPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
         SupabaseProductPriceRemoteDataSource(supabaseClient)
+    }
+
+    /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */
+    val sessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
+        SupabaseSessionBackupRemoteDataSource(supabaseClient)
     }
 
     override fun onCreate() {

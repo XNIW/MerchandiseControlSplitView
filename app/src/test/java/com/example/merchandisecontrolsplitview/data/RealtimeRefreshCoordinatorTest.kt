@@ -255,6 +255,17 @@ class RealtimeRefreshCoordinatorTest {
             )
         )
 
+        override suspend fun pushHistorySessionsToRemote(
+            remote: SessionBackupRemoteDataSource,
+            ownerUserId: String
+        ): Result<HistorySessionBackupPushSummary> =
+            Result.success(HistorySessionBackupPushSummary(0, 0))
+
+        override suspend fun bootstrapHistorySessionsFromRemote(
+            remote: SessionBackupRemoteDataSource
+        ): Result<RemoteSessionBatchResult> =
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+
         // --- Stub: non usati in questi test ---
 
         override fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails> =

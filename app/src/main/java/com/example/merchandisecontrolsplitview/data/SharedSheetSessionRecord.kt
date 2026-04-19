@@ -20,8 +20,42 @@ data class SharedSheetSessionRecord(
     val category: String,
     @SerialName("is_manual_entry")
     val isManualEntry: Boolean,
-    val data: List<List<String>>
+    val data: List<List<String>>,
+    /** Presente nelle SELECT PostgREST; ignorato nel mapping verso [SessionRemotePayload]. */
+    @SerialName("owner_user_id")
+    val ownerUserId: String? = null,
+    /** Opzionale: column server-side (task 010/012). */
+    @SerialName("updated_at")
+    val updatedAt: String? = null
 )
+
+/**
+ * Riga upsert PostgREST verso [shared_sheet_sessions] (backup MVP, task 023).
+ * Allinea al payload v1 + ownership (DEC-019).
+ */
+@Serializable
+data class SharedSheetSessionUpsertRow(
+    @SerialName("remote_id") val remoteId: String,
+    @SerialName("payload_version") val payloadVersion: Int,
+    val timestamp: String,
+    val supplier: String,
+    val category: String,
+    @SerialName("is_manual_entry") val isManualEntry: Boolean,
+    val data: List<List<String>>,
+    @SerialName("owner_user_id") val ownerUserId: String
+)
+
+fun SessionRemotePayload.toSharedSheetSessionUpsertRow(ownerUserId: String): SharedSheetSessionUpsertRow =
+    SharedSheetSessionUpsertRow(
+        remoteId = remoteId,
+        payloadVersion = payloadVersion,
+        timestamp = timestamp,
+        supplier = supplier,
+        category = category,
+        isManualEntry = isManualEntry,
+        data = data,
+        ownerUserId = ownerUserId
+    )
 
 fun SharedSheetSessionRecord.toSessionRemotePayload(): SessionRemotePayload =
     SessionRemotePayload(

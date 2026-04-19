@@ -82,4 +82,12 @@ interface HistoryEntryDao {
             ")"
     )
     fun hasUserVisibleEntriesFlow(): Flow<Boolean>
+
+    /** Snapshot per backup cloud sessioni (task 023): stesso filtro della UI History. */
+    @Query(
+        "SELECT * FROM history_entries WHERE " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            " ORDER BY timestamp DESC"
+    )
+    suspend fun getAllUserVisibleSnapshot(): List<HistoryEntry>
 }

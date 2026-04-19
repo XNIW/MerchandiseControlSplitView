@@ -15,7 +15,9 @@ import io.github.jan.supabase.postgrest.query.Order
  * In [io.github.jan.supabase.postgrest.query.PostgrestRequestBuilder]:
  * - [order] accoda il parametro URL `order=...` (colonna.asc/desc.nullsfirst|nullslast).
  * - [range] imposta `offset` e `limit` dove **limit = to - from + 1** (coerente con PostgREST Range).
- * Entrambe le chiamate scrivono solo nella mappa `params` del builder; **l'ordine consigliato e' `order("id", ASCENDING)` prima di `range(from, to)`** per chiarezza (stessa richiesta HTTP).
+ * Entrambe le chiamate scrivono solo nella mappa `params` del builder;
+ * **l'ordine consigliato e' `order("id", ASCENDING)` prima di `range(from, to)`**
+ * per chiarezza (stessa richiesta HTTP).
  *
  * @see io.github.jan.supabase.postgrest.query.PostgrestRequestBuilder.order
  * @see io.github.jan.supabase.postgrest.query.PostgrestRequestBuilder.range
@@ -69,6 +71,22 @@ internal suspend inline fun <reified T : Any> Postgrest.fetchInventoryTableAllPa
     ) { from, to ->
         this[table].select {
             order("id", Order.ASCENDING)
+            range(from, to)
+        }.decodeList()
+    }
+
+/**
+ * Fetch paginato di `shared_sheet_sessions` ordinato per PK testuale (`remote_id`),
+ * coerente con lo spirito task 022 (range + order deterministici). RLS limita all'owner JWT.
+ */
+internal suspend inline fun <reified T : Any> Postgrest.fetchSharedSheetSessionsAllPagesOrderedByRemoteId(): List<T> =
+    fetchAllPagesByIndexedRange(
+        pageSize = INVENTORY_REMOTE_PAGE_SIZE,
+        maxPageIterations = INVENTORY_REMOTE_PAGE_FETCH_MAX_ITERATIONS,
+        tableLabel = "shared_sheet_sessions"
+    ) { from, to ->
+        this["shared_sheet_sessions"].select {
+            order("remote_id", Order.ASCENDING)
             range(from, to)
         }.decodeList()
     }

@@ -59,6 +59,12 @@ data class RemoteSessionBatchResult(
     val totalProcessed: Int get() = inserted + updated + skipped + failed + unsupported
 }
 
+/** Riepilogo push backup sessioni history verso `shared_sheet_sessions` (task 023). */
+data class HistorySessionBackupPushSummary(
+    val uploaded: Int,
+    val skippedAlreadySynced: Int
+)
+
 interface InventoryRepository {
     // Product methods
     fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
@@ -155,6 +161,8 @@ interface InventoryRepository {
      * - [payloadVersion] non supportata → [RemoteSessionApplyOutcome.UnsupportedVersion].
      * - [remoteId] già presente nel bridge → aggiorna i campi payload dell'entry esistente;
      *   se il payload è invariato rispetto allo stato locale → [RemoteSessionApplyOutcome.Skipped].
+     * - Se esistono modifiche payload locali non ancora consolidate in sync ([HistoryEntryRemoteRef]:
+     *   `localChangeRevision > lastSyncedLocalRevision`) → [RemoteSessionApplyOutcome.Skipped] (task 023).
      * - [remoteId] sconosciuto → inserisce nuova [HistoryEntry] e riga bridge.
      * - Nessuna delete locale: l'assenza di un record nel fetch remoto non cancella nulla.
      * - Il [timestamp] remoto è materializzato/ordinato ma non usato come regola di conflitto.
@@ -184,6 +192,22 @@ interface InventoryRepository {
         priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String
     ): Result<CatalogSyncSummary>
+
+    // --- Backup sessioni cloud (task 023): Room-first, payload v1 ---
+
+    /**
+     * Upload conservativo delle sole entry user-visible con bridge in stato “da inviare”
+     * ([HistoryEntryRemoteRef.lastRemoteAppliedAt] assente o revisione locale avanti).
+     */
+    suspend fun pushHistorySessionsToRemote(
+        remote: SessionBackupRemoteDataSource,
+        ownerUserId: String
+    ): Result<HistorySessionBackupPushSummary>
+
+    /** Fetch owner-scoped paginato + [applyRemoteSessionPayloadBatch] (bootstrap / restore). */
+    suspend fun bootstrapHistorySessionsFromRemote(
+        remote: SessionBackupRemoteDataSource
+    ): Result<RemoteSessionBatchResult>
 }
 
 internal object DefaultInventoryRepositoryTestHooks {
@@ -192,6 +216,13 @@ internal object DefaultInventoryRepositoryTestHooks {
 }
 
 class DefaultInventoryRepository(private val db: AppDatabase) : InventoryRepository {
+
+    private data class HistorySessionPushCandidate(
+        val entry: HistoryEntry,
+        val ref: HistoryEntryRemoteRef,
+        val payload: SessionRemotePayload
+    )
+
     private data class CatalogEntityRef(
         val id: Long,
         val name: String
@@ -729,6 +760,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         val fp = payload.payloadFingerprint()
         val existingRef = remoteRefDao.getByRemoteId(payload.remoteId)
         if (existingRef != null) {
+            // Policy anti-overwrite (task 023): mai applicare inbound se ci sono modifiche payload
+            // non ancora sincronizzate verso remoto o consolidate via apply precedente.
+            if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
+                return RemoteSessionApplyOutcome.Skipped
+            }
             // Fast-path: fingerprint match + entry allineata → Skipped senza caricare HistoryEntry.
             // Evita una lettura del blob data per payload identici già applicati.
             if (existingRef.lastRemotePayloadFingerprint == fp &&
@@ -1209,6 +1245,80 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             productRemoteRefDao.countRows() < productDao.count()
     }
 
+    override suspend fun pushHistorySessionsToRemote(
+        remote: SessionBackupRemoteDataSource,
+        ownerUserId: String
+    ): Result<HistorySessionBackupPushSummary> = withContext(Dispatchers.IO) {
+        if (!remote.isConfigured) {
+            return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
+        }
+        try {
+            val candidates = mutableListOf<HistorySessionPushCandidate>()
+            var skippedAlreadySynced = 0
+            for (entry in historyDao.getAllUserVisibleSnapshot()) {
+                val remoteId = getOrCreateRemoteId(entry.uid) ?: continue
+                val ref = remoteRefDao.getByHistoryEntryUid(entry.uid) ?: continue
+                if (!historySessionNeedsPush(ref)) {
+                    skippedAlreadySynced++
+                    continue
+                }
+                candidates.add(
+                    HistorySessionPushCandidate(
+                        entry = entry,
+                        ref = ref,
+                        payload = entry.toRemotePayload(remoteId)
+                    )
+                )
+            }
+            var uploaded = 0
+            for (chunk in candidates.chunked(SESSION_BACKUP_PUSH_CHUNK)) {
+                val rows = chunk.map { it.payload.toSharedSheetSessionUpsertRow(ownerUserId) }
+                remote.upsertSessions(rows).getOrElse { return@withContext Result.failure(it) }
+                db.withTransaction {
+                    for (c in chunk) {
+                        remoteRefDao.getByHistoryEntryUid(c.entry.uid) ?: continue
+                        val fp = c.payload.payloadFingerprint()
+                        remoteRefDao.updateRemoteApplyState(
+                            uid = c.entry.uid,
+                            // Mark only the revision that produced the uploaded payload.
+                            // If the entry changed while the network call was in flight,
+                            // localChangeRevision remains ahead and the next push retries it.
+                            rev = c.ref.localChangeRevision,
+                            appliedAt = System.currentTimeMillis(),
+                            fingerprint = fp
+                        )
+                    }
+                }
+                uploaded += chunk.size
+            }
+            Result.success(HistorySessionBackupPushSummary(uploaded, skippedAlreadySynced))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    override suspend fun bootstrapHistorySessionsFromRemote(
+        remote: SessionBackupRemoteDataSource
+    ): Result<RemoteSessionBatchResult> = withContext(Dispatchers.IO) {
+        if (!remote.isConfigured) {
+            return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
+        }
+        try {
+            val records = remote.fetchAllSessionsForOwner().getOrElse { return@withContext Result.failure(it) }
+            val payloads = records.map { it.toSessionRemotePayload() }
+            Result.success(applyRemoteSessionPayloadBatch(payloads))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
+
+    private fun historySessionNeedsPush(ref: HistoryEntryRemoteRef): Boolean =
+        ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
+
     override suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
@@ -1288,6 +1398,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     private companion object {
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
+        const val SESSION_BACKUP_PUSH_CHUNK = 80
     }
 
     /** Push bulk: una query candidati + chunk verso PostgREST; bridge solo per righe senza remote ancora. */
