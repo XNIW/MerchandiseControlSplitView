@@ -210,6 +210,60 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `034 applyImport marks imported catalog dirty and exposes price history as pending cloud work`() = runTest {
+        val result = repository.applyImport(
+            importRequest(
+                newProducts = listOf(
+                    Product(
+                        barcode = "034-import-cloud",
+                        productName = "Import Pending Cloud 034",
+                        purchasePrice = 4.0,
+                        retailPrice = 6.0,
+                        supplierId = -1L,
+                        categoryId = -2L
+                    )
+                ),
+                pendingTempSuppliers = mapOf(-1L to "Import Supplier 034"),
+                pendingTempCategories = mapOf(-2L to "Import Category 034"),
+                pendingPriceHistory = listOf(
+                    ImportPriceHistoryEntry(
+                        barcode = "034-import-cloud",
+                        type = "PURCHASE",
+                        timestamp = "2026-04-20 10:34:00",
+                        price = 4.25,
+                        source = null
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val imported = repository.findProductByBarcode("034-import-cloud")!!
+        val supplierRef = db.supplierRemoteRefDao().getBySupplierId(imported.supplierId!!)
+        val categoryRef = db.categoryRemoteRefDao().getByCategoryId(imported.categoryId!!)
+        val productRef = db.productRemoteRefDao().getByProductId(imported.id)
+        val pushRows = db.productPriceDao().getAllForCloudPush()
+        val breakdown = repository.getCatalogCloudPendingBreakdown()
+
+        assertNotNull(supplierRef)
+        assertNotNull(categoryRef)
+        assertNotNull(productRef)
+        assertEquals(0, breakdown.pendingCatalogTombstones)
+        assertEquals(3, breakdown.productPricesPendingPriceBridge)
+        assertEquals(0, breakdown.productPricesBlockedWithoutProductRemote)
+        assertEquals(0, breakdown.suppliersMissingRemoteRef)
+        assertEquals(0, breakdown.categoriesMissingRemoteRef)
+        assertEquals(0, breakdown.productsMissingRemoteRef)
+        assertTrue(breakdown.hasTombstoneOrPriceRelatedPending)
+        assertFalse(breakdown.hasCatalogBridgeGaps)
+        assertTrue(breakdown.hasAnyPendingBreakdown)
+        assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+        assertEquals(3, pushRows.size)
+        assertTrue(pushRows.all { it.productId == imported.id })
+        assertTrue(pushRows.any { it.source == "IMPORT_SHEET" && it.effectiveAt == "2026-04-20 10:34:00" })
+    }
+
+    @Test
     fun `applyImport rolls back products relations and price history on failure after product persistence`() = runTest {
         DefaultInventoryRepositoryTestHooks.afterProductsPersisted = {
             throw IllegalStateException("boom")
@@ -1691,7 +1745,13 @@ class DefaultInventoryRepositoryTest {
         assertEquals(0, empty.pendingCatalogTombstones)
         assertEquals(0, empty.productPricesPendingPriceBridge)
         assertEquals(0, empty.productPricesBlockedWithoutProductRemote)
+        assertEquals(0, empty.suppliersMissingRemoteRef)
+        assertEquals(0, empty.categoriesMissingRemoteRef)
+        assertEquals(0, empty.productsMissingRemoteRef)
         assertFalse(empty.hasTombstoneOrPriceRelatedPending)
+        assertFalse(empty.hasCatalogBridgeGaps)
+        assertFalse(empty.hasAnyPendingBreakdown)
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
 
         db.pendingCatalogTombstoneDao().insert(
             PendingCatalogTombstone(
@@ -1704,7 +1764,11 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, withTomb.pendingCatalogTombstones)
         assertEquals(0, withTomb.productPricesPendingPriceBridge)
         assertEquals(0, withTomb.productPricesBlockedWithoutProductRemote)
+        assertEquals(0, withTomb.suppliersMissingRemoteRef)
+        assertEquals(0, withTomb.categoriesMissingRemoteRef)
+        assertEquals(0, withTomb.productsMissingRemoteRef)
         assertTrue(withTomb.hasTombstoneOrPriceRelatedPending)
+        assertTrue(withTomb.hasAnyPendingBreakdown)
 
         repository.addProduct(
             Product(
@@ -1718,6 +1782,9 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, withPriceBridgePending.pendingCatalogTombstones)
         assertEquals(2, withPriceBridgePending.productPricesPendingPriceBridge)
         assertEquals(0, withPriceBridgePending.productPricesBlockedWithoutProductRemote)
+        assertEquals(0, withPriceBridgePending.suppliersMissingRemoteRef)
+        assertEquals(0, withPriceBridgePending.categoriesMissingRemoteRef)
+        assertEquals(0, withPriceBridgePending.productsMissingRemoteRef)
 
         db.productDao().insert(
             Product(
@@ -1741,7 +1808,88 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, withBlockedPrice.pendingCatalogTombstones)
         assertEquals(2, withBlockedPrice.productPricesPendingPriceBridge)
         assertEquals(1, withBlockedPrice.productPricesBlockedWithoutProductRemote)
+        assertEquals(0, withBlockedPrice.suppliersMissingRemoteRef)
+        assertEquals(0, withBlockedPrice.categoriesMissingRemoteRef)
+        assertEquals(1, withBlockedPrice.productsMissingRemoteRef)
+        assertTrue(withBlockedPrice.hasCatalogBridgeGaps)
         assertTrue(withBlockedPrice.hasTombstoneOrPriceRelatedPending)
+        assertTrue(withBlockedPrice.hasAnyPendingBreakdown)
+    }
+
+    @Test
+    fun `032 breakdown surfaces local catalog rows missing remote refs and sync reconciles them`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000320"
+        val supplierId = db.supplierDao().insert(Supplier(name = "Bridge Gap Supplier 032"))
+        val categoryId = db.categoryDao().insert(Category(name = "Bridge Gap Category 032"))
+        db.productDao().insert(
+            Product(
+                barcode = "bridge-gap-032",
+                productName = "Bridge Gap Product 032",
+                supplierId = supplierId,
+                categoryId = categoryId,
+                stockQuantity = 3.0
+            )
+        )
+        val product = repository.findProductByBarcode("bridge-gap-032")!!
+
+        val before = repository.getCatalogCloudPendingBreakdown()
+        assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+        assertEquals(1, before.suppliersMissingRemoteRef)
+        assertEquals(1, before.categoriesMissingRemoteRef)
+        assertEquals(1, before.productsMissingRemoteRef)
+        assertFalse(before.hasTombstoneOrPriceRelatedPending)
+        assertTrue(before.hasCatalogBridgeGaps)
+        assertTrue(before.hasAnyPendingBreakdown)
+
+        val remote = FakeCatalogRemote016()
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(), owner)
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pushedSuppliers)
+        assertEquals(1, summary.pushedCategories)
+        assertEquals(1, summary.pushedProducts)
+        assertNotNull(db.supplierRemoteRefDao().getBySupplierId(supplierId))
+        assertNotNull(db.categoryRemoteRefDao().getByCategoryId(categoryId))
+        assertNotNull(db.productRemoteRefDao().getByProductId(product.id))
+        val after = repository.getCatalogCloudPendingBreakdown()
+        assertEquals(0, after.suppliersMissingRemoteRef)
+        assertEquals(0, after.categoriesMissingRemoteRef)
+        assertEquals(0, after.productsMissingRemoteRef)
+        assertFalse(after.hasCatalogBridgeGaps)
+        assertFalse(after.hasAnyPendingBreakdown)
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `032 breakdown distinguishes product bridge gap from blocked price rows`() = runTest {
+        val now = "2026-04-20 10:00:00"
+        db.productDao().insert(
+            Product(
+                barcode = "bridge-price-gap-032",
+                productName = "Bridge Price Gap 032",
+                purchasePrice = 20.0
+            )
+        )
+        val product = repository.findProductByBarcode("bridge-price-gap-032")!!
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "PURCHASE",
+                price = 20.0,
+                effectiveAt = now,
+                source = "MANUAL",
+                createdAt = now
+            )
+        )
+
+        val breakdown = repository.getCatalogCloudPendingBreakdown()
+
+        assertEquals(1, breakdown.productsMissingRemoteRef)
+        assertEquals(1, breakdown.productPricesBlockedWithoutProductRemote)
+        assertTrue(breakdown.hasCatalogBridgeGaps)
+        assertTrue(breakdown.hasTombstoneOrPriceRelatedPending)
+        assertTrue(breakdown.hasAnyPendingBreakdown)
     }
 
     // --- Backup sessioni cloud (task 023) ---

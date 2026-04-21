@@ -369,6 +369,7 @@ class CatalogSyncViewModel(
             if (busy.value) return@launch
             busy.value = true
             lastErrorKind.value = null
+            lastHistorySessionSyncSummary.value = null
             var logCatalogOk = false
             var logSummary: CatalogSyncSummary? = null
             var logErr: ErrorKind? = null

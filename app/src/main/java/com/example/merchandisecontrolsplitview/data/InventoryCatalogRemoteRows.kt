@@ -71,10 +71,12 @@ data class InventoryProductPriceRow(
 )
 
 /**
- * Snapshot read-only del pending **tombstone catalogo** + **prezzi** verso il cloud (task 030).
- * Derivato da query aggregate su `pending_catalog_tombstones` e `product_prices`↔bridge,
- * allineate alle prime condizioni pertinenti di [InventoryRepository.hasCatalogCloudPendingWorkInclusive].
- * Non include bridge fornitore/categoria/prodotto né mismatch bootstrap — restano coperti dal booleano inclusivo.
+ * Snapshot read-only del pending **tombstone catalogo**, **bridge catalogo mancanti** e
+ * **prezzi** verso il cloud (task 030, esteso in task 032).
+ *
+ * Resta diagnostico: il gate operativo resta [InventoryRepository.hasCatalogCloudPendingWorkInclusive].
+ * I bridge catalogo dirty (`localChangeRevision > lastSyncedLocalRevision`) restano coperti
+ * solo dal booleano inclusivo.
  */
 data class CatalogCloudPendingBreakdown(
     /** Righe in [pending_catalog_tombstones] da drenare. */
@@ -88,12 +90,26 @@ data class CatalogCloudPendingBreakdown(
      * Righe `product_prices` il cui prodotto non ha ancora bridge cloud (`product_remote_refs`).
      * Stesso conteggio di [ProductPriceDao.countPriceRowsWithoutProductRemote] (gating / DEC-029).
      */
-    val productPricesBlockedWithoutProductRemote: Int
+    val productPricesBlockedWithoutProductRemote: Int,
+    /** Righe `suppliers` locali prive di `supplier_remote_refs`. */
+    val suppliersMissingRemoteRef: Int = 0,
+    /** Righe `categories` locali prive di `category_remote_refs`. */
+    val categoriesMissingRemoteRef: Int = 0,
+    /** Righe `products` locali prive di `product_remote_refs`. */
+    val productsMissingRemoteRef: Int = 0
 ) {
     val hasTombstoneOrPriceRelatedPending: Boolean
         get() = pendingCatalogTombstones > 0 ||
             productPricesPendingPriceBridge > 0 ||
             productPricesBlockedWithoutProductRemote > 0
+
+    val hasCatalogBridgeGaps: Boolean
+        get() = suppliersMissingRemoteRef > 0 ||
+            categoriesMissingRemoteRef > 0 ||
+            productsMissingRemoteRef > 0
+
+    val hasAnyPendingBreakdown: Boolean
+        get() = hasTombstoneOrPriceRelatedPending || hasCatalogBridgeGaps
 }
 
 data class CatalogSyncSummary(

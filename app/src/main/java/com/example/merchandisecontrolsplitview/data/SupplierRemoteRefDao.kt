@@ -45,4 +45,14 @@ interface SupplierRemoteRefDao {
 
     @Query("SELECT COUNT(*) FROM supplier_remote_refs")
     suspend fun countRows(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*)
+        FROM suppliers s
+        LEFT JOIN supplier_remote_refs r ON r.supplierId = s.id
+        WHERE r.id IS NULL
+        """
+    )
+    suspend fun countLocalRowsMissingRemoteRef(): Int
 }

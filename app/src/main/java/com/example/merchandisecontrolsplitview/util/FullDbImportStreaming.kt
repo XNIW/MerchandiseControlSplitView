@@ -200,6 +200,15 @@ private suspend fun analyzeFullDbImportStreaming(
     )
 }
 
+/**
+ * Legacy helper for importing only the `PriceHistory` sheet in a second pass.
+ *
+ * The current UI full-database import path analyzes `PriceHistory` into
+ * [FullDbImportStreamingResult.pendingPriceHistory] and persists those rows through
+ * `InventoryRepository.applyImport`, so catalog dirty marking stays inside the same
+ * repository transaction. Keep this helper behavior unchanged unless a caller is
+ * reintroduced with matching repository-level tests.
+ */
 suspend fun applyFullDbPriceHistoryStreaming(
     context: Context,
     uri: Uri,

@@ -45,4 +45,14 @@ interface CategoryRemoteRefDao {
 
     @Query("SELECT COUNT(*) FROM category_remote_refs")
     suspend fun countRows(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*)
+        FROM categories c
+        LEFT JOIN category_remote_refs r ON r.categoryId = c.id
+        WHERE r.id IS NULL
+        """
+    )
+    suspend fun countLocalRowsMissingRemoteRef(): Int
 }

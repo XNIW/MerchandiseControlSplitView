@@ -45,4 +45,14 @@ interface ProductRemoteRefDao {
 
     @Query("SELECT COUNT(*) FROM product_remote_refs")
     suspend fun countRows(): Int
+
+    @Query(
+        """
+        SELECT COUNT(*)
+        FROM products p
+        LEFT JOIN product_remote_refs r ON r.productId = p.id
+        WHERE r.id IS NULL
+        """
+    )
+    suspend fun countLocalRowsMissingRemoteRef(): Int
 }

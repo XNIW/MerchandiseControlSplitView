@@ -184,8 +184,8 @@ interface InventoryRepository {
     suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean
 
     /**
-     * Breakdown sintetico tombstone + prezzi (task 030): stessi conteggi usati nel check inclusivo
-     * per quelle due famiglie, senza full scan del catalogo.
+     * Breakdown sintetico tombstone + prezzi + bridge catalogo mancanti (task 030/032).
+     * I bridge dirty restano intenzionalmente nel solo booleano inclusivo.
      */
     suspend fun getCatalogCloudPendingBreakdown(): CatalogCloudPendingBreakdown
 
@@ -1241,7 +1241,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         CatalogCloudPendingBreakdown(
             pendingCatalogTombstones = pendingCatalogTombstoneDao.count(),
             productPricesPendingPriceBridge = priceDao.countPriceRowsPendingPriceBridge(),
-            productPricesBlockedWithoutProductRemote = priceDao.countPriceRowsWithoutProductRemote()
+            productPricesBlockedWithoutProductRemote = priceDao.countPriceRowsWithoutProductRemote(),
+            suppliersMissingRemoteRef = supplierRemoteRefDao.countLocalRowsMissingRemoteRef(),
+            categoriesMissingRemoteRef = categoryRemoteRefDao.countLocalRowsMissingRemoteRef(),
+            productsMissingRemoteRef = productRemoteRefDao.countLocalRowsMissingRemoteRef()
         )
     }
 

@@ -213,6 +213,137 @@ class CatalogSyncViewModelTest {
     }
 
     @Test
+    fun `036 manual refresh clears session detail inherited from automatic bootstrap`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(1, 0, 0, 0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val sessionRemote = ViewModelSessionRemote024(configured = true)
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = sessionRemote,
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_sessions_sync_hint, 1, 0),
+            viewModel.uiState.value.sessionDetail
+        )
+
+        sessionRemote.configured = false
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_synced),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertNull(viewModel.uiState.value.sessionDetail)
+        coVerify(exactly = 1) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
+        coVerify(exactly = 0) {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        }
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `036 catalog failure does not reuse session detail from previous manual refresh`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returnsMany listOf(
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = 0,
+                    pulledSuppliers = 0,
+                    pulledCategories = 0,
+                    pulledProducts = 0
+                )
+            ),
+            Result.failure(IOException("catalog unavailable"))
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(1, 0, 0, 0, 0))
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(1, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val sessionRemote = ViewModelSessionRemote024(configured = false)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = sessionRemote,
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+        auth.value = AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        advanceUntilIdle()
+
+        sessionRemote.configured = true
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_synced),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertEquals(
+            app.getString(R.string.catalog_cloud_sessions_sync_hint, 1, 1),
+            viewModel.uiState.value.sessionDetail
+        )
+
+        sessionRemote.configured = false
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_offline),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertNull(viewModel.uiState.value.catalogDetail)
+        assertNull(viewModel.uiState.value.sessionDetail)
+        coVerify(exactly = 1) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
+        coVerify(exactly = 1) {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        }
+
+        collectJob.cancel()
+    }
+
+    @Test
     fun `031 catalog failure with reliable forbidden status uses permissions copy`() = runTest {
         val repository = mockk<InventoryRepository>()
         coEvery {
@@ -505,8 +636,10 @@ private class ViewModelPriceRemote021(
         Result.success(fetchRows)
 }
 
-private class ViewModelSessionRemote024 : SessionBackupRemoteDataSource {
-    override val isConfigured: Boolean get() = true
+private class ViewModelSessionRemote024(
+    var configured: Boolean = true
+) : SessionBackupRemoteDataSource {
+    override val isConfigured: Boolean get() = configured
 
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
         Result.success(emptyList())
