@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.viewmodel
 import android.app.Application
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
@@ -31,6 +32,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -120,6 +122,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -153,6 +156,9 @@ class CatalogSyncViewModelTest {
         coVerify(exactly = 1) {
             repository.hasCatalogCloudPendingWorkInclusive()
         }
+        coVerify(exactly = 1) {
+            repository.getCatalogCloudPendingBreakdown()
+        }
 
         collectJob.cancel()
     }
@@ -173,6 +179,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(1, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -231,6 +238,7 @@ class CatalogSyncViewModelTest {
             repository.bootstrapHistorySessionsFromRemote(any())
         } returns Result.success(RemoteSessionBatchResult(1, 0, 0, 0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val sessionRemote = ViewModelSessionRemote024(configured = true)
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
@@ -295,6 +303,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(1, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val sessionRemote = ViewModelSessionRemote024(configured = false)
         val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
         val viewModel = CatalogSyncViewModel(
@@ -359,6 +368,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -412,6 +422,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -464,6 +475,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.failure(IOException("session push"))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -520,6 +532,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.failure(IOException("session push"))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
         )
@@ -570,6 +583,7 @@ class CatalogSyncViewModelTest {
             repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
         } returns Result.success(HistorySessionBackupPushSummary(0, 0))
         coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(userId = OWNER_VM_021, email = "u@t.test")
         )
@@ -595,12 +609,203 @@ class CatalogSyncViewModelTest {
 
         collectJob.cancel()
     }
+
+    @Test
+    fun `039 refresh loads pending breakdown for structured log after sync`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val breakdown = CatalogCloudPendingBreakdown(
+            pendingCatalogTombstones = 2,
+            productPricesPendingPriceBridge = 5,
+            productPricesBlockedWithoutProductRemote = 1,
+            suppliersMissingRemoteRef = 0,
+            categoriesMissingRemoteRef = 1,
+            productsMissingRemoteRef = 0
+        )
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns breakdown
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "039@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.getCatalogCloudPendingBreakdown() }
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `039 refresh guard paths do not load pending breakdown`() = runTest {
+        val signedOutRepository = mockk<InventoryRepository>()
+        val signedOutViewModel = CatalogSyncViewModel(
+            application = app,
+            repository = signedOutRepository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        )
+        val signedOutCollectJob = launch { signedOutViewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        signedOutViewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { signedOutRepository.getCatalogCloudPendingBreakdown() }
+        signedOutCollectJob.cancel()
+
+        val remoteOffRepository = mockk<InventoryRepository>()
+        val remoteOffViewModel = CatalogSyncViewModel(
+            application = app,
+            repository = remoteOffRepository,
+            remote = ViewModelCatalogRemote021(
+                bundle = bootstrapBundleVm021(OWNER_VM_021),
+                configured = false
+            ),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow<AuthState>(
+                AuthState.SignedIn(userId = OWNER_VM_021, email = "039@example.test")
+            )
+        )
+        val remoteOffCollectJob = launch { remoteOffViewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        remoteOffViewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { remoteOffRepository.getCatalogCloudPendingBreakdown() }
+        remoteOffCollectJob.cancel()
+
+        val busyRepository = mockk<InventoryRepository>()
+        val bootstrapStarted = CompletableDeferred<Unit>()
+        val bootstrapGate = CompletableDeferred<Result<RemoteSessionBatchResult>>()
+        coEvery {
+            busyRepository.bootstrapHistorySessionsFromRemote(any())
+        } coAnswers {
+            bootstrapStarted.complete(Unit)
+            bootstrapGate.await()
+        }
+        val busyViewModel = CatalogSyncViewModel(
+            application = app,
+            repository = busyRepository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = true),
+            authFlow = MutableStateFlow<AuthState>(
+                AuthState.SignedIn(userId = OWNER_VM_021, email = "039@example.test")
+            )
+        )
+        val busyCollectJob = launch { busyViewModel.uiState.collect {} }
+        bootstrapStarted.await()
+
+        busyViewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { busyRepository.getCatalogCloudPendingBreakdown() }
+        bootstrapGate.complete(Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)))
+        advanceUntilIdle()
+        busyCollectJob.cancel()
+    }
+
+    @Test
+    fun `039 pending breakdown failure keeps refresh result unchanged`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } throws IOException("breakdown")
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "039@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_synced),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertNull(viewModel.uiState.value.sessionDetail)
+        coVerify(exactly = 1) { repository.getCatalogCloudPendingBreakdown() }
+
+        collectJob.cancel()
+    }
 }
 
+private fun emptyViewModelPendingBreakdown(): CatalogCloudPendingBreakdown =
+    CatalogCloudPendingBreakdown(
+        pendingCatalogTombstones = 0,
+        productPricesPendingPriceBridge = 0,
+        productPricesBlockedWithoutProductRemote = 0
+    )
+
 private class ViewModelCatalogRemote021(
-    private val bundle: InventoryCatalogFetchBundle
+    private val bundle: InventoryCatalogFetchBundle,
+    private val configured: Boolean = true
 ) : CatalogRemoteDataSource {
-    override val isConfigured: Boolean get() = true
+    override val isConfigured: Boolean get() = configured
 
     override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> =
         Result.success(Unit)

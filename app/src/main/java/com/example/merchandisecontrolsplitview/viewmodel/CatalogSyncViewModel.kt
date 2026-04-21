@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
@@ -20,6 +21,7 @@ import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSourc
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassifier
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -412,6 +414,23 @@ class CatalogSyncViewModel(
                 )
             } finally {
                 busy.value = false
+                val pendingBreakdown: CatalogCloudPendingBreakdown? =
+                    try {
+                        repository.getCatalogCloudPendingBreakdown()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        null
+                    }
+                val pendingBreakdownSuffix = pendingBreakdown?.let { breakdown ->
+                    " pendingCatalogTombstones=${breakdown.pendingCatalogTombstones} " +
+                        "productPricesPendingPriceBridge=${breakdown.productPricesPendingPriceBridge} " +
+                        "productPricesBlockedWithoutProductRemote=${breakdown.productPricesBlockedWithoutProductRemote} " +
+                        "suppliersMissingRemoteRef=${breakdown.suppliersMissingRemoteRef} " +
+                        "categoriesMissingRemoteRef=${breakdown.categoriesMissingRemoteRef} " +
+                        "productsMissingRemoteRef=${breakdown.productsMissingRemoteRef} " +
+                        "hasCatalogBridgeGaps=${breakdown.hasCatalogBridgeGaps}"
+                }.orEmpty()
                 Log.i(
                     TAG,
                     "refresh catalogOk=$logCatalogOk errKind=$logErr priceSyncFailed=${logSummary?.priceSyncFailed} " +
@@ -421,7 +440,8 @@ class CatalogSyncViewModel(
                         "sessionErrCategory=${logHistoryFailureClassification?.category} " +
                         "sessionHttpStatus=${logHistoryFailureClassification?.httpStatus} " +
                         "pricesPushed=${logSummary?.pushedProductPrices} pricesPulled=${logSummary?.pulledProductPrices} " +
-                        "pricesSkipped=${logSummary?.skippedProductPricesPullNoProductRef}"
+                        "pricesSkipped=${logSummary?.skippedProductPricesPullNoProductRef}" +
+                        pendingBreakdownSuffix
                 )
             }
         }
