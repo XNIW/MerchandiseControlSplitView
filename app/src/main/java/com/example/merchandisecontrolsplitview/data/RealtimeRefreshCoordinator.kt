@@ -32,6 +32,8 @@ import kotlinx.coroutines.launch
  * - **Foreground-first:** [onAppForeground] / [onAppBackground] controllano se il drain
  *   può essere eseguito. Il buffer cresce durante il background; al ritorno in foreground
  *   il tickle viene rilanciato e il drain eseguito entro [DEBOUNCE_MS] ms.
+ * - **Single-flight sessione:** l'apply inbound entra nello stesso flight owner usato da
+ *   refresh manuale e auto-push, evitando pull/apply e push concorrenti sullo stesso dominio.
  *
  * ## Garanzie di non-interferenza
  * - Non tocca UI, ViewModel o composable state.
@@ -58,6 +60,7 @@ class RealtimeRefreshCoordinator(
     private val repository: InventoryRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     val debounceMs: Long = DEBOUNCE_MS,
+    private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
     // Logger diagnostico iniettato: default no-op per restare compatibile con i test JVM
     // esistenti che non includono Robolectric (il coordinator non usa android.util.Log
     // direttamente). L'app reale inietta un wrapper su android.util.Log in
@@ -181,17 +184,28 @@ class RealtimeRefreshCoordinator(
 
     private suspend fun applyBatch(payloads: List<SessionRemotePayload>) {
         try {
-            val result = repository.applyRemoteSessionPayloadBatch(payloads)
+            val result = sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
+                repository.applyRemoteSessionPayloadBatch(payloads)
+            }
             logger(
                 "applyBatch done: inserted=${result.inserted} updated=${result.updated} " +
                     "skipped=${result.skipped} failed=${result.failed} " +
                     "unsupported=${result.unsupported}"
+            )
+            logger(
+                "cycle=pull_apply outcome=ok inserted=${result.inserted} updated=${result.updated} " +
+                    "skipped=${result.skipped} dirtyLocalSkips=${result.skipped} failed=${result.failed} " +
+                    "source=realtime"
             )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             // Swallow non-cancellation errors: a transient apply failure must not crash the coordinator.
             logger("applyBatch error (swallowed): ${e.javaClass.simpleName}: ${e.message}")
+            logger(
+                "cycle=pull_apply outcome=fail inserted=0 updated=0 skipped=0 dirtyLocalSkips=0 " +
+                    "failed=1 source=realtime"
+            )
         }
     }
 }

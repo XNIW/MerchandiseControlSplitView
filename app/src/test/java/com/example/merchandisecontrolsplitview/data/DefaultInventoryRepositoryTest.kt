@@ -817,6 +817,7 @@ class DefaultInventoryRepositoryTest {
     @Test
     fun `toRemotePayload builds autosufficiente payload from entry and remoteId`() = runTest {
         val entry = buildMinimalHistoryEntry().copy(
+            displayName = "Session display",
             supplier = "Fornitore Test",
             category = "Cat Test",
             isManualEntry = true
@@ -829,32 +830,63 @@ class DefaultInventoryRepositoryTest {
 
         assertEquals(remoteId, payload.remoteId)
         assertEquals(SESSION_PAYLOAD_VERSION, payload.payloadVersion)
+        assertEquals("Session display", payload.displayName)
         assertEquals("2026-04-15 10:00:00", payload.timestamp)
         assertEquals("Fornitore Test", payload.supplier)
         assertEquals("Cat Test", payload.category)
         assertTrue(payload.isManualEntry)
         // data non è vuota
         assertTrue(payload.data.isNotEmpty())
+        assertEquals(persisted.editable, payload.sessionOverlay?.editable)
+        assertEquals(persisted.complete, payload.sessionOverlay?.complete)
     }
 
     // --- Test pull remoto controllato (task 008) ---
 
     private fun remotePayload(
         remoteId: String = java.util.UUID.randomUUID().toString(),
+        payloadVersion: Int = SESSION_PAYLOAD_VERSION,
+        displayName: String? = null,
         timestamp: String = "2026-04-15 12:00:00",
         supplier: String = "RemoteSupplier",
         category: String = "RemoteCat",
         isManualEntry: Boolean = false,
-        data: List<List<String>> = listOf(listOf("barcode", "qty"), listOf("111", "2"))
+        data: List<List<String>> = listOf(listOf("barcode", "qty"), listOf("111", "2")),
+        sessionOverlay: SessionOverlay? = null
     ) = SessionRemotePayload(
         remoteId = remoteId,
-        payloadVersion = SESSION_PAYLOAD_VERSION,
+        payloadVersion = payloadVersion,
+        displayName = displayName,
         timestamp = timestamp,
         supplier = supplier,
         category = category,
         isManualEntry = isManualEntry,
-        data = data
+        data = data,
+        sessionOverlay = sessionOverlay
     )
+
+    @Test
+    fun `040 legacy v1 fingerprint keeps pre v2 canonical contract`() = runTest {
+        val payload = remotePayload(
+            payloadVersion = SESSION_PAYLOAD_VERSION_LEGACY_V1,
+            displayName = "Ignored by v1",
+            timestamp = "2026-04-15 12:00:00",
+            supplier = "RemoteSupplier",
+            category = "RemoteCat",
+            isManualEntry = true,
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("AAA", "10", "2")
+            ),
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("2", "")),
+                complete = listOf(false, true)
+            )
+        )
+
+        val legacyCanonical = "2026-04-15 12:00:00|RemoteSupplier|RemoteCat|true|barcode,purchasePrice,quantity,AAA,10,2"
+        assertEquals(legacyCanonical.hashCode().toString(), payload.payloadFingerprint())
+    }
 
     @Test
     fun `applyRemoteSessionPayload inserts new entry and bridge for unknown remoteId`() = runTest {
@@ -922,7 +954,10 @@ class DefaultInventoryRepositoryTest {
             listOf("barcode", "purchasePrice", "quantity"),
             listOf("AAA", "10", "3")
         )
-        val payload = remotePayload(data = data)
+        val payload = remotePayload(
+            payloadVersion = SESSION_PAYLOAD_VERSION_LEGACY_V1,
+            data = data
+        )
         repository.applyRemoteSessionPayload(payload)
 
         val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)
@@ -936,6 +971,78 @@ class DefaultInventoryRepositoryTest {
         assertEquals(30.0, entry.orderTotal, 0.0001)
         assertEquals(30.0, entry.paymentTotal, 0.0001)
         assertEquals(1, entry.missingItems)
+    }
+
+    @Test
+    fun `040 applyRemoteSessionPayload v2 materializes display name and operational overlay`() = runTest {
+        val data = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "10", "3")
+        )
+        val overlay = SessionOverlay(
+            editable = listOf(listOf("", ""), listOf("2", "")),
+            complete = listOf(false, true)
+        )
+        val payload = remotePayload(
+            displayName = "Sessione condivisa",
+            data = data,
+            sessionOverlay = overlay
+        )
+
+        val outcome = repository.applyRemoteSessionPayload(payload)
+
+        assertEquals(RemoteSessionApplyOutcome.Inserted, outcome)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals("Sessione condivisa", entry.displayName)
+        assertEquals(overlay.editable, entry.editable)
+        assertEquals(overlay.complete, entry.complete)
+        assertEquals(20.0, entry.paymentTotal, 0.0001)
+        assertEquals(0, entry.missingItems)
+    }
+
+    @Test
+    fun `040 invalid v2 overlay applies data and display name without resetting local overlay`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        val initial = remotePayload(
+            remoteId = remoteId,
+            displayName = "Initial",
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("AAA", "5", "2")
+            ),
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("1", "")),
+                complete = listOf(false, true)
+            )
+        )
+        repository.applyRemoteSessionPayload(initial)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        val before = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+
+        val changedData = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "9", "1")
+        )
+        val invalidOverlay = SessionOverlay(
+            editable = listOf(listOf("", "")),
+            complete = listOf(false)
+        )
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                displayName = "Remote title",
+                data = changedData,
+                sessionOverlay = invalidOverlay
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val after = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals("Remote title", after.displayName)
+        assertEquals(changedData, after.data)
+        assertEquals(before.editable, after.editable)
+        assertEquals(before.complete, after.complete)
     }
 
     @Test
@@ -970,13 +1077,19 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `applyRemoteSessionPayload resets local scaffolding when remote data changes`() = runTest {
+    fun `applyRemoteSessionPayload v1 resets local scaffolding when remote data changes and local is clean`() = runTest {
         val remoteId = java.util.UUID.randomUUID().toString()
         val originalData = listOf(
             listOf("barcode", "purchasePrice", "quantity"),
             listOf("AAA", "5", "2")
         )
-        repository.applyRemoteSessionPayload(remotePayload(remoteId = remoteId, data = originalData))
+        repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                payloadVersion = SESSION_PAYLOAD_VERSION_LEGACY_V1,
+                data = originalData
+            )
+        )
 
         val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
         val locallyEdited = repository.getHistoryEntryByUid(ref.historyEntryUid)!!.copy(
@@ -987,7 +1100,7 @@ class DefaultInventoryRepositoryTest {
             paymentTotal = 777.0,
             missingItems = 0
         )
-        repository.updateHistoryEntry(locallyEdited)
+        db.historyEntryDao().update(locallyEdited)
 
         val changedData = listOf(
             listOf("barcode", "purchasePrice", "quantity"),
@@ -997,6 +1110,7 @@ class DefaultInventoryRepositoryTest {
         val outcome = repository.applyRemoteSessionPayload(
             remotePayload(
                 remoteId = remoteId,
+                payloadVersion = SESSION_PAYLOAD_VERSION_LEGACY_V1,
                 supplier = "RemoteUpdated",
                 data = changedData
             )
@@ -1128,6 +1242,29 @@ class DefaultInventoryRepositoryTest {
         val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
         assertEquals(1, updatedRef.localChangeRevision)
         // lastSyncedLocalRevision non cambia con le modifiche locali
+        assertEquals(0, updatedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `040 localChangeRevision increments on complete only local update`() = runTest {
+        val payload = remotePayload(
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("AAA", "10", "1")
+            ),
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("", "")),
+                complete = listOf(false, false)
+            )
+        )
+        repository.applyRemoteSessionPayload(payload)
+
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        repository.updateHistoryEntry(entry.copy(complete = listOf(false, true)))
+
+        val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(1, updatedRef.localChangeRevision)
         assertEquals(0, updatedRef.lastSyncedLocalRevision)
     }
 
@@ -1910,6 +2047,10 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, fake.upsertedChunks.flatten().size)
         val row = fake.upsertedChunks.single().single()
         assertEquals("PushMe", row.supplier)
+        assertEquals(SESSION_PAYLOAD_VERSION, row.payloadVersion)
+        assertEquals("test_entry.xlsx", row.displayName)
+        assertEquals(listOf(listOf("", "")), row.sessionOverlay.editable)
+        assertEquals(listOf(false), row.sessionOverlay.complete)
         assertEquals(owner, row.ownerUserId)
     }
 
@@ -1937,6 +2078,28 @@ class DefaultInventoryRepositoryTest {
         val second = repository.pushHistorySessionsToRemote(fake, owner).getOrThrow()
         assertEquals(0, second.uploaded)
         assertEquals(1, second.skippedAlreadySynced)
+    }
+
+    @Test
+    fun `040 push blocks overlay above soft cap and keeps session pending`() = runTest {
+        val tooLargeCell = "x".repeat(SESSION_OVERLAY_MAX_BYTES + 1)
+        val uid = repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("large_overlay.xlsx").copy(
+                editable = listOf(listOf(tooLargeCell, "")),
+                complete = listOf(false)
+            )
+        )
+        val fake = FakeSessionBackupRemote023()
+
+        val result = repository
+            .pushHistorySessionsToRemote(fake, "00000000-0000-4000-8000-000000000040")
+            .getOrThrow()
+
+        assertEquals(0, result.uploaded)
+        assertTrue(fake.upsertedChunks.isEmpty())
+        val ref = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)
+        assertNotNull(ref)
+        assertNull(ref!!.lastRemoteAppliedAt)
     }
 
     @Test

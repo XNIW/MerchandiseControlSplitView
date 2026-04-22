@@ -260,7 +260,8 @@ class RealtimeRefreshCoordinatorTest {
 
         override suspend fun pushHistorySessionsToRemote(
             remote: SessionBackupRemoteDataSource,
-            ownerUserId: String
+            ownerUserId: String,
+            candidateUids: Set<Long>?
         ): Result<HistorySessionBackupPushSummary> =
             Result.success(HistorySessionBackupPushSummary(0, 0))
 
@@ -355,6 +356,9 @@ class RealtimeRefreshCoordinatorTest {
         override fun hasHistoryEntriesFlow(): Flow<Boolean> =
             flow { throw UnsupportedOperationException() }
 
+        override fun observeHistoryEntryByUid(uid: Long): Flow<HistoryEntry?> =
+            flow { throw UnsupportedOperationException() }
+
         override suspend fun getHistoryEntryByUid(uid: Long): HistoryEntry? =
             throw UnsupportedOperationException()
 
@@ -412,6 +416,9 @@ class RealtimeRefreshCoordinatorTest {
             throw UnsupportedOperationException()
 
         override suspend fun getRemoteRef(historyEntryUid: Long): HistoryEntryRemoteRef? =
+            throw UnsupportedOperationException()
+
+        override suspend fun getPendingHistorySessionPushUids(): List<Long> =
             throw UnsupportedOperationException()
     }
 }

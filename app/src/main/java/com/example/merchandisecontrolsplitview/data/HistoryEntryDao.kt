@@ -20,7 +20,7 @@ interface HistoryEntryDao {
 
     @Query(
         """
-        SELECT uid, id, timestamp, supplier, category, wasExported, syncStatus,
+        SELECT uid, id, displayName, timestamp, supplier, category, wasExported, syncStatus,
                orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
         FROM history_entries
         WHERE """ +
@@ -43,7 +43,7 @@ interface HistoryEntryDao {
 
     @Query(
         """
-        SELECT uid, id, timestamp, supplier, category, wasExported, syncStatus,
+        SELECT uid, id, displayName, timestamp, supplier, category, wasExported, syncStatus,
                orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
         FROM history_entries
         WHERE timestamp >= :startDate AND timestamp <= :endDate
@@ -73,6 +73,9 @@ interface HistoryEntryDao {
     @Query("SELECT * FROM history_entries WHERE uid = :uid LIMIT 1")
     suspend fun getByUid(uid: Long): HistoryEntry?
 
+    @Query("SELECT * FROM history_entries WHERE uid = :uid LIMIT 1")
+    fun observeByUid(uid: Long): Flow<HistoryEntry?>
+
     @Query("SELECT timestamp FROM history_entries ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestTimestamp(): String?
 
@@ -90,4 +93,34 @@ interface HistoryEntryDao {
             " ORDER BY timestamp DESC"
     )
     suspend fun getAllUserVisibleSnapshot(): List<HistoryEntry>
+
+    @Query(
+        "SELECT * FROM history_entries WHERE uid IN (:uids) AND " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            " ORDER BY timestamp DESC"
+    )
+    suspend fun getUserVisibleSnapshotByUids(uids: List<Long>): List<HistoryEntry>
+
+    @Query(
+        """
+        SELECT h.uid
+        FROM history_entries h
+        LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE h.id NOT LIKE 'APPLY_IMPORT_%'
+          AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND (
+            r.historyEntryUid IS NULL
+            OR r.lastRemoteAppliedAt IS NULL
+            OR r.localChangeRevision > r.lastSyncedLocalRevision
+          )
+        ORDER BY h.timestamp DESC
+        """
+    )
+    suspend fun getUserVisibleSessionPushCandidateUids(): List<Long>
+
+    @Query(
+        "SELECT COUNT(*) FROM history_entries WHERE " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE
+    )
+    suspend fun countUserVisible(): Int
 }

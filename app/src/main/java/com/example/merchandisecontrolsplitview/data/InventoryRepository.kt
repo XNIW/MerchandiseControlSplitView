@@ -6,6 +6,7 @@ import androidx.paging.PagingSource
 import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
+import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +64,8 @@ data class RemoteSessionBatchResult(
 /** Riepilogo push backup sessioni history verso `shared_sheet_sessions` (task 023). */
 data class HistorySessionBackupPushSummary(
     val uploaded: Int,
-    val skippedAlreadySynced: Int
+    val skippedAlreadySynced: Int,
+    val attempted: Int = uploaded
 )
 
 interface InventoryRepository {
@@ -113,6 +115,7 @@ interface InventoryRepository {
     fun getFilteredHistoryFlow(filter: DateFilter): Flow<List<HistoryEntry>>
     fun getFilteredHistoryListFlow(filter: DateFilter): Flow<List<HistoryEntryListItem>>
     fun hasHistoryEntriesFlow(): Flow<Boolean>
+    fun observeHistoryEntryByUid(uid: Long): Flow<HistoryEntry?>
     suspend fun getHistoryEntryByUid(uid: Long): HistoryEntry?
     suspend fun insertHistoryEntry(entry: HistoryEntry): Long
     suspend fun updateHistoryEntry(entry: HistoryEntry)
@@ -152,6 +155,9 @@ interface InventoryRepository {
 
     /** Legge il [HistoryEntryRemoteRef] senza creare nulla. Null se non ancora generato. */
     suspend fun getRemoteRef(historyEntryUid: Long): HistoryEntryRemoteRef?
+
+    /** Uid user-visible che hanno lavoro sessione da pushare; query precisa su Room + bridge. */
+    suspend fun getPendingHistorySessionPushUids(): List<Long>
 
     // --- Pull remoto controllato: apply e dedup per remoteId (task 008) ---
 
@@ -200,7 +206,7 @@ interface InventoryRepository {
         ownerUserId: String
     ): Result<CatalogSyncSummary>
 
-    // --- Backup sessioni cloud (task 023): Room-first, payload v1 ---
+    // --- Backup sessioni cloud (task 023/040): Room-first, payload v1 reader + v2 writer ---
 
     /**
      * Upload conservativo delle sole entry user-visible con bridge in stato “da inviare”
@@ -208,7 +214,8 @@ interface InventoryRepository {
      */
     suspend fun pushHistorySessionsToRemote(
         remote: SessionBackupRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        candidateUids: Set<Long>? = null
     ): Result<HistorySessionBackupPushSummary>
 
     /** Fetch owner-scoped paginato + [applyRemoteSessionPayloadBatch] (bootstrap / restore). */
@@ -244,6 +251,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         val missingItems: Int
     )
 
+    private sealed class OverlayApplyState {
+        data class Valid(val localState: RemoteSessionLocalState) : OverlayApplyState()
+        object Missing : OverlayApplyState()
+        object Invalid : OverlayApplyState()
+    }
+
     private val productDao: ProductDao = db.productDao()
     private val supplierDao: SupplierDao = db.supplierDao()
     private val categoryDao: CategoryDao = db.categoryDao()
@@ -257,6 +270,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private val pendingCatalogTombstoneDao: PendingCatalogTombstoneDao = db.pendingCatalogTombstoneDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
+
+    @Volatile
+    var onHistorySessionPayloadChanged: ((Long) -> Unit)? = null
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
     override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
@@ -593,33 +609,59 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     override fun hasHistoryEntriesFlow(): Flow<Boolean> = historyDao.hasUserVisibleEntriesFlow()
 
+    override fun observeHistoryEntryByUid(uid: Long): Flow<HistoryEntry?> =
+        historyDao.observeByUid(uid)
+
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
-    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) { historyDao.insert(entry) }
+    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
+        val uid = historyDao.insert(entry.withInitialDisplayName())
+        if (uid > 0L) notifyHistorySessionPayloadChanged(uid)
+        uid
+    }
     override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
+        var payloadRelevant = false
         if (bridgeRef != null) {
             // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
             // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
             val old = historyDao.getByUid(entry.uid)
             historyDao.update(entry)
-            if (old != null && isPayloadRelevantChange(old, entry)) {
+            payloadRelevant = old != null && isPayloadRelevantChange(old, entry)
+            if (payloadRelevant) {
                 remoteRefDao.incrementLocalRevision(entry.uid)
             }
         } else {
+            val old = historyDao.getByUid(entry.uid)
             historyDao.update(entry)
+            payloadRelevant = old == null || isPayloadRelevantChange(old, entry)
         }
+        if (payloadRelevant) notifyHistorySessionPayloadChanged(entry.uid)
     }
 
     /**
-     * Restituisce true se la modifica tocca almeno un campo incluso in [SessionRemotePayload] v1.
+     * Restituisce true se la modifica tocca almeno un campo incluso in [SessionRemotePayload] v2.
      * Usata da [updateHistoryEntry] per decidere se incrementare [HistoryEntryRemoteRef.localChangeRevision].
      */
     private fun isPayloadRelevantChange(old: HistoryEntry, new: HistoryEntry): Boolean =
+        old.displayName != new.displayName ||
         old.timestamp != new.timestamp ||
         old.supplier != new.supplier ||
         old.category != new.category ||
         old.isManualEntry != new.isManualEntry ||
-        old.data != new.data
+        old.data != new.data ||
+        old.editable != new.editable ||
+        old.complete != new.complete
+
+    private fun HistoryEntry.withInitialDisplayName(): HistoryEntry =
+        if (displayName.isNotBlank()) this
+        else copy(displayName = id.takeUnless(::looksLikeUuid).orEmpty())
+
+    private fun looksLikeUuid(value: String): Boolean =
+        UUID_PATTERN.matches(value.trim())
+
+    private fun notifyHistorySessionPayloadChanged(uid: Long) {
+        onHistorySessionPayloadChanged?.invoke(uid)
+    }
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         db.withTransaction {
             remoteRefDao.deleteByHistoryEntryUid(entry.uid)
@@ -747,11 +789,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     override suspend fun getRemoteRef(historyEntryUid: Long): HistoryEntryRemoteRef? =
         withContext(Dispatchers.IO) { remoteRefDao.getByHistoryEntryUid(historyEntryUid) }
 
+    override suspend fun getPendingHistorySessionPushUids(): List<Long> =
+        withContext(Dispatchers.IO) { historyDao.getUserVisibleSessionPushCandidateUids() }
+
     // --- Pull remoto controllato (task 008) ---
 
     override suspend fun applyRemoteSessionPayload(payload: SessionRemotePayload): RemoteSessionApplyOutcome =
         withContext(Dispatchers.IO) {
-            if (payload.payloadVersion != SESSION_PAYLOAD_VERSION) {
+            if (payload.payloadVersion !in SUPPORTED_SESSION_PAYLOAD_VERSIONS) {
                 return@withContext RemoteSessionApplyOutcome.UnsupportedVersion
             }
             try {
@@ -765,6 +810,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     private suspend fun applySingleRemotePayload(payload: SessionRemotePayload): RemoteSessionApplyOutcome {
         val fp = payload.payloadFingerprint()
+        val overlayState = buildOverlayStateForPayload(payload)
         val existingRef = remoteRefDao.getByRemoteId(payload.remoteId)
         if (existingRef != null) {
             // Policy anti-overwrite (task 023): mai applicare inbound se ci sono modifiche payload
@@ -782,22 +828,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             val existingEntry = historyDao.getByUid(existingRef.historyEntryUid)
                 ?: return RemoteSessionApplyOutcome.Failed(
                     IllegalStateException("Bridge esiste ma HistoryEntry uid=${existingRef.historyEntryUid} mancante")
-                )
+            )
             // Nessuna scrittura se il payload è materialmente invariato (slow-path fallback).
+            val incomingDisplayName = displayNameFromPayload(payload, existingEntry.displayName)
+            val displayNameUnchanged = existingEntry.displayName == incomingDisplayName
             if (existingEntry.timestamp == payload.timestamp &&
+                displayNameUnchanged &&
                 existingEntry.supplier == payload.supplier &&
                 existingEntry.category == payload.category &&
                 existingEntry.isManualEntry == payload.isManualEntry &&
-                existingEntry.data == payload.data) {
+                existingEntry.data == payload.data &&
+                overlayState.isMateriallySameAs(existingEntry)) {
                 return RemoteSessionApplyOutcome.Skipped
             }
-            val refreshedLocalState =
-                buildRemoteSessionLocalState(payload.data).takeIf { existingEntry.data != payload.data }
-            // Aggiorna i campi payload e riallinea lo scaffolding locale solo se la griglia remota cambia.
+            val refreshedLocalState = when {
+                payload.payloadVersion == SESSION_PAYLOAD_VERSION && overlayState is OverlayApplyState.Valid ->
+                    overlayState.localState
+                payload.payloadVersion == SESSION_PAYLOAD_VERSION_LEGACY_V1 && existingEntry.data != payload.data ->
+                    buildRemoteSessionLocalState(payload.data)
+                else -> null
+            }
+            // Aggiorna i campi payload. In v2 l'overlay valido ripristina lo stato operativo;
+            // se l'overlay manca/è invalido, il data remoto può avanzare senza azzerare editable/complete locali.
             // Chiama historyDao.update() direttamente (non updateHistoryEntry) per non incrementare
             // localChangeRevision: il remote apply non è una modifica locale.
             historyDao.update(
                 existingEntry.copy(
+                    displayName = incomingDisplayName,
                     timestamp = payload.timestamp,
                     supplier = payload.supplier,
                     category = payload.category,
@@ -821,10 +878,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             return RemoteSessionApplyOutcome.Updated
         }
         // Insert path: remoteId sconosciuto → nuova entry + bridge con sync state inizializzato.
-        val localState = buildRemoteSessionLocalState(payload.data)
+        val localState = when (overlayState) {
+            is OverlayApplyState.Valid -> overlayState.localState
+            OverlayApplyState.Invalid,
+            OverlayApplyState.Missing -> buildRemoteSessionLocalState(payload.data)
+        }
         val newEntry = HistoryEntry(
             uid = 0,
             id = payload.remoteId,   // UUID stabile, non collide con prefissi tecnici né nomi utente
+            displayName = displayNameFromPayload(payload, ""),
             timestamp = payload.timestamp,
             data = payload.data,
             editable = localState.editable,
@@ -858,35 +920,113 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         return RemoteSessionApplyOutcome.Inserted
     }
 
+    private fun buildOverlayStateForPayload(payload: SessionRemotePayload): OverlayApplyState {
+        if (payload.payloadVersion == SESSION_PAYLOAD_VERSION_LEGACY_V1) {
+            return OverlayApplyState.Missing
+        }
+        val overlay = payload.sessionOverlay ?: return OverlayApplyState.Missing
+        val overlayBytes = overlay.canonicalString().encodeToByteArray().size
+        val valid = overlay.overlaySchema == SESSION_OVERLAY_SCHEMA &&
+            overlayBytes <= SESSION_OVERLAY_MAX_BYTES &&
+            overlay.editable.size == payload.data.size &&
+            overlay.complete.size == payload.data.size
+        if (!valid) {
+            Log.w(
+                HISTORY_SESSION_SYNC_TAG,
+                "reason=overlay_shape_reject remoteId=${payload.remoteId} " +
+                    "payloadVersionRead=${payload.payloadVersion} dataRows=${payload.data.size} " +
+                    "editableRows=${overlay.editable.size} completeRows=${overlay.complete.size} " +
+                    "overlayBytes=$overlayBytes"
+            )
+            return OverlayApplyState.Invalid
+        }
+        return OverlayApplyState.Valid(
+            buildRemoteSessionLocalState(
+                data = payload.data,
+                overlay = overlay
+            )
+        )
+    }
+
+    private fun OverlayApplyState.isMateriallySameAs(entry: HistoryEntry): Boolean =
+        when (this) {
+            is OverlayApplyState.Valid ->
+                entry.editable == localState.editable &&
+                    entry.complete == localState.complete &&
+                    entry.totalItems == localState.totalItems &&
+                    entry.orderTotal == localState.orderTotal &&
+                    entry.paymentTotal == localState.paymentTotal &&
+                    entry.missingItems == localState.missingItems
+            OverlayApplyState.Missing,
+            OverlayApplyState.Invalid -> true
+        }
+
+    private fun displayNameFromPayload(payload: SessionRemotePayload, current: String): String =
+        if (payload.payloadVersion == SESSION_PAYLOAD_VERSION) {
+            payload.displayName ?: current
+        } else {
+            current
+        }
+
     private fun buildRemoteSessionLocalState(data: List<List<String>>): RemoteSessionLocalState {
-        val editable = List(data.size) { listOf("", "") }
-        val complete = List(data.size) { false }
+        return buildRemoteSessionLocalState(data, overlay = null)
+    }
+
+    private fun buildRemoteSessionLocalState(
+        data: List<List<String>>,
+        overlay: SessionOverlay?
+    ): RemoteSessionLocalState {
+        val editable = overlay?.editable ?: List(data.size) { listOf("", "") }
+        val complete = overlay?.complete ?: List(data.size) { false }
 
         val header = data.firstOrNull().orEmpty()
         val purchasePriceIndex = header.indexOf("purchasePrice")
         val quantityIndex = header.indexOf("quantity")
+        val discountedPriceIndex = header.indexOf("discountedPrice")
+        val discountIndex = header.indexOf("discount")
 
         var totalItems = 0
         var orderTotal = 0.0
+        var completedItems = 0
+        var paymentTotal = 0.0
 
         if (purchasePriceIndex != -1 && quantityIndex != -1) {
-            data.drop(1).forEach { row ->
+            data.drop(1).forEachIndexed { index, row ->
+                val modelIndex = index + 1
                 val quantity = parseUserQuantityInput(row.getOrNull(quantityIndex)) ?: 0.0
                 if (quantity > 0) {
                     totalItems++
                     val purchasePrice = parseUserPriceInput(row.getOrNull(purchasePriceIndex)) ?: 0.0
                     orderTotal += purchasePrice * quantity
                 }
+                if (complete.getOrNull(modelIndex) == true) {
+                    completedItems++
+                    val realQuantityStr = editable.getOrNull(modelIndex)?.getOrNull(0).orEmpty()
+                    val originalQuantityStr = row.getOrNull(quantityIndex).orEmpty()
+                    val quantityToUse = parseUserQuantityInput(realQuantityStr.ifBlank { originalQuantityStr }) ?: 0.0
+                    if (quantityToUse > 0) {
+                        val purchasePrice = parseUserPriceInput(row.getOrNull(purchasePriceIndex)) ?: 0.0
+                        val discountedPrice = parseUserPriceInput(row.getOrNull(discountedPriceIndex))
+                        val discountPercent = parseUserNumericInput(row.getOrNull(discountIndex))
+                        val finalPaymentPrice = when {
+                            discountedPrice != null -> discountedPrice
+                            discountPercent != null -> purchasePrice * (1 - (discountPercent / 100))
+                            else -> purchasePrice
+                        }
+                        paymentTotal += finalPaymentPrice * quantityToUse
+                    }
+                }
             }
         }
+        val missingItems = (data.size - 1).coerceAtLeast(0) - completedItems
 
         return RemoteSessionLocalState(
             editable = editable,
             complete = complete,
             totalItems = totalItems,
             orderTotal = orderTotal,
-            paymentTotal = orderTotal,
-            missingItems = totalItems
+            paymentTotal = overlay?.let { paymentTotal } ?: orderTotal,
+            missingItems = overlay?.let { missingItems } ?: totalItems
         )
     }
 
@@ -1265,33 +1405,59 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     override suspend fun pushHistorySessionsToRemote(
         remote: SessionBackupRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        candidateUids: Set<Long>?
     ): Result<HistorySessionBackupPushSummary> = withContext(Dispatchers.IO) {
         if (!remote.isConfigured) {
             return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
         }
         try {
             val candidates = mutableListOf<HistorySessionPushCandidate>()
-            var skippedAlreadySynced = 0
-            for (entry in historyDao.getAllUserVisibleSnapshot()) {
+            val candidateUidList = candidateUids
+                ?.filter { it > 0L }
+                ?.distinct()
+                ?: historyDao.getUserVisibleSessionPushCandidateUids()
+            val entries = if (candidateUidList.isEmpty()) {
+                emptyList()
+            } else {
+                historyDao.getUserVisibleSnapshotByUids(candidateUidList)
+            }
+            val skippedAlreadySynced = if (candidateUids == null) {
+                (historyDao.countUserVisible() - entries.size).coerceAtLeast(0)
+            } else {
+                0
+            }
+            for (entry in entries) {
                 val remoteId = getOrCreateRemoteId(entry.uid) ?: continue
                 val ref = remoteRefDao.getByHistoryEntryUid(entry.uid) ?: continue
                 if (!historySessionNeedsPush(ref)) {
-                    skippedAlreadySynced++
+                    continue
+                }
+                val payload = entry.toRemotePayload(remoteId)
+                val overlayBytes = payload.sessionOverlay?.canonicalString()?.encodeToByteArray()?.size ?: 0
+                if (overlayBytes > SESSION_OVERLAY_MAX_BYTES) {
+                    Log.w(
+                        HISTORY_SESSION_SYNC_TAG,
+                        "reason=overlay_too_large historyEntryUid=${entry.uid} " +
+                            "remoteId=$remoteId overlayBytes=$overlayBytes maxBytes=$SESSION_OVERLAY_MAX_BYTES"
+                    )
                     continue
                 }
                 candidates.add(
                     HistorySessionPushCandidate(
                         entry = entry,
                         ref = ref,
-                        payload = entry.toRemotePayload(remoteId)
+                        payload = payload
                     )
                 )
             }
             var uploaded = 0
             for (chunk in candidates.chunked(SESSION_BACKUP_PUSH_CHUNK)) {
                 val rows = chunk.map { it.payload.toSharedSheetSessionUpsertRow(ownerUserId) }
-                remote.upsertSessions(rows).getOrElse { return@withContext Result.failure(it) }
+                remote.upsertSessions(rows).getOrElse { error ->
+                    logHistorySessionPushFailure(chunk, error)
+                    return@withContext Result.failure(error)
+                }
                 db.withTransaction {
                     for (c in chunk) {
                         remoteRefDao.getByHistoryEntryUid(c.entry.uid) ?: continue
@@ -1309,7 +1475,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                 }
                 uploaded += chunk.size
             }
-            Result.success(HistorySessionBackupPushSummary(uploaded, skippedAlreadySynced))
+            Result.success(
+                HistorySessionBackupPushSummary(
+                    uploaded = uploaded,
+                    skippedAlreadySynced = skippedAlreadySynced,
+                    attempted = candidates.size
+                )
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -1326,10 +1498,23 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         try {
             val records = remote.fetchAllSessionsForOwner().getOrElse { return@withContext Result.failure(it) }
             val payloads = records.map { it.toSessionRemotePayload() }
-            Result.success(applyRemoteSessionPayloadBatch(payloads))
+            val result = applyRemoteSessionPayloadBatch(payloads)
+            Log.i(
+                "HistorySessionSyncV2",
+                "cycle=pull_apply outcome=ok inserted=${result.inserted} updated=${result.updated} " +
+                    "skipped=${result.skipped} dirtyLocalSkips=${result.skipped} failed=${result.failed} " +
+                    "source=bootstrap"
+            )
+            Result.success(result)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
+            Log.w(
+                "HistorySessionSyncV2",
+                "cycle=pull_apply outcome=fail inserted=0 updated=0 skipped=0 dirtyLocalSkips=0 " +
+                    "failed=1 source=bootstrap",
+                t
+            )
             Result.failure(t)
         }
     }
@@ -1417,8 +1602,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     private companion object {
         const val TAG = "CatalogCloudSync"
+        const val HISTORY_SESSION_SYNC_TAG = "HistorySessionSyncV2"
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
         const val SESSION_BACKUP_PUSH_CHUNK = 80
+        const val LOG_SAMPLE_LIMIT = 5
+        val SUPPORTED_SESSION_PAYLOAD_VERSIONS = setOf(
+            SESSION_PAYLOAD_VERSION_LEGACY_V1,
+            SESSION_PAYLOAD_VERSION
+        )
+        val UUID_PATTERN = Regex(
+            """^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"""
+        )
     }
 
     private fun logSyncTransportFailure(phase: String, throwable: Throwable) {
@@ -1426,6 +1620,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         Log.w(
             TAG,
             "phase=$phase category=${classification.category} httpStatus=${classification.httpStatus} " +
+                "postgrestCode=${classification.postgrestCode} type=${throwable::class.java.simpleName}"
+        )
+    }
+
+    private fun logHistorySessionPushFailure(
+        chunk: List<HistorySessionPushCandidate>,
+        throwable: Throwable
+    ) {
+        val classification = SyncErrorClassifier.classify(throwable)
+        Log.w(
+            HISTORY_SESSION_SYNC_TAG,
+            "cycle=push outcome=fail phase=session_upsert_chunk sessionsInBatch=${chunk.size} " +
+                "historyEntryUidSample=${chunk.take(LOG_SAMPLE_LIMIT).joinToString(",") { it.entry.uid.toString() }} " +
+                "remoteIdSample=${chunk.take(LOG_SAMPLE_LIMIT).joinToString(",") { it.payload.remoteId }} " +
+                "errCategory=${classification.category} httpStatus=${classification.httpStatus} " +
                 "postgrestCode=${classification.postgrestCode} type=${throwable::class.java.simpleName}"
         )
     }

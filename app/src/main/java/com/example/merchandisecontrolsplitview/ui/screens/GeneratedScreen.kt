@@ -250,16 +250,44 @@ fun GeneratedScreen(
     }
 
     val currentEntryName by excelViewModel.currentEntryName
+    val currentEntryFileName by excelViewModel.currentEntryFileName
     val currentLocale = Locale.getDefault()
-    val displayTitleText = remember(titleText) {
-        formatHistoryEntryDisplayTitle(titleText)
+    val currentEntryListItem = remember(historyListEntries, entryUid) {
+        historyListEntries.firstOrNull { it.uid == entryUid }
     }
-    val currentEntryTimestampText = remember(historyListEntries, entryUid, currentLocale) {
-        historyListEntries
-            .firstOrNull { it.uid == entryUid }
+    val currentEntryTimestampText = remember(currentEntryListItem, currentLocale) {
+        currentEntryListItem
             ?.timestamp
             ?.takeIf { it.isNotBlank() }
             ?.let { formatHistoryEntryContextTimestamp(it, currentLocale) }
+    }
+    val genericTitleFallback = stringResource(R.string.history_session_title_fallback_generic)
+    val titleSupplier = currentEntryListItem?.supplier ?: excelViewModel.supplierName
+    val titleTimestamp = currentEntryListItem?.timestamp.orEmpty()
+    val titleTimestampText = remember(titleTimestamp, currentLocale) {
+        formatHistoryEntryContextTimestamp(titleTimestamp, currentLocale)
+    }
+    val contextTitleFallback = stringResource(
+        R.string.history_session_title_fallback_context,
+        titleSupplier.trim(),
+        titleTimestampText
+    )
+    val displayTitleText = remember(
+        titleText,
+        titleSupplier,
+        titleTimestamp,
+        currentLocale,
+        contextTitleFallback,
+        genericTitleFallback
+    ) {
+        formatHistorySessionDisplayTitle(
+            displayName = titleText,
+            supplier = titleSupplier,
+            timestamp = titleTimestamp,
+            locale = currentLocale,
+            contextFallback = contextTitleFallback,
+            genericFallback = genericTitleFallback
+        )
     }
 
     var showManualEntryDialog by remember { mutableStateOf(false) }
@@ -267,9 +295,7 @@ fun GeneratedScreen(
 
     var productDataToPrefill by remember { mutableStateOf<com.example.merchandisecontrolsplitview.data.Product?>(null) }
     LaunchedEffect(entryUid, currentEntryName) {
-        if (currentEntryName.isNotBlank()) {
-            titleText = currentEntryName
-        }
+        titleText = currentEntryName
     }
 
     var showGenericCalcDialog by remember { mutableStateOf(false) }
@@ -574,7 +600,7 @@ fun GeneratedScreen(
     val requestExcelExport: () -> Unit = {
         if (canRunExportAction) {
             exportActionPending = true
-            saveLauncher.launch(titleText)
+            saveLauncher.launch(currentEntryFileName.ifBlank { titleText })
         }
     }
 

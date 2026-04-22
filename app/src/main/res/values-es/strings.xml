@@ -282,6 +282,8 @@
     <string name="payment_total_label">Pago total</string>
     <string name="label_value_format">%1$s: %2$s</string>
     <string name="history_details_separator"> | </string>
+    <string name="history_session_title_fallback_context">%1$s - %2$s</string>
+    <string name="history_session_title_fallback_generic">Sesión de conteo</string>
     <string name="count_label_format">%1$s %2$s</string>
     <string name="filter">Filtrar</string>
     <string name="filter_all">Mostrar todo</string>

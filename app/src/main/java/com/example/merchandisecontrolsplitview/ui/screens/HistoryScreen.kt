@@ -297,7 +297,7 @@ fun HistoryScreen(
                                         onClick = { onSelect(entry) },
                                         onRenameClick = {
                                             entryToRename = entry
-                                            renameText = entry.id
+                                            renameText = entry.displayName
                                             showRenameDialog = true
                                         },
                                         onDeleteClick = {
@@ -778,14 +778,34 @@ private fun HistoryRow(
     val displayTimestamp = remember(entry.timestamp, currentLocale) {
         formatHistoryTimestamp(entry.timestamp, currentLocale)
     }
-    val displayTitle = remember(entry.id) {
-        formatHistoryEntryDisplayTitle(entry.id)
+    val genericTitleFallback = stringResource(R.string.history_session_title_fallback_generic)
+    val titleTimestampText = remember(entry.timestamp, currentLocale) {
+        formatHistoryEntryContextTimestamp(entry.timestamp, currentLocale)
+    }
+    val contextTitleFallback = stringResource(
+        R.string.history_session_title_fallback_context,
+        entry.supplier.trim(),
+        titleTimestampText
+    )
+    val displayTitle = remember(
+        entry.displayName,
+        entry.supplier,
+        entry.timestamp,
+        currentLocale,
+        contextTitleFallback,
+        genericTitleFallback
+    ) {
+        formatHistorySessionDisplayTitle(
+            displayName = entry.displayName,
+            supplier = entry.supplier,
+            timestamp = entry.timestamp,
+            locale = currentLocale,
+            contextFallback = contextTitleFallback,
+            genericFallback = genericTitleFallback
+        )
     }
     val normalizedDisplayTitle = remember(displayTitle) {
         normalizeHistoryComparisonText(displayTitle)
-    }
-    val shouldShowTechnicalId = remember(entry.id, displayTitle) {
-        shouldShowTechnicalRow(entry.id, displayTitle)
     }
     val metadataSegments = remember(
         displayTimestamp,
@@ -905,16 +925,6 @@ private fun HistoryRow(
                         Text(
                             text = metadataSegments.joinToString(detailsSeparator),
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    if (shouldShowTechnicalId) {
-                        Text(
-                            text = entry.id,
-                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis

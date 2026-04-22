@@ -17,6 +17,8 @@ import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSumm
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
+import com.example.merchandisecontrolsplitview.data.SessionCloudFlightOwner
+import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
@@ -45,7 +47,8 @@ class CatalogSyncViewModel(
     private val remote: CatalogRemoteDataSource,
     private val priceRemote: ProductPriceRemoteDataSource,
     private val sessionRemote: SessionBackupRemoteDataSource,
-    private val authFlow: StateFlow<AuthState>
+    private val authFlow: StateFlow<AuthState>,
+    private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner()
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
@@ -455,7 +458,9 @@ class CatalogSyncViewModel(
         busy.value = true
         lastErrorKind.value = null
         try {
-            val outcome = runHistorySessionBootstrap()
+            val outcome = sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
+                runHistorySessionBootstrap()
+            }
             if (outcome.hasIssues) {
                 lastErrorKind.value = outcome.failure
                     ?.let(SyncErrorClassifier::classify)
@@ -471,16 +476,18 @@ class CatalogSyncViewModel(
 
     private suspend fun runHistorySessionCloudRefresh(ownerUserId: String): HistorySessionCloudOutcome? {
         if (!sessionRemote.isConfigured) return null
-        val bootstrapOutcome = runHistorySessionBootstrap()
-        if (bootstrapOutcome.bootstrap == null) return bootstrapOutcome
-        val push = repository.pushHistorySessionsToRemote(sessionRemote, ownerUserId)
-        val outcome = HistorySessionCloudOutcome(
-            bootstrap = bootstrapOutcome.bootstrap,
-            push = push.getOrNull(),
-            failure = push.exceptionOrNull()
-        )
-        lastHistorySessionSyncSummary.value = outcome.toUiSummary()
-        return outcome
+        return sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
+            val bootstrapOutcome = runHistorySessionBootstrap()
+            if (bootstrapOutcome.bootstrap == null) return@withSessionFlight bootstrapOutcome
+            val push = repository.pushHistorySessionsToRemote(sessionRemote, ownerUserId)
+            val outcome = HistorySessionCloudOutcome(
+                bootstrap = bootstrapOutcome.bootstrap,
+                push = push.getOrNull(),
+                failure = push.exceptionOrNull()
+            )
+            lastHistorySessionSyncSummary.value = outcome.toUiSummary()
+            outcome
+        }
     }
 
     private suspend fun runHistorySessionBootstrap(): HistorySessionCloudOutcome {
@@ -518,7 +525,8 @@ class CatalogSyncViewModel(
                         app.catalogRemoteDataSource,
                         app.productPriceRemoteDataSource,
                         app.sessionBackupRemoteDataSource,
-                        app.authManager.state
+                        app.authManager.state,
+                        app.sessionCloudSessionFlightOwner
                     ) as T
             }
     }

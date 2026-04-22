@@ -81,6 +81,25 @@ internal fun formatHistoryEntryDisplayTitle(id: String): String {
     return displayTitle.takeIf { it.isNotBlank() } ?: trimmedId
 }
 
+internal fun formatHistorySessionDisplayTitle(
+    displayName: String,
+    supplier: String,
+    timestamp: String,
+    locale: Locale = Locale.getDefault(),
+    contextFallback: String,
+    genericFallback: String
+): String {
+    displayName.trim().takeIf { it.isNotBlank() }?.let { return it }
+
+    val supplierText = supplier.trim()
+    val timestampText = formatHistoryEntryContextTimestamp(timestamp, locale).trim()
+    return if (supplierText.isNotBlank() && timestampText.isNotBlank()) {
+        contextFallback
+    } else {
+        genericFallback
+    }
+}
+
 internal fun shouldShowTechnicalRow(id: String, displayTitle: String): Boolean {
     val trimmedId = id.trim()
     val trimmedDisplayTitle = displayTitle.trim()

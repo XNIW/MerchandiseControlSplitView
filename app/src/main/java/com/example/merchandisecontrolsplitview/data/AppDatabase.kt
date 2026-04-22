@@ -25,7 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingCatalogTombstone::class
     ],
     views = [ProductPriceSummary::class],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -268,6 +268,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 13 → 14: nome sessione user-facing persistito (task 040).
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE history_entries ADD COLUMN displayName TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -287,7 +294,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_9_10,
                         MIGRATION_10_11,
                         MIGRATION_11_12,
-                        MIGRATION_12_13
+                        MIGRATION_12_13,
+                        MIGRATION_13_14
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

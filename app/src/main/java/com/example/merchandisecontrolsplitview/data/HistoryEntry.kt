@@ -9,6 +9,7 @@ data class HistoryEntry(
     val uid: Long = 0,
 
     val id: String, // Il vecchio ID (nome file)
+    val displayName: String = "",
     val timestamp: String,
     val data: List<List<String>>,
     val editable: List<List<String>>,
@@ -27,6 +28,7 @@ data class HistoryEntry(
 data class HistoryEntryListItem(
     val uid: Long,
     val id: String,
+    val displayName: String = "",
     val timestamp: String,
     val supplier: String = "",
     val category: String = "",

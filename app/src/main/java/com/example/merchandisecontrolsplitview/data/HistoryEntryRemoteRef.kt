@@ -45,7 +45,8 @@ data class HistoryEntryRemoteRef(
      * Revisione locale: incrementata ogni volta che un campo payload-rilevante
      * di [HistoryEntry] viene modificato localmente dopo la creazione del bridge.
      * Campi rilevanti: [HistoryEntry.timestamp], [HistoryEntry.supplier],
-     * [HistoryEntry.category], [HistoryEntry.isManualEntry], [HistoryEntry.data].
+     * [HistoryEntry.displayName], [HistoryEntry.category], [HistoryEntry.isManualEntry],
+     * [HistoryEntry.data], [HistoryEntry.editable] e [HistoryEntry.complete].
      *
      * Non è un contatore assoluto di modifiche: misura la divergenza rispetto a
      * [lastSyncedLocalRevision]. Se uguale → entry allineata; se maggiore → dirty.

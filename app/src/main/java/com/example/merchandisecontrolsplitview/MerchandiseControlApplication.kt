@@ -9,8 +9,10 @@ import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinator
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
+import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
@@ -71,10 +73,12 @@ class MerchandiseControlApplication : Application() {
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppForeground()
+            historySessionPushCoordinator.onAppForeground()
         }
 
         override fun onStop(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppBackground()
+            historySessionPushCoordinator.onAppBackground()
         }
     }
 
@@ -89,7 +93,14 @@ class MerchandiseControlApplication : Application() {
     val realtimeRefreshCoordinator: RealtimeRefreshCoordinator by lazy {
         RealtimeRefreshCoordinator(
             repository = repository,
+            sessionFlightOwner = sessionCloudSessionFlightOwner,
             logger = { message -> Log.i("RealtimeCoordinator", message) }
+        )
+    }
+
+    val sessionCloudSessionFlightOwner: SessionCloudSessionFlightOwner by lazy {
+        SessionCloudSessionFlightOwner(
+            logger = { message -> Log.i("HistorySessionSyncV2", message) }
         )
     }
 
@@ -143,10 +154,25 @@ class MerchandiseControlApplication : Application() {
         SupabaseSessionBackupRemoteDataSource(supabaseClient)
     }
 
+    val historySessionPushCoordinator: HistorySessionPushCoordinator by lazy {
+        HistorySessionPushCoordinator(
+            repository = repository,
+            remote = sessionBackupRemoteDataSource,
+            authFlow = authManager.state,
+            flightOwner = sessionCloudSessionFlightOwner,
+            logger = { message -> Log.i("HistorySessionSyncV2", message) }
+        ).also { coordinator ->
+            repository.onHistorySessionPayloadChanged = { uid ->
+                coordinator.onLocalHistorySessionChanged(uid)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // Eager init: il coordinator deve essere realmente vivo a livello processo.
         realtimeRefreshCoordinator
+        historySessionPushCoordinator
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
         // Auth bootstrap: restore sessione se presente, altrimenti SignedOut (task 011).
         authManager.restoreSession()
@@ -160,6 +186,7 @@ class MerchandiseControlApplication : Application() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
         realtimeSessionSubscriber.shutdown()
         realtimeRefreshCoordinator.shutdown()
+        historySessionPushCoordinator.shutdown()
         authManager.shutdown()
         super.onTerminate()
     }

@@ -2,7 +2,6 @@ package com.example.merchandisecontrolsplitview.data
 
 import android.util.Log
 import io.github.jan.supabase.createSupabaseClient
-import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.HasRecord
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.Realtime
@@ -45,7 +44,7 @@ class SupabaseRealtimeSessionSubscriber(
     companion object {
         internal const val SCHEMA = "public"
         internal const val TABLE_NAME = "shared_sheet_sessions"
-        private const val CHANNEL_NAME = "shared-sheet-sessions-v1"
+        private const val CHANNEL_NAME = "shared-sheet-sessions-v1-v2"
         private const val STARTUP_RETRY_MS = 5_000L
         private const val TAG = "SupabaseRealtime"
     }
@@ -72,11 +71,6 @@ class SupabaseRealtimeSessionSubscriber(
             collectorJob = realtimeChannel
                 .postgresChangeFlow<PostgresAction>(schema = SCHEMA) {
                     table = TABLE_NAME
-                    filter(
-                        column = "payload_version",
-                        operator = FilterOperator.EQ,
-                        value = SESSION_PAYLOAD_VERSION
-                    )
                 }
                 .onEach { action ->
                     if (action is HasRecord) {

@@ -28,6 +28,7 @@ import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,6 +102,7 @@ class ExcelViewModel(
     val loadError = mutableStateOf<String?>(null)
     val historyActionMessage = mutableStateOf<String?>(null)
     val currentEntryName = mutableStateOf("")
+    val currentEntryFileName = mutableStateOf("")
 
     val loadingProgress = mutableStateOf<Int?>(null)
 
@@ -255,6 +257,7 @@ class ExcelViewModel(
     private var _preGenerateStateBackup: List<List<String>>? = null
     private var _preGenerateOriginalHeadersBackup: List<String>? = null
     private var _preGenerateHeaderTypesBackup: List<String>? = null
+    private var currentHistoryEntryObserverJob: Job? = null
 
     val lastUsedCategory = mutableStateOf<String?>(null)
 
@@ -309,7 +312,8 @@ class ExcelViewModel(
             repeat(cols) { selectedColumns.add(false) }
         }
         generated.value = true
-        currentEntryName.value = entry.id
+        currentEntryName.value = entry.displayName
+        currentEntryFileName.value = entry.id
         currentSupplierName = entry.supplier
         currentCategoryName = entry.category
         currentEntryStatus.value = Triple(entry.syncStatus, entry.wasExported, entry.uid)
@@ -360,10 +364,17 @@ class ExcelViewModel(
     }
 
     fun loadHistoryEntry(entryUid: Long, onLoaded: (() -> Unit)? = null) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
-                loadHistoryEntry(entry)
-                onLoaded?.invoke()
+        currentHistoryEntryObserverJob?.cancel()
+        currentHistoryEntryObserverJob = viewModelScope.launch {
+            var firstLoadDelivered = false
+            repository.observeHistoryEntryByUid(entryUid).collect { entry ->
+                if (entry != null) {
+                    loadHistoryEntry(entry)
+                    if (!firstLoadDelivered) {
+                        firstLoadDelivered = true
+                        onLoaded?.invoke()
+                    }
+                }
             }
         }
     }
@@ -544,6 +555,7 @@ class ExcelViewModel(
                 newEditableValues,
                 newCompleteStates,
                 newEntry.id,
+                newEntry.displayName,
                 supplierName,
                 categoryName,
                 newUid,
@@ -669,6 +681,7 @@ class ExcelViewModel(
 
         return HistoryEntry(
             id = fileNameId,
+            displayName = supplierName.trim().ifBlank { fileNameId },
             timestamp = timestampForDb,
             isManualEntry = false,
             data = filteredData,
@@ -690,6 +703,7 @@ class ExcelViewModel(
         newEditableValues: SnapshotStateList<MutableList<MutableState<String>>>,
         newCompleteStates: SnapshotStateList<Boolean>,
         entryName: String,
+        displayName: String,
         supplierName: String,
         categoryName: String,
         newUid: Long,
@@ -706,7 +720,8 @@ class ExcelViewModel(
             filteredData.firstOrNull()?.size?.let { cols -> repeat(cols) { selectedColumns.add(false) } }
 
             generated.value = true
-            currentEntryName.value = entryName
+            currentEntryName.value = displayName
+            currentEntryFileName.value = entryName
             currentSupplierName = supplierName
             currentCategoryName = categoryName
             currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, newUid)
@@ -727,12 +742,14 @@ class ExcelViewModel(
                 val updatedCategory = newCategory?.takeIf { it.isNotBlank() } ?: entry.category
                 val updated = entry.copy(
                     id = newName,
+                    displayName = newName,
                     supplier = updatedSupplier,
                     category = updatedCategory
                 )
                 repository.updateHistoryEntry(updated)
                 if (updated.uid == currentEntryStatus.value.third) {
-                    currentEntryName.value = updated.id
+                    currentEntryName.value = updated.displayName
+                    currentEntryFileName.value = updated.id
                     currentSupplierName = updatedSupplier
                     currentCategoryName = updatedCategory
                 }
@@ -830,6 +847,8 @@ class ExcelViewModel(
     }
 
     fun resetState() {
+        currentHistoryEntryObserverJob?.cancel()
+        currentHistoryEntryObserverJob = null
         excelData.clear()
         originalHeaders.clear()
         selectedColumns.clear()
@@ -840,6 +859,7 @@ class ExcelViewModel(
         isLoading.value = false
         loadError.value = null
         currentEntryName.value = ""
+        currentEntryFileName.value = ""
         currentSupplierName = ""
         currentCategoryName = ""
         headerTypes.clear()
@@ -1005,6 +1025,7 @@ class ExcelViewModel(
 
             val newEntry = HistoryEntry(
                 id = fileNameId,
+                displayName = context.getString(R.string.supplier_manual),
                 timestamp = timestampForDb,
                 isManualEntry = true,
                 data = dataGrid,
