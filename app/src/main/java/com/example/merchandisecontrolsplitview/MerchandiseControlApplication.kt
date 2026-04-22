@@ -8,6 +8,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinator
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
@@ -97,6 +98,13 @@ class MerchandiseControlApplication : Application() {
             logger = { message -> Log.i("RealtimeCoordinator", message) }
         )
     }
+
+    /**
+     * Signal condiviso "sync cloud in corso": aggiornato dal `CatalogSyncViewModel`
+     * (refresh manuale + bootstrap automatico sessioni); letto dalla UI root
+     * per mostrare l'icona sync in alto a destra (nessuna nuova orchestrazione).
+     */
+    val catalogSyncStateTracker: CatalogSyncStateTracker by lazy { CatalogSyncStateTracker() }
 
     val sessionCloudSessionFlightOwner: SessionCloudSessionFlightOwner by lazy {
         SessionCloudSessionFlightOwner(

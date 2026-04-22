@@ -554,6 +554,18 @@
     <string name="catalog_cloud_section_title">Catalogo en la nube</string>
     <string name="catalog_cloud_refresh">Actualizar desde la nube</string>
     <string name="catalog_cloud_state_syncing">Sincronizando\u2026</string>
+    <string name="catalog_cloud_stage_realign">Realineando catalogo...</string>
+    <string name="catalog_cloud_stage_push_suppliers">Sincronizando proveedores...</string>
+    <string name="catalog_cloud_stage_push_suppliers_count">Sincronizando proveedores %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_categories">Sincronizando categorias...</string>
+    <string name="catalog_cloud_stage_push_categories_count">Sincronizando categorias %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_products">Sincronizando productos...</string>
+    <string name="catalog_cloud_stage_push_products_count">Sincronizando productos %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_pull_catalog">Actualizando catalogo desde la nube...</string>
+    <string name="catalog_cloud_stage_sync_prices">Sincronizando precios...</string>
+    <string name="catalog_cloud_stage_sync_prices_count">Sincronizando precios %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_sync_history">Sincronizando historial...</string>
+    <string name="cloud_sync_indicator_cd">Sincronizacion en la nube en curso</string>
     <string name="catalog_cloud_state_synced">Actualizado</string>
     <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
     <string name="catalog_cloud_state_last_failed">El ultimo intento fallo</string>
@@ -569,6 +581,8 @@
     <string name="catalog_cloud_prices_sync_hint">Historial de precios: enviados %1$d, recibidos %2$d · pendiente (catalogo): %3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">Sesiones de historial: restauradas %1$d, enviadas %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">Sesiones de historial incompletas: %1$d</string>
+    <string name="catalog_cloud_sessions_permission_hint">La copia de sesiones esta bloqueada por permisos de la nube. Los cambios locales quedan pendientes.</string>
+    <string name="catalog_cloud_sessions_pending_hint">Sesiones de historial aun pendientes: %1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">En cola: cambios de catalogo/precios o eliminaciones pendientes de subir.</string>
     <string name="catalog_cloud_prices_skipped_hint">Filas de precio remotas no importadas (sin producto local vinculado): %1$d</string>
     <string name="catalog_cloud_detail_sessions_title">Copia de sesiones de historial</string>

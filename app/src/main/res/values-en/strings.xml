@@ -556,6 +556,18 @@
     <string name="catalog_cloud_section_title">Cloud catalog</string>
     <string name="catalog_cloud_refresh">Refresh from cloud</string>
     <string name="catalog_cloud_state_syncing">Syncing\u2026</string>
+    <string name="catalog_cloud_stage_realign">Realigning catalog...</string>
+    <string name="catalog_cloud_stage_push_suppliers">Syncing suppliers...</string>
+    <string name="catalog_cloud_stage_push_suppliers_count">Syncing suppliers %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_categories">Syncing categories...</string>
+    <string name="catalog_cloud_stage_push_categories_count">Syncing categories %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_products">Syncing products...</string>
+    <string name="catalog_cloud_stage_push_products_count">Syncing products %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_pull_catalog">Refreshing catalog from cloud...</string>
+    <string name="catalog_cloud_stage_sync_prices">Syncing prices...</string>
+    <string name="catalog_cloud_stage_sync_prices_count">Syncing prices %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_sync_history">Syncing history...</string>
+    <string name="cloud_sync_indicator_cd">Cloud sync in progress</string>
     <string name="catalog_cloud_state_synced">Up to date</string>
     <string name="catalog_cloud_state_pending">Waiting to sync</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>
@@ -571,6 +583,8 @@
     <string name="catalog_cloud_prices_sync_hint">Price history: sent %1$d, received %2$d · pending (catalog): %3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">History sessions: restored %1$d, sent %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">History sessions incomplete: %1$d</string>
+    <string name="catalog_cloud_sessions_permission_hint">History session backup is blocked by cloud permissions. Local changes stay pending.</string>
+    <string name="catalog_cloud_sessions_pending_hint">History sessions still pending: %1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">Queued: catalog/price changes or deletes waiting to upload.</string>
     <string name="catalog_cloud_prices_skipped_hint">Remote price rows not imported (no local product link): %1$d</string>
     <string name="catalog_cloud_detail_sessions_title">History session backup</string>

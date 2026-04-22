@@ -555,6 +555,18 @@
     <string name="catalog_cloud_section_title">云端目录</string>
     <string name="catalog_cloud_refresh">从云端更新</string>
     <string name="catalog_cloud_state_syncing">正在同步\u2026</string>
+    <string name="catalog_cloud_stage_realign">正在重新对齐目录...</string>
+    <string name="catalog_cloud_stage_push_suppliers">正在同步供应商...</string>
+    <string name="catalog_cloud_stage_push_suppliers_count">正在同步供应商 %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_categories">正在同步分类...</string>
+    <string name="catalog_cloud_stage_push_categories_count">正在同步分类 %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_products">正在同步商品...</string>
+    <string name="catalog_cloud_stage_push_products_count">正在同步商品 %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_pull_catalog">正在从云端更新目录...</string>
+    <string name="catalog_cloud_stage_sync_prices">正在同步价格...</string>
+    <string name="catalog_cloud_stage_sync_prices_count">正在同步价格 %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_sync_history">正在同步历史...</string>
+    <string name="cloud_sync_indicator_cd">云同步进行中</string>
     <string name="catalog_cloud_state_synced">已同步</string>
     <string name="catalog_cloud_state_pending">待同步</string>
     <string name="catalog_cloud_state_last_failed">上次未成功</string>
@@ -570,6 +582,8 @@
     <string name="catalog_cloud_prices_sync_hint">价格历史：已上传 %1$d，已下载 %2$d · 待处理（目录）：%3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">历史会话：已恢复 %1$d，已上传 %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">历史会话未完成：%1$d</string>
+    <string name="catalog_cloud_sessions_permission_hint">历史会话备份被云端权限阻止。本地更改仍会等待同步。</string>
+    <string name="catalog_cloud_sessions_pending_hint">仍待同步的历史会话：%1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">排队中：目录/价格变更或删除等待上传。</string>
     <string name="catalog_cloud_prices_skipped_hint">未导入的远程价格行（本地未关联商品）：%1$d</string>
     <string name="catalog_cloud_detail_sessions_title">历史会话备份</string>

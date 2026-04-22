@@ -2,6 +2,8 @@ package com.example.merchandisecontrolsplitview.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 
 /**
  * Contratto minimo del payload remoto per una sessione persistita condivisibile.
@@ -37,6 +39,8 @@ data class SessionRemotePayload(
 
 @Serializable
 data class SessionOverlay(
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     @SerialName("overlay_schema")
     val overlaySchema: Int = SESSION_OVERLAY_SCHEMA,
     val editable: List<List<String>>,

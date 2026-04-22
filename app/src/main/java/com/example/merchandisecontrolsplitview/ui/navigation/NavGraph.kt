@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -33,6 +34,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.ui.components.CloudSyncIndicator
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
@@ -53,6 +55,8 @@ fun AppNavGraph() {
         ?: error("MerchandiseControlApplication non configurata nel Manifest")
     // Repository singleton dall'Application (task 010): owner unico, nessuna duplicazione.
     val repository = app.repository
+    // Stato sync globale strutturato: fase corrente + conteggio opzionale.
+    val cloudSyncState by app.catalogSyncStateTracker.state.collectAsState()
 
     val excelViewModel: ExcelViewModel = viewModel(
         factory = ExcelViewModel.factory(app, repository)
@@ -108,6 +112,7 @@ fun AppNavGraph() {
             }
         }
     ) { innerPadding ->
+      Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
             startDestination = Screen.FilePicker.route,
@@ -300,6 +305,16 @@ fun AppNavGraph() {
                 }
             }
         }
+        // Overlay indicatore sync cloud (root tabs + Generated/PreGenerate/Import).
+        // Si mostra solo quando e in corso una sync reale (manuale via Opzioni o
+        // bootstrap automatico sessioni); fuori sync l'overlay e invisibile.
+        CloudSyncIndicator(
+            state = cloudSyncState,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = innerPadding.calculateTopPadding() + 12.dp, end = 12.dp)
+        )
+      }
     }
 }
 

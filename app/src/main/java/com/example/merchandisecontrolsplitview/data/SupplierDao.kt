@@ -24,6 +24,19 @@ interface SupplierDao {
     @Query("SELECT * FROM suppliers WHERE LOWER(name) = LOWER(:name) LIMIT 1")
     suspend fun findByNameIgnoreCase(name: String): Supplier?
 
+    /**
+     * Task 041 (hardening): match tollerante a whitespace/case sul lato locale.
+     * Usato dal pre-push realign catalogo per riallineare bridge su righe importate da
+     * Excel con spazi accidentali: senza questo, remote=`"X "` e local=`"X "` (stesso
+     * whitespace) non match­erebbero mai in realign pur collidendo sulla partial UNIQUE
+     * `(owner_user_id, lower(name)) WHERE deleted_at IS NULL` → 23505/409.
+     *
+     * Il chiamante normalizza il parametro con `trim().lowercase()` (Kotlin, più
+     * aggressivo su unicode rispetto a `TRIM`/`LOWER` SQLite).
+     */
+    @Query("SELECT * FROM suppliers WHERE LOWER(TRIM(name)) = :normalizedName LIMIT 1")
+    suspend fun findByNormalizedName(normalizedName: String): Supplier?
+
     // --- QUESTA E' LA FUNZIONE MANCANTE ---
     @Query("SELECT * FROM suppliers WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Supplier?

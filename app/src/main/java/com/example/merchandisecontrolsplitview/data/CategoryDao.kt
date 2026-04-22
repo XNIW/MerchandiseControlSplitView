@@ -25,6 +25,14 @@ interface CategoryDao {
     suspend fun findByName(name: String): Category?
 
     /**
+     * Task 041 (hardening): match tollerante a whitespace/case sul lato locale,
+     * coerente con la partial UNIQUE remota `(owner_user_id, lower(name)) WHERE deleted_at IS NULL`.
+     * Il chiamante normalizza con `trim().lowercase()` prima di invocare.
+     */
+    @Query("SELECT * FROM categories WHERE LOWER(TRIM(name)) = :normalizedName LIMIT 1")
+    suspend fun findByNormalizedName(normalizedName: String): Category?
+
+    /**
      * Cerca categorie il cui nome contiene la stringa di ricerca.
      * @param query La stringa da cercare.
      * @return Una lista di categorie che corrispondono.

@@ -442,3 +442,95 @@ Banner "tutto completato" implementato in `GeneratedScreen.kt` con logica `deriv
 
 - Verificare in review il comportamento visuale del banner su schermi stretti e la convivenza con FAB/griglia.
 - Rieseguire i check Gradle in ambiente con Java Runtime disponibile; l’implementazione è pronta ma il task non ha evidenza build/lint per limite macchina.
+
+---
+
+## Addendum operativo — 2026-04-22 — sync catalogo cloud
+
+**Nota di governance:** questo addendum documenta un follow-up tecnico richiesto dall'utente sul sync catalogo cloud. Il file TASK-041 resta storicamente collegato al quick export ed era gia `DONE`; questo aggiornamento **non** segna un nuovo `DONE` e **non** sostituisce una verifica live device positiva.
+
+### Contesto letto
+
+- `docs/MASTER-PLAN.md`
+- `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/AppDatabase.kt`
+- `app/schemas/com.example.merchandisecontrolsplitview.data.AppDatabase/7.json` (storico richiesto dalle istruzioni workspace; schema corrente Room in `AppDatabase.kt` = v14)
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogSyncStateTracker.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogRemoteDataSource.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseCatalogRemoteDataSource.kt`
+- `SupplierDao.kt`, `CategoryDao.kt`, `ProductDao.kt`
+- `SupplierRemoteRefDao.kt`, `CategoryRemoteRefDao.kt`, `ProductRemoteRefDao.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModel.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/components/CloudSyncIndicator.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/navigation/NavGraph.kt`
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt`
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModelTest.kt`
+
+### Diagnosi
+
+- Il ciclo non risultava privo di `finally`: `CatalogSyncViewModel.refreshCatalog()` rimetteva gia `busy=false`, quindi il blocco persistente in UI era piu probabilmente dovuto a fasi lunghe e poco osservabili.
+- Il tracker applicativo era booleano: la UI poteva mostrare solo "Sincronizzazione in corso...", senza distinguere realign, push prodotti, pull catalogo, prezzi o cronologia.
+- `InventoryRepository.syncCatalogWithRemote()` faceva realign solo sui bridge mancanti; i bridge locali esistenti ma con `remoteId` stale venivano saltati (`local_already_bridged`) e corretti solo dal recovery 23505 per-riga.
+- Il recovery 23505 poteva richiamare `fetchCatalog()` per ogni conflitto; ora il ciclo usa una cache/snapshot condivisa tra realign e recovery.
+- Il push prodotti resta per-riga: non e stato trasformato in batch per non cambiare architettura o semantica Room/offline-first nel perimetro di questo fix.
+
+### Patch applicata
+
+- Aggiunto stato sync strutturato con `CatalogSyncStage` (`IDLE`, `REALIGN`, `PUSH_SUPPLIERS`, `PUSH_CATEGORIES`, `PUSH_PRODUCTS`, `PULL_CATALOG`, `SYNC_PRICES`, `SYNC_HISTORY`, `COMPLETED`) e `CatalogSyncProgressState` con `current/total` opzionali.
+- `CatalogSyncViewModel` ora espone messaggi specifici per fase e logga:
+  - `sync_start source=...`
+  - `sync_stage=... current=... total=...`
+  - `sync_finish ok=true/false durationMs=...`
+- `CatalogSyncStateTracker` ora espone `state` strutturato e mantiene `isSyncing` come compatibilita; logga `tracker busy=true/false`.
+- `CloudSyncIndicator` e `OptionsScreen` ricevono feedback piu specifico: esempio `Sincronizzazione prodotti 123 / 18854` quando il conteggio e disponibile.
+- `realignCatalogBridgesIfNeeded()` corregge anche bridge locali gia esistenti ma stale quando la business key locale matcha una riga remota attiva con remoteId diverso.
+- Il recovery 23505 usa `CatalogConflictRecoveryCache`, evitando fetch catalogo complete ripetute nello stesso ciclo.
+
+### File modificati
+
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogSyncStateTracker.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModel.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/components/CloudSyncIndicator.kt`
+- `app/src/main/java/com/example/merchandisecontrolsplitview/ui/navigation/NavGraph.kt`
+- `app/src/main/res/values/strings.xml`
+- `app/src/main/res/values-en/strings.xml`
+- `app/src/main/res/values-es/strings.xml`
+- `app/src/main/res/values-zh/strings.xml`
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt`
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModelTest.kt`
+- `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`
+- `docs/MASTER-PLAN.md`
+
+### Test aggiunti/aggiornati
+
+- `CatalogSyncViewModelTest`: copre fase strutturata `PUSH_PRODUCTS`, messaggio con `current/total`, tracker `busy=true` e ritorno a `COMPLETED`/`busy=false`.
+- `DefaultInventoryRepositoryTest`: copre realign di bridge stale prima del push.
+- `DefaultInventoryRepositoryTest`: aggiornata copertura 23505 per verificare cache/snapshot reuse (`fetchCount` non cresce per supplier/category/product recovery multipli).
+- Copertura no-loop-infinito gia presente e mantenuta: conflitto 23505 senza riga remota non ritenta all'infinito.
+
+### Check eseguiti
+
+Comandi eseguiti con:
+
+```bash
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
+```
+
+| Check | Esito |
+|-------|-------|
+| `./gradlew :app:compileDebugUnitTestKotlin` | ✅ PASS |
+| `./gradlew :app:testDebugUnitTest --tests "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest"` | ✅ PASS |
+| `./gradlew :app:testDebugUnitTest --tests "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest"` | ✅ PASS |
+| `./gradlew :app:assembleDebug` | ✅ PASS |
+| `./gradlew :app:lintDebug` | ✅ PASS |
+| `git diff --check` | ✅ PASS |
+
+Note: restano warning toolchain/Compose preesistenti (`android.builtInKotlin=false`, `android.newDsl=false`, plugin Kotlin Android deprecato, `rememberSwipeToDismissBoxState(confirmValueChange)` deprecato in file UI non toccati dal fix).
+
+### Rischi residui
+
+- `DA VERIFICARE`: nuova verifica live su device A/B con account reale per confermare riduzione dei 23505 e percezione UI durante dataset grande.
+- `DA VERIFICARE`: durata effettiva del push prodotti su cataloghi molto grandi; il fix migliora osservabilita e riduce recovery costose, ma non cambia il modello di upsert catalogo prodotti da per-riga a batch.
+- Nessuna modifica a schema Room, DAO query distruttive, import/export Excel, barcode, navigation, product prices, tombstone o session sync oltre al solo stato/progress e alla cache recovery catalogo.

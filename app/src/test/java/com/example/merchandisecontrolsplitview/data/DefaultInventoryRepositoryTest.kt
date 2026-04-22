@@ -13,6 +13,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -841,6 +846,29 @@ class DefaultInventoryRepositoryTest {
         assertEquals(persisted.complete, payload.sessionOverlay?.complete)
     }
 
+    @Test
+    fun `040 v2 upsert row serializes session overlay with db required shape`() = runTest {
+        val entry = buildMinimalHistoryEntry().copy(
+            editable = listOf(listOf("1", "")),
+            complete = listOf(true)
+        )
+        val row = entry
+            .toRemotePayload("00000000-0000-4000-8000-000000000401")
+            .toSharedSheetSessionUpsertRow("00000000-0000-4000-8000-000000000402")
+
+        val encoded = Json.encodeToJsonElement(
+            SharedSheetSessionUpsertRow.serializer(),
+            row
+        ).jsonObject
+        val overlayElement = encoded["session_overlay"]
+
+        assertNotNull(overlayElement)
+        val overlay = overlayElement!!.jsonObject
+        assertEquals(SESSION_OVERLAY_SCHEMA, overlay["overlay_schema"]?.jsonPrimitive?.int)
+        assertTrue(overlay["editable"] is JsonArray)
+        assertTrue(overlay["complete"] is JsonArray)
+    }
+
     // --- Test pull remoto controllato (task 008) ---
 
     private fun remotePayload(
@@ -1043,6 +1071,57 @@ class DefaultInventoryRepositoryTest {
         assertEquals(changedData, after.data)
         assertEquals(before.editable, after.editable)
         assertEquals(before.complete, after.complete)
+        assertEquals(9.0, after.orderTotal, 0.0001)
+        assertEquals(9.0, after.paymentTotal, 0.0001)
+        assertEquals(0, after.missingItems)
+    }
+
+    @Test
+    fun `040 invalid v2 overlay with changed row count rebuilds local state safely`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        val initial = remotePayload(
+            remoteId = remoteId,
+            displayName = "Initial",
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("AAA", "5", "2")
+            ),
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("1", "")),
+                complete = listOf(false, true)
+            )
+        )
+        repository.applyRemoteSessionPayload(initial)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+
+        val changedData = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "9", "1"),
+            listOf("BBB", "4", "2")
+        )
+        val invalidOverlay = SessionOverlay(
+            editable = listOf(listOf("", "")),
+            complete = listOf(false)
+        )
+
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                displayName = "Remote title",
+                data = changedData,
+                sessionOverlay = invalidOverlay
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val after = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals(changedData, after.data)
+        assertEquals(List(changedData.size) { listOf("", "") }, after.editable)
+        assertEquals(List(changedData.size) { false }, after.complete)
+        assertEquals(2, after.totalItems)
+        assertEquals(17.0, after.orderTotal, 0.0001)
+        assertEquals(17.0, after.paymentTotal, 0.0001)
+        assertEquals(2, after.missingItems)
     }
 
     @Test
@@ -1999,6 +2078,361 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `041 realign links local rows to existing remote ids before push when bridge missing`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000410"
+        val remoteSupplierId = "00000000-0000-4000-8000-000000000411"
+        val remoteCategoryId = "00000000-0000-4000-8000-000000000412"
+        val remoteProductId = "00000000-0000-4000-8000-000000000413"
+
+        val supplierId = db.supplierDao().insert(Supplier(name = "Shared Supplier 041"))
+        val categoryId = db.categoryDao().insert(Category(name = "Shared Category 041"))
+        db.productDao().insert(
+            Product(
+                barcode = "shared-barcode-041",
+                productName = "Shared Product 041",
+                purchasePrice = 10.0,
+                retailPrice = 15.0,
+                supplierId = supplierId,
+                categoryId = categoryId,
+                stockQuantity = 3.0
+            )
+        )
+        val localProduct = repository.findProductByBarcode("shared-barcode-041")!!
+
+        val remoteBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(id = remoteSupplierId, ownerUserId = owner, name = "Shared Supplier 041")
+            ),
+            categories = listOf(
+                InventoryCategoryRow(id = remoteCategoryId, ownerUserId = owner, name = "Shared Category 041")
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = remoteProductId,
+                    ownerUserId = owner,
+                    barcode = "shared-barcode-041",
+                    productName = "Shared Product 041",
+                    purchasePrice = 10.0,
+                    retailPrice = 15.0,
+                    supplierId = remoteSupplierId,
+                    categoryId = remoteCategoryId,
+                    stockQuantity = 3.0
+                )
+            )
+        )
+        val remote = FakeCatalogRemote016(remoteBundle)
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+
+        assertTrue(result.isSuccess)
+        val supplierRef = db.supplierRemoteRefDao().getBySupplierId(supplierId)
+        val categoryRef = db.categoryRemoteRefDao().getByCategoryId(categoryId)
+        val productRef = db.productRemoteRefDao().getByProductId(localProduct.id)
+        assertNotNull(supplierRef)
+        assertNotNull(categoryRef)
+        assertNotNull(productRef)
+        // Bridge must reuse the remote id discovered via realign, not a freshly minted UUID.
+        assertEquals(remoteSupplierId, supplierRef!!.remoteId)
+        assertEquals(remoteCategoryId, categoryRef!!.remoteId)
+        assertEquals(remoteProductId, productRef!!.remoteId)
+        // Realign marked the bridges as already synced with the remote fingerprint,
+        // so a subsequent push does not attempt any upsert for these rows.
+        val summary = result.getOrThrow()
+        assertEquals(0, summary.pushedSuppliers)
+        assertEquals(0, summary.pushedCategories)
+        assertEquals(0, summary.pushedProducts)
+        assertEquals(
+            0,
+            remote.upsertedSuppliers.sumOf { it.size } +
+                remote.upsertedCategories.sumOf { it.size } +
+                remote.upsertedProducts.sumOf { it.size }
+        )
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `041 realign is no-op when there are no bridge gaps`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000420"
+        val remote = FakeCatalogRemote016()
+        val first = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+        assertTrue(first.isSuccess)
+        val fetchAfterFirst = remote.fetchCount
+
+        val second = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+        assertTrue(second.isSuccess)
+        // Senza bridge gap il realign salta la fetch extra: incremento di una sola fetch.
+        assertEquals(fetchAfterFirst + 1, remote.fetchCount)
+    }
+
+    @Test
+    fun `041 realign normalizes whitespace and case on both sides to link pre-existing remote rows`() = runTest {
+        // Scenario reale task 041: due device importano lo stesso Excel → stesso
+        // whitespace/case nei dati; la partial UNIQUE remota `(owner, lower(name))` /
+        // `(owner, barcode)` collide comunque, ma il realign deve agganciare i bridge
+        // senza inviare nuove righe (niente 23505/409 al push).
+        val owner = "00000000-0000-4000-8000-000000000430"
+        val remoteSupplierId = "00000000-0000-4000-8000-000000000431"
+        val remoteCategoryId = "00000000-0000-4000-8000-000000000432"
+        val remoteProductId = "00000000-0000-4000-8000-000000000433"
+
+        // Local: trailing whitespace sul supplier, case differente sulla category,
+        // trailing whitespace sul barcode del prodotto — tutti match legittimi post-normalize.
+        val supplierId = db.supplierDao().insert(Supplier(name = "Shared Supplier 041 "))
+        val categoryId = db.categoryDao().insert(Category(name = "Shared Category 041"))
+        db.productDao().insert(
+            Product(
+                barcode = "shared-barcode-041 ",
+                productName = "Shared Product 041",
+                purchasePrice = 10.0,
+                retailPrice = 15.0,
+                supplierId = supplierId,
+                categoryId = categoryId,
+                stockQuantity = 3.0
+            )
+        )
+        val localProduct = repository.findProductByBarcode("shared-barcode-041 ")!!
+
+        val remoteBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                // Stesso trailing space del locale ⇒ lower(trim)=lower(trim)="shared supplier 041".
+                InventorySupplierRow(id = remoteSupplierId, ownerUserId = owner, name = "Shared Supplier 041 ")
+            ),
+            categories = listOf(
+                // Case differente ma lower uguale ⇒ match post-normalize.
+                InventoryCategoryRow(id = remoteCategoryId, ownerUserId = owner, name = "SHARED CATEGORY 041")
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = remoteProductId,
+                    ownerUserId = owner,
+                    barcode = "shared-barcode-041 ",
+                    productName = "Shared Product 041",
+                    purchasePrice = 10.0,
+                    retailPrice = 15.0,
+                    supplierId = remoteSupplierId,
+                    categoryId = remoteCategoryId,
+                    stockQuantity = 3.0
+                )
+            )
+        )
+        val remote = FakeCatalogRemote016(remoteBundle)
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+        assertTrue(result.isSuccess)
+
+        val supplierRef = db.supplierRemoteRefDao().getBySupplierId(supplierId)
+        val categoryRef = db.categoryRemoteRefDao().getByCategoryId(categoryId)
+        val productRef = db.productRemoteRefDao().getByProductId(localProduct.id)
+        assertNotNull(supplierRef)
+        assertNotNull(categoryRef)
+        assertNotNull(productRef)
+        assertEquals(remoteSupplierId, supplierRef!!.remoteId)
+        assertEquals(remoteCategoryId, categoryRef!!.remoteId)
+        assertEquals(remoteProductId, productRef!!.remoteId)
+
+        // Nessun push dopo il realign: niente superficie per 23505/409.
+        val summary = result.getOrThrow()
+        assertEquals(0, summary.pushedSuppliers)
+        assertEquals(0, summary.pushedCategories)
+        assertEquals(0, summary.pushedProducts)
+        assertEquals(
+            0,
+            remote.upsertedSuppliers.sumOf { it.size } +
+                remote.upsertedCategories.sumOf { it.size } +
+                remote.upsertedProducts.sumOf { it.size }
+        )
+    }
+
+    @Test
+    fun `041 realign skips non-matching rows without creating bridges`() = runTest {
+        // Se il remoto ha righe con nome/barcode totalmente differenti dal locale,
+        // il realign non deve inventare bridge fantasma: tocca al push normale creare
+        // righe nuove via `ensureXxxRefForPush`.
+        val owner = "00000000-0000-4000-8000-000000000440"
+        val remoteStaleSupplier = "00000000-0000-4000-8000-000000000441"
+
+        val supplierId = db.supplierDao().insert(Supplier(name = "Real Local Supplier"))
+        val remoteBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(id = remoteStaleSupplier, ownerUserId = owner, name = "Completely Different Remote")
+            ),
+            categories = emptyList(),
+            products = emptyList()
+        )
+        val remote = FakeCatalogRemote016(remoteBundle)
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+        assertTrue(result.isSuccess)
+
+        val ref = db.supplierRemoteRefDao().getBySupplierId(supplierId)
+        assertNotNull(ref)
+        // Il bridge locale ha remoteId fresco, NON quello remoto "Completely Different Remote".
+        assertFalse(ref!!.remoteId == remoteStaleSupplier)
+        // Push ha creato una nuova riga remota per il supplier locale.
+        assertEquals(1, result.getOrThrow().pushedSuppliers)
+    }
+
+    @Test
+    fun `041 realign corrects stale local bridges before push`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000470"
+        val remoteSupplierId = "00000000-0000-4000-8000-000000000471"
+        val remoteCategoryId = "00000000-0000-4000-8000-000000000472"
+        val remoteProductId = "00000000-0000-4000-8000-000000000473"
+        val staleSupplierId = "00000000-0000-4000-8000-000000000474"
+        val staleCategoryId = "00000000-0000-4000-8000-000000000475"
+        val staleProductId = "00000000-0000-4000-8000-000000000476"
+
+        val supplierId = db.supplierDao().insert(Supplier(name = "Stale Supplier 041"))
+        val categoryId = db.categoryDao().insert(Category(name = "Stale Category 041"))
+        db.productDao().insert(
+            Product(
+                barcode = "stale-barcode-041",
+                productName = "Stale Product 041",
+                supplierId = supplierId,
+                categoryId = categoryId
+            )
+        )
+        val product = repository.findProductByBarcode("stale-barcode-041")!!
+        db.supplierRemoteRefDao().insert(SupplierRemoteRef(supplierId = supplierId, remoteId = staleSupplierId))
+        db.categoryRemoteRefDao().insert(CategoryRemoteRef(categoryId = categoryId, remoteId = staleCategoryId))
+        db.productRemoteRefDao().insert(ProductRemoteRef(productId = product.id, remoteId = staleProductId))
+
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = listOf(
+                    InventorySupplierRow(id = remoteSupplierId, ownerUserId = owner, name = "Stale Supplier 041")
+                ),
+                categories = listOf(
+                    InventoryCategoryRow(id = remoteCategoryId, ownerUserId = owner, name = "Stale Category 041")
+                ),
+                products = listOf(
+                    InventoryProductRow(
+                        id = remoteProductId,
+                        ownerUserId = owner,
+                        barcode = "stale-barcode-041",
+                        productName = "Stale Product 041",
+                        supplierId = remoteSupplierId,
+                        categoryId = remoteCategoryId
+                    )
+                )
+            )
+        )
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pushedSuppliers)
+        assertEquals(1, summary.pushedCategories)
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(remoteSupplierId, db.supplierRemoteRefDao().getBySupplierId(supplierId)!!.remoteId)
+        assertEquals(remoteCategoryId, db.categoryRemoteRefDao().getByCategoryId(categoryId)!!.remoteId)
+        assertEquals(remoteProductId, db.productRemoteRefDao().getByProductId(product.id)!!.remoteId)
+        assertEquals(1, remote.supplierUpsertCallCount)
+        assertEquals(1, remote.categoryUpsertCallCount)
+        assertEquals(1, remote.productUpsertCallCount)
+        assertEquals(remoteSupplierId, remote.upsertedSuppliers.single().single().id)
+        assertEquals(remoteCategoryId, remote.upsertedCategories.single().single().id)
+        assertEquals(remoteProductId, remote.upsertedProducts.single().single().id)
+    }
+
+    @Test
+    fun `041 conflict 23505 recovers supplier category product bridges and retries once`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000450"
+        val remoteSupplierId = "00000000-0000-4000-8000-000000000451"
+        val remoteCategoryId = "00000000-0000-4000-8000-000000000452"
+        val remoteProductId = "00000000-0000-4000-8000-000000000453"
+        val wrongSupplierId = "00000000-0000-4000-8000-000000000454"
+        val wrongCategoryId = "00000000-0000-4000-8000-000000000455"
+        val wrongProductId = "00000000-0000-4000-8000-000000000456"
+
+        val supplierId = db.supplierDao().insert(Supplier(name = "Conflict Supplier 041 "))
+        val categoryId = db.categoryDao().insert(Category(name = "Conflict Category 041"))
+        db.productDao().insert(
+            Product(
+                barcode = "conflict-barcode-041 ",
+                productName = "Conflict Product 041",
+                purchasePrice = 11.0,
+                retailPrice = 17.0,
+                supplierId = supplierId,
+                categoryId = categoryId,
+                stockQuantity = 4.0
+            )
+        )
+        val product = repository.findProductByBarcode("conflict-barcode-041 ")!!
+        db.supplierRemoteRefDao().insert(SupplierRemoteRef(supplierId = supplierId, remoteId = wrongSupplierId))
+        db.categoryRemoteRefDao().insert(CategoryRemoteRef(categoryId = categoryId, remoteId = wrongCategoryId))
+        db.productRemoteRefDao().insert(ProductRemoteRef(productId = product.id, remoteId = wrongProductId))
+
+        val remoteBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(id = remoteSupplierId, ownerUserId = owner, name = "Conflict Supplier 041 ")
+            ),
+            categories = listOf(
+                InventoryCategoryRow(id = remoteCategoryId, ownerUserId = owner, name = "CONFLICT CATEGORY 041")
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = remoteProductId,
+                    ownerUserId = owner,
+                    barcode = "conflict-barcode-041 ",
+                    productName = "Conflict Product 041",
+                    purchasePrice = 11.0,
+                    retailPrice = 17.0,
+                    supplierId = remoteSupplierId,
+                    categoryId = remoteCategoryId,
+                    stockQuantity = 4.0
+                )
+            )
+        )
+        val remote = FakeCatalogRemote016(remoteBundle).apply {
+            failNextSupplierUpsert = FakePostgrestUniqueViolation()
+            failNextCategoryUpsert = FakePostgrestUniqueViolation()
+            failNextProductUpsert = FakePostgrestUniqueViolation()
+        }
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+
+        assertTrue(result.isSuccess)
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.pushedSuppliers)
+        assertEquals(1, summary.pushedCategories)
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(2, remote.supplierUpsertCallCount)
+        assertEquals(2, remote.categoryUpsertCallCount)
+        assertEquals(2, remote.productUpsertCallCount)
+        assertEquals(remoteSupplierId, db.supplierRemoteRefDao().getBySupplierId(supplierId)!!.remoteId)
+        assertEquals(remoteCategoryId, db.categoryRemoteRefDao().getByCategoryId(categoryId)!!.remoteId)
+        assertEquals(remoteProductId, db.productRemoteRefDao().getByProductId(product.id)!!.remoteId)
+        assertEquals(remoteSupplierId, remote.upsertedSuppliers.single().single().id)
+        assertEquals(remoteCategoryId, remote.upsertedCategories.single().single().id)
+        assertEquals(remoteProductId, remote.upsertedProducts.single().single().id)
+        assertEquals(remoteSupplierId, remote.upsertedProducts.single().single().supplierId)
+        assertEquals(remoteCategoryId, remote.upsertedProducts.single().single().categoryId)
+        assertEquals(2, remote.fetchCount)
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `041 conflict 23505 does not retry forever when reconcile finds no remote row`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000460"
+        val wrongSupplierId = "00000000-0000-4000-8000-000000000461"
+        val supplierId = db.supplierDao().insert(Supplier(name = "Missing Remote Supplier 041"))
+        db.supplierRemoteRefDao().insert(SupplierRemoteRef(supplierId = supplierId, remoteId = wrongSupplierId))
+        val remote = FakeCatalogRemote016().apply {
+            failNextSupplierUpsert = FakePostgrestUniqueViolation()
+        }
+
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(configured = false), owner)
+
+        assertTrue(result.isFailure)
+        assertEquals(1, remote.supplierUpsertCallCount)
+        assertEquals(wrongSupplierId, db.supplierRemoteRefDao().getBySupplierId(supplierId)!!.remoteId)
+        // Una sola snapshot catalogo per realign/recovery: nessun retry loop e nessuna fetch ripetuta.
+        assertEquals(1, remote.fetchCount)
+    }
+
+    @Test
     fun `032 breakdown distinguishes product bridge gap from blocked price rows`() = runTest {
         val now = "2026-04-20 10:00:00"
         db.productDao().insert(
@@ -2097,6 +2531,91 @@ class DefaultInventoryRepositoryTest {
 
         assertEquals(0, result.uploaded)
         assertTrue(fake.upsertedChunks.isEmpty())
+        val ref = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)
+        assertNotNull(ref)
+        assertNull(ref!!.lastRemoteAppliedAt)
+    }
+
+    @Test
+    fun `040 push blocks invalid overlay shape and keeps session pending`() = runTest {
+        val uid = repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("invalid_overlay.xlsx").copy(
+                data = listOf(
+                    listOf("barcode", "purchasePrice", "quantity"),
+                    listOf("AAA", "10", "3")
+                ),
+                editable = listOf(listOf("", "")),
+                complete = listOf(false)
+            )
+        )
+        val fake = FakeSessionBackupRemote023()
+
+        val result = repository
+            .pushHistorySessionsToRemote(fake, "00000000-0000-4000-8000-000000000041")
+            .getOrThrow()
+
+        assertEquals(0, result.uploaded)
+        assertTrue(fake.upsertedChunks.isEmpty())
+        assertTrue(repository.getPendingHistorySessionPushUids().contains(uid))
+        val ref = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)
+        assertNotNull(ref)
+        assertNull(ref!!.lastRemoteAppliedAt)
+    }
+
+    @Test
+    fun `040 push skips invalid overlay while uploading valid session in same batch`() = runTest {
+        val invalidUid = repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("invalid_overlay_batch.xlsx").copy(
+                data = listOf(
+                    listOf("barcode", "purchasePrice", "quantity"),
+                    listOf("AAA", "10", "3")
+                ),
+                editable = listOf(listOf("", "")),
+                complete = listOf(false)
+            )
+        )
+        val validUid = repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("valid_overlay_batch.xlsx").copy(
+                supplier = "Pushable"
+            )
+        )
+        val fake = FakeSessionBackupRemote023()
+
+        val result = repository
+            .pushHistorySessionsToRemote(
+                fake,
+                "00000000-0000-4000-8000-000000000042",
+                setOf(invalidUid, validUid)
+            )
+            .getOrThrow()
+
+        assertEquals(1, result.uploaded)
+        val pushed = fake.upsertedChunks.single().single()
+        assertEquals("valid_overlay_batch.xlsx", pushed.displayName)
+        assertTrue(repository.getPendingHistorySessionPushUids().contains(invalidUid))
+        assertFalse(repository.getPendingHistorySessionPushUids().contains(validUid))
+        val invalidRef = db.historyEntryRemoteRefDao().getByHistoryEntryUid(invalidUid)
+        val validRef = db.historyEntryRemoteRefDao().getByHistoryEntryUid(validUid)
+        assertNotNull(invalidRef)
+        assertNotNull(validRef)
+        assertNull(invalidRef!!.lastRemoteAppliedAt)
+        assertNotNull(validRef!!.lastRemoteAppliedAt)
+    }
+
+    @Test
+    fun `040 failed session push keeps entry pending for retry`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("pinmark.xlsx"))
+        val fake = FakeSessionBackupRemote023().apply {
+            failNextUpsert = IllegalStateException("permission denied for table shared_sheet_sessions")
+        }
+
+        val result = repository.pushHistorySessionsToRemote(
+            fake,
+            "00000000-0000-4000-8000-000000000040"
+        )
+
+        assertTrue(result.isFailure)
+        assertTrue(repository.getPendingHistorySessionPushUids().contains(uid))
         val ref = db.historyEntryRemoteRefDao().getByHistoryEntryUid(uid)
         assertNotNull(ref)
         assertNull(ref!!.lastRemoteAppliedAt)
@@ -2205,11 +2724,16 @@ private class FakeSessionBackupRemote023(
 ) : SessionBackupRemoteDataSource {
     override val isConfigured = true
     val upsertedChunks = mutableListOf<List<SharedSheetSessionUpsertRow>>()
+    var failNextUpsert: Throwable? = null
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
         Result.success(records)
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> {
         upsertedChunks.add(rows)
         onUpsert?.invoke(rows)
+        failNextUpsert?.let { t ->
+            failNextUpsert = null
+            return Result.failure(t)
+        }
         return Result.success(Unit)
     }
 }
@@ -2229,17 +2753,38 @@ private class FakeCatalogRemote016(
     val upsertedCategories = mutableListOf<List<InventoryCategoryRow>>()
     val upsertedProducts = mutableListOf<List<InventoryProductRow>>()
     var fetchCount = 0
+    var supplierUpsertCallCount = 0
+    var categoryUpsertCallCount = 0
+    var productUpsertCallCount = 0
     var failNextFetch: Throwable? = null
+    var failNextSupplierUpsert: Throwable? = null
+    var failNextCategoryUpsert: Throwable? = null
+    var failNextProductUpsert: Throwable? = null
     var failNextSupplierTombstone: Throwable? = null
     override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
+        supplierUpsertCallCount++
+        failNextSupplierUpsert?.let { t ->
+            failNextSupplierUpsert = null
+            return Result.failure(t)
+        }
         upsertedSuppliers.add(rows)
         return Result.success(Unit)
     }
     override suspend fun upsertCategories(rows: List<InventoryCategoryRow>): Result<Unit> {
+        categoryUpsertCallCount++
+        failNextCategoryUpsert?.let { t ->
+            failNextCategoryUpsert = null
+            return Result.failure(t)
+        }
         upsertedCategories.add(rows)
         return Result.success(Unit)
     }
     override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+        productUpsertCallCount++
+        failNextProductUpsert?.let { t ->
+            failNextProductUpsert = null
+            return Result.failure(t)
+        }
         upsertedProducts.add(rows)
         return Result.success(Unit)
     }
@@ -2268,6 +2813,10 @@ private class FakeCatalogRemote016(
         return Result.success(Unit)
     }
 }
+
+private class FakePostgrestUniqueViolation : RuntimeException(
+    "httpStatus=409 postgrestCode=23505 duplicate key value violates unique constraint"
+)
 
 private class RecordingPriceRemote016(
     private val configured: Boolean = true

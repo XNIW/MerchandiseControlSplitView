@@ -12,6 +12,11 @@ import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressRepository
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStage
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
@@ -38,7 +43,15 @@ data class CatalogSyncUiState(
     /** History session cloud backup only; kept separate from catalog pending/detail. */
     val sessionDetail: String?,
     val isSyncing: Boolean,
-    val canRefresh: Boolean
+    val canRefresh: Boolean,
+    val progress: CatalogSyncStageUiState? = null
+)
+
+data class CatalogSyncStageUiState(
+    val stage: CatalogSyncStage,
+    val message: String,
+    val current: Int?,
+    val total: Int?
 )
 
 class CatalogSyncViewModel(
@@ -48,7 +61,8 @@ class CatalogSyncViewModel(
     private val priceRemote: ProductPriceRemoteDataSource,
     private val sessionRemote: SessionBackupRemoteDataSource,
     private val authFlow: StateFlow<AuthState>,
-    private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner()
+    private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
+    private val syncStateTracker: CatalogSyncStateTracker? = null
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
@@ -74,9 +88,13 @@ class CatalogSyncViewModel(
     private data class HistorySessionCloudUiSummary(
         val restored: Int,
         val uploaded: Int,
-        val issueCount: Int
+        val issueCount: Int,
+        val pendingCount: Int = 0,
+        val failureCategory: SyncErrorCategory? = null
     ) {
-        val hasVisibleWork: Boolean get() = restored > 0 || uploaded > 0 || issueCount > 0
+        val hasVisibleWork: Boolean
+            get() = restored > 0 || uploaded > 0 || issueCount > 0 || pendingCount > 0
+        val hasPendingWork: Boolean get() = pendingCount > 0
     }
 
     private data class HistorySessionCloudOutcome(
@@ -91,42 +109,50 @@ class CatalogSyncViewModel(
 
         val hasIssues: Boolean get() = issueCount > 0
 
-        fun toUiSummary(): HistorySessionCloudUiSummary =
-            HistorySessionCloudUiSummary(
+        fun toUiSummary(pendingCount: Int = 0): HistorySessionCloudUiSummary {
+            val failureClassification = failure?.let(SyncErrorClassifier::classify)
+            return HistorySessionCloudUiSummary(
                 restored = (bootstrap?.inserted ?: 0) + (bootstrap?.updated ?: 0),
                 uploaded = push?.uploaded ?: 0,
-                issueCount = issueCount
+                issueCount = issueCount,
+                pendingCount = pendingCount,
+                failureCategory = failureClassification?.category
             )
+        }
     }
 
     private val busy = MutableStateFlow(false)
+    private val syncProgress = MutableStateFlow(CatalogSyncProgressState.idle())
     private val lastErrorKind = MutableStateFlow<ErrorKind?>(null)
     private val lastSuccessAt = MutableStateFlow<Long?>(null)
     private val pendingHint = MutableStateFlow(false)
     private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
     private val lastHistorySessionSyncSummary = MutableStateFlow<HistorySessionCloudUiSummary?>(null)
     private var automaticSessionBootstrapUserId: String? = null
+    private var lastLoggedStage: CatalogSyncStage? = null
 
     val uiState: StateFlow<CatalogSyncUiState> = combine(
         combine(authFlow, busy, lastErrorKind, lastSuccessAt, pendingHint) { auth, isBusy, err, successAt, pending ->
             SyncInputs(auth, isBusy, err, successAt, pending)
         },
+        syncProgress,
         lastCatalogSyncSummary,
         lastHistorySessionSyncSummary
-    ) { inputs, summary, historySessionSummary ->
+    ) { inputs, progress, summary, historySessionSummary ->
         buildUi(
             inputs.auth,
             inputs.isBusy,
             inputs.err,
             inputs.successAt,
             inputs.pending,
+            progress,
             summary,
             historySessionSummary
         )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        buildUi(authFlow.value, false, null, null, false, null, null)
+        buildUi(authFlow.value, false, null, null, false, CatalogSyncProgressState.idle(), null, null)
     )
 
     init {
@@ -144,12 +170,64 @@ class CatalogSyncViewModel(
         if (args.isEmpty()) getApplication<Application>().getString(id)
         else getApplication<Application>().getString(id, *args)
 
+    private fun buildProgressUi(progress: CatalogSyncProgressState?): CatalogSyncStageUiState? {
+        if (progress == null || !progress.isBusy) return null
+        val message = when (progress.stage) {
+            CatalogSyncStage.REALIGN -> str(R.string.catalog_cloud_stage_realign)
+            CatalogSyncStage.PUSH_SUPPLIERS -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_push_suppliers,
+                R.string.catalog_cloud_stage_push_suppliers_count
+            )
+            CatalogSyncStage.PUSH_CATEGORIES -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_push_categories,
+                R.string.catalog_cloud_stage_push_categories_count
+            )
+            CatalogSyncStage.PUSH_PRODUCTS -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_push_products,
+                R.string.catalog_cloud_stage_push_products_count
+            )
+            CatalogSyncStage.PULL_CATALOG -> str(R.string.catalog_cloud_stage_pull_catalog)
+            CatalogSyncStage.SYNC_PRICES -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_sync_prices,
+                R.string.catalog_cloud_stage_sync_prices_count
+            )
+            CatalogSyncStage.SYNC_HISTORY -> str(R.string.catalog_cloud_stage_sync_history)
+            CatalogSyncStage.IDLE,
+            CatalogSyncStage.COMPLETED -> str(R.string.catalog_cloud_state_syncing)
+        }
+        return CatalogSyncStageUiState(
+            stage = progress.stage,
+            message = message,
+            current = progress.current,
+            total = progress.total
+        )
+    }
+
+    private fun stageMessage(
+        progress: CatalogSyncProgressState,
+        @StringRes defaultMessage: Int,
+        @StringRes countedMessage: Int
+    ): String {
+        val current = progress.current
+        val total = progress.total
+        return if (current != null && total != null && total > 0) {
+            str(countedMessage, current.coerceAtMost(total), total)
+        } else {
+            str(defaultMessage)
+        }
+    }
+
     private fun buildUi(
         auth: AuthState,
         isBusy: Boolean,
         err: ErrorKind?,
         successAt: Long?,
         pending: Boolean,
+        progress: CatalogSyncProgressState,
         lastSummary: CatalogSyncSummary?,
         lastHistorySessionSummary: HistorySessionCloudUiSummary?
     ): CatalogSyncUiState {
@@ -164,12 +242,14 @@ class CatalogSyncViewModel(
         }
 
         if (isBusy) {
+            val stageUi = buildProgressUi(progress.takeIf { it.isBusy })
             return CatalogSyncUiState(
-                primaryMessage = str(R.string.catalog_cloud_state_syncing),
+                primaryMessage = stageUi?.message ?: str(R.string.catalog_cloud_state_syncing),
                 catalogDetail = null,
                 sessionDetail = null,
                 isSyncing = true,
-                canRefresh = false
+                canRefresh = false,
+                progress = stageUi
             )
         }
 
@@ -272,7 +352,7 @@ class CatalogSyncViewModel(
                 val catalogDetail =
                     buildCatalogDetail(successAt, lastSummary, pending)
                 val sessionDetail = sessionDetailOnly
-                if (pending) {
+                if (pending || lastHistorySessionSummary?.hasPendingWork == true) {
                     return CatalogSyncUiState(
                         primaryMessage = str(R.string.catalog_cloud_state_pending),
                         catalogDetail = catalogDetail,
@@ -347,15 +427,23 @@ class CatalogSyncViewModel(
 
     private fun buildHistorySessionSecondary(summary: HistorySessionCloudUiSummary?): String? {
         if (summary == null || !summary.hasVisibleWork) return null
-        val parts = mutableListOf(
-            str(
-                R.string.catalog_cloud_sessions_sync_hint,
-                summary.restored,
-                summary.uploaded
+        val parts = mutableListOf<String>()
+        if (summary.restored > 0 || summary.uploaded > 0 || summary.issueCount > 0) {
+            parts.add(
+                str(
+                    R.string.catalog_cloud_sessions_sync_hint,
+                    summary.restored,
+                    summary.uploaded
+                )
             )
-        )
-        if (summary.issueCount > 0) {
+        }
+        if (summary.failureCategory == SyncErrorCategory.RemoteForbiddenRls) {
+            parts.add(str(R.string.catalog_cloud_sessions_permission_hint))
+        } else if (summary.issueCount > 0) {
             parts.add(str(R.string.catalog_cloud_sessions_issue_hint, summary.issueCount))
+        }
+        if (summary.pendingCount > 0) {
+            parts.add(str(R.string.catalog_cloud_sessions_pending_hint, summary.pendingCount))
         }
         return parts.joinToString("\n")
     }
@@ -363,6 +451,60 @@ class CatalogSyncViewModel(
     fun onOptionsScreenVisible() {
         viewModelScope.launch {
             pendingHint.value = repository.hasCatalogCloudPendingWorkInclusive()
+            val auth = authFlow.value
+            if (auth is AuthState.SignedIn && sessionRemote.isConfigured) {
+                val pendingSessionCount = readPendingHistorySessionCount()
+                val pendingOnlySummary = pendingSessionCount
+                    .takeIf { it > 0 }
+                    ?.let { HistorySessionCloudUiSummary(0, 0, 0, pendingCount = it) }
+                lastHistorySessionSyncSummary.value =
+                    lastHistorySessionSyncSummary.value?.copy(pendingCount = pendingSessionCount)
+                        ?: pendingOnlySummary
+            }
+        }
+    }
+
+    private fun startSyncProgress(source: String, firstStage: CatalogSyncStage): Long {
+        lastLoggedStage = null
+        val startedAt = System.currentTimeMillis()
+        Log.i(TAG, "sync_start source=$source")
+        setSyncProgress(CatalogSyncProgressState.running(firstStage))
+        return startedAt
+    }
+
+    private fun setSyncProgress(progress: CatalogSyncProgressState) {
+        syncProgress.value = progress
+        syncStateTracker?.update(progress)
+        if (progress.isBusy && progress.stage != lastLoggedStage) {
+            Log.i(
+                TAG,
+                "sync_stage=${progress.stage} current=${progress.current} total=${progress.total}"
+            )
+            lastLoggedStage = progress.stage
+        }
+    }
+
+    private fun finishSyncProgress(ok: Boolean, startedAt: Long) {
+        val durationMs = System.currentTimeMillis() - startedAt
+        syncProgress.value = CatalogSyncProgressState.completed()
+        syncStateTracker?.update(CatalogSyncProgressState.completed())
+        Log.i(TAG, "sync_finish ok=$ok durationMs=$durationMs")
+        lastLoggedStage = null
+    }
+
+    private suspend fun syncCatalogRepository(ownerUserId: String): Result<CatalogSyncSummary> {
+        val progressAware = repository as? CatalogSyncProgressRepository
+        return if (progressAware != null) {
+            progressAware.syncCatalogWithRemote(
+                remote = remote,
+                priceRemote = priceRemote,
+                ownerUserId = ownerUserId,
+                progressReporter = CatalogSyncProgressReporter { progress ->
+                    setSyncProgress(progress)
+                }
+            )
+        } else {
+            repository.syncCatalogWithRemote(remote, priceRemote, ownerUserId)
         }
     }
 
@@ -373,6 +515,7 @@ class CatalogSyncViewModel(
             if (!remote.isConfigured) return@launch
             if (busy.value) return@launch
             busy.value = true
+            val startedAt = startSyncProgress("manual_refresh", CatalogSyncStage.REALIGN)
             lastErrorKind.value = null
             lastHistorySessionSyncSummary.value = null
             var logCatalogOk = false
@@ -383,7 +526,8 @@ class CatalogSyncViewModel(
             var logHistoryIssues = 0
             var logHistoryFailureClassification: SyncErrorClassification? = null
             try {
-                val catalogResult = repository.syncCatalogWithRemote(remote, priceRemote, auth.userId)
+                val catalogResult = syncCatalogRepository(auth.userId)
+                setSyncProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_HISTORY))
                 val historySessionOutcome = runHistorySessionCloudRefresh(auth.userId)
                 logHistoryIssues = historySessionOutcome?.issueCount ?: 0
                 logHistoryFailureClassification = historySessionOutcome?.failure?.let(SyncErrorClassifier::classify)
@@ -417,6 +561,8 @@ class CatalogSyncViewModel(
                 )
             } finally {
                 busy.value = false
+                val ok = logCatalogOk && logErr == null
+                finishSyncProgress(ok, startedAt)
                 val pendingBreakdown: CatalogCloudPendingBreakdown? =
                     try {
                         repository.getCatalogCloudPendingBreakdown()
@@ -456,11 +602,14 @@ class CatalogSyncViewModel(
         if (!sessionRemote.isConfigured) return
         if (busy.value) return
         busy.value = true
+        val startedAt = startSyncProgress("automatic_session_bootstrap", CatalogSyncStage.SYNC_HISTORY)
         lastErrorKind.value = null
+        var ok = false
         try {
             val outcome = sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
                 runHistorySessionBootstrap()
             }
+            ok = !outcome.hasIssues
             if (outcome.hasIssues) {
                 lastErrorKind.value = outcome.failure
                     ?.let(SyncErrorClassifier::classify)
@@ -471,6 +620,7 @@ class CatalogSyncViewModel(
             }
         } finally {
             busy.value = false
+            finishSyncProgress(ok, startedAt)
         }
     }
 
@@ -485,7 +635,8 @@ class CatalogSyncViewModel(
                 push = push.getOrNull(),
                 failure = push.exceptionOrNull()
             )
-            lastHistorySessionSyncSummary.value = outcome.toUiSummary()
+            lastHistorySessionSyncSummary.value =
+                outcome.toUiSummary(pendingCount = readPendingHistorySessionCount())
             outcome
         }
     }
@@ -497,9 +648,19 @@ class CatalogSyncViewModel(
             push = null,
             failure = bootstrap.exceptionOrNull()
         )
-        lastHistorySessionSyncSummary.value = outcome.toUiSummary()
+        lastHistorySessionSyncSummary.value =
+            outcome.toUiSummary(pendingCount = readPendingHistorySessionCount())
         return outcome
     }
+
+    private suspend fun readPendingHistorySessionCount(): Int =
+        try {
+            repository.getPendingHistorySessionPushUids().size
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            0
+        }
 
     private fun SyncErrorClassification.toErrorKind(): ErrorKind =
         when (category) {
@@ -526,7 +687,8 @@ class CatalogSyncViewModel(
                         app.productPriceRemoteDataSource,
                         app.sessionBackupRemoteDataSource,
                         app.authManager.state,
-                        app.sessionCloudSessionFlightOwner
+                        app.sessionCloudSessionFlightOwner,
+                        app.catalogSyncStateTracker
                     ) as T
             }
     }

@@ -16,6 +16,9 @@ interface CategoryRemoteRefDao {
     @Query("SELECT * FROM category_remote_refs WHERE remoteId = :remoteId LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): CategoryRemoteRef?
 
+    @Query("UPDATE category_remote_refs SET remoteId = :remoteId WHERE categoryId = :categoryId")
+    suspend fun updateRemoteId(categoryId: Long, remoteId: String): Int
+
     @Query(
         """
         UPDATE category_remote_refs SET localChangeRevision = localChangeRevision + 1

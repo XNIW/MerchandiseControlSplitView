@@ -229,7 +229,9 @@ internal object DefaultInventoryRepositoryTestHooks {
     var afterProductsPersisted: (suspend () -> Unit)? = null
 }
 
-class DefaultInventoryRepository(private val db: AppDatabase) : InventoryRepository {
+class DefaultInventoryRepository(private val db: AppDatabase) :
+    InventoryRepository,
+    CatalogSyncProgressRepository {
 
     private data class HistorySessionPushCandidate(
         val entry: HistoryEntry,
@@ -844,12 +846,18 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             val refreshedLocalState = when {
                 payload.payloadVersion == SESSION_PAYLOAD_VERSION && overlayState is OverlayApplyState.Valid ->
                     overlayState.localState
+                payload.payloadVersion == SESSION_PAYLOAD_VERSION && existingEntry.data != payload.data ->
+                    buildRemoteSessionLocalState(
+                        data = payload.data,
+                        overlay = existingEntry.safeOverlayForPayloadData(payload.data)
+                    )
                 payload.payloadVersion == SESSION_PAYLOAD_VERSION_LEGACY_V1 && existingEntry.data != payload.data ->
                     buildRemoteSessionLocalState(payload.data)
                 else -> null
             }
             // Aggiorna i campi payload. In v2 l'overlay valido ripristina lo stato operativo;
-            // se l'overlay manca/è invalido, il data remoto può avanzare senza azzerare editable/complete locali.
+            // se l'overlay manca/è invalido, preserva editable/complete locali solo se
+            // restano allineati alla nuova shape di data, altrimenti ricostruisce default sicuri.
             // Chiama historyDao.update() direttamente (non updateHistoryEntry) per non incrementare
             // localChangeRevision: il remote apply non è una modifica locale.
             historyDao.update(
@@ -966,6 +974,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             payload.displayName ?: current
         } else {
             current
+        }
+
+    private fun HistoryEntry.safeOverlayForPayloadData(data: List<List<String>>): SessionOverlay? =
+        if (editable.size == data.size && complete.size == data.size) {
+            SessionOverlay(
+                overlaySchema = SESSION_OVERLAY_SCHEMA,
+                editable = editable,
+                complete = complete
+            )
+        } else {
+            null
         }
 
     private fun buildRemoteSessionLocalState(data: List<List<String>>): RemoteSessionLocalState {
@@ -1434,13 +1453,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                     continue
                 }
                 val payload = entry.toRemotePayload(remoteId)
-                val overlayBytes = payload.sessionOverlay?.canonicalString()?.encodeToByteArray()?.size ?: 0
-                if (overlayBytes > SESSION_OVERLAY_MAX_BYTES) {
-                    Log.w(
-                        HISTORY_SESSION_SYNC_TAG,
-                        "reason=overlay_too_large historyEntryUid=${entry.uid} " +
-                            "remoteId=$remoteId overlayBytes=$overlayBytes maxBytes=$SESSION_OVERLAY_MAX_BYTES"
-                    )
+                val overlayIssue = payload.outboundOverlayPushIssue()
+                if (overlayIssue != null) {
+                    logOutboundOverlayPushIssue(entry, remoteId, overlayIssue)
                     continue
                 }
                 candidates.add(
@@ -1522,18 +1537,83 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     private fun historySessionNeedsPush(ref: HistoryEntryRemoteRef): Boolean =
         ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
 
+    private data class OutboundOverlayPushIssue(
+        val reason: String,
+        val overlayBytes: Int,
+        val editableRows: Int,
+        val completeRows: Int
+    )
+
+    private fun SessionRemotePayload.outboundOverlayPushIssue(): OutboundOverlayPushIssue? {
+        val overlay = sessionOverlay ?: return OutboundOverlayPushIssue(
+            reason = "overlay_missing_push",
+            overlayBytes = 0,
+            editableRows = 0,
+            completeRows = 0
+        )
+        val overlayBytes = overlay.canonicalString().encodeToByteArray().size
+        val reason = when {
+            overlay.overlaySchema != SESSION_OVERLAY_SCHEMA -> "overlay_schema_unsupported_push"
+            overlayBytes > SESSION_OVERLAY_MAX_BYTES -> "overlay_too_large"
+            overlay.editable.size != data.size || overlay.complete.size != data.size -> "overlay_shape_reject_push"
+            else -> null
+        } ?: return null
+        return OutboundOverlayPushIssue(
+            reason = reason,
+            overlayBytes = overlayBytes,
+            editableRows = overlay.editable.size,
+            completeRows = overlay.complete.size
+        )
+    }
+
+    private fun logOutboundOverlayPushIssue(
+        entry: HistoryEntry,
+        remoteId: String,
+        issue: OutboundOverlayPushIssue
+    ) {
+        Log.w(
+            HISTORY_SESSION_SYNC_TAG,
+            "reason=${issue.reason} historyEntryUid=${entry.uid} remoteId=$remoteId " +
+                "dataRows=${entry.data.size} editableRows=${issue.editableRows} " +
+                "completeRows=${issue.completeRows} overlayBytes=${issue.overlayBytes} " +
+                "maxBytes=$SESSION_OVERLAY_MAX_BYTES"
+        )
+    }
+
     override suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String
+    ): Result<CatalogSyncSummary> =
+        syncCatalogWithRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            ownerUserId = ownerUserId,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+    override suspend fun syncCatalogWithRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         try {
+            val recoveryCache = CatalogConflictRecoveryCache()
+            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
             drainPendingCatalogTombstones(remote, ownerUserId)
             // Snapshot iniziale (prima di ensure/push catalogo): righe prezzo senza bridge prodotto.
             val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
-            val pushedSuppliers = pushCatalogSuppliers(remote, ownerUserId)
-            val pushedCategories = pushCatalogCategories(remote, ownerUserId)
-            val pushedProducts = pushCatalogProducts(remote, ownerUserId)
+            // Bridge realign pre-push: se il locale ha righe catalogo senza `*_remote_refs`
+            // ma il remoto contiene gia una riga attiva con stesso name/barcode, allineiamo
+            // il bridge locale al remoteId esistente — altrimenti `ensureXxxRefForPush`
+            // genererebbe UUID nuovi che violano gli UNIQUE parziali `(owner_user_id, lower(name))`
+            // / `(owner_user_id, barcode)` WHERE deleted_at IS NULL → 23505 / HTTP 409.
+            realignCatalogBridgesIfNeeded(remote, recoveryCache)
+            val pushedSuppliers = pushCatalogSuppliers(remote, ownerUserId, recoveryCache, progressReporter)
+            val pushedCategories = pushCatalogCategories(remote, ownerUserId, recoveryCache, progressReporter)
+            val pushedProducts = pushCatalogProducts(remote, ownerUserId, recoveryCache, progressReporter)
+            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
             val bundle = remote.fetchCatalog().getOrElse { return@withContext Result.failure(it) }
             var pulledSuppliers = 0
             var pulledCategories = 0
@@ -1567,10 +1647,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             var priceSyncFailed = false
             if (priceRemote.isConfigured) {
                 try {
-                    val pullOutcome = pullProductPricesFromRemote(priceRemote)
+                    progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                    val pullOutcome = pullProductPricesFromRemote(priceRemote, progressReporter)
                     pulledPrices = pullOutcome.first
                     skippedPullPrices = pullOutcome.second
-                    pushedPrices = pushProductPricesToRemote(priceRemote, ownerUserId)
+                    pushedPrices = pushProductPricesToRemote(priceRemote, ownerUserId, progressReporter)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (t: Throwable) {
@@ -1606,6 +1687,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
         const val SESSION_BACKUP_PUSH_CHUNK = 80
         const val LOG_SAMPLE_LIMIT = 5
+        const val POSTGREST_UNIQUE_VIOLATION = "23505"
         val SUPPORTED_SESSION_PAYLOAD_VERSIONS = setOf(
             SESSION_PAYLOAD_VERSION_LEGACY_V1,
             SESSION_PAYLOAD_VERSION
@@ -1614,6 +1696,100 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
             """^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"""
         )
     }
+
+    private class CatalogBridgeRealignStats {
+        var remoteRowsSeen: Int = 0
+        var candidatesWithValidKey: Int = 0
+        var localMatches: Int = 0
+        var linked: Int = 0
+        var relinkedStale: Int = 0
+        var skippedEmptyKey: Int = 0
+        var skippedNoLocalMatch: Int = 0
+        var skippedLocalAlreadyBridged: Int = 0
+        var skippedRemoteAlreadyBridged: Int = 0
+
+        fun logFields(prefix: String): String =
+            "${prefix}_remote_seen=$remoteRowsSeen " +
+                "${prefix}_valid_key=$candidatesWithValidKey " +
+                "${prefix}_local_matches=$localMatches " +
+                "${prefix}_linked=$linked " +
+                "${prefix}_relinked_stale=$relinkedStale " +
+                "${prefix}_skip_empty_key=$skippedEmptyKey " +
+                "${prefix}_skip_no_local_match=$skippedNoLocalMatch " +
+                "${prefix}_skip_local_already_bridged=$skippedLocalAlreadyBridged " +
+                "${prefix}_skip_remote_already_bridged=$skippedRemoteAlreadyBridged"
+    }
+
+    private class CatalogConflictRecoveryCache {
+        private var bundle: InventoryCatalogFetchBundle? = null
+
+        suspend fun fetch(
+            remote: CatalogRemoteDataSource,
+            phase: String,
+            kind: String,
+            localId: Long,
+            onFailure: (String, Throwable) -> Unit
+        ): InventoryCatalogFetchBundle? {
+            bundle?.let { return it }
+            val loaded = try {
+                val result = remote.fetchCatalog()
+                if (result.isFailure) {
+                    val throwable = result.exceptionOrNull()
+                    if (throwable != null) {
+                        if (throwable is CancellationException) throw throwable
+                        onFailure(phase, throwable)
+                    }
+                    null
+                } else {
+                    result.getOrThrow()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                onFailure(phase, t)
+                null
+            }
+            if (loaded == null) {
+                Log.w(TAG, "bridge_recover kind=$kind outcome=fetch_failed localId=$localId")
+            } else {
+                bundle = loaded
+            }
+            return loaded
+        }
+    }
+
+    private fun catalogBoundaryTrim(value: String): String =
+        value.trim { ch ->
+            ch.isWhitespace() ||
+                ch == '\u00A0' ||
+                ch == '\u2007' ||
+                ch == '\u202F' ||
+                ch == '\uFEFF'
+        }
+
+    private fun normalizeCatalogNameKey(value: String): String =
+        catalogBoundaryTrim(value).lowercase()
+
+    private fun normalizeCatalogBarcodeKey(value: String): String =
+        catalogBoundaryTrim(value)
+
+    private fun Throwable.isPostgrestUniqueViolationConflict(): Boolean {
+        val classification = SyncErrorClassifier.classify(this)
+        if (classification.httpStatus == 409 &&
+            classification.postgrestCode == POSTGREST_UNIQUE_VIOLATION
+        ) {
+            return true
+        }
+        val text = causeChainText()
+        return text.contains(POSTGREST_UNIQUE_VIOLATION) &&
+            (text.contains("409") || text.contains("duplicate key"))
+    }
+
+    private fun Throwable.causeChainText(): String =
+        generateSequence(this) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(separator = "\n")
+            .lowercase()
 
     private fun logSyncTransportFailure(phase: String, throwable: Throwable) {
         val classification = SyncErrorClassifier.classify(throwable)
@@ -1642,7 +1818,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
     /** Push bulk: una query candidati + chunk verso PostgREST; bridge solo per righe senza remote ancora. */
     private suspend fun pushProductPricesToRemote(
         priceRemote: ProductPriceRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
     ): Int {
         val rows = priceDao.getAllForCloudPush()
         if (rows.isEmpty()) return 0
@@ -1676,6 +1853,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
                 }
             }
             pushed += chunk.size
+            progressReporter.onProgress(
+                CatalogSyncProgressState.running(
+                    CatalogSyncStage.SYNC_PRICES,
+                    current = pushed,
+                    total = rows.size
+                )
+            )
         }
         return pushed
     }
@@ -1685,13 +1869,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
      * non aggiorna `products.purchasePrice` / `retailPrice`.
      */
     private suspend fun pullProductPricesFromRemote(
-        priceRemote: ProductPriceRemoteDataSource
+        priceRemote: ProductPriceRemoteDataSource,
+        progressReporter: CatalogSyncProgressReporter
     ): Pair<Int, Int> {
         val remotes = priceRemote.fetchProductPrices().getOrThrow()
         var pulled = 0
         var skippedNoLocalProduct = 0
         db.withTransaction {
-            for (row in remotes) {
+            for ((index, row) in remotes.withIndex()) {
+                progressReporter.onProgress(
+                    CatalogSyncProgressState.running(
+                        CatalogSyncStage.SYNC_PRICES,
+                        current = index + 1,
+                        total = remotes.size
+                    )
+                )
                 if (productPriceRemoteRefDao.getByRemoteId(row.id) != null) continue
                 val pref = productRemoteRefDao.getByRemoteId(row.productId) ?: run {
                     skippedNoLocalProduct++
@@ -1813,93 +2005,614 @@ class DefaultInventoryRepository(private val db: AppDatabase) : InventoryReposit
 
     private suspend fun pushCatalogSuppliers(
         remote: CatalogRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter
     ): Int {
         var n = 0
-        for (s in supplierDao.getAll()) {
+        val suppliers = supplierDao.getAll()
+        progressReporter.onProgress(
+            CatalogSyncProgressState.running(CatalogSyncStage.PUSH_SUPPLIERS, current = 0, total = suppliers.size)
+        )
+        for ((index, s) in suppliers.withIndex()) {
             val ref = ensureSupplierRefForPush(s.id)
-            if (!supplierNeedsPush(ref)) continue
-            val row = InventorySupplierRow(
-                id = ref.remoteId,
-                ownerUserId = ownerUserId,
-                name = s.name,
-                deletedAt = null
+            if (supplierNeedsPush(ref) &&
+                pushCatalogSupplierRow(remote, ownerUserId, s, ref, recoveryCache)
+            ) {
+                n++
+            }
+            progressReporter.onProgress(
+                CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_SUPPLIERS,
+                    current = index + 1,
+                    total = suppliers.size
+                )
             )
-            remote.upsertSuppliers(listOf(row)).getOrThrow()
-            val fp = fingerprintSupplierInbound(row)
-            supplierRemoteRefDao.updateRemoteApplyState(
-                s.id,
-                ref.localChangeRevision,
-                System.currentTimeMillis(),
-                fp
-            )
-            n++
         }
         return n
     }
 
     private suspend fun pushCatalogCategories(
         remote: CatalogRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter
     ): Int {
         var n = 0
-        for (c in categoryDao.getAll()) {
+        val categories = categoryDao.getAll()
+        progressReporter.onProgress(
+            CatalogSyncProgressState.running(CatalogSyncStage.PUSH_CATEGORIES, current = 0, total = categories.size)
+        )
+        for ((index, c) in categories.withIndex()) {
             val ref = ensureCategoryRefForPush(c.id)
-            if (!categoryNeedsPush(ref)) continue
-            val row = InventoryCategoryRow(
-                id = ref.remoteId,
-                ownerUserId = ownerUserId,
-                name = c.name,
-                deletedAt = null
+            if (categoryNeedsPush(ref) &&
+                pushCatalogCategoryRow(remote, ownerUserId, c, ref, recoveryCache)
+            ) {
+                n++
+            }
+            progressReporter.onProgress(
+                CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_CATEGORIES,
+                    current = index + 1,
+                    total = categories.size
+                )
             )
-            remote.upsertCategories(listOf(row)).getOrThrow()
-            val fp = fingerprintCategoryInbound(row)
-            categoryRemoteRefDao.updateRemoteApplyState(
-                c.id,
-                ref.localChangeRevision,
-                System.currentTimeMillis(),
-                fp
-            )
-            n++
         }
         return n
     }
 
     private suspend fun pushCatalogProducts(
         remote: CatalogRemoteDataSource,
-        ownerUserId: String
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter
     ): Int {
         var n = 0
-        for (p in productDao.getAll()) {
+        val products = productDao.getAll()
+        progressReporter.onProgress(
+            CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 0, total = products.size)
+        )
+        for ((index, p) in products.withIndex()) {
             val ref = ensureProductRefForPush(p.id)
-            if (!productNeedsPush(ref)) continue
-            val supR = p.supplierId?.let { ensureSupplierRefForPush(it).remoteId }
-            val catR = p.categoryId?.let { ensureCategoryRefForPush(it).remoteId }
-            val row = InventoryProductRow(
-                id = ref.remoteId,
-                ownerUserId = ownerUserId,
-                barcode = p.barcode,
-                itemNumber = p.itemNumber,
-                productName = p.productName,
-                secondProductName = p.secondProductName,
-                purchasePrice = p.purchasePrice,
-                retailPrice = p.retailPrice,
-                supplierId = supR,
-                categoryId = catR,
-                stockQuantity = p.stockQuantity,
-                deletedAt = null
+            if (productNeedsPush(ref) &&
+                pushCatalogProductRow(remote, ownerUserId, p, ref, recoveryCache)
+            ) {
+                n++
+            }
+            progressReporter.onProgress(
+                CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_PRODUCTS,
+                    current = index + 1,
+                    total = products.size
+                )
             )
-            remote.upsertProducts(listOf(row)).getOrThrow()
-            val fp = fingerprintProductInbound(row)
-            productRemoteRefDao.updateRemoteApplyState(
-                p.id,
-                ref.localChangeRevision,
-                System.currentTimeMillis(),
-                fp
-            )
-            n++
         }
         return n
+    }
+
+    private fun buildSupplierPushRow(
+        supplier: Supplier,
+        ref: SupplierRemoteRef,
+        ownerUserId: String
+    ): InventorySupplierRow =
+        InventorySupplierRow(
+            id = ref.remoteId,
+            ownerUserId = ownerUserId,
+            name = supplier.name,
+            deletedAt = null
+        )
+
+    private fun buildCategoryPushRow(
+        category: Category,
+        ref: CategoryRemoteRef,
+        ownerUserId: String
+    ): InventoryCategoryRow =
+        InventoryCategoryRow(
+            id = ref.remoteId,
+            ownerUserId = ownerUserId,
+            name = category.name,
+            deletedAt = null
+        )
+
+    private suspend fun buildProductPushRow(
+        product: Product,
+        ref: ProductRemoteRef,
+        ownerUserId: String
+    ): InventoryProductRow =
+        InventoryProductRow(
+            id = ref.remoteId,
+            ownerUserId = ownerUserId,
+            barcode = product.barcode,
+            itemNumber = product.itemNumber,
+            productName = product.productName,
+            secondProductName = product.secondProductName,
+            purchasePrice = product.purchasePrice,
+            retailPrice = product.retailPrice,
+            supplierId = product.supplierId?.let { ensureSupplierRefForPush(it).remoteId },
+            categoryId = product.categoryId?.let { ensureCategoryRefForPush(it).remoteId },
+            stockQuantity = product.stockQuantity,
+            deletedAt = null
+        )
+
+    private suspend fun pushCatalogSupplierRow(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        supplier: Supplier,
+        ref: SupplierRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val row = buildSupplierPushRow(supplier, ref, ownerUserId)
+        val first = remote.upsertSuppliers(listOf(row))
+        val firstError = first.exceptionOrNull()
+        if (firstError == null) {
+            markSupplierPushApplied(supplier.id, ref, row)
+            return true
+        }
+        if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
+
+        val recovered = reconcileSupplierBridgeAfterUniqueConflict(remote, ownerUserId, supplier, ref, recoveryCache)
+        if (!recovered) throw firstError
+        val correctedRef = supplierRemoteRefDao.getBySupplierId(supplier.id) ?: throw firstError
+        if (!supplierNeedsPush(correctedRef)) return false
+
+        val retryRow = buildSupplierPushRow(supplier, correctedRef, ownerUserId)
+        remote.upsertSuppliers(listOf(retryRow)).getOrThrow()
+        markSupplierPushApplied(supplier.id, correctedRef, retryRow)
+        return true
+    }
+
+    private suspend fun pushCatalogCategoryRow(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        category: Category,
+        ref: CategoryRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val row = buildCategoryPushRow(category, ref, ownerUserId)
+        val first = remote.upsertCategories(listOf(row))
+        val firstError = first.exceptionOrNull()
+        if (firstError == null) {
+            markCategoryPushApplied(category.id, ref, row)
+            return true
+        }
+        if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
+
+        val recovered = reconcileCategoryBridgeAfterUniqueConflict(remote, ownerUserId, category, ref, recoveryCache)
+        if (!recovered) throw firstError
+        val correctedRef = categoryRemoteRefDao.getByCategoryId(category.id) ?: throw firstError
+        if (!categoryNeedsPush(correctedRef)) return false
+
+        val retryRow = buildCategoryPushRow(category, correctedRef, ownerUserId)
+        remote.upsertCategories(listOf(retryRow)).getOrThrow()
+        markCategoryPushApplied(category.id, correctedRef, retryRow)
+        return true
+    }
+
+    private suspend fun pushCatalogProductRow(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        product: Product,
+        ref: ProductRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val row = buildProductPushRow(product, ref, ownerUserId)
+        val first = remote.upsertProducts(listOf(row))
+        val firstError = first.exceptionOrNull()
+        if (firstError == null) {
+            markProductPushApplied(product.id, ref, row)
+            return true
+        }
+        if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
+
+        val recovered = reconcileProductBridgeAfterUniqueConflict(remote, ownerUserId, product, ref, recoveryCache)
+        if (!recovered) throw firstError
+        val correctedRef = productRemoteRefDao.getByProductId(product.id) ?: throw firstError
+        if (!productNeedsPush(correctedRef)) return false
+
+        val retryRow = buildProductPushRow(product, correctedRef, ownerUserId)
+        remote.upsertProducts(listOf(retryRow)).getOrThrow()
+        markProductPushApplied(product.id, correctedRef, retryRow)
+        return true
+    }
+
+    private suspend fun markSupplierPushApplied(
+        supplierId: Long,
+        ref: SupplierRemoteRef,
+        row: InventorySupplierRow
+    ) {
+        supplierRemoteRefDao.updateRemoteApplyState(
+            supplierId,
+            ref.localChangeRevision,
+            System.currentTimeMillis(),
+            fingerprintSupplierInbound(row)
+        )
+    }
+
+    private suspend fun markCategoryPushApplied(
+        categoryId: Long,
+        ref: CategoryRemoteRef,
+        row: InventoryCategoryRow
+    ) {
+        categoryRemoteRefDao.updateRemoteApplyState(
+            categoryId,
+            ref.localChangeRevision,
+            System.currentTimeMillis(),
+            fingerprintCategoryInbound(row)
+        )
+    }
+
+    private suspend fun markProductPushApplied(
+        productId: Long,
+        ref: ProductRemoteRef,
+        row: InventoryProductRow
+    ) {
+        productRemoteRefDao.updateRemoteApplyState(
+            productId,
+            ref.localChangeRevision,
+            System.currentTimeMillis(),
+            fingerprintProductInbound(row)
+        )
+    }
+
+    private suspend fun reconcileSupplierBridgeAfterUniqueConflict(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        supplier: Supplier,
+        failedRef: SupplierRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val key = normalizeCatalogNameKey(supplier.name)
+        if (key.isEmpty()) return false
+        val bundle = fetchCatalogForConflictRecovery(remote, "supplier", supplier.id, recoveryCache) ?: return false
+        val remoteRow = bundle.suppliers.firstOrNull {
+            it.deletedAt.isNullOrBlank() &&
+                it.ownerUserId == ownerUserId &&
+                normalizeCatalogNameKey(it.name) == key
+        } ?: return false
+        val recovered = db.withTransaction {
+            attachSupplierBridgeForRetry(supplier.id, remoteRow.id)
+        }
+        logCatalogBridgeRecovery("supplier", recovered, supplier.id, failedRef.remoteId, remoteRow.id)
+        return recovered
+    }
+
+    private suspend fun reconcileCategoryBridgeAfterUniqueConflict(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        category: Category,
+        failedRef: CategoryRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val key = normalizeCatalogNameKey(category.name)
+        if (key.isEmpty()) return false
+        val bundle = fetchCatalogForConflictRecovery(remote, "category", category.id, recoveryCache) ?: return false
+        val remoteRow = bundle.categories.firstOrNull {
+            it.deletedAt.isNullOrBlank() &&
+                it.ownerUserId == ownerUserId &&
+                normalizeCatalogNameKey(it.name) == key
+        } ?: return false
+        val recovered = db.withTransaction {
+            attachCategoryBridgeForRetry(category.id, remoteRow.id)
+        }
+        logCatalogBridgeRecovery("category", recovered, category.id, failedRef.remoteId, remoteRow.id)
+        return recovered
+    }
+
+    private suspend fun reconcileProductBridgeAfterUniqueConflict(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        product: Product,
+        failedRef: ProductRemoteRef,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): Boolean {
+        val key = normalizeCatalogBarcodeKey(product.barcode)
+        if (key.isEmpty()) return false
+        val bundle = fetchCatalogForConflictRecovery(remote, "product", product.id, recoveryCache) ?: return false
+        val remoteRow = bundle.products.firstOrNull {
+            it.deletedAt.isNullOrBlank() &&
+                it.ownerUserId == ownerUserId &&
+                normalizeCatalogBarcodeKey(it.barcode) == key
+        } ?: return false
+        val recovered = db.withTransaction {
+            attachProductBridgeForRetry(product.id, remoteRow.id)
+        }
+        logCatalogBridgeRecovery("product", recovered, product.id, failedRef.remoteId, remoteRow.id)
+        return recovered
+    }
+
+    private suspend fun fetchCatalogForConflictRecovery(
+        remote: CatalogRemoteDataSource,
+        kind: String,
+        localId: Long,
+        recoveryCache: CatalogConflictRecoveryCache
+    ): InventoryCatalogFetchBundle? {
+        return recoveryCache.fetch(
+            remote = remote,
+            phase = "catalog_bridge_conflict_recover_fetch_$kind",
+            kind = kind,
+            localId = localId,
+            onFailure = ::logSyncTransportFailure
+        )
+    }
+
+    private suspend fun attachSupplierBridgeForRetry(supplierId: Long, remoteId: String): Boolean {
+        val existingRemote = supplierRemoteRefDao.getByRemoteId(remoteId)
+        if (existingRemote != null && existingRemote.supplierId != supplierId) return false
+        val existingLocal = supplierRemoteRefDao.getBySupplierId(supplierId)
+        if (existingLocal == null) {
+            supplierRemoteRefDao.insert(SupplierRemoteRef(supplierId = supplierId, remoteId = remoteId))
+            return supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId == remoteId
+        }
+        if (existingLocal.remoteId == remoteId) return true
+        return supplierRemoteRefDao.updateRemoteId(supplierId, remoteId) > 0
+    }
+
+    private suspend fun attachCategoryBridgeForRetry(categoryId: Long, remoteId: String): Boolean {
+        val existingRemote = categoryRemoteRefDao.getByRemoteId(remoteId)
+        if (existingRemote != null && existingRemote.categoryId != categoryId) return false
+        val existingLocal = categoryRemoteRefDao.getByCategoryId(categoryId)
+        if (existingLocal == null) {
+            categoryRemoteRefDao.insert(CategoryRemoteRef(categoryId = categoryId, remoteId = remoteId))
+            return categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId == remoteId
+        }
+        if (existingLocal.remoteId == remoteId) return true
+        return categoryRemoteRefDao.updateRemoteId(categoryId, remoteId) > 0
+    }
+
+    private suspend fun attachProductBridgeForRetry(productId: Long, remoteId: String): Boolean {
+        val existingRemote = productRemoteRefDao.getByRemoteId(remoteId)
+        if (existingRemote != null && existingRemote.productId != productId) return false
+        val existingLocal = productRemoteRefDao.getByProductId(productId)
+        if (existingLocal == null) {
+            productRemoteRefDao.insert(ProductRemoteRef(productId = productId, remoteId = remoteId))
+            return productRemoteRefDao.getByProductId(productId)?.remoteId == remoteId
+        }
+        if (existingLocal.remoteId == remoteId) return true
+        return productRemoteRefDao.updateRemoteId(productId, remoteId) > 0
+    }
+
+    private fun logCatalogBridgeRecovery(
+        kind: String,
+        recovered: Boolean,
+        localId: Long,
+        oldRemoteId: String,
+        recoveredRemoteId: String
+    ) {
+        Log.i(
+            TAG,
+            "bridge_recover kind=$kind outcome=${if (recovered) "linked" else "skipped"} " +
+                "localId=$localId oldRemoteId=$oldRemoteId recoveredRemoteId=$recoveredRemoteId"
+        )
+    }
+
+    /**
+     * Allinea i bridge locali (`supplier_remote_refs`, `category_remote_refs`,
+     * `product_remote_refs`) a righe gia presenti nel catalogo remoto quando manca
+     * il bridge o quando il bridge locale esiste ma punta a un remoteId stale.
+     *
+     * Serve a evitare 23505 / HTTP 409 in push: senza bridge locale,
+     * `ensureXxxRefForPush` genera un UUID fresco; se il remoto ha gia una riga
+     * attiva con stesso `name`/`barcode` per lo stesso owner, l'INSERT viola
+     * l'UNIQUE parziale `WHERE deleted_at IS NULL` e il push abortisce prima
+     * ancora di pullare le modifiche remote (es. prezzi cambiati su un altro device).
+     *
+     * Comportamento: nessuna modifica ai valori Room. I bridge mancanti vengono
+     * creati come gia sincronizzati col payload remoto corrente. I bridge stale
+     * vengono solo riallineati al remoteId corretto, conservando revisioni e
+     * fingerprint: se la riga locale e ancora dirty, il push successivo aggiorna
+     * il remoto corretto senza passare da 23505.
+     *
+     * Sicurezza: se il remoteId e gia agganciato a un'altra riga locale, la riga
+     * viene saltata. Non si spostano bridge tra entita locali diverse.
+     *
+     * Best-effort: un fallimento di fetch non propaga — il flow normale
+     * fara il suo fetch comunque. Cosi la realign non introduce una nuova
+     * fonte di abort per il sync.
+     */
+    private suspend fun realignCatalogBridgesIfNeeded(
+        remote: CatalogRemoteDataSource,
+        recoveryCache: CatalogConflictRecoveryCache
+    ) {
+        val suppliersMissing = supplierRemoteRefDao.countLocalRowsMissingRemoteRef()
+        val categoriesMissing = categoryRemoteRefDao.countLocalRowsMissingRemoteRef()
+        val productsMissing = productRemoteRefDao.countLocalRowsMissingRemoteRef()
+        val suppliersPending = supplierRemoteRefDao.hasPendingWork()
+        val categoriesPending = categoryRemoteRefDao.hasPendingWork()
+        val productsPending = productRemoteRefDao.hasPendingWork()
+        if (suppliersMissing == 0 && categoriesMissing == 0 && productsMissing == 0 &&
+            !suppliersPending && !categoriesPending && !productsPending
+        ) {
+            return
+        }
+
+        val bundle = recoveryCache.fetch(
+            remote = remote,
+            phase = "catalog_bridge_realign_fetch",
+            kind = "realign",
+            localId = 0L,
+            onFailure = ::logSyncTransportFailure
+        ) ?: return
+
+        val supplierStats = CatalogBridgeRealignStats()
+        val categoryStats = CatalogBridgeRealignStats()
+        val productStats = CatalogBridgeRealignStats()
+        db.withTransaction {
+            if (suppliersMissing > 0 || suppliersPending) {
+                for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() }) {
+                    supplierStats.remoteRowsSeen++
+                    // Task 041 (hardening): normalizzazione Kotlin unicode-aware su entrambi
+                    // i lati. Senza trim lato locale righe importate da Excel con spazi
+                    // accidentali sfuggono al match ma collidono sulla partial UNIQUE
+                    // `(owner_user_id, lower(name)) WHERE deleted_at IS NULL` -> 23505/409.
+                    val normalized = normalizeCatalogNameKey(row.name)
+                    if (normalized.isEmpty()) {
+                        supplierStats.skippedEmptyKey++
+                        continue
+                    }
+                    supplierStats.candidatesWithValidKey++
+                    if (supplierRemoteRefDao.getByRemoteId(row.id) != null) {
+                        supplierStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val local = supplierDao.findByNormalizedName(normalized)
+                    if (local == null) {
+                        supplierStats.skippedNoLocalMatch++
+                        continue
+                    }
+                    supplierStats.localMatches++
+                    val remoteBridge = supplierRemoteRefDao.getByRemoteId(row.id)
+                    if (remoteBridge != null && remoteBridge.supplierId != local.id) {
+                        supplierStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val localBridge = supplierRemoteRefDao.getBySupplierId(local.id)
+                    if (localBridge?.remoteId == row.id) {
+                        supplierStats.skippedLocalAlreadyBridged++
+                        continue
+                    }
+                    if (localBridge != null) {
+                        if (supplierRemoteRefDao.updateRemoteId(local.id, row.id) > 0) {
+                            supplierStats.relinkedStale++
+                        } else {
+                            supplierStats.skippedLocalAlreadyBridged++
+                        }
+                    } else {
+                        supplierRemoteRefDao.insert(
+                            SupplierRemoteRef(
+                                supplierId = local.id,
+                                remoteId = row.id,
+                                localChangeRevision = 0,
+                                lastSyncedLocalRevision = 0,
+                                lastRemoteAppliedAt = System.currentTimeMillis(),
+                                lastRemotePayloadFingerprint = fingerprintSupplierInbound(row)
+                            )
+                        )
+                        supplierStats.linked++
+                    }
+                }
+            }
+            if (categoriesMissing > 0 || categoriesPending) {
+                for (row in bundle.categories.filter { it.deletedAt.isNullOrBlank() }) {
+                    categoryStats.remoteRowsSeen++
+                    // Task 041 (hardening): normalizzazione Kotlin unicode-aware su entrambi
+                    // i lati (case + whitespace). Prima `findByName` era case-sensitive
+                    // ed exact, quindi anche una sola categoria con case differente tra
+                    // due device (stesso Excel) lasciava il bridge vuoto ma il push
+                    // collideva sulla partial UNIQUE `(owner_user_id, lower(name))`.
+                    val normalized = normalizeCatalogNameKey(row.name)
+                    if (normalized.isEmpty()) {
+                        categoryStats.skippedEmptyKey++
+                        continue
+                    }
+                    categoryStats.candidatesWithValidKey++
+                    if (categoryRemoteRefDao.getByRemoteId(row.id) != null) {
+                        categoryStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val local = categoryDao.findByNormalizedName(normalized)
+                    if (local == null) {
+                        categoryStats.skippedNoLocalMatch++
+                        continue
+                    }
+                    categoryStats.localMatches++
+                    val remoteBridge = categoryRemoteRefDao.getByRemoteId(row.id)
+                    if (remoteBridge != null && remoteBridge.categoryId != local.id) {
+                        categoryStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val localBridge = categoryRemoteRefDao.getByCategoryId(local.id)
+                    if (localBridge?.remoteId == row.id) {
+                        categoryStats.skippedLocalAlreadyBridged++
+                        continue
+                    }
+                    if (localBridge != null) {
+                        if (categoryRemoteRefDao.updateRemoteId(local.id, row.id) > 0) {
+                            categoryStats.relinkedStale++
+                        } else {
+                            categoryStats.skippedLocalAlreadyBridged++
+                        }
+                    } else {
+                        categoryRemoteRefDao.insert(
+                            CategoryRemoteRef(
+                                categoryId = local.id,
+                                remoteId = row.id,
+                                localChangeRevision = 0,
+                                lastSyncedLocalRevision = 0,
+                                lastRemoteAppliedAt = System.currentTimeMillis(),
+                                lastRemotePayloadFingerprint = fingerprintCategoryInbound(row)
+                            )
+                        )
+                        categoryStats.linked++
+                    }
+                }
+            }
+            if (productsMissing > 0 || productsPending) {
+                for (row in bundle.products.filter { it.deletedAt.isNullOrBlank() }) {
+                    productStats.remoteRowsSeen++
+                    // Task 041 (hardening): barcode normalizzato lato locale via `TRIM()`,
+                    // per agganciare righe con whitespace accidentale (es. Excel) che
+                    // altrimenti collidono sulla partial UNIQUE remota `(owner, barcode)
+                    // WHERE deleted_at IS NULL` -> 23505 senza link possibile dal realign.
+                    val bc = normalizeCatalogBarcodeKey(row.barcode)
+                    if (bc.isEmpty()) {
+                        productStats.skippedEmptyKey++
+                        continue
+                    }
+                    productStats.candidatesWithValidKey++
+                    if (productRemoteRefDao.getByRemoteId(row.id) != null) {
+                        productStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val local = productDao.findByTrimmedBarcode(bc)
+                    if (local == null) {
+                        productStats.skippedNoLocalMatch++
+                        continue
+                    }
+                    productStats.localMatches++
+                    val remoteBridge = productRemoteRefDao.getByRemoteId(row.id)
+                    if (remoteBridge != null && remoteBridge.productId != local.id) {
+                        productStats.skippedRemoteAlreadyBridged++
+                        continue
+                    }
+                    val localBridge = productRemoteRefDao.getByProductId(local.id)
+                    if (localBridge?.remoteId == row.id) {
+                        productStats.skippedLocalAlreadyBridged++
+                        continue
+                    }
+                    if (localBridge != null) {
+                        if (productRemoteRefDao.updateRemoteId(local.id, row.id) > 0) {
+                            productStats.relinkedStale++
+                        } else {
+                            productStats.skippedLocalAlreadyBridged++
+                        }
+                    } else {
+                        productRemoteRefDao.insert(
+                            ProductRemoteRef(
+                                productId = local.id,
+                                remoteId = row.id,
+                                localChangeRevision = 0,
+                                lastSyncedLocalRevision = 0,
+                                lastRemoteAppliedAt = System.currentTimeMillis(),
+                                lastRemotePayloadFingerprint = fingerprintProductInbound(row)
+                            )
+                        )
+                        productStats.linked++
+                    }
+                }
+            }
+        }
+
+        Log.i(
+            TAG,
+            "bridge_realign suppliers_linked=${supplierStats.linked} " +
+                "categories_linked=${categoryStats.linked} products_linked=${productStats.linked} " +
+                "suppliers_missing_before=$suppliersMissing categories_missing_before=$categoriesMissing " +
+                "products_missing_before=$productsMissing suppliers_pending_before=$suppliersPending " +
+                "categories_pending_before=$categoriesPending products_pending_before=$productsPending " +
+                "${supplierStats.logFields("suppliers")} " +
+                "${categoryStats.logFields("categories")} " +
+                productStats.logFields("products")
+        )
     }
 
     private suspend fun drainPendingCatalogTombstones(

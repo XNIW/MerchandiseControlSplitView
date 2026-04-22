@@ -12,6 +12,8 @@
 **Stack:** Kotlin, Jetpack Compose, Material3, Room, Apache POI, ZXing, WorkManager
 **Architettura:** MVVM (ViewModel + Repository + DAO)
 
+**Nota operativa 2026-04-22:** applicato follow-up tecnico su sync catalogo cloud (documentato come addendum in `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`, senza cambiare lo stato storico del task). Patch minima: stato sync strutturato con fasi e conteggi opzionali, log `sync_start` / `sync_stage` / `sync_finish` + tracker `busy=true/false`, realign di bridge locali stale, cache snapshot per recovery 23505. Verifiche eseguite con JBR Android Studio: `compileDebugUnitTestKotlin`, `DefaultInventoryRepositoryTest`, `CatalogSyncViewModelTest`, `assembleDebug`, `lintDebug`, `git diff --check` tutte ✅. **DA VERIFICARE live:** device A/B reale su dataset grande; non dichiarare nuova chiusura live senza evidenza positiva.
+
 ---
 
 ## Obiettivo attuale

@@ -16,6 +16,9 @@ interface ProductRemoteRefDao {
     @Query("SELECT * FROM product_remote_refs WHERE remoteId = :remoteId LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): ProductRemoteRef?
 
+    @Query("UPDATE product_remote_refs SET remoteId = :remoteId WHERE productId = :productId")
+    suspend fun updateRemoteId(productId: Long, remoteId: String): Int
+
     @Query(
         """
         UPDATE product_remote_refs SET localChangeRevision = localChangeRevision + 1

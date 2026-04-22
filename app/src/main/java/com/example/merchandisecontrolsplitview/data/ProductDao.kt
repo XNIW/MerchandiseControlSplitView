@@ -59,6 +59,16 @@ interface ProductDao {
     @Query("SELECT * FROM products WHERE barcode = :barcode LIMIT 1")
     suspend fun findByBarcode(barcode: String): Product?
 
+    /**
+     * Task 041 (hardening): match barcode tollerante a whitespace sul lato locale.
+     * Coerente con la partial UNIQUE remota `(owner_user_id, barcode) WHERE deleted_at IS NULL`:
+     * due device che importano lo stesso Excel con spazi accidentali ("12345 ") generano
+     * la stessa chiave UNIQUE remota, ma `findByBarcode` esatto non match­erebbe il locale
+     * con quel whitespace. Il chiamante normalizza con `trim()` Kotlin (unicode-aware).
+     */
+    @Query("SELECT * FROM products WHERE TRIM(barcode) = :trimmedBarcode LIMIT 1")
+    suspend fun findByTrimmedBarcode(trimmedBarcode: String): Product?
+
     @Query("SELECT * FROM products WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): Product?
 

@@ -5,6 +5,11 @@ import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressRepository
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStage
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
 import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
@@ -39,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -507,6 +513,90 @@ class CatalogSyncViewModelTest {
     }
 
     @Test
+    fun `040 catalog failure keeps session permission and pending detail visible`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.failure(statusException(HttpStatusCode.Conflict))
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.failure(statusException(HttpStatusCode.Forbidden))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(40L)
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_last_failed),
+            viewModel.uiState.value.primaryMessage
+        )
+        val sessionDetail = viewModel.uiState.value.sessionDetail.orEmpty()
+        assertTrue(sessionDetail.contains(app.getString(R.string.catalog_cloud_sessions_permission_hint)))
+        assertTrue(sessionDetail.contains(app.getString(R.string.catalog_cloud_sessions_pending_hint, 1)))
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `040 options visible surfaces pending history sessions`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(40L)
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "fresh@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.onOptionsScreenVisible()
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_pending),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(
+            viewModel.uiState.value.sessionDetail?.contains(
+                app.getString(R.string.catalog_cloud_sessions_pending_hint, 1)
+            ) == true
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
     fun `031 catalog ok with price and session issue prioritizes session partial state`() = runTest {
         val repository = mockk<InventoryRepository>()
         coEvery {
@@ -789,6 +879,82 @@ class CatalogSyncViewModelTest {
         )
         assertNull(viewModel.uiState.value.sessionDetail)
         coVerify(exactly = 1) { repository.getCatalogCloudPendingBreakdown() }
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `041 manual refresh exposes structured phase and returns tracker to completed`() = runTest {
+        val repository = mockk<InventoryRepository>(
+            moreInterfaces = arrayOf(CatalogSyncProgressRepository::class)
+        )
+        val progressRepository = repository as CatalogSyncProgressRepository
+        val progressSeen = CompletableDeferred<Unit>()
+        val finishGate = CompletableDeferred<Unit>()
+        coEvery {
+            progressRepository.syncCatalogWithRemote(any(), any(), OWNER_VM_021, any())
+        } coAnswers {
+            val reporter = arg<CatalogSyncProgressReporter>(3)
+            reporter.onProgress(
+                CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_PRODUCTS,
+                    current = 123,
+                    total = 18_854
+                )
+            )
+            progressSeen.complete(Unit)
+            finishGate.await()
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = 1,
+                    pulledSuppliers = 0,
+                    pulledCategories = 0,
+                    pulledProducts = 0
+                )
+            )
+        }
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val tracker = CatalogSyncStateTracker()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "041@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        progressSeen.await()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isSyncing)
+        assertEquals(CatalogSyncStage.PUSH_PRODUCTS, viewModel.uiState.value.progress?.stage)
+        assertEquals(
+            app.getString(R.string.catalog_cloud_stage_push_products_count, 123, 18_854),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(tracker.state.value.isBusy)
+        assertEquals(CatalogSyncStage.PUSH_PRODUCTS, tracker.state.value.stage)
+
+        finishGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(CatalogSyncStage.COMPLETED, tracker.state.value.stage)
+        assertFalse(tracker.state.value.isBusy)
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_synced),
+            viewModel.uiState.value.primaryMessage
+        )
 
         collectJob.cancel()
     }
