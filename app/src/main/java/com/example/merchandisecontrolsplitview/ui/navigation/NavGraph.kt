@@ -71,8 +71,10 @@ fun AppNavGraph() {
 
     val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
     val showBottomBar = currentRootTab != null
+    val showCloudSyncIndicator = currentRoute != Screen.Options.route
 
     LaunchedEffect(importAnalysisResult) {
         if (importAnalysisResult != null) {
@@ -306,14 +308,15 @@ fun AppNavGraph() {
             }
         }
         // Overlay indicatore sync cloud (root tabs + Generated/PreGenerate/Import).
-        // Si mostra solo quando e in corso una sync reale (manuale via Opzioni o
-        // bootstrap automatico sessioni); fuori sync l'overlay e invisibile.
-        CloudSyncIndicator(
-            state = cloudSyncState,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = innerPadding.calculateTopPadding() + 12.dp, end = 12.dp)
-        )
+        // In Opzioni la card "Catalogo sul cloud" resta la superficie primaria.
+        if (showCloudSyncIndicator) {
+            CloudSyncIndicator(
+                state = cloudSyncState,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = innerPadding.calculateTopPadding() + 12.dp, end = 12.dp)
+            )
+        }
       }
     }
 }

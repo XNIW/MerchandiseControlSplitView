@@ -80,6 +80,26 @@ interface ProductDao {
     @Query("SELECT * FROM products")
     suspend fun getAll(): List<Product>
 
+    @Query(
+        """
+        SELECT p.*,
+               r.id AS ref_id,
+               r.productId AS ref_productId,
+               r.remoteId AS ref_remoteId,
+               r.localChangeRevision AS ref_localChangeRevision,
+               r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
+               r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+        FROM products p
+        LEFT JOIN product_remote_refs r ON r.productId = p.id
+        WHERE r.id IS NULL
+           OR r.lastRemoteAppliedAt IS NULL
+           OR r.localChangeRevision > r.lastSyncedLocalRevision
+        ORDER BY p.id ASC
+        """
+    )
+    suspend fun getCatalogPushCandidates(): List<ProductCatalogPushCandidate>
+
     @Query("SELECT id FROM products WHERE supplierId = :supplierId")
     suspend fun getIdsForSupplier(supplierId: Long): List<Long>
 

@@ -20,6 +20,7 @@ import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
 import java.io.File
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -591,6 +592,38 @@ class ExcelViewModelTest {
         assertEquals("10", viewModel.editableValues[1][0].value)
         assertEquals("Supplier", viewModel.supplierName)
         assertEquals("Category", viewModel.categoryName)
+    }
+
+    @Test
+    fun `042 generated local save does not reload full sheet from self observer emission`() = runTest {
+        val observedEntry = MutableSharedFlow<HistoryEntry?>(replay = 1)
+        val initial = historyEntry(
+            uid = 77L,
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("12345678", "4", "2")
+            ),
+            editable = listOf(listOf("", ""), listOf("", "")),
+            complete = listOf(false, false)
+        )
+        observedEntry.tryEmit(initial)
+        every { repository.observeHistoryEntryByUid(77L) } returns observedEntry
+        coEvery { repository.getHistoryEntryByUid(77L) } returns initial
+        coEvery { repository.updateHistoryEntry(any()) } coAnswers {
+            // Simula una emissione locale immediata: il ViewModel deve evitare un reload
+            // completo del foglio gia aggiornato in memoria.
+            observedEntry.emit(initial)
+        }
+
+        viewModel.loadHistoryEntry(77L)
+        advanceUntilIdle()
+        viewModel.completeStates[1] = true
+
+        viewModel.updateHistoryEntry(77L)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.completeStates[1])
+        coVerify(exactly = 1) { repository.updateHistoryEntry(any()) }
     }
 
     @Test

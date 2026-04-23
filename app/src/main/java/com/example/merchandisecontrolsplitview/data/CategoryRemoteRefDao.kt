@@ -46,6 +46,16 @@ interface CategoryRemoteRefDao {
     )
     suspend fun hasPendingWork(): Boolean
 
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM category_remote_refs
+            WHERE lastRemoteAppliedAt IS NULL
+        )
+        """
+    )
+    suspend fun hasNeverAppliedRemoteRef(): Boolean
+
     @Query("SELECT COUNT(*) FROM category_remote_refs")
     suspend fun countRows(): Int
 

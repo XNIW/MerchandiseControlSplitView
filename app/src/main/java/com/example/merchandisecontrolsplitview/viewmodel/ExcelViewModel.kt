@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.viewmodel
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -258,6 +259,7 @@ class ExcelViewModel(
     private var _preGenerateOriginalHeadersBackup: List<String>? = null
     private var _preGenerateHeaderTypesBackup: List<String>? = null
     private var currentHistoryEntryObserverJob: Job? = null
+    private val suppressedHistoryEntryObserverReloads = mutableMapOf<Long, Int>()
 
     val lastUsedCategory = mutableStateOf<String?>(null)
 
@@ -365,17 +367,67 @@ class ExcelViewModel(
 
     fun loadHistoryEntry(entryUid: Long, onLoaded: (() -> Unit)? = null) {
         currentHistoryEntryObserverJob?.cancel()
+        suppressedHistoryEntryObserverReloads.clear()
         currentHistoryEntryObserverJob = viewModelScope.launch {
             var firstLoadDelivered = false
             repository.observeHistoryEntryByUid(entryUid).collect { entry ->
                 if (entry != null) {
-                    loadHistoryEntry(entry)
+                    if (consumeSuppressedHistoryEntryObserverReload(entry.uid)) {
+                        Log.i(
+                            GENERATED_DB_TAG,
+                            "flow=history_entry_observer uid=${entry.uid} outcome=skip_self_reload"
+                        )
+                    } else {
+                        loadHistoryEntry(entry)
+                    }
                     if (!firstLoadDelivered) {
                         firstLoadDelivered = true
                         onLoaded?.invoke()
                     }
                 }
             }
+        }
+    }
+
+    private fun shouldSuppressNextHistoryEntryObserverReload(uid: Long): Boolean =
+        currentHistoryEntryObserverJob != null && currentEntryStatus.value.third == uid
+
+    private fun suppressNextHistoryEntryObserverReload(uid: Long) {
+        suppressedHistoryEntryObserverReloads[uid] = (suppressedHistoryEntryObserverReloads[uid] ?: 0) + 1
+    }
+
+    private fun cancelSuppressedHistoryEntryObserverReload(uid: Long) {
+        val remaining = (suppressedHistoryEntryObserverReloads[uid] ?: 0) - 1
+        if (remaining > 0) {
+            suppressedHistoryEntryObserverReloads[uid] = remaining
+        } else {
+            suppressedHistoryEntryObserverReloads.remove(uid)
+        }
+    }
+
+    private fun consumeSuppressedHistoryEntryObserverReload(uid: Long): Boolean {
+        if (!suppressedHistoryEntryObserverReloads.containsKey(uid)) return false
+        cancelSuppressedHistoryEntryObserverReload(uid)
+        return true
+    }
+
+    private suspend fun updateHistoryEntryWithoutObserverReload(entry: HistoryEntry, flow: String) {
+        val suppressObserverReload = shouldSuppressNextHistoryEntryObserverReload(entry.uid)
+        if (suppressObserverReload) {
+            suppressNextHistoryEntryObserverReload(entry.uid)
+        }
+        try {
+            repository.updateHistoryEntry(entry)
+            Log.i(
+                GENERATED_DB_TAG,
+                "flow=$flow uid=${entry.uid} rows=${entry.data.size.coerceAtLeast(0)} " +
+                    "observerReloadSuppressed=$suppressObserverReload"
+            )
+        } catch (t: Throwable) {
+            if (suppressObserverReload) {
+                cancelSuppressedHistoryEntryObserverReload(entry.uid)
+            }
+            throw t
         }
     }
 
@@ -746,7 +798,7 @@ class ExcelViewModel(
                     supplier = updatedSupplier,
                     category = updatedCategory
                 )
-                repository.updateHistoryEntry(updated)
+                updateHistoryEntryWithoutObserverReload(updated, flow = "rename")
                 if (updated.uid == currentEntryStatus.value.third) {
                     currentEntryName.value = updated.displayName
                     currentEntryFileName.value = updated.id
@@ -813,7 +865,7 @@ class ExcelViewModel(
                     paymentTotal = finalPaymentTotal,
                     missingItems = finalMissingItems
                 )
-                repository.updateHistoryEntry(updatedEntry)
+                updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "generated_update")
             }
         }
     }
@@ -828,7 +880,7 @@ class ExcelViewModel(
             paymentTotal = finalPaymentTotal,
             missingItems = finalMissingItems
         )
-        repository.updateHistoryEntry(updatedEntry)
+        updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "generated_save")
         true
     }
 
@@ -849,6 +901,7 @@ class ExcelViewModel(
     fun resetState() {
         currentHistoryEntryObserverJob?.cancel()
         currentHistoryEntryObserverJob = null
+        suppressedHistoryEntryObserverReloads.clear()
         excelData.clear()
         originalHeaders.clear()
         selectedColumns.clear()
@@ -896,7 +949,7 @@ class ExcelViewModel(
             repository.getHistoryEntryByUid(entryUid)?.let { entry ->
                 if (!entry.wasExported) {
                     val updatedEntry = entry.copy(wasExported = true)
-                    repository.updateHistoryEntry(updatedEntry)
+                    updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "mark_exported")
                     if (entry.uid == currentEntryStatus.value.third) {
                         currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
                     }
@@ -918,7 +971,7 @@ class ExcelViewModel(
             repository.getHistoryEntryByUid(entryUid)?.let { entry ->
                 if (entry.syncStatus != newStatus) {
                     val updatedEntry = entry.copy(syncStatus = newStatus)
-                    repository.updateHistoryEntry(updatedEntry)
+                    updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "sync_status")
                     if (entry.uid == currentEntryStatus.value.third) {
                         currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
                     }
@@ -1105,6 +1158,8 @@ class ExcelViewModel(
     }
 
     companion object {
+        private const val GENERATED_DB_TAG = "GeneratedDbFlow"
+
         fun factory(app: Application, repository: InventoryRepository): androidx.lifecycle.ViewModelProvider.Factory {
             return object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

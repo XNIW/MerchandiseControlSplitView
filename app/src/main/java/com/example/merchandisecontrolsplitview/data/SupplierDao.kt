@@ -15,6 +15,27 @@ interface SupplierDao {
     @Query("SELECT * FROM suppliers ORDER BY name ASC")
     suspend fun getAll(): List<Supplier>
 
+    @Query(
+        """
+        SELECT s.id AS id,
+               s.name AS name,
+               r.id AS ref_id,
+               r.supplierId AS ref_supplierId,
+               r.remoteId AS ref_remoteId,
+               r.localChangeRevision AS ref_localChangeRevision,
+               r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
+               r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+        FROM suppliers s
+        LEFT JOIN supplier_remote_refs r ON r.supplierId = s.id
+        WHERE r.id IS NULL
+           OR r.lastRemoteAppliedAt IS NULL
+           OR r.localChangeRevision > r.lastSyncedLocalRevision
+        ORDER BY s.name ASC
+        """
+    )
+    suspend fun getCatalogPushCandidates(): List<SupplierCatalogPushCandidate>
+
     @Query("SELECT * FROM suppliers WHERE name LIKE '%' || :query || '%'")
     suspend fun searchByName(query: String): List<Supplier>
 

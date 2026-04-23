@@ -486,8 +486,13 @@ class CatalogSyncViewModel(
 
     private fun finishSyncProgress(ok: Boolean, startedAt: Long) {
         val durationMs = System.currentTimeMillis() - startedAt
-        syncProgress.value = CatalogSyncProgressState.completed()
-        syncStateTracker?.update(CatalogSyncProgressState.completed())
+        val finalProgress = if (ok) {
+            CatalogSyncProgressState.completed()
+        } else {
+            CatalogSyncProgressState.failed()
+        }
+        syncProgress.value = finalProgress
+        syncStateTracker?.update(finalProgress)
         Log.i(TAG, "sync_finish ok=$ok durationMs=$durationMs")
         lastLoggedStage = null
     }
@@ -513,7 +518,10 @@ class CatalogSyncViewModel(
             val auth = authFlow.value
             if (auth !is AuthState.SignedIn) return@launch
             if (!remote.isConfigured) return@launch
-            if (busy.value) return@launch
+            if (busy.value) {
+                Log.i(TAG, "sync_request source=manual_refresh outcome=ignored reason=busy")
+                return@launch
+            }
             busy.value = true
             val startedAt = startSyncProgress("manual_refresh", CatalogSyncStage.REALIGN)
             lastErrorKind.value = null
@@ -524,11 +532,17 @@ class CatalogSyncViewModel(
             var logFailureClassification: SyncErrorClassification? = null
             var logPendingAfter = false
             var logHistoryIssues = 0
+            var logHistorySyncDurationMs: Long? = null
             var logHistoryFailureClassification: SyncErrorClassification? = null
             try {
                 val catalogResult = syncCatalogRepository(auth.userId)
                 setSyncProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_HISTORY))
-                val historySessionOutcome = runHistorySessionCloudRefresh(auth.userId)
+                val historyStartedAt = System.currentTimeMillis()
+                val historySessionOutcome = try {
+                    runHistorySessionCloudRefresh(auth.userId)
+                } finally {
+                    logHistorySyncDurationMs = System.currentTimeMillis() - historyStartedAt
+                }
                 logHistoryIssues = historySessionOutcome?.issueCount ?: 0
                 logHistoryFailureClassification = historySessionOutcome?.failure?.let(SyncErrorClassifier::classify)
                 catalogResult.fold(
@@ -582,10 +596,17 @@ class CatalogSyncViewModel(
                 }.orEmpty()
                 Log.i(
                     TAG,
+                    "sync_phase_durations ok=$ok syncDomain=HISTORY syncHistoryMs=$logHistorySyncDurationMs " +
+                        "historyIssues=$logHistoryIssues " +
+                        "sessionErrCategory=${logHistoryFailureClassification?.category}"
+                )
+                Log.i(
+                    TAG,
                     "refresh catalogOk=$logCatalogOk errKind=$logErr priceSyncFailed=${logSummary?.priceSyncFailed} " +
                         "errCategory=${logFailureClassification?.category} httpStatus=${logFailureClassification?.httpStatus} " +
                         "postgrestCode=${logFailureClassification?.postgrestCode} " +
                         "pendingAfter=$logPendingAfter sessionIssues=$logHistoryIssues " +
+                        "historySyncMs=$logHistorySyncDurationMs " +
                         "sessionErrCategory=${logHistoryFailureClassification?.category} " +
                         "sessionHttpStatus=${logHistoryFailureClassification?.httpStatus} " +
                         "pricesPushed=${logSummary?.pushedProductPrices} pricesPulled=${logSummary?.pulledProductPrices} " +

@@ -33,6 +33,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -251,7 +252,8 @@ fun GeneratedScreen(
 
     val currentEntryName by excelViewModel.currentEntryName
     val currentEntryFileName by excelViewModel.currentEntryFileName
-    val currentLocale = Locale.getDefault()
+    val currentConfiguration = LocalConfiguration.current
+    val currentLocale = remember(currentConfiguration) { Locale.getDefault() }
     val currentEntryListItem = remember(historyListEntries, entryUid) {
         historyListEntries.firstOrNull { it.uid == entryUid }
     }

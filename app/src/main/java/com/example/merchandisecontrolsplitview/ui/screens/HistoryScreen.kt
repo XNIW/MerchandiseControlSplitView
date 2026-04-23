@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -75,7 +76,8 @@ fun HistoryScreen(
     onSetFilter: (HistoryFilter) -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
-    val currentLocale = Locale.getDefault()
+    val currentConfiguration = LocalConfiguration.current
+    val currentLocale = remember(currentConfiguration) { Locale.getDefault() }
     val navigationBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     // `innerPadding` already includes the floating bottom bar height. Keep that clearance
     // separate from the device inset so the snackbar sits just above the bar without magic numbers.
@@ -94,8 +96,8 @@ fun HistoryScreen(
     var customStartDate by remember { mutableStateOf(LocalDate.now()) }
     var customEndDate by remember { mutableStateOf(LocalDate.now()) }
     val snackbarHostState = remember { SnackbarHostState() }
-    val dateFormatter = remember {
-        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault())
+    val dateFormatter = remember(currentLocale) {
+        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(currentLocale)
     }
 
     fun resetCustomRangeDraft() {
@@ -773,7 +775,8 @@ private fun HistoryRow(
     val spacing = MaterialTheme.appSpacing
     val statusIconsBottomInset = spacing.xxl + spacing.sm
     val statusIconsEndInset = spacing.xxl + spacing.xxl + spacing.sm
-    val currentLocale = Locale.getDefault()
+    val currentConfiguration = LocalConfiguration.current
+    val currentLocale = remember(currentConfiguration) { Locale.getDefault() }
     val detailsSeparator = stringResource(R.string.history_details_separator)
     val displayTimestamp = remember(entry.timestamp, currentLocale) {
         formatHistoryTimestamp(entry.timestamp, currentLocale)

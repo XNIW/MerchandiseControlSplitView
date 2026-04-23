@@ -46,6 +46,16 @@ interface ProductRemoteRefDao {
     )
     suspend fun hasPendingWork(): Boolean
 
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM product_remote_refs
+            WHERE lastRemoteAppliedAt IS NULL
+        )
+        """
+    )
+    suspend fun hasNeverAppliedRemoteRef(): Boolean
+
     @Query("SELECT COUNT(*) FROM product_remote_refs")
     suspend fun countRows(): Int
 

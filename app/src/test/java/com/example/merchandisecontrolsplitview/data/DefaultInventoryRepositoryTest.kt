@@ -1648,6 +1648,74 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `042 incremental catalog push evaluates only dirty product candidates`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000420"
+        repeat(3) { index ->
+            db.productDao().insert(
+                Product(
+                    barcode = "042-incremental-$index",
+                    productName = "Incremental Product $index",
+                    purchasePrice = 10.0 + index,
+                    retailPrice = 20.0 + index
+                )
+            )
+        }
+        val remote = FakeCatalogRemote016()
+
+        val first = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            owner
+        )
+
+        assertTrue(first.isSuccess)
+        assertEquals(3, first.getOrThrow().pushedProducts)
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+
+        val noopProgress = mutableListOf<CatalogSyncProgressState>()
+        val productCallsAfterFirst = remote.productUpsertCallCount
+        val second = repository.syncCatalogWithRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { noopProgress.add(it) }
+        )
+
+        assertTrue(second.isSuccess)
+        assertEquals(0, second.getOrThrow().pushedProducts)
+        assertEquals(productCallsAfterFirst, remote.productUpsertCallCount)
+        assertEquals(
+            0,
+            noopProgress.last { it.stage == CatalogSyncStage.PUSH_PRODUCTS }.total
+        )
+
+        val dirtyProduct = repository.findProductByBarcode("042-incremental-1")!!
+        db.productRemoteRefDao().incrementLocalRevision(dirtyProduct.id)
+
+        val dirtyProgress = mutableListOf<CatalogSyncProgressState>()
+        val productCallsBeforeDirtyPush = remote.productUpsertCallCount
+        val fetchCallsBeforeDirtyPush = remote.fetchCount
+        val third = repository.syncCatalogWithRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { dirtyProgress.add(it) }
+        )
+
+        assertTrue(third.isSuccess)
+        assertEquals(1, third.getOrThrow().pushedProducts)
+        assertEquals(productCallsBeforeDirtyPush + 1, remote.productUpsertCallCount)
+        // Dirty locali gia' allineati in passato non devono pagare una fetch extra di realign:
+        // resta solo il pull catalogo finale.
+        assertEquals(fetchCallsBeforeDirtyPush + 1, remote.fetchCount)
+        assertEquals(
+            1,
+            dirtyProgress.first { it.stage == CatalogSyncStage.PUSH_PRODUCTS }.total
+        )
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+    }
+
+    @Test
     fun `021 price remote not configured still completes catalog bootstrap`() = runTest {
         val owner = OWNER_021
         val priceRemote = RecordingPriceRemote016(configured = false).apply {

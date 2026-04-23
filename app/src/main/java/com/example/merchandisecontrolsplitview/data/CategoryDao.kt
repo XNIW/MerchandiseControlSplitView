@@ -47,6 +47,27 @@ interface CategoryDao {
     @Query("SELECT * FROM categories ORDER BY name ASC")
     suspend fun getAll(): List<Category>
 
+    @Query(
+        """
+        SELECT c.id AS id,
+               c.name AS name,
+               r.id AS ref_id,
+               r.categoryId AS ref_categoryId,
+               r.remoteId AS ref_remoteId,
+               r.localChangeRevision AS ref_localChangeRevision,
+               r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
+               r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+        FROM categories c
+        LEFT JOIN category_remote_refs r ON r.categoryId = c.id
+        WHERE r.id IS NULL
+           OR r.lastRemoteAppliedAt IS NULL
+           OR r.localChangeRevision > r.lastSyncedLocalRevision
+        ORDER BY c.name COLLATE NOCASE ASC
+        """
+    )
+    suspend fun getCatalogPushCandidates(): List<CategoryCatalogPushCandidate>
+
     /**
      * Recupera una categoria tramite il suo ID.
      * @param id L'ID univoco della categoria.

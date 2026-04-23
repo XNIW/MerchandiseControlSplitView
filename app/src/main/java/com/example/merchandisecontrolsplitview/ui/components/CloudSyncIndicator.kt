@@ -19,13 +19,19 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -34,7 +40,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStatus
 import com.example.merchandisecontrolsplitview.data.CatalogSyncStage
+import kotlinx.coroutines.delay
 
 /**
  * Indicatore "sync cloud in corso" leggero, da posizionare in alto a destra
@@ -48,8 +56,26 @@ fun CloudSyncIndicator(
     state: CatalogSyncProgressState,
     modifier: Modifier = Modifier
 ) {
+    var visible by remember { mutableStateOf(state.isBusy) }
+    LaunchedEffect(state.status, state.stage, state.current, state.total) {
+        when (state.status) {
+            CatalogSyncStatus.RUNNING -> visible = true
+            CatalogSyncStatus.COMPLETED -> {
+                visible = true
+                delay(2_200L)
+                visible = false
+            }
+            CatalogSyncStatus.FAILED -> {
+                visible = true
+                delay(3_600L)
+                visible = false
+            }
+            CatalogSyncStatus.IDLE -> visible = false
+        }
+    }
+
     AnimatedVisibility(
-        visible = state.isBusy,
+        visible = visible,
         enter = fadeIn(animationSpec = tween(durationMillis = 150)),
         exit = fadeOut(animationSpec = tween(durationMillis = 200)),
         modifier = modifier
@@ -64,10 +90,33 @@ fun CloudSyncIndicator(
             ),
             label = "cloudSyncIndicatorAngle"
         )
+        val containerColor = when (state.status) {
+            CatalogSyncStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
+            CatalogSyncStatus.COMPLETED -> MaterialTheme.colorScheme.secondaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        }
+        val contentColor = when (state.status) {
+            CatalogSyncStatus.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+            CatalogSyncStatus.COMPLETED -> MaterialTheme.colorScheme.onSecondaryContainer
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+        val iconTint = when (state.status) {
+            CatalogSyncStatus.FAILED -> MaterialTheme.colorScheme.error
+            CatalogSyncStatus.COMPLETED -> MaterialTheme.colorScheme.secondary
+            else -> MaterialTheme.colorScheme.primary
+        }
+        val icon = when (state.status) {
+            CatalogSyncStatus.FAILED -> Icons.Default.Error
+            CatalogSyncStatus.COMPLETED -> Icons.Default.CheckCircle
+            else -> Icons.Default.Sync
+        }
+        val iconModifier = Modifier
+            .size(16.dp)
+            .let { base -> if (state.isBusy) base.rotate(-angle) else base }
         Surface(
             modifier = Modifier.widthIn(max = 280.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceVariant,
+            color = containerColor,
             tonalElevation = 2.dp,
             shadowElevation = 2.dp
         ) {
@@ -86,19 +135,17 @@ fun CloudSyncIndicator(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Sync,
+                        imageVector = icon,
                         contentDescription = stringResource(R.string.cloud_sync_indicator_cd),
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .rotate(-angle)
+                        tint = iconTint,
+                        modifier = iconModifier
                     )
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = catalogSyncStageMessage(state),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = contentColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -120,6 +167,10 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
         }
 
     return when (state.stage) {
+        CatalogSyncStage.COMPLETED -> when (state.status) {
+            CatalogSyncStatus.FAILED -> stringResource(R.string.catalog_cloud_state_last_failed)
+            else -> stringResource(R.string.catalog_cloud_state_synced)
+        }
         CatalogSyncStage.REALIGN -> stringResource(R.string.catalog_cloud_stage_realign)
         CatalogSyncStage.PUSH_SUPPLIERS -> counted(
             R.string.catalog_cloud_stage_push_suppliers,
@@ -139,7 +190,6 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
             R.string.catalog_cloud_stage_sync_prices_count
         )
         CatalogSyncStage.SYNC_HISTORY -> stringResource(R.string.catalog_cloud_stage_sync_history)
-        CatalogSyncStage.IDLE,
-        CatalogSyncStage.COMPLETED -> stringResource(R.string.catalog_cloud_state_syncing)
+        CatalogSyncStage.IDLE -> stringResource(R.string.catalog_cloud_state_syncing)
     }
 }

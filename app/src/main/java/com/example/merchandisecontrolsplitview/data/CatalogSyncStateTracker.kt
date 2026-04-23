@@ -17,25 +17,81 @@ enum class CatalogSyncStage {
     COMPLETED
 }
 
+enum class CatalogSyncStatus {
+    IDLE,
+    RUNNING,
+    COMPLETED,
+    FAILED
+}
+
+enum class CatalogSyncStageGroup {
+    IDLE,
+    LOCAL_ANALYSIS,
+    SEND_CHANGES,
+    UPDATE_FROM_CLOUD,
+    PRICES,
+    HISTORY,
+    COMPLETED
+}
+
+val CatalogSyncStage.group: CatalogSyncStageGroup
+    get() = when (this) {
+        CatalogSyncStage.IDLE -> CatalogSyncStageGroup.IDLE
+        CatalogSyncStage.REALIGN -> CatalogSyncStageGroup.LOCAL_ANALYSIS
+        CatalogSyncStage.PUSH_SUPPLIERS,
+        CatalogSyncStage.PUSH_CATEGORIES,
+        CatalogSyncStage.PUSH_PRODUCTS -> CatalogSyncStageGroup.SEND_CHANGES
+        CatalogSyncStage.PULL_CATALOG -> CatalogSyncStageGroup.UPDATE_FROM_CLOUD
+        CatalogSyncStage.SYNC_PRICES -> CatalogSyncStageGroup.PRICES
+        CatalogSyncStage.SYNC_HISTORY -> CatalogSyncStageGroup.HISTORY
+        CatalogSyncStage.COMPLETED -> CatalogSyncStageGroup.COMPLETED
+    }
+
 data class CatalogSyncProgressState(
     val stage: CatalogSyncStage = CatalogSyncStage.IDLE,
     val current: Int? = null,
     val total: Int? = null,
-    val isBusy: Boolean = false
+    val isBusy: Boolean = false,
+    val status: CatalogSyncStatus = when {
+        isBusy -> CatalogSyncStatus.RUNNING
+        stage == CatalogSyncStage.COMPLETED -> CatalogSyncStatus.COMPLETED
+        else -> CatalogSyncStatus.IDLE
+    }
 ) {
     companion object {
         fun idle(): CatalogSyncProgressState =
-            CatalogSyncProgressState(stage = CatalogSyncStage.IDLE, isBusy = false)
+            CatalogSyncProgressState(
+                stage = CatalogSyncStage.IDLE,
+                isBusy = false,
+                status = CatalogSyncStatus.IDLE
+            )
 
         fun running(
             stage: CatalogSyncStage,
             current: Int? = null,
             total: Int? = null
         ): CatalogSyncProgressState =
-            CatalogSyncProgressState(stage = stage, current = current, total = total, isBusy = true)
+            CatalogSyncProgressState(
+                stage = stage,
+                current = current,
+                total = total,
+                isBusy = true,
+                status = CatalogSyncStatus.RUNNING
+            )
 
         fun completed(): CatalogSyncProgressState =
-            CatalogSyncProgressState(stage = CatalogSyncStage.COMPLETED, isBusy = false)
+            CatalogSyncProgressState(
+                stage = CatalogSyncStage.COMPLETED,
+                isBusy = false,
+                status = CatalogSyncStatus.COMPLETED
+            )
+
+        fun failed(): CatalogSyncProgressState =
+            CatalogSyncProgressState(
+                stage = CatalogSyncStage.COMPLETED,
+                isBusy = false,
+                status = CatalogSyncStatus.FAILED
+            )
     }
 }
 
@@ -80,8 +136,8 @@ class CatalogSyncStateTracker {
         val previous = _state.value
         _state.value = next
         _isSyncing.value = next.isBusy
-        if (previous.isBusy != next.isBusy) {
-            Log.i("CatalogCloudSync", "tracker busy=${next.isBusy} stage=${next.stage}")
+        if (previous.isBusy != next.isBusy || previous.status != next.status) {
+            Log.i("CatalogCloudSync", "tracker busy=${next.isBusy} stage=${next.stage} status=${next.status}")
         }
     }
 }
