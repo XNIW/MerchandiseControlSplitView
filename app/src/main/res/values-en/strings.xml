@@ -555,6 +555,9 @@
 
     <string name="catalog_cloud_section_title">Cloud catalog</string>
     <string name="catalog_cloud_refresh">Refresh from cloud</string>
+    <string name="catalog_cloud_sync_full">Full sync</string>
+    <string name="catalog_cloud_sync_quick">Quick sync</string>
+    <string name="catalog_cloud_sync_quick_hint">Quick sync sends recent changes. Full sync also refreshes from cloud.</string>
     <string name="catalog_cloud_state_syncing">Syncing\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparing local database\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Sending supplier changes\u2026</string>

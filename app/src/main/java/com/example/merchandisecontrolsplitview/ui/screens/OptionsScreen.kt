@@ -62,7 +62,8 @@ fun OptionsScreen(
     onSignOut: () -> Unit = {},
     onDismissError: () -> Unit = {},
     catalogSyncUi: CatalogSyncUiState? = null,
-    onCatalogRefresh: () -> Unit = {}
+    onCatalogRefresh: () -> Unit = {},
+    onCatalogQuickSync: () -> Unit = {}
 ) {
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -164,7 +165,8 @@ fun OptionsScreen(
             catalogSyncUi?.let { sync ->
                 CatalogCloudSection(
                     state = sync,
-                    onRefresh = onCatalogRefresh
+                    onRefresh = onCatalogRefresh,
+                    onQuickSync = onCatalogQuickSync
                 )
             }
         }
@@ -174,7 +176,8 @@ fun OptionsScreen(
 @Composable
 private fun CatalogCloudSection(
     state: CatalogSyncUiState,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onQuickSync: () -> Unit
 ) {
     OptionsGroup(
         title = stringResource(R.string.catalog_cloud_section_title),
@@ -219,13 +222,25 @@ private fun CatalogCloudSection(
                 )
             }
         } else {
-            OutlinedButton(
+            Button(
                 onClick = onRefresh,
                 enabled = state.canRefresh,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(stringResource(R.string.catalog_cloud_refresh))
+                Text(stringResource(R.string.catalog_cloud_sync_full))
             }
+            OutlinedButton(
+                onClick = onQuickSync,
+                enabled = state.canQuickSync,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.catalog_cloud_sync_quick))
+            }
+            Text(
+                text = stringResource(R.string.catalog_cloud_sync_quick_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

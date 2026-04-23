@@ -231,7 +231,8 @@ internal object DefaultInventoryRepositoryTestHooks {
 
 class DefaultInventoryRepository(private val db: AppDatabase) :
     InventoryRepository,
-    CatalogSyncProgressRepository {
+    CatalogSyncProgressRepository,
+    CatalogAutoSyncRepository {
 
     private data class HistorySessionPushCandidate(
         val entry: HistoryEntry,
@@ -242,6 +243,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private data class CatalogEntityRef(
         val id: Long,
         val name: String
+    )
+
+    private data class CatalogPullApplyCounts(
+        val suppliers: Int,
+        val categories: Int,
+        val products: Int
     )
 
     private data class RemoteSessionLocalState(
@@ -275,22 +282,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     @Volatile
     var onHistorySessionPayloadChanged: ((Long) -> Unit)? = null
+
+    @Volatile
+    var onProductCatalogChanged: ((Long) -> Unit)? = null
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
-    override suspend fun findProductByBarcode(barcode: String) = withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
-    override suspend fun findProductsByBarcodes(barcodes: List<String>) = withContext(Dispatchers.IO) { productDao.findByBarcodes(barcodes) }
+    override suspend fun findProductByBarcode(barcode: String) =
+        withContext(Dispatchers.IO) { productDao.findDetailsByBarcode(barcode)?.productWithCurrentPrices() }
+
+    override suspend fun findProductsByBarcodes(barcodes: List<String>) =
+        withContext(Dispatchers.IO) {
+            if (barcodes.isEmpty()) emptyList()
+            else productDao.findDetailsByBarcodes(barcodes).map { it.productWithCurrentPrices() }
+        }
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
     override suspend fun addProduct(product: Product) {
-        withContext(Dispatchers.IO) {
+        val persistedId = withContext(Dispatchers.IO) {
             productDao.insert(product)
-            val persisted = productDao.findByBarcode(product.barcode) ?: return@withContext
+            val persisted = productDao.findByBarcode(product.barcode) ?: return@withContext null
 
             val now = LocalDateTime.now().format(tSFMT)
 
             product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
             product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
             touchProductDirty(persisted.id)
+            persisted.id
         }
+        persistedId?.let(::notifyProductCatalogChanged)
     }
     override suspend fun updateProduct(product: Product) {
         withContext(Dispatchers.IO) {
@@ -302,6 +320,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
             touchProductDirty(product.id)
         }
+        notifyProductCatalogChanged(product.id)
     }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
@@ -664,6 +683,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private fun notifyHistorySessionPayloadChanged(uid: Long) {
         onHistorySessionPayloadChanged?.invoke(uid)
     }
+
+    private fun notifyProductCatalogChanged(productId: Long) {
+        onProductCatalogChanged?.invoke(productId)
+    }
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         db.withTransaction {
             remoteRefDao.deleteByHistoryEntryUid(entry.uid)
@@ -717,50 +740,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         barcodes: List<String>
     ): Map<String, Pair<Double?, Double?>> = withContext(Dispatchers.IO) {
         if (barcodes.isEmpty()) return@withContext emptyMap()
-
-        // 1) Prendo i prodotti e mappo id↔barcode
-        val products = productDao.findByBarcodes(barcodes)
-        if (products.isEmpty()) return@withContext emptyMap()
-
-        val barcodeById = products.associate { it.id to it.barcode }
-
-        // 2) UNA SOLA QUERY per tutti gli ID toccati
-        val latest = priceDao.getLatestForProducts(products.map { it.id })
-
-        // 3) Compongo la mappa barcode → (purchase?, retail?)
-        val out = mutableMapOf<String, Pair<Double?, Double?>>()
-        latest.forEach { row ->
-            val bc = barcodeById[row.productId] ?: return@forEach
-            val cur = out[bc] ?: (null to null)
-            out[bc] = when (row.type) {
-                "PURCHASE" -> row.price to cur.second
-                "RETAIL"   -> cur.first to row.price
-                else       -> cur
-            }
+        val detailsByBarcode = productDao.findDetailsByBarcodes(barcodes)
+            .associateBy { it.product.barcode }
+        barcodes.associateWith { barcode ->
+            val details = detailsByBarcode[barcode]
+            details?.currentPurchasePrice to details?.currentRetailPrice
         }
-        // Garantisco key per tutti i barcodes richiesti
-        barcodes.forEach { bc -> out.putIfAbsent(bc, null to null) }
-        out
     }
 
     override suspend fun getCurrentPriceSnapshot(): List<CurrentPriceRow> = withContext(Dispatchers.IO) {
-        // 1) Ultimi prezzi per tutti i prodotti (una query)
-        val latest = priceDao.getLatestPerProductAndType(listOf("PURCHASE", "RETAIL"))
-
-        // 2) Per barcode serve una sola lettura dei prodotti (no N+1)
-        val allProducts = productDao.getAll()
-        val bcById = allProducts.associate { it.id to it.barcode }
-
-        // 3) Aggrego per prodotto
-        val grouped = latest.groupBy { it.productId }
-        grouped.map { (pid, rows) ->
-            val purchase = rows.find { it.type == "PURCHASE" }?.price
-            val retail   = rows.find { it.type == "RETAIL" }?.price
+        productDao.getAllWithDetailsOnce().map { details ->
+            val product = details.product
             CurrentPriceRow(
-                productId = pid,
-                barcode = bcById[pid].orEmpty(),
-                purchasePrice = purchase,
-                retailPrice = retail
+                productId = product.id,
+                barcode = product.barcode,
+                purchasePrice = details.currentPurchasePrice,
+                retailPrice = details.currentRetailPrice
             )
         }
     }
@@ -1627,43 +1622,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             var pulledCategories = 0
             var pulledProducts = 0
             measureCatalogSyncPhase(CatalogSyncStage.PULL_CATALOG, phaseDurationsMs) {
-                progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
-                val fetchStartedAt = System.currentTimeMillis()
-                val bundle = remote.fetchCatalog().getOrThrow()
-                val fetchMs = System.currentTimeMillis() - fetchStartedAt
-                val applyStartedAt = System.currentTimeMillis()
-                db.withTransaction {
-                    val tombstoneProducts = bundle.products.filter { !it.deletedAt.isNullOrBlank() }
-                    val tombstoneCategories = bundle.categories.filter { !it.deletedAt.isNullOrBlank() }
-                    val tombstoneSuppliers = bundle.suppliers.filter { !it.deletedAt.isNullOrBlank() }
-                    for (row in tombstoneProducts) {
-                        if (applyInboundProductTombstone(row)) pulledProducts++
-                    }
-                    for (row in tombstoneCategories) {
-                        if (applyInboundCategoryTombstone(row)) pulledCategories++
-                    }
-                    for (row in tombstoneSuppliers) {
-                        if (applyInboundSupplierTombstone(row)) pulledSuppliers++
-                    }
-                    for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() }) {
-                        if (applyRemoteSupplierInbound(row)) pulledSuppliers++
-                    }
-                    for (row in bundle.categories.filter { it.deletedAt.isNullOrBlank() }) {
-                        if (applyRemoteCategoryInbound(row)) pulledCategories++
-                    }
-                    for (row in bundle.products.filter { it.deletedAt.isNullOrBlank() }) {
-                        if (applyRemoteProductInbound(row)) pulledProducts++
-                    }
-                }
-                val applyMs = System.currentTimeMillis() - applyStartedAt
-                Log.i(
-                    TAG,
-                    "phase_metrics syncDomain=CATALOG phase=PULL_CATALOG " +
-                        "remoteSuppliers=${bundle.suppliers.size} remoteCategories=${bundle.categories.size} " +
-                        "remoteProducts=${bundle.products.size} pulledSuppliers=$pulledSuppliers " +
-                        "pulledCategories=$pulledCategories pulledProducts=$pulledProducts " +
-                        "fetchMs=$fetchMs applyMs=$applyMs"
-                )
+                val counts = pullCatalogFromRemote(remote, progressReporter)
+                pulledSuppliers = counts.suppliers
+                pulledCategories = counts.categories
+                pulledProducts = counts.products
             }
             var pushedPrices = 0
             var pulledPrices = 0
@@ -1715,6 +1677,188 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             )
             Result.failure(t)
         }
+    }
+
+    override suspend fun pushDirtyCatalogDeltaToRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
+        val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
+        try {
+            val recoveryCache = CatalogConflictRecoveryCache()
+            val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
+            val pushedProducts = measureCatalogSyncPhase(CatalogSyncStage.PUSH_PRODUCTS, phaseDurationsMs) {
+                pushCatalogProducts(
+                    remote = remote,
+                    ownerUserId = ownerUserId,
+                    recoveryCache = recoveryCache,
+                    progressReporter = progressReporter,
+                    allowCreatingDependencyRefs = false
+                )
+            }
+            var pushedPrices = 0
+            var priceSyncFailed = false
+            if (priceRemote.isConfigured) {
+                try {
+                    measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        pushedPrices = pushProductPricesToRemote(
+                            priceRemote = priceRemote,
+                            ownerUserId = ownerUserId,
+                            progressReporter = progressReporter,
+                            requireProductSynced = true
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    logSyncTransportFailure("auto_price_push", t)
+                    priceSyncFailed = true
+                }
+            }
+            logCatalogSyncPhaseDurations(
+                ok = true,
+                durationsMs = phaseDurationsMs,
+                priceSyncFailed = priceSyncFailed
+            )
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = pushedProducts,
+                    pulledSuppliers = 0,
+                    pulledCategories = 0,
+                    pulledProducts = 0,
+                    pushedProductPrices = pushedPrices,
+                    pulledProductPrices = 0,
+                    deferredProductPricesNoProductRef = deferredPrices,
+                    skippedProductPricesPullNoProductRef = 0,
+                    priceSyncFailed = priceSyncFailed
+                )
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            logCatalogSyncPhaseDurations(
+                ok = false,
+                durationsMs = phaseDurationsMs,
+                priceSyncFailed = null
+            )
+            Result.failure(t)
+        }
+    }
+
+    override suspend fun pullCatalogBootstrapFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
+        val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
+        try {
+            val pullCounts = measureCatalogSyncPhase(CatalogSyncStage.PULL_CATALOG, phaseDurationsMs) {
+                pullCatalogFromRemote(remote, progressReporter)
+            }
+            var pulledPrices = 0
+            var skippedPullPrices = 0
+            var priceSyncFailed = false
+            if (priceRemote.isConfigured) {
+                try {
+                    measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        val pullOutcome = pullProductPricesFromRemote(priceRemote, progressReporter)
+                        pulledPrices = pullOutcome.first
+                        skippedPullPrices = pullOutcome.second
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    logSyncTransportFailure("bootstrap_price_pull", t)
+                    priceSyncFailed = true
+                }
+            }
+            logCatalogSyncPhaseDurations(
+                ok = true,
+                durationsMs = phaseDurationsMs,
+                priceSyncFailed = priceSyncFailed
+            )
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = 0,
+                    pulledSuppliers = pullCounts.suppliers,
+                    pulledCategories = pullCounts.categories,
+                    pulledProducts = pullCounts.products,
+                    pushedProductPrices = 0,
+                    pulledProductPrices = pulledPrices,
+                    deferredProductPricesNoProductRef = 0,
+                    skippedProductPricesPullNoProductRef = skippedPullPrices,
+                    priceSyncFailed = priceSyncFailed
+                )
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            logCatalogSyncPhaseDurations(
+                ok = false,
+                durationsMs = phaseDurationsMs,
+                priceSyncFailed = null
+            )
+            Result.failure(t)
+        }
+    }
+
+    private suspend fun pullCatalogFromRemote(
+        remote: CatalogRemoteDataSource,
+        progressReporter: CatalogSyncProgressReporter
+    ): CatalogPullApplyCounts {
+        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+        val fetchStartedAt = System.currentTimeMillis()
+        val bundle = remote.fetchCatalog().getOrThrow()
+        val fetchMs = System.currentTimeMillis() - fetchStartedAt
+        val applyStartedAt = System.currentTimeMillis()
+        var pulledSuppliers = 0
+        var pulledCategories = 0
+        var pulledProducts = 0
+        db.withTransaction {
+            val tombstoneProducts = bundle.products.filter { !it.deletedAt.isNullOrBlank() }
+            val tombstoneCategories = bundle.categories.filter { !it.deletedAt.isNullOrBlank() }
+            val tombstoneSuppliers = bundle.suppliers.filter { !it.deletedAt.isNullOrBlank() }
+            for (row in tombstoneProducts) {
+                if (applyInboundProductTombstone(row)) pulledProducts++
+            }
+            for (row in tombstoneCategories) {
+                if (applyInboundCategoryTombstone(row)) pulledCategories++
+            }
+            for (row in tombstoneSuppliers) {
+                if (applyInboundSupplierTombstone(row)) pulledSuppliers++
+            }
+            for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() }) {
+                if (applyRemoteSupplierInbound(row)) pulledSuppliers++
+            }
+            for (row in bundle.categories.filter { it.deletedAt.isNullOrBlank() }) {
+                if (applyRemoteCategoryInbound(row)) pulledCategories++
+            }
+            for (row in bundle.products.filter { it.deletedAt.isNullOrBlank() }) {
+                if (applyRemoteProductInbound(row)) pulledProducts++
+            }
+        }
+        val applyMs = System.currentTimeMillis() - applyStartedAt
+        Log.i(
+            TAG,
+            "phase_metrics syncDomain=CATALOG phase=PULL_CATALOG " +
+                "remoteSuppliers=${bundle.suppliers.size} remoteCategories=${bundle.categories.size} " +
+                "remoteProducts=${bundle.products.size} pulledSuppliers=$pulledSuppliers " +
+                "pulledCategories=$pulledCategories pulledProducts=$pulledProducts " +
+                "fetchMs=$fetchMs applyMs=$applyMs"
+        )
+        return CatalogPullApplyCounts(
+            suppliers = pulledSuppliers,
+            categories = pulledCategories,
+            products = pulledProducts
+        )
     }
 
     private companion object {
@@ -1887,13 +2031,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private suspend fun pushProductPricesToRemote(
         priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        requireProductSynced: Boolean = false
     ): Int {
-        val rows = priceDao.getAllForCloudPush()
+        val candidates = priceDao.getAllForCloudPush()
+        val rows = if (requireProductSynced) {
+            candidates.filter { row ->
+                val ref = productRemoteRefDao.getByProductId(row.productId)
+                ref != null &&
+                    ref.lastRemoteAppliedAt != null &&
+                    ref.localChangeRevision <= ref.lastSyncedLocalRevision
+            }
+        } else {
+            candidates
+        }
         if (rows.isEmpty()) {
             Log.i(
                 TAG,
-                "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH pricesEvaluated=0 pricesPushed=0"
+                "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH " +
+                    "pricesEvaluated=${candidates.size} pricesPushed=0 requireProductSynced=$requireProductSynced"
             )
             return 0
         }
@@ -1938,7 +2094,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         Log.i(
             TAG,
             "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH " +
-                "pricesEvaluated=${rows.size} pricesPushed=$pushed"
+                "pricesEvaluated=${candidates.size} pricesEligible=${rows.size} pricesPushed=$pushed " +
+                "requireProductSynced=$requireProductSynced"
         )
         return pushed
     }
@@ -2176,10 +2333,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         remote: CatalogRemoteDataSource,
         ownerUserId: String,
         recoveryCache: CatalogConflictRecoveryCache,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        allowCreatingDependencyRefs: Boolean = true
     ): Int {
         var n = 0
         var dirty = 0
+        var skippedMissingDependencyRef = 0
         var skippedAlreadySynced = 0
         val productTotal = productDao.count()
         val candidates = productDao.getCatalogPushCandidates()
@@ -2188,11 +2347,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         )
         for ((index, candidate) in candidates.withIndex()) {
             val p = candidate.product
+            val productForPush = p.copy(
+                purchasePrice = candidate.lastPurchase ?: p.purchasePrice,
+                retailPrice = candidate.lastRetail ?: p.retailPrice
+            )
             val ref = candidate.remoteRef ?: ensureProductRefForPush(p.id)
             if (productNeedsPush(ref)) {
                 dirty++
-                if (pushCatalogProductRow(remote, ownerUserId, p, ref, recoveryCache)) {
+                val pushed = pushCatalogProductRow(
+                    remote = remote,
+                    ownerUserId = ownerUserId,
+                    product = productForPush,
+                    ref = ref,
+                    recoveryCache = recoveryCache,
+                    allowCreatingDependencyRefs = allowCreatingDependencyRefs
+                )
+                if (pushed) {
                     n++
+                } else if (!allowCreatingDependencyRefs) {
+                    skippedMissingDependencyRef++
                 }
             } else {
                 skippedAlreadySynced++
@@ -2209,7 +2382,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             TAG,
             "phase_metrics syncDomain=CATALOG phase=PUSH_PRODUCTS productsTotal=$productTotal " +
                 "productsEvaluated=${candidates.size} productsDirty=$dirty productsPushed=$n " +
-                "productsSkippedAlreadySynced=${(productTotal - candidates.size + skippedAlreadySynced).coerceAtLeast(0)}"
+                "productsSkippedAlreadySynced=${(productTotal - candidates.size + skippedAlreadySynced).coerceAtLeast(0)} " +
+                "productsSkippedMissingDependencyRef=$skippedMissingDependencyRef"
         )
         return n
     }
@@ -2241,9 +2415,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private suspend fun buildProductPushRow(
         product: Product,
         ref: ProductRemoteRef,
-        ownerUserId: String
-    ): InventoryProductRow =
-        InventoryProductRow(
+        ownerUserId: String,
+        allowCreatingDependencyRefs: Boolean = true
+    ): InventoryProductRow? {
+        val supplierRemoteId = product.supplierId?.let { supplierId ->
+            if (allowCreatingDependencyRefs) {
+                ensureSupplierRefForPush(supplierId).remoteId
+            } else {
+                supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId ?: return null
+            }
+        }
+        val categoryRemoteId = product.categoryId?.let { categoryId ->
+            if (allowCreatingDependencyRefs) {
+                ensureCategoryRefForPush(categoryId).remoteId
+            } else {
+                categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId ?: return null
+            }
+        }
+        return InventoryProductRow(
             id = ref.remoteId,
             ownerUserId = ownerUserId,
             barcode = product.barcode,
@@ -2252,11 +2441,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             secondProductName = product.secondProductName,
             purchasePrice = product.purchasePrice,
             retailPrice = product.retailPrice,
-            supplierId = product.supplierId?.let { ensureSupplierRefForPush(it).remoteId },
-            categoryId = product.categoryId?.let { ensureCategoryRefForPush(it).remoteId },
+            supplierId = supplierRemoteId,
+            categoryId = categoryRemoteId,
             stockQuantity = product.stockQuantity,
             deletedAt = null
         )
+    }
 
     private suspend fun pushCatalogSupplierRow(
         remote: CatalogRemoteDataSource,
@@ -2317,9 +2507,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ownerUserId: String,
         product: Product,
         ref: ProductRemoteRef,
-        recoveryCache: CatalogConflictRecoveryCache
+        recoveryCache: CatalogConflictRecoveryCache,
+        allowCreatingDependencyRefs: Boolean = true
     ): Boolean {
-        val row = buildProductPushRow(product, ref, ownerUserId)
+        val row = buildProductPushRow(product, ref, ownerUserId, allowCreatingDependencyRefs)
+            ?: return false
         val first = remote.upsertProducts(listOf(row))
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
@@ -2333,7 +2525,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val correctedRef = productRemoteRefDao.getByProductId(product.id) ?: throw firstError
         if (!productNeedsPush(correctedRef)) return false
 
-        val retryRow = buildProductPushRow(product, correctedRef, ownerUserId)
+        val retryRow = buildProductPushRow(product, correctedRef, ownerUserId, allowCreatingDependencyRefs)
+            ?: return false
         remote.upsertProducts(listOf(retryRow)).getOrThrow()
         markProductPushApplied(product.id, correctedRef, retryRow)
         return true

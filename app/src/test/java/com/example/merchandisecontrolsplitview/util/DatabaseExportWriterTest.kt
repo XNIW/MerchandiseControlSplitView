@@ -221,6 +221,43 @@ class DatabaseExportWriterTest {
         }
     }
 
+    @Test
+    fun `writeDatabaseExport writes products sheet current prices from price summary`() {
+        val output = ByteArrayOutputStream()
+
+        writeDatabaseExport(
+            outputStream = output,
+            selection = ExportSheetSelection.productsOnly(),
+            schema = sampleSchema(),
+            content = DatabaseExportContent(
+                products = listOf(
+                    ProductWithDetails(
+                        product = Product(
+                            barcode = "dm04-043",
+                            productName = "DM04 043",
+                            purchasePrice = 10.0,
+                            retailPrice = 1100.0
+                        ),
+                        supplierName = null,
+                        categoryName = null,
+                        lastPurchase = 11.0,
+                        prevPurchase = 10.0,
+                        lastRetail = 1101.0,
+                        prevRetail = 1100.0
+                    )
+                )
+            )
+        )
+
+        XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
+            val row = workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS).getRow(1)
+            assertEquals(11.0, row.getCell(4).numericCellValue, 0.0001)
+            assertEquals(1101.0, row.getCell(5).numericCellValue, 0.0001)
+            assertEquals(10.0, row.getCell(6).numericCellValue, 0.0001)
+            assertEquals(1100.0, row.getCell(7).numericCellValue, 0.0001)
+        }
+    }
+
     private fun sampleProductWithDetails(barcode: String): ProductWithDetails =
         ProductWithDetails(
             product = Product(

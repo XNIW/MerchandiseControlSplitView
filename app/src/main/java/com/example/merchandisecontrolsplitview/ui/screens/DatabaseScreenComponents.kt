@@ -470,6 +470,7 @@ internal fun DatabaseProductListSection(
                 items(products.itemCount, key = { idx -> products[idx]?.product?.id ?: "placeholder-$idx" }) { idx ->
                     products[idx]?.let { details ->
                         val product = details.product
+                        val currentProduct = details.productWithCurrentPrices()
 
                         val dismissState = rememberSwipeToDismissBoxState(
                             confirmValueChange = { value ->
@@ -490,8 +491,8 @@ internal fun DatabaseProductListSection(
                             content = {
                                 ProductRow(
                                     productDetails = details,
-                                    onClick = { onProductClick(product) },
-                                    onShowHistory = { onShowHistory(product) }
+                                    onClick = { onProductClick(currentProduct) },
+                                    onShowHistory = { onShowHistory(currentProduct) }
                                 )
                             }
                         )
@@ -619,8 +620,8 @@ internal fun ProductRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val currentPurchasePrice = product.purchasePrice ?: productDetails.lastPurchase
-                val currentRetailPrice = product.retailPrice ?: productDetails.lastRetail
+                val currentPurchasePrice = productDetails.currentPurchasePrice
+                val currentRetailPrice = productDetails.currentRetailPrice
 
                 PriceColumn(
                     labelNew = stringResource(R.string.product_purchase_price_new_short),

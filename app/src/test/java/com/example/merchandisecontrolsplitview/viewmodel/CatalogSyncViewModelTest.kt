@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.viewmodel
 import android.app.Application
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
@@ -955,6 +956,62 @@ class CatalogSyncViewModelTest {
             app.getString(R.string.catalog_cloud_state_synced),
             viewModel.uiState.value.primaryMessage
         )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `043 quick sync uses targeted catalog delta lane without full refresh`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        coEvery {
+            autoRepository.pushDirtyCatalogDeltaToRemote(any(), any(), OWNER_VM_021, any())
+        } coAnswers {
+            val reporter = arg<CatalogSyncProgressReporter>(3)
+            reporter.onProgress(
+                CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 1, total = 1)
+            )
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = 1,
+                    pulledSuppliers = 0,
+                    pulledCategories = 0,
+                    pulledProducts = 0,
+                    pushedProductPrices = 1,
+                    pulledProductPrices = 0
+                )
+            )
+        }
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "043@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            autoSyncRepository = autoRepository
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            autoRepository.pushDirtyCatalogDeltaToRemote(any(), any(), OWNER_VM_021, any())
+        }
+        coVerify(exactly = 0) {
+            repository.syncCatalogWithRemote(any(), any(), any())
+        }
+        assertTrue(viewModel.uiState.value.canQuickSync)
+        assertTrue(viewModel.uiState.value.catalogDetail?.isNotBlank() == true)
 
         collectJob.cancel()
     }

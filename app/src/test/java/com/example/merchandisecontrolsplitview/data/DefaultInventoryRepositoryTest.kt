@@ -662,6 +662,26 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `043 current price helpers fall back to product cache when summary is absent`() = runTest {
+        db.productDao().insert(
+            Product(
+                barcode = "cache-only-043",
+                productName = "Cache Only 043",
+                purchasePrice = 7.0,
+                retailPrice = 9.0
+            )
+        )
+
+        val prices = repository.getCurrentPricesForBarcodes(listOf("cache-only-043"))
+        val snapshotRow = repository.getCurrentPriceSnapshot().single { it.barcode == "cache-only-043" }
+
+        assertEquals(7.0, prices["cache-only-043"]?.first)
+        assertEquals(9.0, prices["cache-only-043"]?.second)
+        assertEquals(7.0, snapshotRow.purchasePrice)
+        assertEquals(9.0, snapshotRow.retailPrice)
+    }
+
+    @Test
     fun `recordPriceIfChanged ignores unchanged value and getLastPrice returns latest`() = runTest {
         repository.addProduct(
             Product(
@@ -2529,6 +2549,171 @@ class DefaultInventoryRepositoryTest {
         assertTrue(breakdown.hasCatalogBridgeGaps)
         assertTrue(breakdown.hasTombstoneOrPriceRelatedPending)
         assertTrue(breakdown.hasAnyPendingBreakdown)
+    }
+
+    @Test
+    fun `043 current product lookup and details prefer latest price summary over product cache`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "dm04-043",
+                productName = "DM04 043",
+                purchasePrice = 10.0,
+                retailPrice = 1100.0
+            )
+        )
+        val product = repository.findProductByBarcode("dm04-043")!!
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "RETAIL",
+                price = 1101.0,
+                effectiveAt = "2099-01-01 00:00:00",
+                source = "REMOTE",
+                createdAt = "2099-01-01 00:00:00"
+            )
+        )
+
+        val details = repository.getAllProductsWithDetails().single()
+        val hydratedProduct = repository.findProductByBarcode("dm04-043")!!
+
+        assertEquals(1101.0, details.currentRetailPrice!!, 0.0001)
+        assertEquals(1101.0, details.productWithCurrentPrices().retailPrice!!, 0.0001)
+        assertEquals(1101.0, hydratedProduct.retailPrice!!, 0.0001)
+    }
+
+    @Test
+    fun `043 dirty catalog delta pushes products and pending price history without pull or full catalog push`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000431"
+        repository.addProduct(
+            Product(
+                barcode = "delta-043",
+                productName = "Delta 043",
+                purchasePrice = 12.0,
+                retailPrice = 18.0
+            )
+        )
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.supplierUpsertCallCount)
+        assertEquals(0, remote.categoryUpsertCallCount)
+        assertEquals(1, remote.productUpsertCallCount)
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(2, summary.pushedProductPrices)
+        assertEquals(2, priceRemote.upsertBatches.flatten().size)
+        assertEquals(0, priceRemote.fetchCount)
+
+        val second = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(0, second.pushedProducts)
+        assertEquals(0, second.pushedProductPrices)
+        assertEquals(1, remote.productUpsertCallCount)
+        assertEquals(1, priceRemote.upsertBatches.size)
+    }
+
+    @Test
+    fun `043 product delta push serializes current summary prices instead of stale product cache`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000435"
+        repository.addProduct(
+            Product(
+                barcode = "delta-summary-043",
+                productName = "Delta Summary 043",
+                purchasePrice = 12.0,
+                retailPrice = 18.0
+            )
+        )
+        val product = repository.findProductByBarcode("delta-summary-043")!!
+        db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "RETAIL",
+                price = 19.0,
+                effectiveAt = "2099-04-23 10:00:00",
+                source = "REMOTE",
+                createdAt = "2099-04-23 10:00:00"
+            )
+        )
+        val rawProductCache = db.productDao().getById(product.id)!!
+        assertEquals(18.0, rawProductCache.retailPrice!!, 0.0001)
+
+        val remote = FakeCatalogRemote016()
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        val pushedRow = remote.upsertedProducts.single().single()
+        assertEquals(12.0, pushedRow.purchasePrice!!, 0.0001)
+        assertEquals(19.0, pushedRow.retailPrice!!, 0.0001)
+    }
+
+    @Test
+    fun `043 bootstrap pull applies remote catalog and prices without outbound upserts`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000432"
+        val productRemoteId = "00000000-0000-4000-8000-000000000433"
+        val priceRemoteId = "00000000-0000-4000-8000-000000000434"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "bootstrap-043",
+                        productName = "Bootstrap 043",
+                        retailPrice = 100.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = priceRemoteId,
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "RETAIL",
+                    price = 101.0,
+                    effectiveAt = "2026-04-23 10:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-04-23 10:00:00"
+                )
+            )
+        }
+
+        val summary = repository.pullCatalogBootstrapFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        val product = repository.findProductByBarcode("bootstrap-043")!!
+        val priceSeries = repository.getPriceSeries(product.id, "RETAIL").first()
+        assertEquals(1, remote.fetchCount)
+        assertEquals(0, remote.productUpsertCallCount)
+        assertTrue(priceRemote.upsertBatches.isEmpty())
+        assertEquals(1, priceRemote.fetchCount)
+        assertEquals(1, summary.pulledProducts)
+        assertEquals(1, summary.pulledProductPrices)
+        assertEquals(101.0, product.retailPrice!!, 0.0001)
+        assertEquals(101.0, priceSeries.single().price, 0.0001)
     }
 
     // --- Backup sessioni cloud (task 023) ---

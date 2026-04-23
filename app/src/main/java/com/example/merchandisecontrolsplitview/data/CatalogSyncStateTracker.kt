@@ -99,11 +99,32 @@ fun interface CatalogSyncProgressReporter {
     fun onProgress(state: CatalogSyncProgressState)
 }
 
+enum class CatalogSyncFlightOwner {
+    MANUAL,
+    AUTO_PUSH,
+    BOOTSTRAP
+}
+
 interface CatalogSyncProgressRepository {
     suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary>
+}
+
+interface CatalogAutoSyncRepository {
+    suspend fun pushDirtyCatalogDeltaToRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary>
+
+    suspend fun pullCatalogBootstrapFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
         progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary>
 }
@@ -121,6 +142,26 @@ class CatalogSyncStateTracker {
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val ownerLock = Any()
+    private var activeOwner: CatalogSyncFlightOwner? = null
+
+    fun tryBegin(owner: CatalogSyncFlightOwner): Boolean =
+        synchronized(ownerLock) {
+            if (activeOwner != null) return@synchronized false
+            activeOwner = owner
+            true
+        }
+
+    fun finish(owner: CatalogSyncFlightOwner) {
+        synchronized(ownerLock) {
+            if (activeOwner == owner) {
+                activeOwner = null
+            } else {
+                Log.w("CatalogCloudSync", "tracker finish ignored owner=$owner activeOwner=$activeOwner")
+            }
+        }
+    }
 
     fun setSyncing(syncing: Boolean) {
         update(

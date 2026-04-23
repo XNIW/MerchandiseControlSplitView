@@ -59,6 +59,20 @@ interface ProductDao {
     @Query("SELECT * FROM products WHERE barcode = :barcode LIMIT 1")
     suspend fun findByBarcode(barcode: String): Product?
 
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON p.supplierId = s.id
+        LEFT JOIN categories c ON p.categoryId = c.id
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        WHERE p.barcode = :barcode
+        LIMIT 1
+    """)
+    suspend fun findDetailsByBarcode(barcode: String): ProductWithDetails?
+
     /**
      * Task 041 (hardening): match barcode tollerante a whitespace sul lato locale.
      * Coerente con la partial UNIQUE remota `(owner_user_id, barcode) WHERE deleted_at IS NULL`:
@@ -83,6 +97,8 @@ interface ProductDao {
     @Query(
         """
         SELECT p.*,
+               v.lastPurchase AS lastPurchase,
+               v.lastRetail AS lastRetail,
                r.id AS ref_id,
                r.productId AS ref_productId,
                r.remoteId AS ref_remoteId,
@@ -92,6 +108,7 @@ interface ProductDao {
                r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
         FROM products p
         LEFT JOIN product_remote_refs r ON r.productId = p.id
+        LEFT JOIN product_price_summary v ON v.productId = p.id
         WHERE r.id IS NULL
            OR r.lastRemoteAppliedAt IS NULL
            OR r.localChangeRevision > r.lastSyncedLocalRevision
@@ -154,6 +171,20 @@ interface ProductDao {
     */
     @Query("SELECT * FROM products WHERE barcode IN (:barcodes)")
     suspend fun findByBarcodes(barcodes: List<String>): List<Product>
+
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON p.supplierId = s.id
+        LEFT JOIN categories c ON p.categoryId = c.id
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        WHERE p.barcode IN (:barcodes)
+        ORDER BY p.id ASC
+    """)
+    suspend fun findDetailsByBarcodes(barcodes: List<String>): List<ProductWithDetails>
 
     @Transaction
     @Query("""

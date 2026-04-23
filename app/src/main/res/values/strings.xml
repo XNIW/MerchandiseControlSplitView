@@ -574,6 +574,9 @@
     <!-- Catalogo cloud (task 013) — messaggi non tecnici -->
     <string name="catalog_cloud_section_title">Catalogo sul cloud</string>
     <string name="catalog_cloud_refresh">Aggiorna dal cloud</string>
+    <string name="catalog_cloud_sync_full">Sincronizzazione completa</string>
+    <string name="catalog_cloud_sync_quick">Sincronizzazione rapida</string>
+    <string name="catalog_cloud_sync_quick_hint">La rapida invia le modifiche recenti. La completa riallinea anche dal cloud.</string>
     <string name="catalog_cloud_state_syncing">Sincronizzazione in corso\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparazione del database locale\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Invio modifiche fornitori\u2026</string>

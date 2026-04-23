@@ -260,7 +260,8 @@ fun AppNavGraph() {
                     },
                     onDismissError = { app.authManager.dismissError() },
                     catalogSyncUi = if (app.authManager.isEnabled) catalogSyncUi else null,
-                    onCatalogRefresh = { catalogSyncViewModel.refreshCatalog() }
+                    onCatalogRefresh = { catalogSyncViewModel.refreshCatalog() },
+                    onCatalogQuickSync = { catalogSyncViewModel.syncCatalogQuick() }
                 )
             }
 

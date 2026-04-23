@@ -14,5 +14,7 @@ data class CategoryCatalogPushCandidate(
 
 data class ProductCatalogPushCandidate(
     @Embedded val product: Product,
-    @Embedded(prefix = "ref_") val remoteRef: ProductRemoteRef?
+    @Embedded(prefix = "ref_") val remoteRef: ProductRemoteRef?,
+    val lastPurchase: Double?,
+    val lastRetail: Double?
 )

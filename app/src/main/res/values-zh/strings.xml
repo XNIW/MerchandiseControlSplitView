@@ -554,6 +554,9 @@
 
     <string name="catalog_cloud_section_title">云端目录</string>
     <string name="catalog_cloud_refresh">从云端更新</string>
+    <string name="catalog_cloud_sync_full">完整同步</string>
+    <string name="catalog_cloud_sync_quick">快速同步</string>
+    <string name="catalog_cloud_sync_quick_hint">快速同步会发送最近更改。完整同步也会从云端更新。</string>
     <string name="catalog_cloud_state_syncing">正在同步\u2026</string>
     <string name="catalog_cloud_stage_realign">正在准备本地数据库\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">正在发送供应商更改\u2026</string>

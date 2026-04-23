@@ -553,6 +553,9 @@
 
     <string name="catalog_cloud_section_title">Catalogo en la nube</string>
     <string name="catalog_cloud_refresh">Actualizar desde la nube</string>
+    <string name="catalog_cloud_sync_full">Sincronizacion completa</string>
+    <string name="catalog_cloud_sync_quick">Sincronizacion rapida</string>
+    <string name="catalog_cloud_sync_quick_hint">La rapida envia cambios recientes. La completa tambien actualiza desde la nube.</string>
     <string name="catalog_cloud_state_syncing">Sincronizando\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparando base de datos local\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Enviando cambios de proveedores\u2026</string>

@@ -10,8 +10,10 @@ import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncFlightOwner
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressRepository
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
@@ -44,6 +46,7 @@ data class CatalogSyncUiState(
     val sessionDetail: String?,
     val isSyncing: Boolean,
     val canRefresh: Boolean,
+    val canQuickSync: Boolean = canRefresh,
     val progress: CatalogSyncStageUiState? = null
 )
 
@@ -62,7 +65,8 @@ class CatalogSyncViewModel(
     private val sessionRemote: SessionBackupRemoteDataSource,
     private val authFlow: StateFlow<AuthState>,
     private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
-    private val syncStateTracker: CatalogSyncStateTracker? = null
+    private val syncStateTracker: CatalogSyncStateTracker? = null,
+    private val autoSyncRepository: CatalogAutoSyncRepository? = repository as? CatalogAutoSyncRepository
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
@@ -522,6 +526,10 @@ class CatalogSyncViewModel(
                 Log.i(TAG, "sync_request source=manual_refresh outcome=ignored reason=busy")
                 return@launch
             }
+            if (syncStateTracker?.tryBegin(CatalogSyncFlightOwner.MANUAL) == false) {
+                Log.i(TAG, "sync_request source=manual_refresh outcome=ignored reason=tracker_busy")
+                return@launch
+            }
             busy.value = true
             val startedAt = startSyncProgress("manual_refresh", CatalogSyncStage.REALIGN)
             lastErrorKind.value = null
@@ -577,6 +585,7 @@ class CatalogSyncViewModel(
                 busy.value = false
                 val ok = logCatalogOk && logErr == null
                 finishSyncProgress(ok, startedAt)
+                syncStateTracker?.finish(CatalogSyncFlightOwner.MANUAL)
                 val pendingBreakdown: CatalogCloudPendingBreakdown? =
                     try {
                         repository.getCatalogCloudPendingBreakdown()
@@ -617,11 +626,83 @@ class CatalogSyncViewModel(
         }
     }
 
+    fun syncCatalogQuick() {
+        viewModelScope.launch {
+            val auth = authFlow.value
+            val autoRepository = autoSyncRepository
+            if (auth !is AuthState.SignedIn) return@launch
+            if (!remote.isConfigured) return@launch
+            if (autoRepository == null) return@launch
+            if (busy.value) {
+                Log.i(TAG, "sync_request source=manual_quick_sync outcome=ignored reason=busy")
+                return@launch
+            }
+            if (syncStateTracker?.tryBegin(CatalogSyncFlightOwner.MANUAL) == false) {
+                Log.i(TAG, "sync_request source=manual_quick_sync outcome=ignored reason=tracker_busy")
+                return@launch
+            }
+            busy.value = true
+            val startedAt = startSyncProgress("manual_quick_sync", CatalogSyncStage.PUSH_PRODUCTS)
+            lastErrorKind.value = null
+            var ok = false
+            var logSummary: CatalogSyncSummary? = null
+            var logErr: ErrorKind? = null
+            var logFailureClassification: SyncErrorClassification? = null
+            var logPendingAfter = false
+            try {
+                val result = autoRepository.pushDirtyCatalogDeltaToRemote(
+                    remote = remote,
+                    priceRemote = priceRemote,
+                    ownerUserId = auth.userId,
+                    progressReporter = CatalogSyncProgressReporter { progress ->
+                        setSyncProgress(progress)
+                    }
+                )
+                result.fold(
+                    onSuccess = { summary ->
+                        logSummary = summary
+                        lastCatalogSyncSummary.value = summary
+                        val err = if (summary.priceSyncFailed) ErrorKind.CatalogOkPricesIncomplete else null
+                        lastErrorKind.value = err
+                        logErr = err
+                        val pendingAfter = repository.hasCatalogCloudPendingWorkInclusive()
+                        pendingHint.value = pendingAfter
+                        logPendingAfter = pendingAfter
+                        ok = err == null
+                    },
+                    onFailure = { e ->
+                        val classification = SyncErrorClassifier.classify(e)
+                        val err = classification.toErrorKind()
+                        lastErrorKind.value = err
+                        logErr = err
+                        logFailureClassification = classification
+                        val pendingAfter = repository.hasCatalogCloudPendingWorkInclusive()
+                        pendingHint.value = pendingAfter
+                        logPendingAfter = pendingAfter
+                    }
+                )
+            } finally {
+                busy.value = false
+                finishSyncProgress(ok, startedAt)
+                syncStateTracker?.finish(CatalogSyncFlightOwner.MANUAL)
+                Log.i(
+                    TAG,
+                    "quick_sync ok=$ok errKind=$logErr errCategory=${logFailureClassification?.category} " +
+                        "httpStatus=${logFailureClassification?.httpStatus} " +
+                        "postgrestCode=${logFailureClassification?.postgrestCode} pendingAfter=$logPendingAfter " +
+                        "productsPushed=${logSummary?.pushedProducts} pricesPushed=${logSummary?.pushedProductPrices} " +
+                        "priceSyncFailed=${logSummary?.priceSyncFailed}"
+                )
+            }
+        }
+    }
+
     private suspend fun runAutomaticSessionBootstrapIfNeeded(userId: String) {
         if (automaticSessionBootstrapUserId == userId) return
-        automaticSessionBootstrapUserId = userId
         if (!sessionRemote.isConfigured) return
         if (busy.value) return
+        if (syncStateTracker?.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP) == false) return
+        automaticSessionBootstrapUserId = userId
         busy.value = true
         val startedAt = startSyncProgress("automatic_session_bootstrap", CatalogSyncStage.SYNC_HISTORY)
         lastErrorKind.value = null
@@ -642,6 +723,7 @@ class CatalogSyncViewModel(
         } finally {
             busy.value = false
             finishSyncProgress(ok, startedAt)
+            syncStateTracker?.finish(CatalogSyncFlightOwner.BOOTSTRAP)
         }
     }
 

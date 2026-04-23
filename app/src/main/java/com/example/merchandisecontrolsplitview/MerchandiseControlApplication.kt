@@ -7,6 +7,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinator
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
@@ -75,11 +76,13 @@ class MerchandiseControlApplication : Application() {
         override fun onStart(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppForeground()
             historySessionPushCoordinator.onAppForeground()
+            catalogAutoSyncCoordinator.onAppForeground()
         }
 
         override fun onStop(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppBackground()
             historySessionPushCoordinator.onAppBackground()
+            catalogAutoSyncCoordinator.onAppBackground()
         }
     }
 
@@ -176,11 +179,27 @@ class MerchandiseControlApplication : Application() {
         }
     }
 
+    val catalogAutoSyncCoordinator: CatalogAutoSyncCoordinator by lazy {
+        CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = catalogRemoteDataSource,
+            priceRemote = productPriceRemoteDataSource,
+            authFlow = authManager.state,
+            syncStateTracker = catalogSyncStateTracker,
+            logger = { message -> Log.i("CatalogCloudSync", message) }
+        ).also { coordinator ->
+            repository.onProductCatalogChanged = { productId ->
+                coordinator.onLocalProductChanged(productId)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // Eager init: il coordinator deve essere realmente vivo a livello processo.
         realtimeRefreshCoordinator
         historySessionPushCoordinator
+        catalogAutoSyncCoordinator
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
         // Auth bootstrap: restore sessione se presente, altrimenti SignedOut (task 011).
         authManager.restoreSession()
@@ -195,6 +214,7 @@ class MerchandiseControlApplication : Application() {
         realtimeSessionSubscriber.shutdown()
         realtimeRefreshCoordinator.shutdown()
         historySessionPushCoordinator.shutdown()
+        catalogAutoSyncCoordinator.shutdown()
         authManager.shutdown()
         super.onTerminate()
     }
