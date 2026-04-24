@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
@@ -219,6 +220,7 @@ internal fun DatabaseHubFab(
 internal fun DatabaseCatalogListSection(
     kind: CatalogEntityKind,
     sectionState: CatalogSectionUiState,
+    listState: LazyListState,
     onItemClick: (CatalogListItem) -> Unit,
     onRetry: () -> Unit,
     onQuickCreate: (String) -> Unit,
@@ -282,6 +284,7 @@ internal fun DatabaseCatalogListSection(
 
             else -> {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = DatabaseListContentPadding,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -416,14 +419,16 @@ private fun DatabaseCatalogRow(
 internal fun DatabaseProductListSection(
     filter: String,
     products: LazyPagingItems<ProductWithDetails>,
+    listState: LazyListState,
     onProductClick: (Product) -> Unit,
     onDeleteRequest: (Product) -> Unit,
     onShowHistory: (Product) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val loadState = products.loadState
+    val isRefreshing = loadState.refresh is LoadState.Loading
     Box(modifier = modifier.fillMaxSize()) {
-        if (loadState.refresh is LoadState.Loading) {
+        if (isRefreshing && products.itemCount == 0) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
         } else if (products.itemCount == 0) {
             Box(
@@ -463,6 +468,7 @@ internal fun DatabaseProductListSection(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = DatabaseListContentPadding,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -500,7 +506,7 @@ internal fun DatabaseProductListSection(
                 }
 
                 if (loadState.append is LoadState.Loading) {
-                    item {
+                    item(key = "append-loading") {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -510,6 +516,14 @@ internal fun DatabaseProductListSection(
                         }
                     }
                 }
+            }
+
+            if (isRefreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                )
             }
         }
     }
@@ -524,7 +538,9 @@ private fun PriceColumn(
     priceOldValue: Double?,
     horizontalAlignment: Alignment.Horizontal
 ) {
-    val visibleOldPrice = priceOldValue?.takeIf { shouldShowPreviousPrice(currentPriceValue, it) }
+    val visibleOldPrice = priceOldValue?.takeIf {
+        shouldShowOldPrice(oldPrice = it, currentPrice = currentPriceValue)
+    }
 
     Column(horizontalAlignment = horizontalAlignment) {
         Text(
@@ -555,10 +571,20 @@ private fun PriceColumn(
     }
 }
 
-private fun shouldShowPreviousPrice(
-    currentPriceValue: Double?,
-    previousPriceValue: Double
-): Boolean = currentPriceValue == null || currentPriceValue.compareTo(previousPriceValue) != 0
+private fun shouldShowOldPrice(
+    oldPrice: Double?,
+    currentPrice: Double?
+): Boolean {
+    val old = oldPrice ?: return false
+    if (old.isZeroPriceForDisplay()) return false
+    return currentPrice == null || !currentPrice.matchesPriceForDisplay(old)
+}
+
+private fun Double.isZeroPriceForDisplay(): Boolean =
+    this == 0.0 || formatClPricePlainDisplay(this) == formatClPricePlainDisplay(0.0)
+
+private fun Double.matchesPriceForDisplay(other: Double): Boolean =
+    compareTo(other) == 0 || formatClPricePlainDisplay(this) == formatClPricePlainDisplay(other)
 
 @Composable
 private fun DatabaseHubTab.labelRes(): Int = when (this) {

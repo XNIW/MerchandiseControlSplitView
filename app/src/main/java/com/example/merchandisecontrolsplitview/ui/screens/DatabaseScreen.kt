@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -94,6 +95,9 @@ fun DatabaseScreen(
     val supplierOptions by viewModel.suppliers.collectAsState()
     val categoryOptions by viewModel.categories.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
+    val productListState = key(filter.orEmpty()) { rememberLazyListState() }
+    val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
+    val categoryListState = key(categoryCatalogQuery) { rememberLazyListState() }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -298,6 +302,7 @@ fun DatabaseScreen(
                         DatabaseProductListSection(
                             filter = filter.orEmpty(),
                             products = products,
+                            listState = productListState,
                             onProductClick = { itemToEdit = it },
                             onDeleteRequest = {
                                 itemToDelete = it
@@ -312,6 +317,7 @@ fun DatabaseScreen(
                         DatabaseCatalogListSection(
                             kind = CatalogEntityKind.SUPPLIER,
                             sectionState = supplierCatalogSection,
+                            listState = supplierListState,
                             onItemClick = {
                                 catalogActionTarget = CatalogDialogTarget(
                                     kind = CatalogEntityKind.SUPPLIER,
@@ -330,6 +336,7 @@ fun DatabaseScreen(
                         DatabaseCatalogListSection(
                             kind = CatalogEntityKind.CATEGORY,
                             sectionState = categoryCatalogSection,
+                            listState = categoryListState,
                             onItemClick = {
                                 catalogActionTarget = CatalogDialogTarget(
                                     kind = CatalogEntityKind.CATEGORY,

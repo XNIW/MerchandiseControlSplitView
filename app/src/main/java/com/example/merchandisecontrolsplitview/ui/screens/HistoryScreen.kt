@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -140,6 +141,7 @@ fun HistoryScreen(
         if (currentFilter.category.isNotBlank()) { append(detailSep); append(currentFilter.category) }
     }
     val isFilterActive = currentFilter.hasAnyActiveFilter
+    val historyListState = key(currentFilter) { rememberLazyListState() }
     val historyRows = remember(historyList, currentLocale) {
         val monthKeys = historyList.map { historyMonthKey(it.timestamp) }
         val showMonthHeaders = monthKeys.distinct().size > 1
@@ -275,6 +277,7 @@ fun HistoryScreen(
                     )
                 } else {
                     LazyColumn(
+                        state = historyListState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
                             top = spacing.sm,

@@ -818,6 +818,16 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | File task   | `docs/TASKS/TASK-054-generated-screen-progress-card-compact-expandable.md` |
 | Descrizione | Default compatto per più viewport griglia; espansione on-demand per meta, pending, totale ordine iniziale, dettaglio filtro errori; ridurre ridondanza con menu (exported) e verbosità; **zero** cambi VM/Room/navigation/sync logic. |
 
+### TASK-055 — Audit sync Supabase: UX, efficienza push/pull e stabilita scroll Database/History
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `PLANNING`                                              |
+| Priorità    | `ALTA`                                                  |
+| Area        | Supabase sync / UX / DatabaseScreen / HistoryScreen     |
+| Dipendenze  | **TASK-041** addendum sync cloud, **TASK-044**, **TASK-048/049/050**, **TASK-051**, **TASK-054** |
+| File task   | `docs/TASKS/TASK-055-audit-sync-supabase-ux-scroll-database-history.md` |
+| Descrizione | Audit read-only e piano applicabile per interazione Android ↔ Supabase: chiarezza UX full/partial push-pull, efficienza sync delta, auto-sync post modifica prodotto, feedback conteggi/errori, e preservazione scroll/search/filter/tab in `DatabaseScreen` e `HistoryScreen`. **Nessuna patch funzionale senza conferma utente.** |
+
 ---
 
 ## Razionale priorità

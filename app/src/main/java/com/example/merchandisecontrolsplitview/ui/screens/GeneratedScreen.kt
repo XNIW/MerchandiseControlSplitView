@@ -104,18 +104,21 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.ui.text.style.TextOverflow
 
 /**
- * Whether auxiliary "old purchase price" UI should show: old is non-blank and not equal to current
- * (trimmed string match; if both parse as numbers, numeric equality hides the old value).
+ * Whether auxiliary old-price UI should show: old parses to a non-zero price and differs
+ * from the current value the user can see.
  */
 private fun oldPurchasePriceDiffersFromCurrent(current: String, old: String): Boolean {
-    val c = current.trim()
-    val o = old.trim()
-    if (o.isEmpty()) return false
-    if (c == o) return false
-    val cd = parseUserPriceInput(c)
-    val od = parseUserPriceInput(o)
-    return !(cd != null && od != null && cd == od)
+    val oldPrice = parseUserPriceInput(old.trim()) ?: return false
+    if (oldPrice.isZeroPriceForDisplay()) return false
+    val currentPrice = parseUserPriceInput(current.trim())
+    return currentPrice == null || !currentPrice.matchesPriceForDisplay(oldPrice)
 }
+
+private fun Double.isZeroPriceForDisplay(): Boolean =
+    this == 0.0 || formatClPricePlainDisplay(this) == formatClPricePlainDisplay(0.0)
+
+private fun Double.matchesPriceForDisplay(other: Double): Boolean =
+    compareTo(other) == 0 || formatClPricePlainDisplay(this) == formatClPricePlainDisplay(other)
 
 /**
  * UI-local summary aligned with History `paymentTotal`, kept here to avoid widening the
@@ -2648,7 +2651,11 @@ private fun GeneratedScreenInfoDialog(
                                 modifier = modifier,
                                 normalizeOnBlur = ::normalizeClPriceInput,
                                 supportingText = {
-                                    if (oldRetailPriceState.value.text.isNotBlank()) {
+                                    if (oldPurchasePriceDiffersFromCurrent(
+                                            priceTf.text,
+                                            oldRetailPriceState.value.text
+                                        )
+                                    ) {
                                         Text("${stringResource(R.string.header_old_retail_price)}: ${formatClPricePlainDisplay(parseUserPriceInput(oldRetailPriceState.value.text))}")
                                     }
                                 },

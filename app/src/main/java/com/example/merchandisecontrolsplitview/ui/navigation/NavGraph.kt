@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -17,6 +18,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -291,28 +295,59 @@ fun AppNavGraph() {
                     }
                 )
             ) { importBackStackEntry ->
-                importAnalysisResult?.let { analysis ->
+                val importOrigin = ImportNavOrigin.parse(
+                    importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
+                )
+                val analysis = importAnalysisResult
+                var fallbackNavigationRequested by remember(importOrigin) { mutableStateOf(false) }
+
+                if (analysis == null) {
+                    LaunchedEffect(importOrigin) {
+                        if (!fallbackNavigationRequested) {
+                            fallbackNavigationRequested = true
+                            navigateToImportSuccessDestination(navController, importOrigin, excelViewModel)
+                        }
+                    }
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else {
                     val importFlowState by dbViewModel.importFlowState.collectAsState()
                     val currentEntryUid = excelViewModel.currentEntryStatus.value.third
-                    val importOrigin = ImportNavOrigin.parse(
-                        importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
-                    )
                     val hasGeneratedImportContext =
                         importOrigin != ImportNavOrigin.DATABASE && currentEntryUid != 0L
                     val isApplyError =
                         (importFlowState as? ImportFlowState.Error)?.occurredDuringApply == true
+                    var successNavigationRequested by remember(analysis, importOrigin) {
+                        mutableStateOf(false)
+                    }
 
                     LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid, importOrigin) {
-                        if (importFlowState is ImportFlowState.Success) {
+                        if (importFlowState is ImportFlowState.Success && !successNavigationRequested) {
+                            successNavigationRequested = true
+                            fallbackNavigationRequested = true
                             if (hasGeneratedImportContext) {
                                 if (analysis.errors.isEmpty()) {
                                     excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
                                 } else {
                                     excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
+                                    excelViewModel.errorRowIndexes.value =
+                                        analysis.errors.map { it.rowNumber }.toSet()
                                 }
                             }
+                            val successDestination = if (
+                                hasGeneratedImportContext &&
+                                analysis.errors.isNotEmpty()
+                            ) {
+                                ImportNavOrigin.GENERATED
+                            } else {
+                                importOrigin
+                            }
+                            navigateToImportSuccessDestination(navController, successDestination, excelViewModel)
                             dbViewModel.dismissImportPreview()
-                            navigateToImportSuccessDestination(navController, importOrigin, excelViewModel)
                         }
                     }
 
@@ -328,8 +363,15 @@ fun AppNavGraph() {
                         onCorrectRows = {
                             excelViewModel.errorRowIndexes.value =
                                 analysis.errors.map { it.rowNumber }.toSet()
+                            if (!navController.popBackStack()) {
+                                navigateToImportSuccessDestination(
+                                    navController,
+                                    ImportNavOrigin.GENERATED,
+                                    excelViewModel
+                                )
+                            }
+                            fallbackNavigationRequested = true
                             dbViewModel.clearImportAnalysis()
-                            navController.popBackStack()
                         },
                         onClose = {
                             val flowState = importFlowState
@@ -339,8 +381,15 @@ fun AppNavGraph() {
                                 }
                                 dbViewModel.recoverImportPreviewAfterApplyError()
                             } else {
+                                if (!navController.popBackStack()) {
+                                    navigateToImportSuccessDestination(
+                                        navController,
+                                        importOrigin,
+                                        excelViewModel
+                                    )
+                                }
+                                fallbackNavigationRequested = true
                                 dbViewModel.clearImportAnalysis()
-                                navController.popBackStack()
                             }
                         },
                     )
