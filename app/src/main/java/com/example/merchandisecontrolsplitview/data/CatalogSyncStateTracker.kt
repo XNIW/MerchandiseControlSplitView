@@ -102,7 +102,8 @@ fun interface CatalogSyncProgressReporter {
 enum class CatalogSyncFlightOwner {
     MANUAL,
     AUTO_PUSH,
-    BOOTSTRAP
+    BOOTSTRAP,
+    SYNC_EVENTS
 }
 
 interface CatalogSyncProgressRepository {
@@ -121,6 +122,37 @@ interface CatalogAutoSyncRepository {
         ownerUserId: String,
         progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary>
+
+    suspend fun syncCatalogQuickWithEvents(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> =
+        pushDirtyCatalogDeltaToRemote(remote, priceRemote, ownerUserId, progressReporter).map {
+            it.copy(syncEventsDisabled = true, syncEventsFallback044 = true)
+        }
+
+    suspend fun drainSyncEventsFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> =
+        Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                syncEventsDisabled = true,
+                syncEventsFallback044 = true
+            )
+        )
 
     suspend fun pullCatalogBootstrapFromRemote(
         remote: CatalogRemoteDataSource,

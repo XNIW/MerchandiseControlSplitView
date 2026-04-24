@@ -17,6 +17,7 @@ class CatalogAutoSyncCoordinator(
     private val repository: CatalogAutoSyncRepository,
     private val remote: CatalogRemoteDataSource,
     private val priceRemote: ProductPriceRemoteDataSource,
+    private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
     private val authFlow: StateFlow<AuthState>,
     private val syncStateTracker: CatalogSyncStateTracker,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
@@ -50,6 +51,10 @@ class CatalogAutoSyncCoordinator(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
+    private val syncEventTickle = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
     init {
         startDebouncers()
@@ -77,6 +82,7 @@ class CatalogAutoSyncCoordinator(
         isForeground = true
         scheduleBootstrap("foreground")
         schedulePush("foreground")
+        scheduleSyncEventDrain("foreground")
     }
 
     fun onAppBackground() {
@@ -95,6 +101,14 @@ class CatalogAutoSyncCoordinator(
         bootstrapTickle.tryEmit(reason)
     }
 
+    fun onRemoteSyncEventSignal() {
+        scheduleSyncEventDrain("realtime_signal")
+    }
+
+    private fun scheduleSyncEventDrain(reason: String) {
+        syncEventTickle.tryEmit(reason)
+    }
+
     @OptIn(FlowPreview::class)
     private fun startDebouncers() {
         scope.launch {
@@ -106,6 +120,11 @@ class CatalogAutoSyncCoordinator(
             bootstrapTickle
                 .debounce(debounceMs)
                 .collect { reason -> runBootstrapCycle(reason) }
+        }
+        scope.launch {
+            syncEventTickle
+                .debounce(debounceMs)
+                .collect { reason -> runSyncEventDrainCycle(reason) }
         }
     }
 
@@ -139,14 +158,27 @@ class CatalogAutoSyncCoordinator(
             syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
             var summary: CatalogSyncSummary? = null
             val durationMs = measureTimeMillis {
-                summary = repository.pushDirtyCatalogDeltaToRemote(
-                    remote = remote,
-                    priceRemote = priceRemote,
-                    ownerUserId = auth.userId,
-                    progressReporter = CatalogSyncProgressReporter { progress ->
-                        syncStateTracker.update(progress)
-                    }
-                ).getOrThrow()
+                summary = if (syncEventRemote.isConfigured) {
+                    repository.syncCatalogQuickWithEvents(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        syncEventRemote = syncEventRemote,
+                        ownerUserId = auth.userId,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                } else {
+                    repository.pushDirtyCatalogDeltaToRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        ownerUserId = auth.userId,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                }
+                    .getOrThrow()
             }
             ok = true
             val s = summary
@@ -154,6 +186,8 @@ class CatalogAutoSyncCoordinator(
                 "cycle=catalog_push outcome=ok reason=$reason durationMs=$durationMs " +
                     "dirtyHints=${hinted.size} dirtySample=${hinted.take(LOG_SAMPLE_LIMIT).joinToString(",")} " +
                     "productsPushed=${s?.pushedProducts ?: 0} pricesPushed=${s?.pushedProductPrices ?: 0} " +
+                    "syncEventsProcessed=${s?.syncEventsProcessed ?: 0} " +
+                    "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
                     "priceSyncFailed=${s?.priceSyncFailed ?: false}"
             )
         } catch (cancelled: CancellationException) {
@@ -237,6 +271,67 @@ class CatalogAutoSyncCoordinator(
                 if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
             )
             syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
+        }
+    }
+
+    internal suspend fun runSyncEventDrainCycle(reason: String) {
+        val auth = authFlow.value
+        if (auth !is AuthState.SignedIn) {
+            logger("cycle=sync_events_drain outcome=skip reason=no_auth")
+            return
+        }
+        if (!remote.isConfigured || !syncEventRemote.isConfigured) {
+            logger("cycle=sync_events_drain outcome=skip reason=remote_unconfigured")
+            return
+        }
+        if (!isForeground) {
+            logger("cycle=sync_events_drain outcome=skip reason=background_policy")
+            return
+        }
+        if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
+            logger("cycle=sync_events_drain outcome=skip reason=sync_busy")
+            return
+        }
+        var ok = false
+        val startedAt = System.currentTimeMillis()
+        try {
+            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+            var summary: CatalogSyncSummary? = null
+            val durationMs = measureTimeMillis {
+                summary = repository.drainSyncEventsFromRemote(
+                    remote = remote,
+                    priceRemote = priceRemote,
+                    syncEventRemote = syncEventRemote,
+                    ownerUserId = auth.userId,
+                    progressReporter = CatalogSyncProgressReporter { progress ->
+                        syncStateTracker.update(progress)
+                    }
+                ).getOrThrow()
+            }
+            ok = true
+            val s = summary
+            logger(
+                "cycle=sync_events_drain outcome=ok reason=$reason durationMs=$durationMs " +
+                    "eventsFetched=${s?.syncEventsFetched ?: 0} eventsProcessed=${s?.syncEventsProcessed ?: 0} " +
+                    "skippedSelf=${s?.syncEventsSkippedSelf ?: 0} outboxPending=${s?.syncEventOutboxPending ?: 0} " +
+                    "targetedProductsFetched=${s?.targetedProductsFetched ?: 0} " +
+                    "targetedPricesFetched=${s?.targetedPricesFetched ?: 0} " +
+                    "fullCatalogFetch=${s?.fullCatalogFetch ?: false} fullPriceFetch=${s?.fullPriceFetch ?: false}"
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            val classification = SyncErrorClassifier.classify(t)
+            logger(
+                "cycle=sync_events_drain outcome=fail reason=$reason durationMs=${System.currentTimeMillis() - startedAt} " +
+                    "errCategory=${classification.category} httpStatus=${classification.httpStatus} " +
+                    "postgrestCode=${classification.postgrestCode}"
+            )
+        } finally {
+            syncStateTracker.update(
+                if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+            )
+            syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
         }
     }
 }

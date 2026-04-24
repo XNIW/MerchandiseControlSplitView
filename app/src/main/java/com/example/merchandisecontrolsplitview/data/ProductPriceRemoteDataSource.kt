@@ -10,4 +10,6 @@ interface ProductPriceRemoteDataSource {
     suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>): Result<Unit>
 
     suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>>
+
+    suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>>
 }

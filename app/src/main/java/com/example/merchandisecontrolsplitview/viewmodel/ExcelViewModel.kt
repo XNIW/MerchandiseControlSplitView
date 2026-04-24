@@ -27,6 +27,7 @@ import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
 import com.example.merchandisecontrolsplitview.util.ExcelFileUserError
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
+import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -243,6 +244,25 @@ class ExcelViewModel(
 
     val currentEntryStatus = mutableStateOf(Triple(SyncStatus.NOT_ATTEMPTED, false, 0L))
     val headerTypes = mutableStateListOf<String>()
+
+    /** Argomenti ultima navigazione a Generated (044C). */
+    private var generatedRouteIsNew: Boolean = false
+    private var generatedRouteIsManualEntry: Boolean = false
+    private var importOriginForGeneratedSession: ImportNavOrigin = ImportNavOrigin.HOME
+
+    fun noteGeneratedNavigationContext(
+        isNew: Boolean,
+        isManualEntry: Boolean,
+        importOrigin: ImportNavOrigin
+    ) {
+        generatedRouteIsNew = isNew
+        generatedRouteIsManualEntry = isManualEntry
+        importOriginForGeneratedSession = importOrigin
+    }
+
+    fun peekGeneratedRouteIsNew(): Boolean = generatedRouteIsNew
+    fun peekGeneratedRouteIsManualEntry(): Boolean = generatedRouteIsManualEntry
+    fun peekImportOriginForGeneratedSession(): ImportNavOrigin = importOriginForGeneratedSession
 
     // --- BLOCCO DATABASE ---
 
@@ -917,6 +937,9 @@ class ExcelViewModel(
         currentCategoryName = ""
         headerTypes.clear()
         currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, 0L)
+        generatedRouteIsNew = false
+        generatedRouteIsManualEntry = false
+        importOriginForGeneratedSession = ImportNavOrigin.HOME
     }
 
     fun setHeaderType(colIdx: Int, type: String?) {

@@ -78,8 +78,10 @@ fun AppNavGraph() {
 
     LaunchedEffect(importAnalysisResult) {
         if (importAnalysisResult != null) {
-            if (navController.currentDestination?.route != Screen.ImportAnalysis.route) {
-                navController.navigate(Screen.ImportAnalysis.route)
+            val dest = navController.currentDestination?.route
+            if (dest != Screen.ImportAnalysis.route) {
+                val origin = dbViewModel.importNavigationOrigin.value
+                navController.navigate(Screen.ImportAnalysis.createRoute(origin))
             }
         }
     }
@@ -133,6 +135,11 @@ fun AppNavGraph() {
                         excelViewModel.resetState()
 
                         excelViewModel.createManualEntry(context) { newUid ->
+                            excelViewModel.noteGeneratedNavigationContext(
+                                isNew = true,
+                                isManualEntry = true,
+                                importOrigin = ImportNavOrigin.HOME
+                            )
                             navController.navigate(
                                 Screen.Generated.createRoute(
                                     entryUid = newUid,
@@ -153,6 +160,11 @@ fun AppNavGraph() {
                     databaseViewModel = dbViewModel,
                     onGenerate = { supplierName, categoryName ->
                         excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid ->
+                            excelViewModel.noteGeneratedNavigationContext(
+                                isNew = true,
+                                isManualEntry = false,
+                                importOrigin = ImportNavOrigin.HOME
+                            )
                             navController.navigate(Screen.Generated.createRoute(entryUid, isNew = true))
                         }
                     },
@@ -217,6 +229,11 @@ fun AppNavGraph() {
                     availableCategories = availableCategories,
                     onSelect = { entry ->
                         excelViewModel.loadHistoryEntry(entry.uid) {
+                            excelViewModel.noteGeneratedNavigationContext(
+                                isNew = false,
+                                isManualEntry = entry.isManualEntry,
+                                importOrigin = ImportNavOrigin.HISTORY
+                            )
                             navController.navigate(
                                 Screen.Generated.createRoute(
                                     entryUid = entry.uid,
@@ -265,14 +282,29 @@ fun AppNavGraph() {
                 )
             }
 
-            composable(Screen.ImportAnalysis.route) {
+            composable(
+                route = Screen.ImportAnalysis.route,
+                arguments = listOf(
+                    navArgument(Screen.ImportAnalysis.ARG_ORIGIN) {
+                        type = NavType.StringType
+                        defaultValue = ImportNavOrigin.HOME.routeArg
+                    }
+                )
+            ) { importBackStackEntry ->
                 importAnalysisResult?.let { analysis ->
                     val importFlowState by dbViewModel.importFlowState.collectAsState()
                     val currentEntryUid = excelViewModel.currentEntryStatus.value.third
+                    val importOrigin = ImportNavOrigin.parse(
+                        importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
+                    )
+                    val hasGeneratedImportContext =
+                        importOrigin != ImportNavOrigin.DATABASE && currentEntryUid != 0L
+                    val isApplyError =
+                        (importFlowState as? ImportFlowState.Error)?.occurredDuringApply == true
 
-                    LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid) {
+                    LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid, importOrigin) {
                         if (importFlowState is ImportFlowState.Success) {
-                            if (currentEntryUid != 0L) {
+                            if (hasGeneratedImportContext) {
                                 if (analysis.errors.isEmpty()) {
                                     excelViewModel.markCurrentEntryAsSyncedSuccessfully(currentEntryUid)
                                 } else {
@@ -280,7 +312,7 @@ fun AppNavGraph() {
                                 }
                             }
                             dbViewModel.dismissImportPreview()
-                            navController.popBackStack()
+                            navigateToImportSuccessDestination(navController, importOrigin, excelViewModel)
                         }
                     }
 
@@ -289,20 +321,27 @@ fun AppNavGraph() {
                         databaseViewModel = dbViewModel,
                         importAnalysis = analysis,
                         importFlowState = importFlowState,
+                        canReturnToGeneratedForCorrection = hasGeneratedImportContext && !isApplyError,
                         onConfirm = { previewId, newProducts, updatedProducts ->
                             dbViewModel.importProducts(previewId, newProducts, updatedProducts, context)
                         },
-                        onClose = {
-                            val flowState = importFlowState
-                            if (
-                                flowState is ImportFlowState.Error &&
-                                flowState.occurredDuringApply &&
-                                currentEntryUid != 0L
-                            ) {
-                                excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
-                            }
+                        onCorrectRows = {
+                            excelViewModel.errorRowIndexes.value =
+                                analysis.errors.map { it.rowNumber }.toSet()
                             dbViewModel.clearImportAnalysis()
                             navController.popBackStack()
+                        },
+                        onClose = {
+                            val flowState = importFlowState
+                            if (flowState is ImportFlowState.Error && flowState.occurredDuringApply) {
+                                if (hasGeneratedImportContext) {
+                                    excelViewModel.markCurrentEntryAsSyncedWithErrors(currentEntryUid)
+                                }
+                                dbViewModel.recoverImportPreviewAfterApplyError()
+                            } else {
+                                dbViewModel.clearImportAnalysis()
+                                navController.popBackStack()
+                            }
                         },
                     )
                 }
@@ -319,6 +358,62 @@ fun AppNavGraph() {
             )
         }
       }
+    }
+}
+
+private fun navigateToImportSuccessDestination(
+    navController: NavHostController,
+    origin: ImportNavOrigin,
+    excelViewModel: ExcelViewModel
+) {
+    when (origin) {
+        ImportNavOrigin.HOME -> navController.navigate(Screen.FilePicker.route) {
+            popUpTo(Screen.FilePicker.route) { inclusive = false }
+            launchSingleTop = true
+        }
+        ImportNavOrigin.HISTORY -> {
+            val startRoute = navController.graph.findStartDestination().route ?: Screen.FilePicker.route
+            navController.navigate(Screen.History.route) {
+                popUpTo(startRoute) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        ImportNavOrigin.DATABASE -> {
+            val startRoute = navController.graph.findStartDestination().route ?: Screen.FilePicker.route
+            navController.navigate(Screen.Database.route) {
+                popUpTo(startRoute) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        ImportNavOrigin.GENERATED -> {
+            val uid = excelViewModel.currentEntryStatus.value.third
+            if (uid == 0L) {
+                navController.navigate(Screen.FilePicker.route) {
+                    popUpTo(Screen.FilePicker.route) { inclusive = false }
+                    launchSingleTop = true
+                }
+            } else {
+                navController.navigate(
+                    Screen.Generated.createRoute(
+                        entryUid = uid,
+                        isNew = excelViewModel.peekGeneratedRouteIsNew(),
+                        isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry()
+                    )
+                ) {
+                    popUpTo(navController.graph.findStartDestination().route ?: Screen.FilePicker.route) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        }
     }
 }
 

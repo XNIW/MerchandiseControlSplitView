@@ -22,10 +22,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CategoryRemoteRef::class,
         ProductRemoteRef::class,
         ProductPriceRemoteRef::class,
-        PendingCatalogTombstone::class
+        PendingCatalogTombstone::class,
+        SyncEventWatermark::class,
+        SyncEventDeviceState::class,
+        SyncEventOutboxEntry::class
     ],
     views = [ProductPriceSummary::class],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -41,6 +44,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun productRemoteRefDao(): ProductRemoteRefDao
     abstract fun productPriceRemoteRefDao(): ProductPriceRemoteRefDao
     abstract fun pendingCatalogTombstoneDao(): PendingCatalogTombstoneDao
+    abstract fun syncEventWatermarkDao(): SyncEventWatermarkDao
+    abstract fun syncEventDeviceStateDao(): SyncEventDeviceStateDao
+    abstract fun syncEventOutboxDao(): SyncEventOutboxDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -275,6 +281,66 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 14 -> 15: stato locale per sync_events 045 (watermark owner-scoped, device id, outbox emit).
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_event_watermarks` (
+                        `ownerUserId` TEXT NOT NULL,
+                        `storeScope` TEXT NOT NULL,
+                        `lastSyncEventId` INTEGER NOT NULL,
+                        PRIMARY KEY(`ownerUserId`, `storeScope`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_event_device_state` (
+                        `id` INTEGER NOT NULL,
+                        `deviceId` TEXT NOT NULL,
+                        `createdAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_event_outbox` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `ownerUserId` TEXT NOT NULL,
+                        `storeScope` TEXT NOT NULL,
+                        `domain` TEXT NOT NULL,
+                        `eventType` TEXT NOT NULL,
+                        `source` TEXT,
+                        `sourceDeviceId` TEXT,
+                        `batchId` TEXT,
+                        `clientEventId` TEXT NOT NULL,
+                        `changedCount` INTEGER NOT NULL,
+                        `entityIdsJson` TEXT NOT NULL,
+                        `metadataJson` TEXT NOT NULL,
+                        `createdAtMs` INTEGER NOT NULL,
+                        `attemptCount` INTEGER NOT NULL DEFAULT 0,
+                        `lastAttemptAtMs` INTEGER,
+                        `lastErrorType` TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_event_outbox_ownerUserId_clientEventId`
+                    ON `sync_event_outbox` (`ownerUserId`, `clientEventId`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sync_event_outbox_ownerUserId_createdAtMs`
+                    ON `sync_event_outbox` (`ownerUserId`, `createdAtMs`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -295,7 +361,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_10_11,
                         MIGRATION_11_12,
                         MIGRATION_12_13,
-                        MIGRATION_13_14
+                        MIGRATION_13_14,
+                        MIGRATION_14_15
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

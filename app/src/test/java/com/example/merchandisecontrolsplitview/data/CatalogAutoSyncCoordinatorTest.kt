@@ -113,6 +113,12 @@ class CatalogAutoSyncCoordinatorTest {
         override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> = Result.success(Unit)
         override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
             Result.success(InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList()))
+        override suspend fun fetchCatalogByIds(
+            supplierIds: Set<String>,
+            categoryIds: Set<String>,
+            productIds: Set<String>
+        ): Result<InventoryCatalogFetchBundle> =
+            Result.success(InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList()))
         override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> = Result.success(Unit)
         override suspend fun markCategoryTombstoned(patch: CatalogTombstonePatch): Result<Unit> = Result.success(Unit)
         override suspend fun markProductTombstoned(patch: CatalogTombstonePatch): Result<Unit> = Result.success(Unit)
@@ -123,6 +129,8 @@ class CatalogAutoSyncCoordinatorTest {
     ) : ProductPriceRemoteDataSource {
         override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>): Result<Unit> = Result.success(Unit)
         override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> = Result.success(emptyList())
+        override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+            Result.success(emptyList())
     }
 
     private companion object {

@@ -48,7 +48,9 @@ fun ImportAnalysisScreen(
     databaseViewModel: DatabaseViewModel,
     importAnalysis: ImportAnalysis,
     importFlowState: ImportFlowState,
+    canReturnToGeneratedForCorrection: Boolean = false,
     onConfirm: (Long, List<Product>, List<ProductUpdate>) -> Unit,
+    onCorrectRows: () -> Unit,
     onClose: () -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
@@ -62,6 +64,7 @@ fun ImportAnalysisScreen(
         else -> null
     }
     val importErrorMessage = (importFlowState as? ImportFlowState.Error)?.message
+    val isApplyError = (importFlowState as? ImportFlowState.Error)?.occurredDuringApply == true
     val closeActionText = stringResource(
         if (importErrorMessage == null) R.string.cancel else R.string.close
     )
@@ -283,11 +286,27 @@ fun ImportAnalysisScreen(
                             ) {
                                 Text(stringResource(R.string.export_errors))
                             }
-                            OutlinedButton(onClick = {
-                                excelViewModel.errorRowIndexes.value = importAnalysis.errors.map { it.rowNumber }.toSet()
-                                onClose()
-                            }, enabled = !isApplying) {
-                                Text(stringResource(R.string.correct_errors))
+                            if (!isApplyError) {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (canReturnToGeneratedForCorrection) {
+                                            onCorrectRows()
+                                        } else {
+                                            onClose()
+                                        }
+                                    },
+                                    enabled = !isApplying
+                                ) {
+                                    Text(
+                                        stringResource(
+                                            if (canReturnToGeneratedForCorrection) {
+                                                R.string.import_edit_rows
+                                            } else {
+                                                R.string.import_correct_data
+                                            }
+                                        )
+                                    )
+                                }
                             }
                         }
                     } else {

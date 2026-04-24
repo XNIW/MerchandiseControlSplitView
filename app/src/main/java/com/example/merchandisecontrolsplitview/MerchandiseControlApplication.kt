@@ -18,6 +18,9 @@ import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwn
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseSyncEventRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseSyncEventRealtimeSubscriber
+import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
@@ -150,6 +153,13 @@ class MerchandiseControlApplication : Application() {
         )
     }
 
+    val syncEventRealtimeSubscriber: SupabaseSyncEventRealtimeSubscriber by lazy {
+        SupabaseSyncEventRealtimeSubscriber(
+            client = supabaseClient,
+            coordinator = catalogAutoSyncCoordinator
+        )
+    }
+
     /** Transport PostgREST catalogo (task 013); null client → [CatalogRemoteDataSource.isConfigured] falso. */
     val catalogRemoteDataSource: CatalogRemoteDataSource by lazy {
         SupabaseCatalogRemoteDataSource(supabaseClient)
@@ -158,6 +168,11 @@ class MerchandiseControlApplication : Application() {
     /** Transport PostgREST storico prezzi (task 016). */
     val productPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
         SupabaseProductPriceRemoteDataSource(supabaseClient)
+    }
+
+    /** Transport PostgREST/RPC per `sync_events` (task 045). */
+    val syncEventRemoteDataSource: SyncEventRemoteDataSource by lazy {
+        SupabaseSyncEventRemoteDataSource(supabaseClient)
     }
 
     /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */
@@ -184,6 +199,7 @@ class MerchandiseControlApplication : Application() {
             repository = repository,
             remote = catalogRemoteDataSource,
             priceRemote = productPriceRemoteDataSource,
+            syncEventRemote = syncEventRemoteDataSource,
             authFlow = authManager.state,
             syncStateTracker = catalogSyncStateTracker,
             logger = { message -> Log.i("CatalogCloudSync", message) }
@@ -212,6 +228,7 @@ class MerchandiseControlApplication : Application() {
         appScope.cancel()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
         realtimeSessionSubscriber.shutdown()
+        syncEventRealtimeSubscriber.shutdown()
         realtimeRefreshCoordinator.shutdown()
         historySessionPushCoordinator.shutdown()
         catalogAutoSyncCoordinator.shutdown()
@@ -243,14 +260,25 @@ class MerchandiseControlApplication : Application() {
                     is AuthState.SignedIn -> {
                         Log.i(TAG, "Auth: sessione attiva (userId=${state.userId})")
                         realtimeSessionSubscriber.start()
+                        val syncEventCapabilities = syncEventRemoteDataSource
+                            .checkCapabilities(state.userId)
+                            .getOrNull()
+                        if (syncEventCapabilities?.realtimeSyncEventsAvailable == true) {
+                            syncEventRealtimeSubscriber.start(state.userId)
+                        } else {
+                            Log.i(TAG, "sync_events realtime non disponibile: fallback catch-up watermark")
+                            syncEventRealtimeSubscriber.stop()
+                        }
                     }
                     is AuthState.SignedOut -> {
                         Log.i(TAG, "Auth: nessuna sessione, fermo realtime")
                         realtimeSessionSubscriber.stop()
+                        syncEventRealtimeSubscriber.stop()
                     }
                     is AuthState.ErrorRecoverable -> {
                         Log.w(TAG, "Auth: errore recuperabile, fermo realtime prudenzialmente")
                         realtimeSessionSubscriber.stop()
+                        syncEventRealtimeSubscriber.stop()
                     }
                 }
             }

@@ -179,6 +179,8 @@
     <string name="no_critical_errors_found">未发现严重错误。</string>
     <string name="export_errors">导出错误</string>
     <string name="correct_errors">纠正</string>
+    <string name="import_correct_data">修正数据</string>
+    <string name="import_edit_rows">编辑行</string>
     <string name="edit_update">编辑更新</string>
     <string name="error_file_exported">错误文件已导出。</string>
     <string name="import_error_export_sheet_name">导入错误</string>
@@ -556,7 +558,14 @@
     <string name="catalog_cloud_refresh">从云端更新</string>
     <string name="catalog_cloud_sync_full">完整同步</string>
     <string name="catalog_cloud_sync_quick">快速同步</string>
+    <string name="catalog_cloud_sync_quick_body">上传待同步的本地更改。增量远程更新目前尚无法自动核验。</string>
+    <string name="catalog_cloud_sync_quick_body_events">上传本地更改，并通过 sync events 下载可验证的近期更新。</string>
+    <string name="catalog_cloud_sync_full_body">从云端检查并对齐目录、价格与历史会话，可能需要更长时间。</string>
     <string name="catalog_cloud_sync_quick_hint">快速同步会发送最近更改。完整同步也会从云端更新。</string>
+    <string name="catalog_cloud_quick_sync_locals_sent">已上传 %1$d 项本地更改（供应商、分类、商品与价格）。</string>
+    <string name="catalog_cloud_quick_sync_recent_updates">已处理近期事件：%1$d；已应用更新：%2$d。</string>
+    <string name="catalog_cloud_sync_event_outbox_hint">%1$d 条同步通知稍后会重试。</string>
+    <string name="catalog_cloud_manual_full_sync_required_hint">部分远程更改需要手动完整同步。</string>
     <string name="catalog_cloud_state_syncing">正在同步\u2026</string>
     <string name="catalog_cloud_stage_realign">正在准备本地数据库\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">正在发送供应商更改\u2026</string>
@@ -589,5 +598,6 @@
     <string name="catalog_cloud_sessions_pending_hint">仍待同步的历史会话：%1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">排队中：目录/价格变更或删除等待上传。</string>
     <string name="catalog_cloud_prices_skipped_hint">未导入的远程价格行（本地未关联商品）：%1$d</string>
+    <string name="catalog_cloud_remote_incremental_not_verifiable_hint">无法自动验证云端是否有新更新；若需从云端完整对齐，请使用完整同步。</string>
     <string name="catalog_cloud_detail_sessions_title">历史会话备份</string>
 </resources>

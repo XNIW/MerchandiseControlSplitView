@@ -699,7 +699,10 @@ fun GeneratedScreen(
         }
 
         if (gridDataForAnalysis.isNotEmpty()) {
-            databaseViewModel.analyzeGridData(gridDataForAnalysis)
+            databaseViewModel.analyzeGridData(
+                gridDataForAnalysis,
+                excelViewModel.peekImportOriginForGeneratedSession()
+            )
             Toast.makeText(
                 context,
                 syncAnalysisStartedText,

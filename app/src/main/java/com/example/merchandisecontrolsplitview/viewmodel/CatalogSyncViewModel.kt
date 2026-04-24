@@ -27,6 +27,7 @@ import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionCloudFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassifier
@@ -47,8 +48,15 @@ data class CatalogSyncUiState(
     val isSyncing: Boolean,
     val canRefresh: Boolean,
     val canQuickSync: Boolean = canRefresh,
+    @StringRes val quickSyncBodyRes: Int = R.string.catalog_cloud_sync_quick_body,
     val progress: CatalogSyncStageUiState? = null
 )
+
+/** Scope for incremental “remote not verifiable” copy: only after a successful quick sync, not after full sync. */
+private enum class CatalogIncrementalDetailSurface {
+    AFTER_QUICK_SUCCESS,
+    OTHER
+}
 
 data class CatalogSyncStageUiState(
     val stage: CatalogSyncStage,
@@ -66,7 +74,8 @@ class CatalogSyncViewModel(
     private val authFlow: StateFlow<AuthState>,
     private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
     private val syncStateTracker: CatalogSyncStateTracker? = null,
-    private val autoSyncRepository: CatalogAutoSyncRepository? = repository as? CatalogAutoSyncRepository
+    private val autoSyncRepository: CatalogAutoSyncRepository? = repository as? CatalogAutoSyncRepository,
+    private val syncEventRemote: SyncEventRemoteDataSource? = null
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
@@ -131,9 +140,12 @@ class CatalogSyncViewModel(
     private val lastSuccessAt = MutableStateFlow<Long?>(null)
     private val pendingHint = MutableStateFlow(false)
     private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
+    private val incrementalDetailSurface = MutableStateFlow(CatalogIncrementalDetailSurface.OTHER)
     private val lastHistorySessionSyncSummary = MutableStateFlow<HistorySessionCloudUiSummary?>(null)
     private var automaticSessionBootstrapUserId: String? = null
     private var lastLoggedStage: CatalogSyncStage? = null
+
+    private val quickSyncLaneAvailable: Boolean get() = autoSyncRepository != null
 
     val uiState: StateFlow<CatalogSyncUiState> = combine(
         combine(authFlow, busy, lastErrorKind, lastSuccessAt, pendingHint) { auth, isBusy, err, successAt, pending ->
@@ -141,8 +153,9 @@ class CatalogSyncViewModel(
         },
         syncProgress,
         lastCatalogSyncSummary,
-        lastHistorySessionSyncSummary
-    ) { inputs, progress, summary, historySessionSummary ->
+        lastHistorySessionSyncSummary,
+        incrementalDetailSurface
+    ) { inputs, progress, summary, historySessionSummary, incrementalSurface ->
         buildUi(
             inputs.auth,
             inputs.isBusy,
@@ -151,12 +164,23 @@ class CatalogSyncViewModel(
             inputs.pending,
             progress,
             summary,
-            historySessionSummary
+            historySessionSummary,
+            incrementalSurface
         )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        buildUi(authFlow.value, false, null, null, false, CatalogSyncProgressState.idle(), null, null)
+        buildUi(
+            authFlow.value,
+            false,
+            null,
+            null,
+            false,
+            CatalogSyncProgressState.idle(),
+            null,
+            null,
+            CatalogIncrementalDetailSurface.OTHER
+        )
     )
 
     init {
@@ -233,7 +257,8 @@ class CatalogSyncViewModel(
         pending: Boolean,
         progress: CatalogSyncProgressState,
         lastSummary: CatalogSyncSummary?,
-        lastHistorySessionSummary: HistorySessionCloudUiSummary?
+        lastHistorySessionSummary: HistorySessionCloudUiSummary?,
+        incrementalSurface: CatalogIncrementalDetailSurface
     ): CatalogSyncUiState {
         if (!remote.isConfigured) {
             return CatalogSyncUiState(
@@ -241,7 +266,8 @@ class CatalogSyncViewModel(
                 catalogDetail = null,
                 sessionDetail = null,
                 isSyncing = false,
-                canRefresh = false
+                canRefresh = false,
+                canQuickSync = false
             )
         }
 
@@ -253,6 +279,7 @@ class CatalogSyncViewModel(
                 sessionDetail = null,
                 isSyncing = true,
                 canRefresh = false,
+                canQuickSync = false,
                 progress = stageUi
             )
         }
@@ -264,7 +291,8 @@ class CatalogSyncViewModel(
                     catalogDetail = null,
                     sessionDetail = null,
                     isSyncing = false,
-                    canRefresh = false
+                    canRefresh = false,
+                    canQuickSync = false
                 )
             }
             is AuthState.SignedOut -> {
@@ -273,7 +301,8 @@ class CatalogSyncViewModel(
                     catalogDetail = null,
                     sessionDetail = null,
                     isSyncing = false,
-                    canRefresh = false
+                    canRefresh = false,
+                    canQuickSync = false
                 )
             }
             is AuthState.ErrorRecoverable -> {
@@ -282,11 +311,14 @@ class CatalogSyncViewModel(
                     catalogDetail = auth.message,
                     sessionDetail = null,
                     isSyncing = false,
-                    canRefresh = false
+                    canRefresh = false,
+                    canQuickSync = false
                 )
             }
             is AuthState.SignedIn -> {
                 val sessionDetailOnly = buildHistorySessionSecondary(lastHistorySessionSummary)
+                val canQuick = quickSyncLaneAvailable
+                val quickBodyRes = buildQuickSyncBodyRes(lastSummary)
                 when (err) {
                     ErrorKind.Offline -> {
                         return CatalogSyncUiState(
@@ -294,7 +326,9 @@ class CatalogSyncViewModel(
                             catalogDetail = null,
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.Session -> {
@@ -303,7 +337,9 @@ class CatalogSyncViewModel(
                             catalogDetail = null,
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.Forbidden -> {
@@ -312,7 +348,9 @@ class CatalogSyncViewModel(
                             catalogDetail = null,
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.NotFoundOrConfig -> {
@@ -321,25 +359,41 @@ class CatalogSyncViewModel(
                             catalogDetail = null,
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.CatalogOkPricesIncomplete -> {
                         return CatalogSyncUiState(
                             primaryMessage = str(R.string.catalog_cloud_state_prices_incomplete),
-                            catalogDetail = buildCatalogDetail(successAt, lastSummary, pending),
+                            catalogDetail = buildCatalogDetail(
+                                successAt,
+                                lastSummary,
+                                pending,
+                                incrementalSurface
+                            ),
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.HistorySessionsIncomplete -> {
                         return CatalogSyncUiState(
                             primaryMessage = str(R.string.catalog_cloud_state_sessions_incomplete),
-                            catalogDetail = buildCatalogDetail(successAt, lastSummary, pending),
+                            catalogDetail = buildCatalogDetail(
+                                successAt,
+                                lastSummary,
+                                pending,
+                                incrementalSurface
+                            ),
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     ErrorKind.Generic -> {
@@ -348,13 +402,15 @@ class CatalogSyncViewModel(
                             catalogDetail = null,
                             sessionDetail = sessionDetailOnly,
                             isSyncing = false,
-                            canRefresh = true
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes
                         )
                     }
                     null -> { /* below */ }
                 }
                 val catalogDetail =
-                    buildCatalogDetail(successAt, lastSummary, pending)
+                    buildCatalogDetail(successAt, lastSummary, pending, incrementalSurface)
                 val sessionDetail = sessionDetailOnly
                 if (pending || lastHistorySessionSummary?.hasPendingWork == true) {
                     return CatalogSyncUiState(
@@ -362,7 +418,9 @@ class CatalogSyncViewModel(
                         catalogDetail = catalogDetail,
                         sessionDetail = sessionDetail,
                         isSyncing = false,
-                        canRefresh = true
+                        canRefresh = true,
+                        canQuickSync = canQuick,
+                        quickSyncBodyRes = quickBodyRes
                     )
                 }
                 if (successAt == null) {
@@ -371,7 +429,9 @@ class CatalogSyncViewModel(
                         catalogDetail = catalogDetail,
                         sessionDetail = sessionDetail,
                         isSyncing = false,
-                        canRefresh = true
+                        canRefresh = true,
+                        canQuickSync = canQuick,
+                        quickSyncBodyRes = quickBodyRes
                     )
                 }
                 return CatalogSyncUiState(
@@ -379,11 +439,20 @@ class CatalogSyncViewModel(
                     catalogDetail = catalogDetail,
                     sessionDetail = sessionDetail,
                     isSyncing = false,
-                    canRefresh = true
+                    canRefresh = true,
+                    canQuickSync = canQuick,
+                    quickSyncBodyRes = quickBodyRes
                 )
             }
         }
     }
+
+    private fun buildQuickSyncBodyRes(lastSummary: CatalogSyncSummary?): Int =
+        if (lastSummary?.syncEventsAvailable == true && !lastSummary.syncEventsFallback044) {
+            R.string.catalog_cloud_sync_quick_body_events
+        } else {
+            R.string.catalog_cloud_sync_quick_body
+        }
 
     private fun formatTime(epochMs: Long): String {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
@@ -397,11 +466,21 @@ class CatalogSyncViewModel(
     private fun buildCatalogDetail(
         successAt: Long?,
         lastSummary: CatalogSyncSummary?,
-        pendingCatalogWork: Boolean
+        pendingCatalogWork: Boolean,
+        incrementalSurface: CatalogIncrementalDetailSurface
     ): String? {
         val parts = mutableListOf<String>()
         if (pendingCatalogWork) {
             parts.add(str(R.string.catalog_cloud_pending_catalog_hint))
+        }
+        lastSummary?.let { s ->
+            if (incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS) {
+                val pushedLocal =
+                    s.pushedSuppliers + s.pushedCategories + s.pushedProducts + s.pushedProductPrices
+                if (pushedLocal > 0) {
+                    parts.add(str(R.string.catalog_cloud_quick_sync_locals_sent, pushedLocal))
+                }
+            }
         }
         successAt?.let { parts.add(str(R.string.catalog_cloud_last_ok, formatTime(it))) }
         lastSummary?.let { s ->
@@ -424,6 +503,29 @@ class CatalogSyncViewModel(
                         s.skippedProductPricesPullNoProductRef
                     )
                 )
+            }
+            if (!s.incrementalRemoteSubsetVerifiable &&
+                incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
+            ) {
+                parts.add(str(R.string.catalog_cloud_remote_incremental_not_verifiable_hint))
+            }
+            if (incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS &&
+                s.syncEventsAvailable &&
+                !s.syncEventsFallback044
+            ) {
+                parts.add(
+                    str(
+                        R.string.catalog_cloud_quick_sync_recent_updates,
+                        s.syncEventsProcessed,
+                        s.remoteUpdatesApplied
+                    )
+                )
+            }
+            if (s.syncEventOutboxPending > 0) {
+                parts.add(str(R.string.catalog_cloud_sync_event_outbox_hint, s.syncEventOutboxPending))
+            }
+            if (s.manualFullSyncRequired) {
+                parts.add(str(R.string.catalog_cloud_manual_full_sync_required_hint))
             }
         }
         return parts.joinToString("\n").takeIf { it.isNotEmpty() }
@@ -583,6 +685,7 @@ class CatalogSyncViewModel(
                 )
             } finally {
                 busy.value = false
+                incrementalDetailSurface.value = CatalogIncrementalDetailSurface.OTHER
                 val ok = logCatalogOk && logErr == null
                 finishSyncProgress(ok, startedAt)
                 syncStateTracker?.finish(CatalogSyncFlightOwner.MANUAL)
@@ -650,18 +753,31 @@ class CatalogSyncViewModel(
             var logFailureClassification: SyncErrorClassification? = null
             var logPendingAfter = false
             try {
-                val result = autoRepository.pushDirtyCatalogDeltaToRemote(
-                    remote = remote,
-                    priceRemote = priceRemote,
-                    ownerUserId = auth.userId,
-                    progressReporter = CatalogSyncProgressReporter { progress ->
-                        setSyncProgress(progress)
-                    }
-                )
+                val result = if (syncEventRemote?.isConfigured == true) {
+                    autoRepository.syncCatalogQuickWithEvents(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        syncEventRemote = syncEventRemote,
+                        ownerUserId = auth.userId,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            setSyncProgress(progress)
+                        }
+                    )
+                } else {
+                    autoRepository.pushDirtyCatalogDeltaToRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        ownerUserId = auth.userId,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            setSyncProgress(progress)
+                        }
+                    )
+                }
                 result.fold(
                     onSuccess = { summary ->
                         logSummary = summary
                         lastCatalogSyncSummary.value = summary
+                        incrementalDetailSurface.value = CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
                         val err = if (summary.priceSyncFailed) ErrorKind.CatalogOkPricesIncomplete else null
                         lastErrorKind.value = err
                         logErr = err
@@ -671,6 +787,7 @@ class CatalogSyncViewModel(
                         ok = err == null
                     },
                     onFailure = { e ->
+                        incrementalDetailSurface.value = CatalogIncrementalDetailSurface.OTHER
                         val classification = SyncErrorClassifier.classify(e)
                         val err = classification.toErrorKind()
                         lastErrorKind.value = err
@@ -691,7 +808,15 @@ class CatalogSyncViewModel(
                         "httpStatus=${logFailureClassification?.httpStatus} " +
                         "postgrestCode=${logFailureClassification?.postgrestCode} pendingAfter=$logPendingAfter " +
                         "productsPushed=${logSummary?.pushedProducts} pricesPushed=${logSummary?.pushedProductPrices} " +
-                        "priceSyncFailed=${logSummary?.priceSyncFailed}"
+                        "priceSyncFailed=${logSummary?.priceSyncFailed} " +
+                        "fullCatalogFetch=${logSummary?.fullCatalogFetch} fullPriceFetch=${logSummary?.fullPriceFetch} " +
+                        "remoteSubsetVerifiable=${logSummary?.incrementalRemoteSubsetVerifiable} " +
+                        "remoteNotVerifiableReason=${logSummary?.incrementalRemoteNotVerifiableReason} " +
+                        "syncEventsAvailable=${logSummary?.syncEventsAvailable} " +
+                        "syncEventsProcessed=${logSummary?.syncEventsProcessed} " +
+                        "syncEventOutboxPending=${logSummary?.syncEventOutboxPending} " +
+                        "targetedProductsFetched=${logSummary?.targetedProductsFetched} " +
+                        "targetedPricesFetched=${logSummary?.targetedPricesFetched}"
                 )
             }
         }
@@ -791,7 +916,8 @@ class CatalogSyncViewModel(
                         app.sessionBackupRemoteDataSource,
                         app.authManager.state,
                         app.sessionCloudSessionFlightOwner,
-                        app.catalogSyncStateTracker
+                        app.catalogSyncStateTracker,
+                        syncEventRemote = app.syncEventRemoteDataSource
                     ) as T
             }
     }

@@ -28,5 +28,10 @@ sealed class Screen(val route: String) {
     data object Options : Screen("optionsScreen")
 
     // Schermate del Flusso di Importazione
-    data object ImportAnalysis : Screen("importAnalysisScreen")
+    data object ImportAnalysis : Screen("importAnalysisScreen/{importOrigin}") {
+        const val ARG_ORIGIN = "importOrigin"
+
+        fun createRoute(origin: ImportNavOrigin = ImportNavOrigin.HOME): String =
+            "importAnalysisScreen/${origin.routeArg}"
+    }
 }

@@ -50,6 +50,20 @@ class SupabaseCatalogRemoteDataSource(
             InventoryCatalogFetchBundle(suppliers, categories, products)
         }
 
+    override suspend fun fetchCatalogByIds(
+        supplierIds: Set<String>,
+        categoryIds: Set<String>,
+        productIds: Set<String>
+    ): Result<InventoryCatalogFetchBundle> =
+        runCatching {
+            val pg = requireClient().postgrest
+            InventoryCatalogFetchBundle(
+                suppliers = pg.fetchInventoryRowsByIds("inventory_suppliers", supplierIds),
+                categories = pg.fetchInventoryRowsByIds("inventory_categories", categoryIds),
+                products = pg.fetchInventoryRowsByIds("inventory_products", productIds)
+            )
+        }
+
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
         patchTombstone("inventory_suppliers", patch)
 
@@ -75,4 +89,24 @@ class SupabaseCatalogRemoteDataSource(
                 }
             )
         }
+
+    private suspend inline fun <reified T : Any> io.github.jan.supabase.postgrest.Postgrest.fetchInventoryRowsByIds(
+        table: String,
+        remoteIds: Set<String>
+    ): List<T> {
+        if (remoteIds.isEmpty()) return emptyList()
+        val rows = mutableListOf<T>()
+        for (chunk in remoteIds.chunked(TARGETED_FETCH_CHUNK)) {
+            rows += this[table].select {
+                filter {
+                    isIn("id", chunk)
+                }
+            }.decodeList<T>()
+        }
+        return rows
+    }
+
+    private companion object {
+        const val TARGETED_FETCH_CHUNK = 80
+    }
 }

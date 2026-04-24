@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("14", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("14", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("14", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("14", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("14", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1461,6 +1461,26 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 14 to 15 adds sync event local state tables`() = runTest {
+        val dbName = "task045-migration-14-15.db"
+        createLegacyDatabase(dbName, version = 14) { }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 15) { database, oldVersion, newVersion ->
+            assertEquals(14, oldVersion)
+            assertEquals(15, newVersion)
+            AppDatabase.MIGRATION_14_15.migrate(database)
+        }
+
+        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "sync_event_watermarks"))
+        assertTrue(tableExists(migrated, "sync_event_device_state"))
+        assertTrue(tableExists(migrated, "sync_event_outbox"))
+        assertTrue(indexExists(migrated, "index_sync_event_outbox_ownerUserId_clientEventId"))
+        assertTrue(indexExists(migrated, "index_sync_event_outbox_ownerUserId_createdAtMs"))
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1476,7 +1496,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_10_11,
                 AppDatabase.MIGRATION_11_12,
                 AppDatabase.MIGRATION_12_13,
-                AppDatabase.MIGRATION_13_14
+                AppDatabase.MIGRATION_13_14,
+                AppDatabase.MIGRATION_14_15
             )
         }
 
@@ -1561,6 +1582,12 @@ class AppDatabaseMigrationTest {
         queryCount(
             db,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '$table'"
+        ) == 1
+
+    private fun indexExists(db: SupportSQLiteDatabase, index: String): Boolean =
+        queryCount(
+            db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = '$index'"
         ) == 1
 
     private fun viewExists(db: AppDatabase, view: String): Boolean =

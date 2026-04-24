@@ -221,26 +221,41 @@ private fun CatalogCloudSection(
                     strokeWidth = 2.dp
                 )
             }
-        } else {
-            Button(
-                onClick = onRefresh,
-                enabled = state.canRefresh,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.catalog_cloud_sync_full))
-            }
-            OutlinedButton(
-                onClick = onQuickSync,
-                enabled = state.canQuickSync,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.catalog_cloud_sync_quick))
-            }
-            Text(
-                text = stringResource(R.string.catalog_cloud_sync_quick_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        }
+        Text(
+            text = stringResource(R.string.catalog_cloud_sync_quick),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = stringResource(state.quickSyncBodyRes),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedButton(
+            onClick = onQuickSync,
+            enabled = state.canQuickSync && !state.isSyncing,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.catalog_cloud_sync_quick))
+        }
+        Spacer(Modifier.height(spacing.md))
+        Text(
+            text = stringResource(R.string.catalog_cloud_sync_full),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            text = stringResource(R.string.catalog_cloud_sync_full_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Button(
+            onClick = onRefresh,
+            enabled = state.canRefresh && !state.isSyncing,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.catalog_cloud_sync_full))
         }
     }
 }

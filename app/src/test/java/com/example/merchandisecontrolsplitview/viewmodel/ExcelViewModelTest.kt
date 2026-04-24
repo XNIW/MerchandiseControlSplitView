@@ -11,6 +11,7 @@ import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
+import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -74,6 +75,25 @@ class ExcelViewModelTest {
 
         assertTrue(viewModel.isColumnEssential(0))
         assertFalse(viewModel.selectedColumns[0])
+    }
+
+    @Test
+    fun `generated navigation context is stored and reset with view state`() = runTest {
+        viewModel.noteGeneratedNavigationContext(
+            isNew = true,
+            isManualEntry = true,
+            importOrigin = ImportNavOrigin.HISTORY
+        )
+
+        assertTrue(viewModel.peekGeneratedRouteIsNew())
+        assertTrue(viewModel.peekGeneratedRouteIsManualEntry())
+        assertEquals(ImportNavOrigin.HISTORY, viewModel.peekImportOriginForGeneratedSession())
+
+        viewModel.resetState()
+
+        assertFalse(viewModel.peekGeneratedRouteIsNew())
+        assertFalse(viewModel.peekGeneratedRouteIsManualEntry())
+        assertEquals(ImportNavOrigin.HOME, viewModel.peekImportOriginForGeneratedSession())
     }
 
     @Test

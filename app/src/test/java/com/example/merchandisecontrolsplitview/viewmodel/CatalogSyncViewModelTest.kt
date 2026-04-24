@@ -4,6 +4,7 @@ import android.app.Application
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
+import com.example.merchandisecontrolsplitview.data.CatalogIncrementalRemoteContract044A
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
@@ -980,7 +981,12 @@ class CatalogSyncViewModelTest {
                     pulledCategories = 0,
                     pulledProducts = 0,
                     pushedProductPrices = 1,
-                    pulledProductPrices = 0
+                    pulledProductPrices = 0,
+                    fullCatalogFetch = false,
+                    fullPriceFetch = false,
+                    incrementalRemoteSubsetVerifiable = false,
+                    incrementalRemoteNotVerifiableReason =
+                        CatalogIncrementalRemoteContract044A.INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES
                 )
             )
         }
@@ -1012,6 +1018,151 @@ class CatalogSyncViewModelTest {
         }
         assertTrue(viewModel.uiState.value.canQuickSync)
         assertTrue(viewModel.uiState.value.catalogDetail?.isNotBlank() == true)
+        assertTrue(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_quick_sync_locals_sent, 2)
+            )
+        )
+        assertTrue(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_remote_incremental_not_verifiable_hint)
+            )
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `044B full refresh clears quick-only remote not verifiable line from catalogDetail`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        coEvery {
+            autoRepository.pushDirtyCatalogDeltaToRemote(any(), any(), OWNER_VM_021, any())
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 1,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                pushedProductPrices = 0,
+                pulledProductPrices = 0,
+                fullCatalogFetch = false,
+                fullPriceFetch = false,
+                incrementalRemoteSubsetVerifiable = false,
+                incrementalRemoteNotVerifiableReason =
+                    CatalogIncrementalRemoteContract044A.INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES
+            )
+        )
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                pushedProductPrices = 0,
+                pulledProductPrices = 1,
+                fullCatalogFetch = true,
+                fullPriceFetch = true,
+                incrementalRemoteSubsetVerifiable = false,
+                incrementalRemoteNotVerifiableReason =
+                    CatalogIncrementalRemoteContract044A.INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "044b@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            autoSyncRepository = autoRepository
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        val notVerifiable = app.getString(R.string.catalog_cloud_remote_incremental_not_verifiable_hint)
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.catalogDetail?.contains(notVerifiable) == true)
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.catalogDetail?.contains(notVerifiable) == true)
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `044B second quick sync while first is in flight is ignored`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        val gate = CompletableDeferred<Unit>()
+        coEvery {
+            autoRepository.pushDirtyCatalogDeltaToRemote(any(), any(), OWNER_VM_021, any())
+        } coAnswers {
+            gate.await()
+            Result.success(
+                CatalogSyncSummary(
+                    pushedSuppliers = 0,
+                    pushedCategories = 0,
+                    pushedProducts = 1,
+                    pulledSuppliers = 0,
+                    pulledCategories = 0,
+                    pulledProducts = 0,
+                    fullCatalogFetch = false,
+                    fullPriceFetch = false
+                )
+            )
+        }
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "044b2@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            autoSyncRepository = autoRepository
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            autoRepository.pushDirtyCatalogDeltaToRemote(any(), any(), OWNER_VM_021, any())
+        }
+
+        gate.complete(Unit)
+        advanceUntilIdle()
 
         collectJob.cancel()
     }
@@ -1042,6 +1193,19 @@ private class ViewModelCatalogRemote021(
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         Result.success(bundle)
 
+    override suspend fun fetchCatalogByIds(
+        supplierIds: Set<String>,
+        categoryIds: Set<String>,
+        productIds: Set<String>
+    ): Result<InventoryCatalogFetchBundle> =
+        Result.success(
+            InventoryCatalogFetchBundle(
+                suppliers = bundle.suppliers.filter { it.id in supplierIds },
+                categories = bundle.categories.filter { it.id in categoryIds },
+                products = bundle.products.filter { it.id in productIds }
+            )
+        )
+
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
         Result.success(Unit)
 
@@ -1062,6 +1226,9 @@ private class ViewModelPriceRemote021(
 
     override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> =
         Result.success(fetchRows)
+
+    override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+        Result.success(fetchRows.filter { it.id in remoteIds })
 }
 
 private class ViewModelSessionRemote024(

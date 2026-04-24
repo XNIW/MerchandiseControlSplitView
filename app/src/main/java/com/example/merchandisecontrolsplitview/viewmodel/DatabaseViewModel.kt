@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
 import kotlinx.coroutines.sync.Mutex
+import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 
 sealed class UiState {
     data object Idle : UiState()
@@ -267,8 +268,10 @@ class DatabaseViewModel(
         pendingSupplierNames: Set<String> = emptySet(),
         pendingCategoryNames: Set<String> = emptySet(),
         pendingTempSuppliers: Map<Long, String> = emptyMap(),
-        pendingTempCategories: Map<Long, String> = emptyMap()
+        pendingTempCategories: Map<Long, String> = emptyMap(),
+        navigationOrigin: ImportNavOrigin = ImportNavOrigin.HOME
     ) {
+        _importNavigationOrigin.value = navigationOrigin
         _importAnalysisResult.value = analysis
         this.pendingPriceHistory = pendingPriceHistory
         this.pendingSupplierNames = pendingSupplierNames
@@ -284,6 +287,7 @@ class DatabaseViewModel(
     private fun clearPendingImportState(clearAnalysisResult: Boolean) {
         if (clearAnalysisResult) {
             _importAnalysisResult.value = null
+            _importNavigationOrigin.value = ImportNavOrigin.HOME
         }
         pendingPriceHistory = emptyList()
         pendingSupplierNames = emptySet()
@@ -503,7 +507,10 @@ class DatabaseViewModel(
     private val _importAnalysisResult = MutableStateFlow<ImportAnalysis?>(null)
     val importAnalysisResult: StateFlow<ImportAnalysis?> = _importAnalysisResult.asStateFlow()
 
-    fun startSmartImport(context: Context, uri: Uri) {
+    private val _importNavigationOrigin = MutableStateFlow(ImportNavOrigin.HOME)
+    val importNavigationOrigin: StateFlow<ImportNavOrigin> = _importNavigationOrigin.asStateFlow()
+
+    fun startSmartImport(context: Context, uri: Uri, navigationOrigin: ImportNavOrigin = ImportNavOrigin.DATABASE) {
         if (importFlowState.value is ImportFlowState.Applying) return
         viewModelScope.launch {
             var fullImportLockAcquired = false
@@ -522,9 +529,9 @@ class DatabaseViewModel(
                         }
                     )
                 }) {
-                    SmartImportWorkbookOutcome.SingleSheet -> startImportAnalysis(context, uri)
+                    SmartImportWorkbookOutcome.SingleSheet -> startImportAnalysis(context, uri, navigationOrigin)
                     is SmartImportWorkbookOutcome.FullDatabaseAnalyzed ->
-                        finalizeFullImportAnalysisSuccess(outcome.result)
+                        finalizeFullImportAnalysisSuccess(outcome.result, navigationOrigin)
                 }
             } catch (_: FullImportAlreadyInProgressException) {
                 return@launch
@@ -591,7 +598,8 @@ class DatabaseViewModel(
     }
 
     private suspend fun finalizeFullImportAnalysisSuccess(
-        importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult
+        importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult,
+        navigationOrigin: ImportNavOrigin
     ) {
         publishPreviewAnalysis(
             analysis = importResult.analysis.analysis,
@@ -599,7 +607,8 @@ class DatabaseViewModel(
             pendingSupplierNames = importResult.pendingSupplierNames,
             pendingCategoryNames = importResult.pendingCategoryNames,
             pendingTempSuppliers = importResult.analysis.pendingSuppliers,
-            pendingTempCategories = importResult.analysis.pendingCategories
+            pendingTempCategories = importResult.analysis.pendingCategories,
+            navigationOrigin = navigationOrigin
         )
         _uiState.value = UiState.Idle
         Log.d(
@@ -628,7 +637,11 @@ class DatabaseViewModel(
         Log.e("DB_IMPORT", "FULL_IMPORT FAILED message=$userMessage", throwable)
     }
 
-    fun startImportAnalysis(context: Context, uri: Uri) {
+    fun startImportAnalysis(
+        context: Context,
+        uri: Uri,
+        navigationOrigin: ImportNavOrigin = ImportNavOrigin.HOME
+    ) {
         if (importFlowState.value is ImportFlowState.Applying) return
         clearPendingImportState(clearAnalysisResult = true)
         markPreviewLoading()
@@ -650,7 +663,8 @@ class DatabaseViewModel(
                 publishPreviewAnalysis(
                     analysis = analysis.analysis,
                     pendingTempSuppliers = analysis.pendingSuppliers,
-                    pendingTempCategories = analysis.pendingCategories
+                    pendingTempCategories = analysis.pendingCategories,
+                    navigationOrigin = navigationOrigin
                 )
                 _uiState.value = UiState.Idle
             } catch (e: OutOfMemoryError) {
@@ -741,6 +755,17 @@ class DatabaseViewModel(
             is ImportFlowState.PreviewLoading -> cancelImportPreview()
             else -> dismissImportPreview()
         }
+    }
+
+    /**
+     * Dopo un errore in fase di apply: torna a preview senza perdere l’analisi (task 044C).
+     */
+    fun recoverImportPreviewAfterApplyError() {
+        val previewId = activePreviewId
+        if (previewId != null && _importAnalysisResult.value != null) {
+            _importFlowState.value = ImportFlowState.PreviewReady(previewId)
+        }
+        _uiState.value = UiState.Idle
     }
 
     fun importProducts(
@@ -973,7 +998,10 @@ class DatabaseViewModel(
         }
     }
 
-    fun analyzeGridData(gridData: List<Map<String, String>>) {
+    fun analyzeGridData(
+        gridData: List<Map<String, String>>,
+        navigationOrigin: ImportNavOrigin = ImportNavOrigin.HOME
+    ) {
         if (importFlowState.value is ImportFlowState.Applying) return
         clearPendingImportState(clearAnalysisResult = true)
         markPreviewLoading()
@@ -997,7 +1025,8 @@ class DatabaseViewModel(
                 publishPreviewAnalysis(
                     analysis = analysis.analysis,
                     pendingTempSuppliers = analysis.pendingSuppliers,
-                    pendingTempCategories = analysis.pendingCategories
+                    pendingTempCategories = analysis.pendingCategories,
+                    navigationOrigin = navigationOrigin
                 )
                 _uiState.value = UiState.Idle
             } catch (e: Exception) {
@@ -1074,7 +1103,11 @@ class DatabaseViewModel(
         repository.getPriceSeries(productId, type)
 
     // ⬇️ IMPORT COMPLETO: nuovo metodo pubblico
-    fun startFullDbImport(context: Context, uri: Uri) {
+    fun startFullDbImport(
+        context: Context,
+        uri: Uri,
+        navigationOrigin: ImportNavOrigin = ImportNavOrigin.DATABASE
+    ) {
         if (importFlowState.value is ImportFlowState.Applying) return
         // blocca se c'è già un import in corso
         if (!importMutex.tryLock()) return
@@ -1120,7 +1153,8 @@ class DatabaseViewModel(
                     pendingSupplierNames = importResult.pendingSupplierNames,
                     pendingCategoryNames = importResult.pendingCategoryNames,
                     pendingTempSuppliers = importResult.analysis.pendingSuppliers,
-                    pendingTempCategories = importResult.analysis.pendingCategories
+                    pendingTempCategories = importResult.analysis.pendingCategories,
+                    navigationOrigin = navigationOrigin
                 )
                 _uiState.value = UiState.Idle
                 Log.d(

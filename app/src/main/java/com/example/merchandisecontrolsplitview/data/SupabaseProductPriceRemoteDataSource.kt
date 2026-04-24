@@ -33,4 +33,19 @@ class SupabaseProductPriceRemoteDataSource(
         runCatching {
             requireClient().postgrest.fetchInventoryTableAllPagesOrderedById("inventory_product_prices")
         }
+
+    override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+        runCatching {
+            if (remoteIds.isEmpty()) return@runCatching emptyList()
+            val supabase = requireClient()
+            val rows = mutableListOf<InventoryProductPriceRow>()
+            for (chunk in remoteIds.chunked(PRICE_UPSERT_CHUNK)) {
+                rows += supabase.postgrest["inventory_product_prices"].select {
+                    filter {
+                        isIn("id", chunk)
+                    }
+                }.decodeList()
+            }
+            rows
+        }
 }

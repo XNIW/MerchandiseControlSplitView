@@ -20,6 +20,7 @@ import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
+import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import com.example.merchandisecontrolsplitview.util.DatabaseExportConstants
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import io.mockk.coEvery
@@ -259,6 +260,32 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `analyzeGridData records import origin and clear resets it to home`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+
+        viewModel.analyzeGridData(
+            listOf(
+                mapOf(
+                    "barcode" to "87654321",
+                    "productName" to "Origin Item",
+                    "purchasePrice" to "7.0",
+                    "retailPrice" to "10.0",
+                    "quantity" to "3"
+                )
+            ),
+            navigationOrigin = ImportNavOrigin.HISTORY
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.importAnalysisResult.value != null }
+
+        assertEquals(ImportNavOrigin.HISTORY, viewModel.importNavigationOrigin.value)
+
+        viewModel.clearImportAnalysis()
+
+        assertEquals(ImportNavOrigin.HOME, viewModel.importNavigationOrigin.value)
+    }
+
+    @Test
     fun `analyzeGridData repository failure emits error state`() = runTest {
         coEvery { repository.getAllProducts() } throws IllegalStateException("db unavailable")
 
@@ -304,6 +331,27 @@ class DatabaseViewModelTest {
         assertNotNull(result)
         assertTrue(result!!.newProducts.any { it.barcode == "12345678" })
         assertEquals(UiState.Idle, viewModel.uiState.value)
+    }
+
+    @Test
+    fun `startSmartImport single sheet defaults origin to database`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+        val workbookFile = createWorkbook(
+            name = "smart-import-origin",
+            rows = listOf(
+                listOf("Barcode", "Product name", "Purchase Price", "Retail Price", "Quantity"),
+                listOf(12345679.0, "Database Import Item", 4.0, 6.0, 2.0)
+            )
+        )
+
+        viewModel.startSmartImport(app, Uri.fromFile(workbookFile))
+        advanceUntilIdle()
+        waitForCondition {
+            viewModel.importAnalysisResult.value != null || viewModel.uiState.value is UiState.Error
+        }
+
+        assertNotNull(viewModel.importAnalysisResult.value)
+        assertEquals(ImportNavOrigin.DATABASE, viewModel.importNavigationOrigin.value)
     }
 
     @Test
@@ -653,6 +701,30 @@ class DatabaseViewModelTest {
             ),
             viewModel.importFlowState.value
         )
+    }
+
+    @Test
+    fun `recoverImportPreviewAfterApplyError restores preview and keeps analysis result`() = runTest {
+        val previewId = preparePreview()
+
+        coEvery { repository.applyImport(any()) } returns ImportApplyResult.Failure(
+            IllegalStateException("db offline")
+        )
+
+        viewModel.importProducts(
+            previewId = previewId,
+            newProducts = listOf(sampleProduct(barcode = "33334444", productName = "Broken")),
+            updatedProducts = emptyList(),
+            context = app
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.Error }
+
+        viewModel.recoverImportPreviewAfterApplyError()
+
+        assertEquals(ImportFlowState.PreviewReady(previewId), viewModel.importFlowState.value)
+        assertNotNull(viewModel.importAnalysisResult.value)
+        assertEquals(UiState.Idle, viewModel.uiState.value)
     }
 
     @Test

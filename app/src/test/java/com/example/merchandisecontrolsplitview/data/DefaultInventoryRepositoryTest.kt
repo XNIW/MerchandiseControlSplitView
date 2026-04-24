@@ -2610,6 +2610,17 @@ class DefaultInventoryRepositoryTest {
         assertEquals(2, summary.pushedProductPrices)
         assertEquals(2, priceRemote.upsertBatches.flatten().size)
         assertEquals(0, priceRemote.fetchCount)
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, summary.remoteProductIdsRequested)
+        assertEquals(0, summary.remoteProductsFetched)
+        assertEquals(0, summary.remotePriceIdsRequested)
+        assertEquals(0, summary.remotePricesFetched)
+        assertFalse(summary.incrementalRemoteSubsetVerifiable)
+        assertEquals(
+            CatalogIncrementalRemoteContract044A.INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES,
+            summary.incrementalRemoteNotVerifiableReason
+        )
 
         val second = repository.pushDirtyCatalogDeltaToRemote(
             remote = remote,
@@ -2622,6 +2633,589 @@ class DefaultInventoryRepositoryTest {
         assertEquals(0, second.pushedProductPrices)
         assertEquals(1, remote.productUpsertCallCount)
         assertEquals(1, priceRemote.upsertBatches.size)
+    }
+
+    @Test
+    fun `045 quick sync emits catalog and price sync events with remote ids only`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000451"
+        repository.addProduct(
+            Product(
+                barcode = "sync-event-045-one",
+                productName = "Sync Event 045",
+                purchasePrice = 3.0,
+                retailPrice = 5.0
+            )
+        )
+        val local = repository.findProductByBarcode("sync-event-045-one")!!
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, priceRemote.fetchCount)
+        assertEquals(2, syncEvents.recordedParams.size)
+        assertEquals(SyncEventDomains.CATALOG, syncEvents.recordedParams[0].domain)
+        assertEquals(SyncEventDomains.PRICES, syncEvents.recordedParams[1].domain)
+        assertEquals(syncEvents.recordedParams[0].batchId, syncEvents.recordedParams[1].batchId)
+        val pushedProductRemoteId = remote.upsertedProducts.single().single().id
+        assertEquals(listOf(pushedProductRemoteId), syncEvents.recordedParams[0].entityIds!!.productIds)
+        assertFalse(syncEvents.recordedParams[0].entityIds!!.productIds.contains(local.id.toString()))
+        assertEquals(2, syncEvents.recordedParams[1].entityIds!!.priceIds.size)
+        assertEquals(2, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.targetedProductsFetched)
+        assertEquals(0, summary.targetedPricesFetched)
+    }
+
+    @Test
+    fun `045 generated import batch emits at most catalog and price events with shared batch`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000452"
+        repeat(30) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "sync-event-045-batch-$index",
+                    productName = "Batch $index",
+                    purchasePrice = index + 1.0,
+                    retailPrice = index + 2.0
+                )
+            )
+        }
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val syncEvents = FakeSyncEventRemote()
+
+        repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(2, syncEvents.recordedParams.size)
+        assertEquals(30, syncEvents.recordedParams[0].entityIds!!.productIds.size)
+        assertEquals(60, syncEvents.recordedParams[1].entityIds!!.priceIds.size)
+        assertEquals(syncEvents.recordedParams[0].batchId, syncEvents.recordedParams[1].batchId)
+    }
+
+    @Test
+    fun `045 capability false keeps quick sync push-only without hidden full pull`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000453"
+        repository.addProduct(
+            Product(
+                barcode = "sync-event-045-fallback",
+                productName = "Fallback",
+                purchasePrice = 1.0,
+                retailPrice = 2.0
+            )
+        )
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val syncEvents = FakeSyncEventRemote(
+            capabilities = SyncEventRemoteCapabilities.disabled("test_schema_missing")
+        )
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.syncEventsFallback044)
+        assertTrue(summary.syncEventsDisabled)
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, priceRemote.fetchCount)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+    }
+
+    @Test
+    fun `045 drain fetches targeted product and price ids then advances watermark`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000454"
+        val productRemoteId = "00000000-0000-4000-8000-000000000455"
+        val priceRemoteId = "00000000-0000-4000-8000-000000000456"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "sync-event-045-target",
+                        productName = "Target",
+                        retailPrice = 9.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = priceRemoteId,
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "RETAIL",
+                    price = 10.0,
+                    effectiveAt = "2026-04-24 10:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-04-24 10:00:00"
+                )
+            )
+        }
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+                createdAt = "2026-04-24T10:00:00Z"
+            )
+            externalEvents += SyncEventRemoteRow(
+                id = 2,
+                ownerUserId = owner,
+                domain = SyncEventDomains.PRICES,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(priceIds = listOf(priceRemoteId)),
+                createdAt = "2026-04-24T10:00:01Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(0, remote.fetchCount)
+        assertEquals(1, remote.targetedFetchCount)
+        assertEquals(setOf(productRemoteId), remote.targetedProductIds.first())
+        assertEquals(1, priceRemote.targetedFetchCount)
+        assertEquals(setOf(priceRemoteId), priceRemote.targetedPriceIds.single())
+        assertEquals(2, summary.syncEventsProcessed)
+        assertEquals(2, summary.syncEventsWatermarkAfter)
+        assertEquals("Target", repository.findProductByBarcode("sync-event-045-target")!!.productName)
+        assertEquals(1, repository.getPriceSeries(repository.findProductByBarcode("sync-event-045-target")!!.id, "RETAIL").first().size)
+    }
+
+    @Test
+    fun `045 emit failure stores outbox and retry records only pending event`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000457"
+        repository.addProduct(
+            Product(
+                barcode = "sync-event-045-outbox",
+                productName = "Outbox",
+                purchasePrice = 4.0,
+                retailPrice = 6.0
+            )
+        )
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            failRecordForDomains += SyncEventDomains.PRICES
+        }
+
+        val first = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, first.syncEventOutboxPending)
+        assertEquals(listOf(SyncEventDomains.CATALOG), syncEvents.recordedParams.map { it.domain })
+
+        val second = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, second.syncEventOutboxRetried)
+        assertEquals(0, second.syncEventOutboxPending)
+        assertEquals(2, syncEvents.recordedParams.size)
+        assertEquals(SyncEventDomains.PRICES, syncEvents.recordedParams.last().domain)
+    }
+
+    @Test
+    fun `045 watermark advances only after event apply succeeds`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000458"
+        val productRemoteId = "00000000-0000-4000-8000-000000000459"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "sync-event-045-watermark",
+                        productName = "Watermark"
+                    )
+                )
+            )
+        ).apply {
+            failNextFetch = IOException("targeted fetch failed")
+        }
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 7,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+                createdAt = "2026-04-24T10:00:00Z"
+            )
+        }
+
+        val failed = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(failed.isFailure)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+
+        val ok = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(7, ok.syncEventsWatermarkAfter)
+        assertEquals(7, db.syncEventWatermarkDao().get(owner, "")!!.lastSyncEventId)
+    }
+
+    @Test
+    fun `044A manual sync summary marks full catalog and price fetch`() = runTest {
+        val owner = "00000000-0000-4000-8000-00000000044a"
+        val productRemoteId = "00000000-0000-4000-8000-00000000044b"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "044a-full",
+                        productName = "Full sync 044A",
+                        retailPrice = 1.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = "00000000-0000-4000-8000-00000000044c",
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "RETAIL",
+                    price = 2.0,
+                    effectiveAt = "2026-04-23 12:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-04-23 12:00:00"
+                )
+            )
+        }
+        val summary = repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+        assertTrue(summary.fullCatalogFetch)
+        assertTrue(summary.fullPriceFetch)
+        assertEquals(1, summary.remoteProductIdsRequested)
+        assertEquals(1, summary.remoteProductsFetched)
+        assertEquals(1, summary.remotePriceIdsRequested)
+        assertEquals(1, summary.remotePricesFetched)
+        assertEquals(1, summary.pulledProductPrices)
+        assertTrue(summary.incrementalRemoteSubsetVerifiable)
+        assertNull(summary.incrementalRemoteNotVerifiableReason)
+        assertEquals(1, remote.fetchCount)
+        assertEquals(1, priceRemote.fetchCount)
+    }
+
+    @Test
+    fun `044A full fetch metrics remain remote-row counts when inbound apply is no-op`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000451"
+        val productRemoteId = "00000000-0000-4000-8000-000000000452"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "044a-metrics",
+                        productName = "Metrics product",
+                        retailPrice = 1.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = "00000000-0000-4000-8000-000000000453",
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "RETAIL",
+                    price = 2.0,
+                    effectiveAt = "2026-04-23 12:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-04-23 12:00:00"
+                )
+            )
+        }
+
+        repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+        val second = repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+
+        assertEquals(0, second.pulledProducts)
+        assertEquals(1, second.remoteProductIdsRequested)
+        assertEquals(1, second.remoteProductsFetched)
+        assertEquals(0, second.pulledProductPrices)
+        assertEquals(1, second.remotePriceIdsRequested)
+        assertEquals(1, second.remotePricesFetched)
+        assertEquals(2, remote.fetchCount)
+        assertEquals(2, priceRemote.fetchCount)
+    }
+
+    @Test
+    fun `044A manual sync with prices disabled marks full catalog only`() = runTest {
+        val owner = "00000000-0000-4000-8000-00000000044d"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = "00000000-0000-4000-8000-00000000044e",
+                        ownerUserId = owner,
+                        barcode = "044a-noprice",
+                        productName = "No price remote",
+                        retailPrice = 1.0
+                    )
+                )
+            )
+        )
+        val summary = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            owner
+        ).getOrThrow()
+        assertTrue(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, summary.remotePriceIdsRequested)
+    }
+
+    @Test
+    fun `044A bootstrap pull skips dirty catalog inbound overwrite`() = runTest {
+        val owner = "00000000-0000-4000-8000-00000000044f"
+        val supplierRemoteId = "00000000-0000-4000-8000-000000000454"
+        val categoryRemoteId = "00000000-0000-4000-8000-000000000455"
+        val productRemoteId = "00000000-0000-4000-8000-000000000450"
+        val bundleV1 = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(
+                    id = supplierRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Supplier V1"
+                )
+            ),
+            categories = listOf(
+                InventoryCategoryRow(
+                    id = categoryRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Category V1"
+                )
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = productRemoteId,
+                    ownerUserId = owner,
+                    barcode = "044a-dirty",
+                    productName = "Remote V1",
+                    retailPrice = 10.0,
+                    supplierId = supplierRemoteId,
+                    categoryId = categoryRemoteId
+                )
+            )
+        )
+        val remote = FakeCatalogRemote016(bundleV1)
+        repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            owner
+        ).getOrThrow()
+        val supplier = repository.findSupplierByName("Remote Supplier V1")!!
+        val category = repository.findCategoryByName("Remote Category V1")!!
+        val local = repository.findProductByBarcode("044a-dirty")!!
+        repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, "Local supplier dirty")
+        repository.renameCatalogEntry(CatalogEntityKind.CATEGORY, category.id, "Local category dirty")
+        repository.updateProduct(local.copy(productName = "Local dirty edit"))
+        val supplierRefAfterEdit = db.supplierRemoteRefDao().getBySupplierId(supplier.id)!!
+        val categoryRefAfterEdit = db.categoryRemoteRefDao().getByCategoryId(category.id)!!
+        val refAfterEdit = db.productRemoteRefDao().getByProductId(local.id)!!
+        assertTrue(supplierRefAfterEdit.localChangeRevision > supplierRefAfterEdit.lastSyncedLocalRevision)
+        assertTrue(categoryRefAfterEdit.localChangeRevision > categoryRefAfterEdit.lastSyncedLocalRevision)
+        assertTrue(refAfterEdit.localChangeRevision > refAfterEdit.lastSyncedLocalRevision)
+
+        val bundleV2 = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(
+                    id = supplierRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Supplier V2 overwrite attempt"
+                )
+            ),
+            categories = listOf(
+                InventoryCategoryRow(
+                    id = categoryRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Category V2 overwrite attempt"
+                )
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = productRemoteId,
+                    ownerUserId = owner,
+                    barcode = "044a-dirty",
+                    productName = "Remote V2 overwrite attempt",
+                    retailPrice = 99.0,
+                    supplierId = supplierRemoteId,
+                    categoryId = categoryRemoteId
+                )
+            )
+        )
+        val remote2 = FakeCatalogRemote016(bundleV2)
+        repository.pullCatalogBootstrapFromRemote(
+            remote2,
+            RecordingPriceRemote016(configured = false),
+            CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals("Local supplier dirty", repository.getSupplierById(supplier.id)!!.name)
+        assertEquals("Local category dirty", repository.getCategoryById(category.id)!!.name)
+        val after = repository.findProductByBarcode("044a-dirty")!!
+        assertEquals("Local dirty edit", after.productName)
+        assertEquals(10.0, after.retailPrice!!, 0.0001)
+    }
+
+    @Test
+    fun `044A bootstrap pull skips dirty catalog tombstone inbound`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000456"
+        val supplierRemoteId = "00000000-0000-4000-8000-000000000457"
+        val categoryRemoteId = "00000000-0000-4000-8000-000000000458"
+        val productRemoteId = "00000000-0000-4000-8000-000000000459"
+        val activeBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(
+                    id = supplierRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Supplier Tombstone V1"
+                )
+            ),
+            categories = listOf(
+                InventoryCategoryRow(
+                    id = categoryRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Category Tombstone V1"
+                )
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = productRemoteId,
+                    ownerUserId = owner,
+                    barcode = "044a-dirty-tombstone",
+                    productName = "Remote Tombstone V1",
+                    retailPrice = 10.0,
+                    supplierId = supplierRemoteId,
+                    categoryId = categoryRemoteId
+                )
+            )
+        )
+        repository.syncCatalogWithRemote(
+            FakeCatalogRemote016(activeBundle),
+            RecordingPriceRemote016(configured = false),
+            owner
+        ).getOrThrow()
+        val supplier = repository.findSupplierByName("Remote Supplier Tombstone V1")!!
+        val category = repository.findCategoryByName("Remote Category Tombstone V1")!!
+        val product = repository.findProductByBarcode("044a-dirty-tombstone")!!
+        repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, "Local supplier survives tombstone")
+        repository.renameCatalogEntry(CatalogEntityKind.CATEGORY, category.id, "Local category survives tombstone")
+        repository.updateProduct(product.copy(productName = "Local product survives tombstone"))
+
+        val deletedAt = "2026-04-23T12:00:00Z"
+        val tombstoneBundle = InventoryCatalogFetchBundle(
+            suppliers = listOf(
+                InventorySupplierRow(
+                    id = supplierRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Supplier Tombstone V1",
+                    deletedAt = deletedAt
+                )
+            ),
+            categories = listOf(
+                InventoryCategoryRow(
+                    id = categoryRemoteId,
+                    ownerUserId = owner,
+                    name = "Remote Category Tombstone V1",
+                    deletedAt = deletedAt
+                )
+            ),
+            products = listOf(
+                InventoryProductRow(
+                    id = productRemoteId,
+                    ownerUserId = owner,
+                    barcode = "044a-dirty-tombstone",
+                    productName = "Remote Tombstone V1",
+                    deletedAt = deletedAt
+                )
+            )
+        )
+
+        repository.pullCatalogBootstrapFromRemote(
+            FakeCatalogRemote016(tombstoneBundle),
+            RecordingPriceRemote016(configured = false),
+            CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals("Local supplier survives tombstone", repository.getSupplierById(supplier.id)!!.name)
+        assertEquals("Local category survives tombstone", repository.getCategoryById(category.id)!!.name)
+        assertEquals(
+            "Local product survives tombstone",
+            repository.findProductByBarcode("044a-dirty-tombstone")!!.productName
+        )
     }
 
     @Test
@@ -3006,6 +3600,10 @@ private class FakeCatalogRemote016(
     val upsertedCategories = mutableListOf<List<InventoryCategoryRow>>()
     val upsertedProducts = mutableListOf<List<InventoryProductRow>>()
     var fetchCount = 0
+    var targetedFetchCount = 0
+    val targetedSupplierIds = mutableListOf<Set<String>>()
+    val targetedCategoryIds = mutableListOf<Set<String>>()
+    val targetedProductIds = mutableListOf<Set<String>>()
     var supplierUpsertCallCount = 0
     var categoryUpsertCallCount = 0
     var productUpsertCallCount = 0
@@ -3049,6 +3647,27 @@ private class FakeCatalogRemote016(
         }
         return Result.success(bundle)
     }
+    override suspend fun fetchCatalogByIds(
+        supplierIds: Set<String>,
+        categoryIds: Set<String>,
+        productIds: Set<String>
+    ): Result<InventoryCatalogFetchBundle> {
+        targetedFetchCount++
+        targetedSupplierIds.add(supplierIds)
+        targetedCategoryIds.add(categoryIds)
+        targetedProductIds.add(productIds)
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(
+            InventoryCatalogFetchBundle(
+                suppliers = bundle.suppliers.filter { it.id in supplierIds },
+                categories = bundle.categories.filter { it.id in categoryIds },
+                products = bundle.products.filter { it.id in productIds }
+            )
+        )
+    }
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> {
         failNextSupplierTombstone?.let { t ->
             failNextSupplierTombstone = null
@@ -3077,6 +3696,8 @@ private class RecordingPriceRemote016(
     val upsertBatches = mutableListOf<List<InventoryProductPriceRow>>()
     var fetchRows: List<InventoryProductPriceRow> = emptyList()
     var fetchCount = 0
+    var targetedFetchCount = 0
+    val targetedPriceIds = mutableListOf<Set<String>>()
     var failIfCalled = false
     var failNextFetch: Throwable? = null
     var failNextUpsert: Throwable? = null
@@ -3099,6 +3720,75 @@ private class RecordingPriceRemote016(
         }
         return Result.success(fetchRows)
     }
+    override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> {
+        if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
+        targetedFetchCount++
+        targetedPriceIds.add(remoteIds)
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(fetchRows.filter { it.id in remoteIds })
+    }
+}
+
+private class FakeSyncEventRemote(
+    private val capabilities: SyncEventRemoteCapabilities = SyncEventRemoteCapabilities(
+        syncEventsAvailable = true,
+        recordSyncEventAvailable = true,
+        realtimeSyncEventsAvailable = true
+    )
+) : SyncEventRemoteDataSource {
+    override val isConfigured: Boolean get() = true
+    val recordedParams = mutableListOf<SyncEventRecordRpcParams>()
+    val emittedRows = mutableListOf<SyncEventRemoteRow>()
+    val externalEvents = mutableListOf<SyncEventRemoteRow>()
+    val failRecordForDomains = mutableSetOf<String>()
+    private var nextId = 1L
+
+    override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
+        Result.success(capabilities)
+
+    override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+        if (!capabilities.recordSyncEventAvailable) {
+            return Result.failure(IOException("record_sync_event unavailable"))
+        }
+        if (failRecordForDomains.remove(params.domain)) {
+            return Result.failure(IOException("record_sync_event failed for ${params.domain}"))
+        }
+        val existing = emittedRows.firstOrNull { it.clientEventId == params.clientEventId }
+        if (existing != null) return Result.success(existing)
+        recordedParams += params
+        val row = SyncEventRemoteRow(
+            id = nextId++,
+            ownerUserId = "00000000-0000-4000-8000-000000000000",
+            storeId = params.storeId,
+            domain = params.domain,
+            eventType = params.eventType,
+            source = params.source,
+            sourceDeviceId = params.sourceDeviceId,
+            batchId = params.batchId,
+            clientEventId = params.clientEventId,
+            changedCount = params.changedCount,
+            entityIds = params.entityIds,
+            createdAt = "2026-04-24T10:00:00Z"
+        )
+        emittedRows += row
+        return Result.success(row)
+    }
+
+    override suspend fun fetchSyncEventsAfter(
+        ownerUserId: String,
+        storeId: String?,
+        afterId: Long,
+        limit: Long
+    ): Result<List<SyncEventRemoteRow>> =
+        Result.success(
+            (externalEvents + emittedRows)
+                .filter { it.id > afterId }
+                .sortedBy { it.id }
+                .take(limit.toInt())
+        )
 }
 
 private const val OWNER_021 = "00000000-0000-4000-8000-000000000210"

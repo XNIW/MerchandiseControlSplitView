@@ -16,6 +16,12 @@ interface CatalogRemoteDataSource {
 
     suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle>
 
+    suspend fun fetchCatalogByIds(
+        supplierIds: Set<String>,
+        categoryIds: Set<String>,
+        productIds: Set<String>
+    ): Result<InventoryCatalogFetchBundle>
+
     /** UPDATE tombstone: solo righe ancora attive (`deleted_at` null). Idempotente se già tombstonato. */
     suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit>
 

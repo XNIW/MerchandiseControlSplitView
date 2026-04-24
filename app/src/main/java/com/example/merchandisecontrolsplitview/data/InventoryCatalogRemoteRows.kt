@@ -127,8 +127,62 @@ data class CatalogSyncSummary(
     /** Righe remote il cui `product_id` non risolve un bridge locale (catalogo non allineato). */
     val skippedProductPricesPullNoProductRef: Int = 0,
     /** true se il blocco sync prezzi ha fallito dopo un catalogo considerato applicato. */
-    val priceSyncFailed: Boolean = false
+    val priceSyncFailed: Boolean = false,
+    /**
+     * Task 044A: true solo dopo [CatalogRemoteDataSource.fetchCatalog] nella stessa operazione (sync completa / bootstrap).
+     * La quick lane ([pushDirtyCatalogDeltaToRemote]) resta sempre false.
+     */
+    val fullCatalogFetch: Boolean = false,
+    /**
+     * Task 044A: true quando è stato eseguito pull prezzi full-page ([ProductPriceRemoteDataSource.fetchProductPrices])
+     * nella stessa operazione; false nella sola lane push prezzi della quick sync.
+     */
+    val fullPriceFetch: Boolean = false,
+    /** Task 044A: righe prodotto remote richieste/considerate nel pull; 0 nella quick lane. */
+    val remoteProductIdsRequested: Int = 0,
+    /** Task 044A: righe prodotto remote effettivamente ricevute; distinto da [pulledProducts] che conta gli apply. */
+    val remoteProductsFetched: Int = 0,
+    /** Task 044A: righe prezzo remote richieste/considerate nel pull; 0 nella quick lane. */
+    val remotePriceIdsRequested: Int = 0,
+    /** Task 044A: righe prezzo remote effettivamente ricevute; distinto da [pulledProductPrices] che conta gli apply. */
+    val remotePricesFetched: Int = 0,
+    /**
+     * Task 044A: false se il contratto remoto **non** consente subset/catch-up affidabile senza full pull;
+     * la quick sync non deve fingere pull incrementale.
+     */
+    val incrementalRemoteSubsetVerifiable: Boolean = true,
+    /** Task 044A: codici stabili per log/UI quando [incrementalRemoteSubsetVerifiable] è false. */
+    val incrementalRemoteNotVerifiableReason: String? = null,
+    /** Task 044A: riservato a catch-up a watermark con scope oltre soglia (non usato in MVP 044A corrente). */
+    val incrementalCatchUpTooLarge: Boolean = false,
+    val syncEventsAvailable: Boolean = false,
+    val recordSyncEventAvailable: Boolean = false,
+    val realtimeSyncEventsAvailable: Boolean = false,
+    val syncEventsFallback044: Boolean = false,
+    val syncEventsDisabled: Boolean = false,
+    val syncEventOutboxPending: Int = 0,
+    val syncEventOutboxRetried: Int = 0,
+    val syncEventsFetched: Int = 0,
+    val syncEventsProcessed: Int = 0,
+    val syncEventsSkippedSelf: Int = 0,
+    val syncEventsSkippedDirtyLocal: Int = 0,
+    val syncEventsWatermarkBefore: Long = 0L,
+    val syncEventsWatermarkAfter: Long = 0L,
+    val syncEventsTooLarge: Boolean = false,
+    val syncEventsGapDetected: Boolean = false,
+    val targetedProductsFetched: Int = 0,
+    val targetedPricesFetched: Int = 0,
+    val remoteUpdatesApplied: Int = 0,
+    val manualFullSyncRequired: Boolean = false
 )
+
+/**
+ * Audit 044A: motivi sintetici quando non si implementa pull incrementale (contratto non verificabile).
+ */
+object CatalogIncrementalRemoteContract044A {
+    const val INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES: String =
+        "no_realtime_inventory_publication;inventory_product_prices_no_updated_at;products_updated_at_untrusted"
+}
 
 internal fun fingerprintSupplierName(name: String): String = "s:" + name.trim().lowercase()
 

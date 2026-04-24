@@ -182,6 +182,8 @@
     <string name="no_critical_errors_found">Nessun errore critico trovato.</string>
     <string name="export_errors">Esporta Errori</string>
     <string name="correct_errors">Correggi</string>
+    <string name="import_correct_data">Correggi dati</string>
+    <string name="import_edit_rows">Modifica righe</string>
     <string name="edit_update">Modifica Aggiornamento</string>
     <string name="error_file_exported">File errori esportato.</string>
     <string name="import_error_export_sheet_name">Errori importazione</string>
@@ -576,7 +578,14 @@
     <string name="catalog_cloud_refresh">Aggiorna dal cloud</string>
     <string name="catalog_cloud_sync_full">Sincronizzazione completa</string>
     <string name="catalog_cloud_sync_quick">Sincronizzazione rapida</string>
+    <string name="catalog_cloud_sync_quick_body">Invia le modifiche locali in sospeso. Gli aggiornamenti remoti incrementali non sono ancora verificabili automaticamente.</string>
+    <string name="catalog_cloud_sync_quick_body_events">Invia le modifiche locali e scarica gli aggiornamenti recenti verificabili tramite sync events.</string>
+    <string name="catalog_cloud_sync_full_body">Controlla e riallinea catalogo, prezzi e sessioni history dal cloud. Può richiedere più tempo.</string>
     <string name="catalog_cloud_sync_quick_hint">La rapida invia le modifiche recenti. La completa riallinea anche dal cloud.</string>
+    <string name="catalog_cloud_quick_sync_locals_sent">Inviate %1$d modifiche locali (fornitori, categorie, prodotti e prezzi).</string>
+    <string name="catalog_cloud_quick_sync_recent_updates">Eventi recenti elaborati: %1$d; aggiornamenti applicati: %2$d.</string>
+    <string name="catalog_cloud_sync_event_outbox_hint">%1$d notifiche di sync verranno ritentate piu tardi.</string>
+    <string name="catalog_cloud_manual_full_sync_required_hint">Alcuni cambi remoti richiedono una sincronizzazione completa manuale.</string>
     <string name="catalog_cloud_state_syncing">Sincronizzazione in corso\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparazione del database locale\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Invio modifiche fornitori\u2026</string>
@@ -609,5 +618,6 @@
     <string name="catalog_cloud_sessions_pending_hint">Sessioni history ancora in attesa: %1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">In coda: modifiche catalogo/prezzi o eliminazioni da inviare al cloud.</string>
     <string name="catalog_cloud_prices_skipped_hint">Righe prezzo remote non importate (prodotto non collegato in locale): %1$d</string>
+    <string name="catalog_cloud_remote_incremental_not_verifiable_hint">Aggiornamenti remoti non verificabili in automatico: per riallineare dal cloud usa la sincronizzazione completa.</string>
     <string name="catalog_cloud_detail_sessions_title">Backup sessioni history</string>
 </resources>
