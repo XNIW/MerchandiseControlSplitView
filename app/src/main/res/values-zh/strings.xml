@@ -171,6 +171,8 @@
     <string name="import_analysis_title">导入审核</string>
     <string name="confirm_import">确认导入</string>
     <string name="import_preview_not_saved_message">此预览尚未将任何更改保存到数据库。</string>
+    <string name="import_valid_rows_with_errors_notice">确认后只会导入有效行。有错误的行将被忽略。</string>
+    <string name="import_no_valid_rows_to_apply">没有可导入的有效行。</string>
     <string name="new_products_to_add">新增产品：%1$s</string>
     <string name="no_new_products">没有新产品。</string>
     <string name="products_to_update">待更新产品：%1$s</string>

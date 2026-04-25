@@ -171,6 +171,8 @@
     <string name="import_analysis_title">Revisión de Importación</string>
     <string name="confirm_import">Confirmar Importación</string>
     <string name="import_preview_not_saved_message">Esta vista previa todavía no ha guardado cambios en la base de datos.</string>
+    <string name="import_valid_rows_with_errors_notice">Al confirmar se importarán solo las filas válidas. Las filas con error se ignorarán.</string>
+    <string name="import_no_valid_rows_to_apply">No hay filas válidas para importar.</string>
     <string name="new_products_to_add">Nuevos productos a agregar: %1$s</string>
     <string name="no_new_products">No hay nuevos productos.</string>
     <string name="products_to_update">Productos a actualizar: %1$s</string>

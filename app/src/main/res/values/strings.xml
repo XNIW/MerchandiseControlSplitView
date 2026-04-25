@@ -174,6 +174,8 @@
     <string name="import_analysis_title">Revisione Importazione</string>
     <string name="confirm_import">Conferma Importazione</string>
     <string name="import_preview_not_saved_message">Questa anteprima non ha ancora salvato modifiche nel database.</string>
+    <string name="import_valid_rows_with_errors_notice">Confermando verranno importate solo le righe valide. Le righe con errore saranno ignorate.</string>
+    <string name="import_no_valid_rows_to_apply">Nessuna riga valida da importare.</string>
     <string name="new_products_to_add">Nuovi prodotti da aggiungere: %1$s</string>
     <string name="no_new_products">Nessun nuovo prodotto.</string>
     <string name="products_to_update">Prodotti da aggiornare: %1$s</string>

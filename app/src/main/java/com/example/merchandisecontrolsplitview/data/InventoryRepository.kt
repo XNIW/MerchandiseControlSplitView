@@ -1163,6 +1163,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val categoryIdsByName = categoryDao.getAll()
             .associate { it.name.trim().lowercase() to it.id }
             .toMutableMap()
+        val createdSupplierIds = mutableSetOf<Long>()
+        val createdCategoryIds = mutableSetOf<Long>()
 
         suspend fun resolveSupplierIdByName(name: String): Long? {
             val normalizedName = name.trim()
@@ -1181,6 +1183,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 else -> supplierDao.findByNameIgnoreCase(normalizedName)?.id
             } ?: return null
 
+            if (insertedId > 0L) {
+                createdSupplierIds += resolvedId
+            }
             supplierIdsByName[key] = resolvedId
             return resolvedId
         }
@@ -1201,6 +1206,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 insertedId > 0L -> insertedId
                 else -> categoryDao.findByName(normalizedName)?.id
             } ?: return null
+            if (insertedId > 0L) {
+                createdCategoryIds += resolvedId
+            }
             categoryIdsByName[key] = resolvedId
             return resolvedId
         }
@@ -1296,8 +1304,16 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (pendingPriceHistoryPoints.isNotEmpty()) {
             priceDao.insertAll(pendingPriceHistoryPoints)
         }
-        markEntireCatalogDirtyForCloud()
-        return persistedProducts.map { it.id }.filter { it > 0L }.toSet()
+        val touchedProductIds = persistedProducts.map { it.id }.filter { it > 0L }.toSet()
+        createdSupplierIds.forEach { touchSupplierDirty(it) }
+        createdCategoryIds.forEach { touchCategoryDirty(it) }
+        touchedProductIds.forEach { touchProductDirty(it) }
+        Log.d(
+            TAG,
+            "import_dirty_marking productsTouched=${touchedProductIds.size} " +
+                "suppliersCreated=${createdSupplierIds.size} categoriesCreated=${createdCategoryIds.size}"
+        )
+        return touchedProductIds
     }
 
     private suspend fun normalizedNameFor(
@@ -3061,12 +3077,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             skippedNoLocalProduct = skippedNoLocalProduct,
             remoteRowsEvaluated = remotes.size
         )
-    }
-
-    private suspend fun markEntireCatalogDirtyForCloud() {
-        supplierDao.getAll().forEach { touchSupplierDirty(it.id) }
-        categoryDao.getAll().forEach { touchCategoryDirty(it.id) }
-        productDao.getAll().forEach { touchProductDirty(it.id) }
     }
 
     private suspend fun touchSupplierDirty(supplierId: Long) {

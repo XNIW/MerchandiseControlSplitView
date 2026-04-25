@@ -172,6 +172,8 @@
     <string name="import_analysis_title">Import Review</string>
     <string name="confirm_import">Confirm Import</string>
     <string name="import_preview_not_saved_message">This preview has not saved any changes to the database yet.</string>
+    <string name="import_valid_rows_with_errors_notice">Confirming will import only the valid rows. Rows with errors will be ignored.</string>
+    <string name="import_no_valid_rows_to_apply">No valid rows to import.</string>
     <string name="new_products_to_add">New products to add: %1$s</string>
     <string name="no_new_products">No new products.</string>
     <string name="products_to_update">Products to update: %1$s</string>

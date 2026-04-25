@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitReason
 import com.example.merchandisecontrolsplitview.util.formatClCount
 import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
@@ -168,8 +169,7 @@ private fun calculateCurrentEffectivePaymentTotal(
 fun GeneratedScreen(
     excelViewModel: ExcelViewModel,
     databaseViewModel: DatabaseViewModel,
-    onBackToStart: () -> Unit,
-    onNavigateToHome: () -> Unit,
+    onExit: (GeneratedExitReason) -> Unit,
     onNavigateToDatabase: () -> Unit,
     entryUid: Long,
     isNewEntry: Boolean,
@@ -313,6 +313,9 @@ fun GeneratedScreen(
     var syncActionInFlight by rememberSaveable(entryUid) { mutableStateOf(false) }
     var syncLoadingObserved by rememberSaveable(entryUid) { mutableStateOf(false) }
     var exportActionPending by rememberSaveable(entryUid) { mutableStateOf(false) }
+    var pendingGeneratedExitReason by rememberSaveable(entryUid) {
+        mutableStateOf(GeneratedExitReason.Done)
+    }
     // Stato per mostrare il caricamento durante il salvataggio o il ripristino
     var isSavingOrReverting by remember { mutableStateOf(false) }
     var isExiting by remember { mutableStateOf(false) }
@@ -399,7 +402,7 @@ fun GeneratedScreen(
         else -> stringResource(R.string.generated_complete_card_message_sync_pending)
     }
 
-    fun performGeneratedExit() {
+    fun performGeneratedExit(exitReason: GeneratedExitReason = pendingGeneratedExitReason) {
         if (isSavingOrReverting || isExiting) return
 
         isExiting = true
@@ -422,11 +425,7 @@ fun GeneratedScreen(
             }
 
             try {
-                when {
-                    !isNewEntry -> onBackToStart()
-                    isManualEntry -> onBackToStart()
-                    else -> onNavigateToHome()
-                }
+                onExit(exitReason)
             } finally {
                 pendingExitAfterSuccessfulSync = false
                 isExiting = false
@@ -491,7 +490,7 @@ fun GeneratedScreen(
         }
     }
 
-    fun requestGeneratedExit() {
+    fun requestGeneratedExit(exitReason: GeneratedExitReason) {
         if (
             isSavingOrReverting ||
             isExiting ||
@@ -501,6 +500,8 @@ fun GeneratedScreen(
         ) {
             return
         }
+
+        pendingGeneratedExitReason = exitReason
 
         if (isManualDraftEmpty) {
             showExitDialog = true
@@ -512,11 +513,11 @@ fun GeneratedScreen(
             return
         }
 
-        performGeneratedExit()
+        performGeneratedExit(exitReason)
     }
 
     BackHandler(enabled = !showExitDialog && !showCompleteExitSyncDialog && !pendingExitAfterSuccessfulSync) {
-        requestGeneratedExit()
+        requestGeneratedExit(GeneratedExitReason.SystemBack)
     }
 
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -829,7 +830,7 @@ fun GeneratedScreen(
                 isFinishEnabled = !pendingExitAfterSuccessfulSync,
                 isSyncActionEnabled = !syncActionInFlight && !pendingExitAfterSuccessfulSync,
                 isExportActionEnabled = !isExportActionInProgress,
-                onFinish = { requestGeneratedExit() },
+                onFinish = { requestGeneratedExit(GeneratedExitReason.Done) },
                 onAnalyzeSync = { requestSyncAnalysis() },
                 onExport = requestExcelExport,
                 onShare = { shareXlsx() },
@@ -952,7 +953,7 @@ fun GeneratedScreen(
                             excelViewModel.deleteHistoryEntry(entryUid)
                             excelViewModel.revertToPreGenerateState()
                             isSavingOrReverting = false
-                            onBackToStart()
+                            onExit(pendingGeneratedExitReason)
                         }
                     },
                     onCancel = { if (!isSavingOrReverting) showExitDialog = false }

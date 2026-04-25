@@ -1,12 +1,16 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
+import android.util.Log
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.NavigationBar
@@ -14,6 +18,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -29,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.merchandisecontrolsplitview.R
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -79,14 +85,38 @@ fun AppNavGraph() {
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
     val showBottomBar = currentRootTab != null
     val showCloudSyncIndicator = currentRoute != Screen.Options.route
+    var pendingImportAnalysisExitCleanup by remember {
+        mutableStateOf<ImportAnalysisExitCleanup?>(null)
+    }
+    var importAnalysisExitCleanupApplied by remember { mutableStateOf(false) }
 
-    LaunchedEffect(importAnalysisResult) {
-        if (importAnalysisResult != null) {
+    LaunchedEffect(importAnalysisResult, pendingImportAnalysisExitCleanup) {
+        if (pendingImportAnalysisExitCleanup != null) {
+            if (importAnalysisResult == null) {
+                pendingImportAnalysisExitCleanup = null
+                importAnalysisExitCleanupApplied = false
+            }
+            return@LaunchedEffect
+        }
+
+        if (importAnalysisResult != null && pendingImportAnalysisExitCleanup == null) {
             val dest = navController.currentDestination?.route
             if (dest != Screen.ImportAnalysis.route) {
                 val origin = dbViewModel.importNavigationOrigin.value
                 navController.navigate(Screen.ImportAnalysis.createRoute(origin))
             }
+        }
+    }
+
+    LaunchedEffect(pendingImportAnalysisExitCleanup, currentRoute) {
+        val cleanup = pendingImportAnalysisExitCleanup ?: return@LaunchedEffect
+        if (importAnalysisExitCleanupApplied) return@LaunchedEffect
+        if (currentRoute == null || currentRoute == Screen.ImportAnalysis.route) return@LaunchedEffect
+
+        importAnalysisExitCleanupApplied = true
+        when (cleanup) {
+            ImportAnalysisExitCleanup.CancelPreview -> dbViewModel.clearImportAnalysis()
+            ImportAnalysisExitCleanup.DismissPreview -> dbViewModel.dismissImportPreview()
         }
     }
 
@@ -114,7 +144,23 @@ fun AppNavGraph() {
                 RootNavigationBar(
                     selectedTab = currentRootTab,
                     onTabSelected = { tab ->
-                        navigateToRootTab(navController, tab)
+                        if (tab.screen == Screen.History) {
+                            navigateByGeneratedExitRequest(
+                                navController = navController,
+                                request = GeneratedExitRequest(
+                                    origin = ImportNavOrigin.HOME,
+                                    exitReason = GeneratedExitReason.HistoryTabSelected,
+                                    currentRoute = currentRoute,
+                                    entryUid = excelViewModel.currentEntryStatus.value.third
+                                        .takeIf { it > 0L },
+                                    isNewEntry = excelViewModel.peekGeneratedRouteIsNew(),
+                                    isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry()
+                                ),
+                                excelViewModel = excelViewModel
+                            )
+                        } else {
+                            navigateToRootTab(navController, tab)
+                        }
                     }
                 )
             }
@@ -193,26 +239,56 @@ fun AppNavGraph() {
                 val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
                 val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
                 val isManualEntry = backStackEntry.arguments?.getBoolean("isManualEntry") ?: false
+                val generatedOrigin = resolveGeneratedSessionOrigin(excelViewModel, isNewEntry)
+                val currentSessionUid = excelViewModel.currentEntryStatus.value.third
+                val hasGeneratedSession =
+                    entryUid > 0L && (currentSessionUid == entryUid || excelViewModel.generated.value)
 
-                GeneratedScreen(
-                    excelViewModel = excelViewModel,
-                    databaseViewModel = dbViewModel,
-                    onBackToStart = { navController.popBackStack() },
-                    onNavigateToHome = {
-                        navController.navigate(Screen.FilePicker.route) {
-                            popUpTo(Screen.FilePicker.route) {
-                                inclusive = false
-                            }
-                            launchSingleTop = true
-                        }
-                    },
-                    onNavigateToDatabase = {
-                        navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Database })
-                    },
-                    entryUid = entryUid,
-                    isNewEntry = isNewEntry,
-                    isManualEntry = isManualEntry
-                )
+                if (!hasGeneratedSession) {
+                    val navigateMissingSession = {
+                        navigateByGeneratedExitRequest(
+                            navController = navController,
+                            request = GeneratedExitRequest(
+                                origin = generatedOrigin,
+                                exitReason = GeneratedExitReason.MissingSession,
+                                currentRoute = currentRoute,
+                                entryUid = entryUid.takeIf { it > 0L },
+                                isNewEntry = isNewEntry,
+                                isManualEntry = isManualEntry
+                            ),
+                            excelViewModel = excelViewModel
+                        )
+                    }
+                    LaunchedEffect(entryUid, generatedOrigin, currentRoute) {
+                        navigateMissingSession()
+                    }
+                    RouteFallbackState(onNavigate = navigateMissingSession)
+                } else {
+                    GeneratedScreen(
+                        excelViewModel = excelViewModel,
+                        databaseViewModel = dbViewModel,
+                        onExit = { exitReason ->
+                            navigateByGeneratedExitRequest(
+                                navController = navController,
+                                request = GeneratedExitRequest(
+                                    origin = generatedOrigin,
+                                    exitReason = exitReason,
+                                    currentRoute = currentRoute,
+                                    entryUid = entryUid.takeIf { it > 0L },
+                                    isNewEntry = isNewEntry,
+                                    isManualEntry = isManualEntry
+                                ),
+                                excelViewModel = excelViewModel
+                            )
+                        },
+                        onNavigateToDatabase = {
+                            navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Database })
+                        },
+                        entryUid = entryUid,
+                        isNewEntry = isNewEntry,
+                        isManualEntry = isManualEntry
+                    )
+                }
             }
 
             composable(Screen.History.route) {
@@ -303,38 +379,38 @@ fun AppNavGraph() {
                 val currentEntryUid = excelViewModel.currentEntryStatus.value.third
                 val hasGeneratedImportContext =
                     importOrigin != ImportNavOrigin.DATABASE && currentEntryUid != 0L
-                val generatedAwareReturnOrigin = if (hasGeneratedImportContext) {
-                    ImportNavOrigin.GENERATED
-                } else {
-                    importOrigin
-                }
                 var fallbackNavigationRequested by remember(importOrigin) { mutableStateOf(false) }
-                var missingPreviewFallbackOrigin by remember(importOrigin, generatedAwareReturnOrigin) {
-                    mutableStateOf(generatedAwareReturnOrigin)
-                }
 
-                LaunchedEffect(analysis, importOrigin, generatedAwareReturnOrigin) {
+                LaunchedEffect(analysis, importOrigin) {
                     if (analysis != null) {
                         fallbackNavigationRequested = false
-                        missingPreviewFallbackOrigin = generatedAwareReturnOrigin
                     }
                 }
 
                 if (analysis == null) {
                     val isPreviewLoading = importFlowState is ImportFlowState.PreviewLoading
+                    val navigateMissingPreview = {
+                        fallbackNavigationRequested = true
+                        navigateByGeneratedExitRequest(
+                            navController = navController,
+                            request = GeneratedExitRequest(
+                                origin = importOrigin,
+                                exitReason = GeneratedExitReason.MissingPreview,
+                                currentRoute = currentRoute,
+                                entryUid = currentEntryUid.takeIf { it > 0L },
+                                isNewEntry = excelViewModel.peekGeneratedRouteIsNew(),
+                                isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry()
+                            ),
+                            excelViewModel = excelViewModel
+                        )
+                    }
                     LaunchedEffect(
                         importOrigin,
-                        missingPreviewFallbackOrigin,
                         isPreviewLoading,
                         fallbackNavigationRequested
                     ) {
                         if (!isPreviewLoading && !fallbackNavigationRequested) {
-                            fallbackNavigationRequested = true
-                            navigateToImportSuccessDestination(
-                                navController,
-                                missingPreviewFallbackOrigin,
-                                excelViewModel
-                            )
+                            navigateMissingPreview()
                         }
                     }
                     if (isPreviewLoading) {
@@ -344,6 +420,8 @@ fun AppNavGraph() {
                         ) {
                             CircularProgressIndicator()
                         }
+                    } else {
+                        RouteFallbackState(onNavigate = navigateMissingPreview)
                     }
                 } else {
                     val isApplyError =
@@ -364,10 +442,22 @@ fun AppNavGraph() {
                                         analysis.errors.map { it.rowNumber }.toSet()
                                 }
                             }
-                            val successDestination = generatedAwareReturnOrigin
-                            missingPreviewFallbackOrigin = successDestination
-                            navigateToImportSuccessDestination(navController, successDestination, excelViewModel)
-                            dbViewModel.dismissImportPreview()
+                            fallbackNavigationRequested = true
+                            importAnalysisExitCleanupApplied = false
+                            pendingImportAnalysisExitCleanup = ImportAnalysisExitCleanup.DismissPreview
+                            navigateByGeneratedExitRequest(
+                                navController = navController,
+                                request = GeneratedExitRequest(
+                                    origin = importOrigin,
+                                    exitReason = GeneratedExitReason.ImportSuccess,
+                                    currentRoute = currentRoute,
+                                    entryUid = currentEntryUid.takeIf { it > 0L },
+                                    isNewEntry = excelViewModel.peekGeneratedRouteIsNew(),
+                                    isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry(),
+                                    previewId = (importFlowState as? ImportFlowState.Success)?.previewId
+                                ),
+                                excelViewModel = excelViewModel
+                            )
                         }
                     }
 
@@ -383,15 +473,22 @@ fun AppNavGraph() {
                         onCorrectRows = {
                             excelViewModel.errorRowIndexes.value =
                                 analysis.errors.map { it.rowNumber }.toSet()
-                            missingPreviewFallbackOrigin = ImportNavOrigin.GENERATED
-                            if (!navController.popBackStack()) {
-                                navigateToImportSuccessDestination(
-                                    navController,
-                                    ImportNavOrigin.GENERATED,
-                                    excelViewModel
-                                )
-                            }
-                            dbViewModel.clearImportAnalysis()
+                            fallbackNavigationRequested = true
+                            importAnalysisExitCleanupApplied = false
+                            pendingImportAnalysisExitCleanup = ImportAnalysisExitCleanup.CancelPreview
+                            navigateByGeneratedExitRequest(
+                                navController = navController,
+                                request = GeneratedExitRequest(
+                                    origin = importOrigin,
+                                    exitReason = GeneratedExitReason.CorrectRows,
+                                    currentRoute = currentRoute,
+                                    entryUid = currentEntryUid.takeIf { it > 0L },
+                                    isNewEntry = excelViewModel.peekGeneratedRouteIsNew(),
+                                    isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry(),
+                                    previewId = (importFlowState as? ImportFlowState.PreviewReady)?.previewId
+                                ),
+                                excelViewModel = excelViewModel
+                            )
                         },
                         onClose = {
                             val flowState = importFlowState
@@ -401,15 +498,22 @@ fun AppNavGraph() {
                                 }
                                 dbViewModel.recoverImportPreviewAfterApplyError()
                             } else {
-                                missingPreviewFallbackOrigin = generatedAwareReturnOrigin
-                                if (!navController.popBackStack()) {
-                                    navigateToImportSuccessDestination(
-                                        navController,
-                                        generatedAwareReturnOrigin,
-                                        excelViewModel
-                                    )
-                                }
-                                dbViewModel.clearImportAnalysis()
+                                fallbackNavigationRequested = true
+                                importAnalysisExitCleanupApplied = false
+                                pendingImportAnalysisExitCleanup = ImportAnalysisExitCleanup.CancelPreview
+                                navigateByGeneratedExitRequest(
+                                    navController = navController,
+                                    request = GeneratedExitRequest(
+                                        origin = importOrigin,
+                                        exitReason = GeneratedExitReason.ImportCancel,
+                                        currentRoute = currentRoute,
+                                        entryUid = currentEntryUid.takeIf { it > 0L },
+                                        isNewEntry = excelViewModel.peekGeneratedRouteIsNew(),
+                                        isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry(),
+                                        previewId = (flowState as? ImportFlowState.PreviewReady)?.previewId
+                                    ),
+                                    excelViewModel = excelViewModel
+                                )
                             }
                         },
                     )
@@ -430,27 +534,93 @@ fun AppNavGraph() {
     }
 }
 
-private fun navigateToImportSuccessDestination(
+private enum class ImportAnalysisExitCleanup {
+    CancelPreview,
+    DismissPreview
+}
+
+@Composable
+private fun RouteFallbackState(
+    onNavigate: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.error_label),
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Text(
+                text = stringResource(R.string.import_preview_invalidated),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onNavigate) {
+                Text(stringResource(R.string.back))
+            }
+        }
+    }
+}
+
+private fun resolveGeneratedSessionOrigin(
+    excelViewModel: ExcelViewModel,
+    isNewEntry: Boolean
+): ImportNavOrigin {
+    val storedOrigin = excelViewModel.peekImportOriginForGeneratedSession()
+    return if (storedOrigin == ImportNavOrigin.HOME && !isNewEntry) {
+        ImportNavOrigin.HISTORY
+    } else {
+        storedOrigin
+    }
+}
+
+private fun navigateByGeneratedExitRequest(
     navController: NavHostController,
-    origin: ImportNavOrigin,
+    request: GeneratedExitRequest,
     excelViewModel: ExcelViewModel
 ) {
-    when (origin) {
-        ImportNavOrigin.HOME -> navController.navigate(Screen.FilePicker.route) {
+    val destination = GeneratedExitDestinationResolver.resolve(request)
+    Log.d(
+        GENERATED_EXIT_TAG,
+        "resolve origin=${request.origin} reason=${request.exitReason} " +
+            "route=${request.currentRoute} entryUid=${request.entryUid ?: 0L} " +
+            "previewId=${request.previewId ?: 0L} destination=$destination"
+    )
+    navigateToGeneratedExitDestination(
+        navController = navController,
+        destination = destination,
+        excelViewModel = excelViewModel
+    )
+}
+
+private fun navigateToGeneratedExitDestination(
+    navController: NavHostController,
+    destination: GeneratedExitDestination,
+    excelViewModel: ExcelViewModel
+) {
+    when (destination) {
+        GeneratedExitDestination.NewExcelDestination -> navController.navigate(Screen.FilePicker.route) {
             popUpTo(Screen.FilePicker.route) { inclusive = false }
             launchSingleTop = true
         }
-        ImportNavOrigin.HISTORY -> {
+        GeneratedExitDestination.HistoryRoot -> {
             val startRoute = navController.graph.findStartDestination().route ?: Screen.FilePicker.route
             navController.navigate(Screen.History.route) {
                 popUpTo(startRoute) {
                     saveState = true
                 }
                 launchSingleTop = true
-                restoreState = true
+                restoreState = false
             }
         }
-        ImportNavOrigin.DATABASE -> {
+        GeneratedExitDestination.DatabaseRoot -> {
             val startRoute = navController.graph.findStartDestination().route ?: Screen.FilePicker.route
             navController.navigate(Screen.Database.route) {
                 popUpTo(startRoute) {
@@ -460,31 +630,31 @@ private fun navigateToImportSuccessDestination(
                 restoreState = true
             }
         }
-        ImportNavOrigin.GENERATED -> {
-            val uid = excelViewModel.currentEntryStatus.value.third
-            if (uid == 0L) {
-                navController.navigate(Screen.FilePicker.route) {
-                    popUpTo(Screen.FilePicker.route) { inclusive = false }
-                    launchSingleTop = true
+        is GeneratedExitDestination.Generated -> {
+            navController.navigate(
+                Screen.Generated.createRoute(
+                    entryUid = destination.entryUid,
+                    isNew = destination.isNewEntry,
+                    isManualEntry = destination.isManualEntry
+                )
+            ) {
+                // Do not save/restore the ImportAnalysis child route when intentionally returning.
+                popUpTo(navController.graph.findStartDestination().route ?: Screen.FilePicker.route) {
+                    saveState = false
                 }
-            } else {
-                navController.navigate(
-                    Screen.Generated.createRoute(
-                        entryUid = uid,
-                        isNew = excelViewModel.peekGeneratedRouteIsNew(),
-                        isManualEntry = excelViewModel.peekGeneratedRouteIsManualEntry()
-                    )
-                ) {
-                    popUpTo(navController.graph.findStartDestination().route ?: Screen.FilePicker.route) {
-                        saveState = true
-                    }
-                    launchSingleTop = true
-                    restoreState = true
-                }
+                launchSingleTop = true
+                restoreState = false
             }
         }
+        is GeneratedExitDestination.RecoverableError -> navigateToGeneratedExitDestination(
+            navController = navController,
+            destination = destination.fallback,
+            excelViewModel = excelViewModel
+        )
     }
 }
+
+private const val GENERATED_EXIT_TAG = "GeneratedExit"
 
 private fun navigateToRootTab(
     navController: NavHostController,

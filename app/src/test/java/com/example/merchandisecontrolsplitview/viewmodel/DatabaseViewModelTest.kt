@@ -39,6 +39,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -667,6 +668,106 @@ class DatabaseViewModelTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `importProducts applies valid updates when analysis also has row errors`() = runTest {
+        val oldProduct = sampleProduct(id = 11L, barcode = "11112222", productName = "Old Name")
+        coEvery { repository.getAllProducts() } returns listOf(oldProduct)
+
+        viewModel.analyzeGridData(
+            listOf(
+                mapOf(
+                    "barcode" to "11112222",
+                    "productName" to "Updated Name",
+                    "purchasePrice" to "3.0",
+                    "retailPrice" to "5.0",
+                    "quantity" to "2"
+                ),
+                mapOf(
+                    "barcode" to "",
+                    "productName" to "Broken Row",
+                    "purchasePrice" to "4.0",
+                    "retailPrice" to "6.0",
+                    "quantity" to "1"
+                )
+            )
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.importAnalysisResult.value != null }
+        val previewId = (viewModel.importFlowState.value as ImportFlowState.PreviewReady).previewId
+        val analysis = viewModel.importAnalysisResult.value!!
+        assertTrue(analysis.hasValidRowsToApply)
+        assertTrue(analysis.errors.isNotEmpty())
+        assertEquals(1, analysis.updatedProducts.size)
+        assertEquals(0, analysis.newProducts.size)
+
+        coEvery { repository.applyImport(any()) } returns ImportApplyResult.Success
+
+        viewModel.importProducts(
+            previewId = previewId,
+            newProducts = analysis.newProducts,
+            updatedProducts = analysis.updatedProducts,
+            context = app
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.Success }
+
+        coVerify(exactly = 1) {
+            repository.applyImport(
+                match {
+                    it.newProducts.isEmpty() &&
+                        it.updatedProducts.single().oldProduct.id == oldProduct.id &&
+                        it.updatedProducts.single().newProduct.productName == "Updated Name"
+                }
+            )
+        }
+        assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
+    }
+
+    @Test
+    fun `importProducts rejects preview with only row errors and no valid rows`() = runTest {
+        coEvery { repository.getAllProducts() } returns emptyList()
+
+        viewModel.analyzeGridData(
+            listOf(
+                mapOf(
+                    "barcode" to "",
+                    "productName" to "Broken Row",
+                    "purchasePrice" to "4.0",
+                    "retailPrice" to "6.0",
+                    "quantity" to "1"
+                )
+            )
+        )
+        advanceUntilIdle()
+        waitForCondition { viewModel.importAnalysisResult.value != null }
+        val previewId = (viewModel.importFlowState.value as ImportFlowState.PreviewReady).previewId
+        val analysis = viewModel.importAnalysisResult.value!!
+        assertFalse(analysis.hasValidRowsToApply)
+        assertTrue(analysis.errors.isNotEmpty())
+
+        viewModel.importProducts(
+            previewId = previewId,
+            newProducts = analysis.newProducts,
+            updatedProducts = analysis.updatedProducts,
+            context = app
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.applyImport(any()) }
+        assertEquals(
+            ImportFlowState.Error(
+                previewId = previewId,
+                message = app.getString(R.string.import_no_valid_rows_to_apply),
+                occurredDuringApply = false
+            ),
+            viewModel.importFlowState.value
+        )
+        assertEquals(
+            UiState.Error(app.getString(R.string.import_no_valid_rows_to_apply)),
+            viewModel.uiState.value
+        )
     }
 
     @Test

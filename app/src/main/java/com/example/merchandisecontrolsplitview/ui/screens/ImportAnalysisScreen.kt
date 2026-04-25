@@ -65,6 +65,7 @@ fun ImportAnalysisScreen(
     }
     val importErrorMessage = (importFlowState as? ImportFlowState.Error)?.message
     val isApplyError = (importFlowState as? ImportFlowState.Error)?.occurredDuringApply == true
+    val hasValidRowsToApply = importAnalysis.hasValidRowsToApply
     val closeActionText = stringResource(
         if (importErrorMessage == null) R.string.cancel else R.string.close
     )
@@ -147,7 +148,7 @@ fun ImportAnalysisScreen(
                     },
                     enabled = !isApplying &&
                         previewId != null &&
-                        (editableNewProducts.isNotEmpty() || editableUpdatedProducts.isNotEmpty())
+                        hasValidRowsToApply
                 ) { Text(stringResource(R.string.confirm_import)) }
                 OutlinedButton(
                     onClick = onClose,
@@ -278,6 +279,14 @@ fun ImportAnalysisScreen(
                     onToggle = { errorsExpanded = !errorsExpanded }
                 ) {
                     if (importAnalysis.errors.isNotEmpty()) {
+                        if (hasValidRowsToApply) {
+                            Text(
+                                text = stringResource(R.string.import_valid_rows_with_errors_notice),
+                                modifier = Modifier.padding(spacing.md),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
                             val exportErrorsFilename = stringResource(R.string.default_error_export_filename)
                             Button(

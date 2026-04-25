@@ -275,6 +275,169 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `applyImport updating one synced product marks only that product dirty`() = runTest {
+        val supplierId = db.supplierDao().insert(Supplier(name = "Import Supplier 057"))
+        val categoryId = db.categoryDao().insert(Category(name = "Import Category 057"))
+        db.productDao().insert(
+            Product(
+                barcode = "057-update-target",
+                productName = "Import Target 057",
+                purchasePrice = 10.0,
+                retailPrice = 12.0,
+                supplierId = supplierId,
+                categoryId = categoryId
+            )
+        )
+        db.productDao().insert(
+            Product(
+                barcode = "057-update-other",
+                productName = "Import Other 057",
+                purchasePrice = 20.0,
+                retailPrice = 24.0,
+                supplierId = supplierId,
+                categoryId = categoryId
+            )
+        )
+        val target = repository.findProductByBarcode("057-update-target")!!
+        val other = repository.findProductByBarcode("057-update-other")!!
+        db.supplierRemoteRefDao().insert(
+            SupplierRemoteRef(
+                supplierId = supplierId,
+                remoteId = "00000000-0000-4000-8000-000000000571",
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "supplier-057"
+            )
+        )
+        db.categoryRemoteRefDao().insert(
+            CategoryRemoteRef(
+                categoryId = categoryId,
+                remoteId = "00000000-0000-4000-8000-000000000572",
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "category-057"
+            )
+        )
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = target.id,
+                remoteId = "00000000-0000-4000-8000-000000000573",
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "target-057"
+            )
+        )
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = other.id,
+                remoteId = "00000000-0000-4000-8000-000000000574",
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "other-057"
+            )
+        )
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = target,
+                        newProduct = target.copy(
+                            productName = "Import Target 057 Updated",
+                            purchasePrice = 11.0,
+                            retailPrice = 13.0
+                        ),
+                        changedFields = emptyList()
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val supplierRef = db.supplierRemoteRefDao().getBySupplierId(supplierId)!!
+        val categoryRef = db.categoryRemoteRefDao().getByCategoryId(categoryId)!!
+        val targetRef = db.productRemoteRefDao().getByProductId(target.id)!!
+        val otherRef = db.productRemoteRefDao().getByProductId(other.id)!!
+
+        assertEquals(0, supplierRef.localChangeRevision)
+        assertEquals(0, categoryRef.localChangeRevision)
+        assertEquals(1, targetRef.localChangeRevision)
+        assertEquals(0, targetRef.lastSyncedLocalRevision)
+        assertEquals(0, otherRef.localChangeRevision)
+        assertTrue(db.supplierDao().getCatalogPushCandidates().isEmpty())
+        assertTrue(db.categoryDao().getCatalogPushCandidates().isEmpty())
+        assertEquals(
+            listOf(target.id),
+            db.productDao().getCatalogPushCandidates().map { it.product.id }
+        )
+    }
+
+    @Test
+    fun `applyImport single update adds one candidate on top of existing product backlog`() = runTest {
+        repeat(3) { index ->
+            db.productDao().insert(
+                Product(
+                    barcode = "057-backlog-$index",
+                    productName = "Backlog Product 057 $index",
+                    purchasePrice = 10.0 + index,
+                    retailPrice = 12.0 + index
+                )
+            )
+        }
+        db.productDao().insert(
+            Product(
+                barcode = "057-backlog-update-target",
+                productName = "Backlog Update Target 057",
+                purchasePrice = 30.0,
+                retailPrice = 35.0
+            )
+        )
+        val target = repository.findProductByBarcode("057-backlog-update-target")!!
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = target.id,
+                remoteId = "00000000-0000-4000-8000-000000000575",
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "target-backlog-057"
+            )
+        )
+        val backlogIds = db.productDao().getCatalogPushCandidates().map { it.product.id }
+        assertEquals(3, backlogIds.size)
+        assertFalse(backlogIds.contains(target.id))
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = target,
+                        newProduct = target.copy(
+                            productName = "Backlog Update Target 057 Updated",
+                            purchasePrice = 31.0,
+                            retailPrice = 36.0
+                        ),
+                        changedFields = emptyList()
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val candidatesAfterImport = db.productDao().getCatalogPushCandidates().map { it.product.id }
+        assertEquals(backlogIds.toSet() + target.id, candidatesAfterImport.toSet())
+
+        val progress = mutableListOf<CatalogSyncProgressState>()
+        val push = repository.pushDirtyCatalogDeltaToRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = "00000000-0000-4000-8000-000000000576",
+            progressReporter = CatalogSyncProgressReporter { progress.add(it) }
+        )
+
+        assertTrue(push.isSuccess)
+        assertEquals(4, push.getOrThrow().pushedProducts)
+        assertEquals(
+            4,
+            progress.first { it.stage == CatalogSyncStage.PUSH_PRODUCTS }.total
+        )
+    }
+
+    @Test
     fun `applyImport rolls back products relations and price history on failure after product persistence`() = runTest {
         DefaultInventoryRepositoryTestHooks.afterProductsPersisted = {
             throw IllegalStateException("boom")

@@ -789,6 +789,16 @@ class DatabaseViewModel(
             )
             return
         }
+        if (newProducts.isEmpty() && updatedProducts.isEmpty()) {
+            val message = context.getString(R.string.import_no_valid_rows_to_apply)
+            _uiState.value = UiState.Error(message)
+            _importFlowState.value = ImportFlowState.Error(
+                previewId = previewId,
+                message = message,
+                occurredDuringApply = false
+            )
+            return
+        }
 
         val importRequest = ImportApplyRequest(
             newProducts = newProducts,

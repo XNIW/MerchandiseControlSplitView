@@ -14,4 +14,7 @@ data class ImportAnalysis(
     val updatedProducts: List<ProductUpdate>,
     val errors: List<RowImportError>,
     val warnings: List<DuplicateWarning>
-)
+) {
+    val hasValidRowsToApply: Boolean
+        get() = newProducts.isNotEmpty() || updatedProducts.isNotEmpty()
+}
