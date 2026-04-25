@@ -199,10 +199,10 @@ JOIN (
         price: Double,
         effectiveAt: String,      // "yyyy-MM-dd HH:mm:ss"
         source: String? = null
-    ) {
+    ): Boolean {
         val last = getLastPrice(productId, type)
         if (last == null || abs(last - price) > 0.0005) {
-            insert(
+            return insert(
                 ProductPrice(
                     productId = productId,
                     type = type,
@@ -210,8 +210,9 @@ JOIN (
                     effectiveAt = effectiveAt,
                     source = source
                 )
-            )
+            ) > 0L
         }
+        return false
     }
 
     // Convenience wrapper (nessuna @Query qui, chiama quella sopra)

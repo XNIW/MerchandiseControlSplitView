@@ -78,6 +78,10 @@ class CatalogAutoSyncCoordinator(
         schedulePush("local_commit")
     }
 
+    fun onLocalCatalogChanged() {
+        schedulePush("local_catalog_commit")
+    }
+
     fun onAppForeground() {
         isForeground = true
         scheduleBootstrap("foreground")
@@ -87,6 +91,12 @@ class CatalogAutoSyncCoordinator(
 
     fun onAppBackground() {
         isForeground = false
+    }
+
+    fun onNetworkAvailable() {
+        scheduleBootstrap("network_available")
+        schedulePush("network_available")
+        scheduleSyncEventDrain("network_available")
     }
 
     fun shutdown() {

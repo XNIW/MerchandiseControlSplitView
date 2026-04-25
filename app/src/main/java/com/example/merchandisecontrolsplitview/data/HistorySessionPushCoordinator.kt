@@ -67,6 +67,10 @@ class HistorySessionPushCoordinator(
         isForeground = false
     }
 
+    fun onNetworkAvailable() {
+        schedule("network_available")
+    }
+
     fun shutdown() {
         scope.cancel()
     }

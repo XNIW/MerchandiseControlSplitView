@@ -331,6 +331,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     @Volatile
     var onProductCatalogChanged: ((Long) -> Unit)? = null
+
+    @Volatile
+    var onCatalogChanged: (() -> Unit)? = null
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
     override suspend fun findProductByBarcode(barcode: String) =
@@ -373,20 +376,23 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     override suspend fun getProductsWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getWithDetailsPage(limit, offset) }
-    override suspend fun deleteProduct(product: Product) = withContext(Dispatchers.IO) {
-        db.withTransaction {
-            productRemoteRefDao.getByProductId(product.id)?.remoteId?.let { rid ->
-                pendingCatalogTombstoneDao.insert(
-                    PendingCatalogTombstone(
-                        entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
-                        remoteId = rid,
-                        enqueuedAtMs = System.currentTimeMillis(),
-                        attemptCount = 0
+    override suspend fun deleteProduct(product: Product) {
+        withContext(Dispatchers.IO) {
+            db.withTransaction {
+                productRemoteRefDao.getByProductId(product.id)?.remoteId?.let { rid ->
+                    pendingCatalogTombstoneDao.insert(
+                        PendingCatalogTombstone(
+                            entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                            remoteId = rid,
+                            enqueuedAtMs = System.currentTimeMillis(),
+                            attemptCount = 0
+                        )
                     )
-                )
+                }
+                productDao.delete(product)
             }
-            productDao.delete(product)
         }
+        notifyCatalogChanged()
     }
     override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =
         withContext(Dispatchers.IO) {
@@ -395,9 +401,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
 
             try {
-                db.withTransaction {
+                val touchedProductIds = db.withTransaction {
                     applyImportAtomically(request)
                 }
+                touchedProductIds.forEach(::notifyProductCatalogChanged)
                 ImportApplyResult.Success
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -424,20 +431,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private val supplierMutex = Mutex()
-    override suspend fun addSupplier(name: String): Supplier? = withContext(Dispatchers.IO) {
-        val normalizedName = name.trim()
-        if (normalizedName.isBlank()) return@withContext null
-        supplierMutex.withLock {
-            supplierDao.findByNameIgnoreCase(normalizedName)?.let { return@withLock it }
-            val newSupplier = Supplier(name = normalizedName)
-            val insertedId = supplierDao.insert(newSupplier)
-            val created = if (insertedId > 0L) {
-                supplierDao.getById(insertedId)
-            } else {
-                supplierDao.findByNameIgnoreCase(normalizedName)
+    override suspend fun addSupplier(name: String): Supplier? {
+        val (supplier, didCreate) = withContext(Dispatchers.IO) {
+            val normalizedName = name.trim()
+            if (normalizedName.isBlank()) return@withContext null to false
+            supplierMutex.withLock {
+                supplierDao.findByNameIgnoreCase(normalizedName)?.let { return@withLock it to false }
+                val newSupplier = Supplier(name = normalizedName)
+                val insertedId = supplierDao.insert(newSupplier)
+                val created = if (insertedId > 0L) {
+                    supplierDao.getById(insertedId)
+                } else {
+                    supplierDao.findByNameIgnoreCase(normalizedName)
+                }
+                Pair(
+                    created?.also { touchSupplierDirty(it.id) },
+                    created != null && insertedId > 0L
+                )
             }
-            created?.also { touchSupplierDirty(it.id) }
         }
+        if (didCreate) {
+            notifyCatalogChanged()
+        }
+        return supplier
     }
 
     override suspend fun getCatalogItems(
@@ -465,110 +481,126 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     override suspend fun createCatalogEntry(
         kind: CatalogEntityKind,
         name: String
-    ): CatalogListItem = withContext(Dispatchers.IO) {
-        withCatalogMutationLock(kind) {
-            val item = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
-            when (kind) {
-                CatalogEntityKind.SUPPLIER -> touchSupplierDirty(item.id)
-                CatalogEntityKind.CATEGORY -> touchCategoryDirty(item.id)
+    ): CatalogListItem {
+        val item = withContext(Dispatchers.IO) {
+            withCatalogMutationLock(kind) {
+                val created = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
+                when (kind) {
+                    CatalogEntityKind.SUPPLIER -> touchSupplierDirty(created.id)
+                    CatalogEntityKind.CATEGORY -> touchCategoryDirty(created.id)
+                }
+                created
             }
-            item
         }
+        notifyCatalogChanged()
+        return item
     }
 
     override suspend fun renameCatalogEntry(
         kind: CatalogEntityKind,
         id: Long,
         newName: String
-    ): CatalogListItem = withContext(Dispatchers.IO) {
-        withCatalogMutationLock(kind) {
-            val current = getCatalogEntityRef(kind, id)
-                ?: throw CatalogNotFoundException(kind, id)
-            val normalizedName = normalizedNameFor(kind, newName, currentId = id)
-            if (current.name != normalizedName) {
-                renameCatalogEntity(kind, id, normalizedName)
+    ): CatalogListItem {
+        val item = withContext(Dispatchers.IO) {
+            withCatalogMutationLock(kind) {
+                val current = getCatalogEntityRef(kind, id)
+                    ?: throw CatalogNotFoundException(kind, id)
+                val normalizedName = normalizedNameFor(kind, newName, currentId = id)
+                if (current.name != normalizedName) {
+                    renameCatalogEntity(kind, id, normalizedName)
+                }
+                when (kind) {
+                    CatalogEntityKind.SUPPLIER -> touchSupplierDirty(id)
+                    CatalogEntityKind.CATEGORY -> touchCategoryDirty(id)
+                }
+                CatalogListItem(
+                    id = id,
+                    name = normalizedName,
+                    productCount = linkedProductCount(kind, id)
+                )
             }
-            when (kind) {
-                CatalogEntityKind.SUPPLIER -> touchSupplierDirty(id)
-                CatalogEntityKind.CATEGORY -> touchCategoryDirty(id)
-            }
-            CatalogListItem(
-                id = id,
-                name = normalizedName,
-                productCount = linkedProductCount(kind, id)
-            )
         }
+        notifyCatalogChanged()
+        return item
     }
 
     override suspend fun deleteCatalogEntry(
         kind: CatalogEntityKind,
         id: Long,
         strategy: CatalogDeleteStrategy
-    ): CatalogDeleteResult = withContext(Dispatchers.IO) {
-        withCatalogMutationLock(kind) {
-            db.withTransaction {
-                getCatalogEntityRef(kind, id) ?: throw CatalogNotFoundException(kind, id)
-                when (strategy) {
-                    CatalogDeleteStrategy.DeleteIfUnused -> {
-                        val linkedCount = linkedProductCount(kind, id)
-                        if (linkedCount > 0) {
-                            throw CatalogEntityInUseException(linkedCount)
+    ): CatalogDeleteResult {
+        val result = withContext(Dispatchers.IO) {
+            withCatalogMutationLock(kind) {
+                db.withTransaction {
+                    getCatalogEntityRef(kind, id) ?: throw CatalogNotFoundException(kind, id)
+                    when (strategy) {
+                        CatalogDeleteStrategy.DeleteIfUnused -> {
+                            val linkedCount = linkedProductCount(kind, id)
+                            if (linkedCount > 0) {
+                                throw CatalogEntityInUseException(linkedCount)
+                            }
+                            deleteCatalogEntity(kind, id)
+                            CatalogDeleteResult(
+                                affectedProducts = 0,
+                                strategy = strategy
+                            )
                         }
-                        deleteCatalogEntity(kind, id)
-                        CatalogDeleteResult(
-                            affectedProducts = 0,
-                            strategy = strategy
-                        )
-                    }
 
-                    is CatalogDeleteStrategy.ReplaceWithExisting -> {
-                        if (strategy.replacementId == id) {
-                            throw CatalogInvalidReplacementException
+                        is CatalogDeleteStrategy.ReplaceWithExisting -> {
+                            if (strategy.replacementId == id) {
+                                throw CatalogInvalidReplacementException
+                            }
+                            val replacement = getCatalogEntityRef(kind, strategy.replacementId)
+                                ?: throw CatalogNotFoundException(kind, strategy.replacementId)
+                            val affectedProducts = reassignCatalogProducts(
+                                kind = kind,
+                                sourceId = id,
+                                replacementId = strategy.replacementId
+                            )
+                            deleteCatalogEntity(kind, id)
+                            CatalogDeleteResult(
+                                affectedProducts = affectedProducts,
+                                strategy = strategy,
+                                replacementName = replacement.name
+                            )
                         }
-                        val replacement = getCatalogEntityRef(kind, strategy.replacementId)
-                            ?: throw CatalogNotFoundException(kind, strategy.replacementId)
-                        val affectedProducts = reassignCatalogProducts(
-                            kind = kind,
-                            sourceId = id,
-                            replacementId = strategy.replacementId
-                        )
-                        deleteCatalogEntity(kind, id)
-                        CatalogDeleteResult(
-                            affectedProducts = affectedProducts,
-                            strategy = strategy,
-                            replacementName = replacement.name
-                        )
-                    }
 
-                    is CatalogDeleteStrategy.CreateNewAndReplace -> {
-                        val replacement = createCatalogEntryLocked(
-                            kind = kind,
-                            normalizedName = normalizedNameFor(kind, strategy.replacementName)
-                        )
-                        val affectedProducts = reassignCatalogProducts(
-                            kind = kind,
-                            sourceId = id,
-                            replacementId = replacement.id
-                        )
-                        deleteCatalogEntity(kind, id)
-                        CatalogDeleteResult(
-                            affectedProducts = affectedProducts,
-                            strategy = strategy,
-                            replacementName = replacement.name
-                        )
-                    }
+                        is CatalogDeleteStrategy.CreateNewAndReplace -> {
+                            val replacement = createCatalogEntryLocked(
+                                kind = kind,
+                                normalizedName = normalizedNameFor(kind, strategy.replacementName)
+                            )
+                            when (kind) {
+                                CatalogEntityKind.SUPPLIER -> touchSupplierDirty(replacement.id)
+                                CatalogEntityKind.CATEGORY -> touchCategoryDirty(replacement.id)
+                            }
+                            val affectedProducts = reassignCatalogProducts(
+                                kind = kind,
+                                sourceId = id,
+                                replacementId = replacement.id
+                            )
+                            deleteCatalogEntity(kind, id)
+                            CatalogDeleteResult(
+                                affectedProducts = affectedProducts,
+                                strategy = strategy,
+                                replacementName = replacement.name
+                            )
+                        }
 
-                    CatalogDeleteStrategy.ClearAssignments -> {
-                        val affectedProducts = clearCatalogAssignments(kind, id)
-                        deleteCatalogEntity(kind, id)
-                        CatalogDeleteResult(
-                            affectedProducts = affectedProducts,
-                            strategy = strategy
-                        )
+                        CatalogDeleteStrategy.ClearAssignments -> {
+                            val affectedProducts = clearCatalogAssignments(kind, id)
+                            deleteCatalogEntity(kind, id)
+                            CatalogDeleteResult(
+                                affectedProducts = affectedProducts,
+                                strategy = strategy
+                            )
+                        }
                     }
                 }
             }
         }
+        notifyCatalogChanged()
+        return result
     }
     override suspend fun recordPriceIfChanged(
         productId: Long,
@@ -576,8 +608,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         price: Double,
         at: String,
         source: String?
-    ) = withContext(Dispatchers.IO) {
-        priceDao.insertIfChanged(productId, type, price, at, source)
+    ) {
+        val inserted = withContext(Dispatchers.IO) {
+            priceDao.insertIfChanged(productId, type, price, at, source)
+        }
+        if (inserted) {
+            notifyProductCatalogChanged(productId)
+        }
     }
 
     override suspend fun getLastPrice(productId: Long, type: String): Double? =
@@ -615,20 +652,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private val categoryMutex = Mutex()
-    override suspend fun addCategory(name: String): Category? = withContext(Dispatchers.IO) {
-        val normalizedName = name.trim()
-        if (normalizedName.isBlank()) return@withContext null
-        categoryMutex.withLock {
-            categoryDao.findByName(normalizedName)?.let { return@withLock it }
-            val newCategory = Category(name = normalizedName)
-            val insertedId = categoryDao.insert(newCategory)
-            val created = if (insertedId > 0L) {
-                categoryDao.getById(insertedId)
-            } else {
-                categoryDao.findByName(normalizedName)
+    override suspend fun addCategory(name: String): Category? {
+        val (category, didCreate) = withContext(Dispatchers.IO) {
+            val normalizedName = name.trim()
+            if (normalizedName.isBlank()) return@withContext null to false
+            categoryMutex.withLock {
+                categoryDao.findByName(normalizedName)?.let { return@withLock it to false }
+                val newCategory = Category(name = normalizedName)
+                val insertedId = categoryDao.insert(newCategory)
+                val created = if (insertedId > 0L) {
+                    categoryDao.getById(insertedId)
+                } else {
+                    categoryDao.findByName(normalizedName)
+                }
+                Pair(
+                    created?.also { touchCategoryDirty(it.id) },
+                    created != null && insertedId > 0L
+                )
             }
-            created?.also { touchCategoryDirty(it.id) }
         }
+        if (didCreate) {
+            notifyCatalogChanged()
+        }
+        return category
     }
 
     // --- History Implementations ---
@@ -732,6 +778,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     private fun notifyProductCatalogChanged(productId: Long) {
         onProductCatalogChanged?.invoke(productId)
+    }
+
+    private fun notifyCatalogChanged() {
+        onCatalogChanged?.invoke()
     }
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         db.withTransaction {
@@ -1106,7 +1156,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         RemoteSessionBatchResult(inserted, updated, skipped, failed, unsupported)
     }
 
-    private suspend fun applyImportAtomically(request: ImportApplyRequest) {
+    private suspend fun applyImportAtomically(request: ImportApplyRequest): Set<Long> {
         val supplierIdsByName = supplierDao.getAll()
             .associate { it.name.trim().lowercase() to it.id }
             .toMutableMap()
@@ -1247,6 +1297,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             priceDao.insertAll(pendingPriceHistoryPoints)
         }
         markEntireCatalogDirtyForCloud()
+        return persistedProducts.map { it.id }.filter { it > 0L }.toSet()
     }
 
     private suspend fun normalizedNameFor(

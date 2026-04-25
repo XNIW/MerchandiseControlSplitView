@@ -1,6 +1,10 @@
 package com.example.merchandisecontrolsplitview
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -74,6 +78,9 @@ class MerchandiseControlApplication : Application() {
 
     /** Scope applicativo per osservatori lifecycle (auth → componenti remoti). */
     private val appScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val validatedNetworks = mutableSetOf<Network>()
+    private val networkLock = Any()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
@@ -207,6 +214,9 @@ class MerchandiseControlApplication : Application() {
             repository.onProductCatalogChanged = { productId ->
                 coordinator.onLocalProductChanged(productId)
             }
+            repository.onCatalogChanged = {
+                coordinator.onLocalCatalogChanged()
+            }
         }
     }
 
@@ -217,6 +227,7 @@ class MerchandiseControlApplication : Application() {
         historySessionPushCoordinator
         catalogAutoSyncCoordinator
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
+        registerNetworkAutoSyncTrigger()
         // Auth bootstrap: restore sessione se presente, altrimenti SignedOut (task 011).
         authManager.restoreSession()
         // Subscriber lifecycle gestito dall'auth observer (task 011 patch 5).
@@ -229,6 +240,7 @@ class MerchandiseControlApplication : Application() {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
         realtimeSessionSubscriber.shutdown()
         syncEventRealtimeSubscriber.shutdown()
+        unregisterNetworkAutoSyncTrigger()
         realtimeRefreshCoordinator.shutdown()
         historySessionPushCoordinator.shutdown()
         catalogAutoSyncCoordinator.shutdown()
@@ -282,6 +294,68 @@ class MerchandiseControlApplication : Application() {
                     }
                 }
             }
+        }
+    }
+
+    private fun registerNetworkAutoSyncTrigger() {
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(
+                network: Network,
+                networkCapabilities: NetworkCapabilities
+            ) {
+                val hasValidatedInternet =
+                    networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                val becameOnline = synchronized(networkLock) {
+                    val wasOffline = validatedNetworks.isEmpty()
+                    if (hasValidatedInternet) {
+                        validatedNetworks.add(network)
+                    } else {
+                        validatedNetworks.remove(network)
+                    }
+                    hasValidatedInternet && wasOffline
+                }
+                if (becameOnline) {
+                    Log.i(TAG, "Network: internet validato disponibile, pianifico sync cloud pending")
+                    catalogAutoSyncCoordinator.onNetworkAvailable()
+                    historySessionPushCoordinator.onNetworkAvailable()
+                }
+            }
+
+            override fun onLost(network: Network) {
+                synchronized(networkLock) {
+                    validatedNetworks.remove(network)
+                }
+            }
+
+            override fun onUnavailable() {
+                synchronized(networkLock) {
+                    validatedNetworks.clear()
+                }
+            }
+        }
+        runCatching {
+            connectivityManager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        }.onFailure { throwable ->
+            Log.w(TAG, "Network: registrazione callback auto-sync fallita", throwable)
+        }
+    }
+
+    private fun unregisterNetworkAutoSyncTrigger() {
+        val callback = networkCallback ?: return
+        val connectivityManager =
+            getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching {
+            connectivityManager.unregisterNetworkCallback(callback)
+        }.onFailure { throwable ->
+            Log.w(TAG, "Network: unregister callback auto-sync fallito", throwable)
+        }
+        networkCallback = null
+        synchronized(networkLock) {
+            validatedNetworks.clear()
         }
     }
 }

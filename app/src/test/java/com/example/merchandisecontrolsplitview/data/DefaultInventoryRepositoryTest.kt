@@ -216,6 +216,11 @@ class DefaultInventoryRepositoryTest {
 
     @Test
     fun `034 applyImport marks imported catalog dirty and exposes price history as pending cloud work`() = runTest {
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
         val result = repository.applyImport(
             importRequest(
                 newProducts = listOf(
@@ -266,6 +271,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(3, pushRows.size)
         assertTrue(pushRows.all { it.productId == imported.id })
         assertTrue(pushRows.any { it.source == "IMPORT_SHEET" && it.effectiveAt == "2026-04-20 10:34:00" })
+        assertEquals(listOf(imported.id), changedProductIds)
     }
 
     @Test
@@ -381,22 +387,34 @@ class DefaultInventoryRepositoryTest {
 
     @Test
     fun `addSupplier returns existing supplier when name already exists`() = runTest {
+        var catalogChangeCount = 0
+        repository.onCatalogChanged = {
+            catalogChangeCount++
+        }
+
         val first = repository.addSupplier("My Supplier")
         val second = repository.addSupplier("My Supplier")
 
         assertNotNull(first)
         assertEquals(first?.id, second?.id)
         assertEquals(1, repository.getAllSuppliers().size)
+        assertEquals(1, catalogChangeCount)
     }
 
     @Test
     fun `addCategory returns existing category when name already exists`() = runTest {
+        var catalogChangeCount = 0
+        repository.onCatalogChanged = {
+            catalogChangeCount++
+        }
+
         val first = repository.addCategory("My Category")
         val second = repository.addCategory("My Category")
 
         assertNotNull(first)
         assertEquals(first?.id, second?.id)
         assertEquals(1, repository.getAllCategories().size)
+        assertEquals(1, catalogChangeCount)
     }
 
     @Test
@@ -529,6 +547,24 @@ class DefaultInventoryRepositoryTest {
         assertNull(categoryProduct.categoryId)
         assertNull(repository.getSupplierById(oldSupplier.id))
         assertNull(repository.getCategoryById(category.id))
+    }
+
+    @Test
+    fun `catalog entity mutations notify generic catalog auto sync`() = runTest {
+        var catalogChangeCount = 0
+        repository.onCatalogChanged = {
+            catalogChangeCount++
+        }
+
+        val supplier = repository.createCatalogEntry(CatalogEntityKind.SUPPLIER, "Sync Supplier")
+        repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, "Sync Supplier Renamed")
+        repository.deleteCatalogEntry(
+            kind = CatalogEntityKind.SUPPLIER,
+            id = supplier.id,
+            strategy = CatalogDeleteStrategy.DeleteIfUnused
+        )
+
+        assertEquals(3, catalogChangeCount)
     }
 
     @Test
@@ -683,6 +719,10 @@ class DefaultInventoryRepositoryTest {
 
     @Test
     fun `recordPriceIfChanged ignores unchanged value and getLastPrice returns latest`() = runTest {
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
         repository.addProduct(
             Product(
                 barcode = "55556666",
@@ -702,6 +742,7 @@ class DefaultInventoryRepositoryTest {
 
         assertEquals(2, purchaseHistory.size)
         assertEquals(1.5, repository.getLastPrice(saved.id, "PURCHASE"))
+        assertEquals(listOf(saved.id, saved.id), changedProductIds)
         assertEquals(1.5, snapshotRow.purchasePrice)
         assertEquals(2.0, snapshotRow.retailPrice)
     }
@@ -2026,6 +2067,10 @@ class DefaultInventoryRepositoryTest {
 
     @Test
     fun `019 deleteProduct with remote ref enqueues product tombstone`() = runTest {
+        var catalogChangeCount = 0
+        repository.onCatalogChanged = {
+            catalogChangeCount++
+        }
         repository.addProduct(
             Product(barcode = "tomb-p1", productName = "P")
         )
@@ -2039,6 +2084,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, pending.size)
         assertEquals(PendingCatalogTombstoneEntityTypes.PRODUCT, pending[0].entityType)
         assertEquals(rid, pending[0].remoteId)
+        assertEquals(1, catalogChangeCount)
     }
 
     // --- Pending breakdown snapshot (task 030, repository-first) ---

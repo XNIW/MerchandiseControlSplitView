@@ -828,6 +828,16 @@ Baseline ricavata dall'audit della repo (2026-03-26):
 | File task   | `docs/TASKS/TASK-055-audit-sync-supabase-ux-scroll-database-history.md` |
 | Descrizione | Audit read-only e piano applicabile per interazione Android ↔ Supabase: chiarezza UX full/partial push-pull, efficienza sync delta, auto-sync post modifica prodotto, feedback conteggi/errori, e preservazione scroll/search/filter/tab in `DatabaseScreen` e `HistoryScreen`. **Nessuna patch funzionale senza conferma utente.** |
 
+### TASK-056 — Fix spinner post conferma import review
+| Campo       | Valore                                                  |
+|-------------|---------------------------------------------------------|
+| Stato       | `PLANNING`                                              |
+| Priorità    | `ALTA`                                                  |
+| Area        | Import Excel / Revisione Importazione / DatabaseViewModel / Navigation |
+| Dipendenze  | **TASK-026** `DONE`, **TASK-044** `DONE`, **TASK-055** `PARTIAL` |
+| File task   | `docs/TASKS/TASK-056-fix-spinner-post-conferma-import-review.md` |
+| Descrizione | Fix mirato del blocco post **Conferma Importazione**: dopo `DB_IMPORT APPLY_IMPORT SUCCESS` la route `ImportAnalysis` puo restare senza preview e mostrare spinner full-screen. Pianificare patch minima su stato completion/navigation/reset preview, senza cambiare schema Room, Supabase o logica import/export. |
+
 ---
 
 ## Razionale priorità

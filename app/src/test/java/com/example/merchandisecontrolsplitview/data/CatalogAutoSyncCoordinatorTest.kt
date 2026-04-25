@@ -1,8 +1,13 @@
 package com.example.merchandisecontrolsplitview.data
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -10,6 +15,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
+@OptIn(ExperimentalCoroutinesApi::class)
 class CatalogAutoSyncCoordinatorTest {
 
     @Test
@@ -76,6 +82,63 @@ class CatalogAutoSyncCoordinatorTest {
 
         assertEquals(1, repository.bootstrapCalls)
         assertEquals(0, repository.pushCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `056 network available schedules catalog catch up push`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043()
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            bootstrapStalenessMs = Long.MAX_VALUE
+        )
+        runCurrent()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+        repository.pushCalls = 0
+        repository.bootstrapCalls = 0
+
+        coordinator.onNetworkAvailable()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.pushCalls)
+        assertTrue(repository.bootstrapCalls in 0..1)
+        assertEquals(false, tracker.isSyncing.value)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `056 generic local catalog change schedules catch up push`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043()
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L
+        )
+        runCurrent()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+        repository.pushCalls = 0
+
+        coordinator.onLocalCatalogChanged()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.pushCalls)
+        assertEquals(false, tracker.isSyncing.value)
         coordinator.shutdown()
     }
 
