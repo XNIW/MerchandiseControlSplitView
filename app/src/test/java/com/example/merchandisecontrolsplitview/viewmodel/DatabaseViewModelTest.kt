@@ -32,6 +32,7 @@ import io.mockk.runs
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.async
@@ -63,13 +64,16 @@ class DatabaseViewModelTest {
     private lateinit var repository: InventoryRepository
     private lateinit var viewModel: DatabaseViewModel
     private lateinit var app: Application
+    private lateinit var remoteAppliedProductIds: MutableSharedFlow<Set<Long>>
 
     @Before
     fun setup() {
         app = RuntimeEnvironment.getApplication()
         repository = mockk(relaxed = true)
+        remoteAppliedProductIds = MutableSharedFlow(extraBufferCapacity = 16)
 
         every { repository.getProductsWithDetailsPaged(any()) } returns mockk(relaxed = true)
+        every { repository.remoteAppliedProductIds } returns remoteAppliedProductIds
         every { repository.getPriceSeries(any(), any()) } returns emptyFlow()
         every { repository.getFilteredHistoryFlow(any()) } returns flowOf(emptyList())
 
@@ -253,6 +257,25 @@ class DatabaseViewModelTest {
         advanceUntilIdle()
 
         assertEquals(secondDetails, viewModel.productDetailsOverrides.value[9L])
+    }
+
+    @Test
+    fun `remote applied product ids store fresh product details override without global refresh`() = runTest {
+        val product = sampleProduct(id = 21L, barcode = "remote-21", productName = "Remote")
+        val freshDetails = sampleProductDetails(
+            product = product.copy(productName = "Remote Updated", retailPrice = 14.0),
+            lastRetail = 14.0,
+            prevRetail = 9.0
+        )
+        coEvery { repository.getProductDetailsById(product.id) } returns freshDetails
+
+        advanceUntilIdle()
+        remoteAppliedProductIds.emit(setOf(product.id))
+        advanceUntilIdle()
+
+        assertEquals(freshDetails, viewModel.productDetailsOverrides.value[product.id])
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+        coVerify(exactly = 1) { repository.getProductDetailsById(product.id) }
     }
 
     @Test

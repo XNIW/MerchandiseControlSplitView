@@ -174,6 +174,10 @@ class DatabaseViewModel(
         }.flow.cachedIn(viewModelScope)
     }
 
+    init {
+        observeRemoteAppliedProductIds()
+    }
+
     private val _supplierInputText = MutableStateFlow("")
     val supplierInputText: StateFlow<String> = _supplierInputText.asStateFlow()
 
@@ -993,11 +997,7 @@ class DatabaseViewModel(
             try {
                 productDetailsOverrideMutex.withLock {
                     repository.updateProduct(product)
-                    repository.getProductDetailsById(product.id)?.let { details ->
-                        _productDetailsOverrides.update { current ->
-                            current.withCappedProductDetailsOverride(product.id, details)
-                        }
-                    }
+                    refreshProductDetailsOverridesLocked(listOf(product.id))
                 }
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
             } catch (e: android.database.sqlite.SQLiteConstraintException) {
@@ -1006,6 +1006,44 @@ class DatabaseViewModel(
             } catch (e: Exception) {
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_updated))
+            }
+        }
+    }
+
+    private fun observeRemoteAppliedProductIds() {
+        viewModelScope.launch {
+            repository.remoteAppliedProductIds
+                .map { productIds -> productIds.filter { it > 0L }.distinct() }
+                .filter { it.isNotEmpty() }
+                .collect { productIds ->
+                    try {
+                        refreshProductDetailsOverrides(productIds)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w("DB_REMOTE_REFRESH", "Unable to refresh remote product overrides", e)
+                    }
+                }
+        }
+    }
+
+    private suspend fun refreshProductDetailsOverrides(productIds: Iterable<Long>) {
+        productDetailsOverrideMutex.withLock {
+            refreshProductDetailsOverridesLocked(productIds)
+        }
+    }
+
+    private suspend fun refreshProductDetailsOverridesLocked(productIds: Iterable<Long>) {
+        for (productId in productIds.distinct()) {
+            val details = repository.getProductDetailsById(productId)
+            _productDetailsOverrides.update { current ->
+                if (details != null) {
+                    current.withCappedProductDetailsOverride(productId, details)
+                } else if (current.containsKey(productId)) {
+                    current - productId
+                } else {
+                    current
+                }
             }
         }
     }

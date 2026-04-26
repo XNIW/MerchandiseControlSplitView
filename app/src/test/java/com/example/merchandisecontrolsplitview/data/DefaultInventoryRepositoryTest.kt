@@ -10,8 +10,10 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -34,6 +36,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
+@OptIn(ExperimentalCoroutinesApi::class)
 class DefaultInventoryRepositoryTest {
 
     private lateinit var db: AppDatabase
@@ -3042,6 +3045,8 @@ class DefaultInventoryRepositoryTest {
                 createdAt = "2026-04-24T10:00:01Z"
             )
         }
+        val remoteAppliedIds = async { repository.remoteAppliedProductIds.first() }
+        runCurrent()
 
         val summary = repository.drainSyncEventsFromRemote(
             remote = remote,
@@ -3058,8 +3063,10 @@ class DefaultInventoryRepositoryTest {
         assertEquals(setOf(priceRemoteId), priceRemote.targetedPriceIds.single())
         assertEquals(2, summary.syncEventsProcessed)
         assertEquals(2, summary.syncEventsWatermarkAfter)
-        assertEquals("Target", repository.findProductByBarcode("sync-event-045-target")!!.productName)
-        assertEquals(1, repository.getPriceSeries(repository.findProductByBarcode("sync-event-045-target")!!.id, "RETAIL").first().size)
+        val product = repository.findProductByBarcode("sync-event-045-target")!!
+        assertEquals("Target", product.productName)
+        assertEquals(1, repository.getPriceSeries(product.id, "RETAIL").first().size)
+        assertEquals(setOf(product.id), remoteAppliedIds.await())
     }
 
     @Test
@@ -3536,6 +3543,8 @@ class DefaultInventoryRepositoryTest {
                 )
             )
         }
+        val remoteAppliedIds = async { repository.remoteAppliedProductIds.first() }
+        runCurrent()
 
         val summary = repository.pullCatalogBootstrapFromRemote(
             remote = remote,
@@ -3553,6 +3562,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, summary.pulledProductPrices)
         assertEquals(101.0, product.retailPrice!!, 0.0001)
         assertEquals(101.0, priceSeries.single().price, 0.0001)
+        assertEquals(setOf(product.id), remoteAppliedIds.await())
     }
 
     // --- Backup sessioni cloud (task 023) ---
