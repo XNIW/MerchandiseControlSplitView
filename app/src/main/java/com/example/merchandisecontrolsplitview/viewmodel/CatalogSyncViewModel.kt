@@ -48,8 +48,15 @@ data class CatalogSyncUiState(
     val isSyncing: Boolean,
     val canRefresh: Boolean,
     val canQuickSync: Boolean = canRefresh,
-    @StringRes val quickSyncBodyRes: Int = R.string.catalog_cloud_sync_quick_body,
+    @param:StringRes val quickSyncBodyRes: Int = R.string.catalog_cloud_sync_quick_body,
+    val statusBadges: List<CatalogSyncBadgeUiState> = emptyList(),
+    val fullSyncRecommended: Boolean = false,
+    val quickSyncRecommended: Boolean = false,
     val progress: CatalogSyncStageUiState? = null
+)
+
+data class CatalogSyncBadgeUiState(
+    @param:StringRes val labelRes: Int
 )
 
 /** Scope for incremental “remote not verifiable” copy: only after a successful quick sync, not after full sync. */
@@ -280,6 +287,13 @@ class CatalogSyncViewModel(
                 isSyncing = true,
                 canRefresh = false,
                 canQuickSync = false,
+                statusBadges = buildStatusBadges(
+                    progress,
+                    lastSummary,
+                    lastHistorySessionSummary,
+                    pending,
+                    incrementalSurface
+                ),
                 progress = stageUi
             )
         }
@@ -319,6 +333,16 @@ class CatalogSyncViewModel(
                 val sessionDetailOnly = buildHistorySessionSecondary(lastHistorySessionSummary)
                 val canQuick = quickSyncLaneAvailable
                 val quickBodyRes = buildQuickSyncBodyRes(lastSummary)
+                val statusBadges = buildStatusBadges(
+                    progress,
+                    lastSummary,
+                    lastHistorySessionSummary,
+                    pending,
+                    incrementalSurface
+                )
+                val fullSyncRecommended =
+                    shouldRecommendFullSync(err, lastSummary, incrementalSurface)
+                val quickSyncRecommended = pending && canQuick && !fullSyncRecommended
                 when (err) {
                     ErrorKind.Offline -> {
                         return CatalogSyncUiState(
@@ -328,7 +352,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.Session -> {
@@ -339,7 +366,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.Forbidden -> {
@@ -350,7 +380,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.NotFoundOrConfig -> {
@@ -361,7 +394,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.CatalogOkPricesIncomplete -> {
@@ -377,7 +413,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.HistorySessionsIncomplete -> {
@@ -393,7 +432,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     ErrorKind.Generic -> {
@@ -404,7 +446,10 @@ class CatalogSyncViewModel(
                             isSyncing = false,
                             canRefresh = true,
                             canQuickSync = canQuick,
-                            quickSyncBodyRes = quickBodyRes
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = fullSyncRecommended,
+                            quickSyncRecommended = quickSyncRecommended
                         )
                     }
                     null -> { /* below */ }
@@ -420,7 +465,10 @@ class CatalogSyncViewModel(
                         isSyncing = false,
                         canRefresh = true,
                         canQuickSync = canQuick,
-                        quickSyncBodyRes = quickBodyRes
+                        quickSyncBodyRes = quickBodyRes,
+                        statusBadges = statusBadges,
+                        fullSyncRecommended = fullSyncRecommended,
+                        quickSyncRecommended = quickSyncRecommended
                     )
                 }
                 if (successAt == null) {
@@ -431,7 +479,10 @@ class CatalogSyncViewModel(
                         isSyncing = false,
                         canRefresh = true,
                         canQuickSync = canQuick,
-                        quickSyncBodyRes = quickBodyRes
+                        quickSyncBodyRes = quickBodyRes,
+                        statusBadges = statusBadges,
+                        fullSyncRecommended = fullSyncRecommended,
+                        quickSyncRecommended = quickSyncRecommended
                     )
                 }
                 return CatalogSyncUiState(
@@ -441,7 +492,10 @@ class CatalogSyncViewModel(
                     isSyncing = false,
                     canRefresh = true,
                     canQuickSync = canQuick,
-                    quickSyncBodyRes = quickBodyRes
+                    quickSyncBodyRes = quickBodyRes,
+                    statusBadges = statusBadges,
+                    fullSyncRecommended = fullSyncRecommended,
+                    quickSyncRecommended = quickSyncRecommended
                 )
             }
         }
@@ -453,6 +507,86 @@ class CatalogSyncViewModel(
         } else {
             R.string.catalog_cloud_sync_quick_body
         }
+
+    private fun shouldRecommendFullSync(
+        err: ErrorKind?,
+        lastSummary: CatalogSyncSummary?,
+        incrementalSurface: CatalogIncrementalDetailSurface
+    ): Boolean =
+        err == ErrorKind.CatalogOkPricesIncomplete ||
+            err == ErrorKind.HistorySessionsIncomplete ||
+            lastSummary?.manualFullSyncRequired == true ||
+            (
+                incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS &&
+                    lastSummary?.incrementalRemoteSubsetVerifiable == false
+                )
+
+    private fun buildStatusBadges(
+        progress: CatalogSyncProgressState,
+        lastSummary: CatalogSyncSummary?,
+        historySessionSummary: HistorySessionCloudUiSummary?,
+        pendingCatalogWork: Boolean,
+        incrementalSurface: CatalogIncrementalDetailSurface
+    ): List<CatalogSyncBadgeUiState> {
+        val badges = mutableListOf<CatalogSyncBadgeUiState>()
+        fun add(@StringRes labelRes: Int) {
+            if (badges.none { it.labelRes == labelRes }) {
+                badges.add(CatalogSyncBadgeUiState(labelRes))
+            }
+        }
+
+        if (progress.isBusy) {
+            when (progress.stage) {
+                CatalogSyncStage.REALIGN -> add(R.string.catalog_cloud_badge_complete)
+                CatalogSyncStage.PUSH_SUPPLIERS,
+                CatalogSyncStage.PUSH_CATEGORIES,
+                CatalogSyncStage.PUSH_PRODUCTS -> add(R.string.catalog_cloud_badge_upload)
+                CatalogSyncStage.PULL_CATALOG,
+                CatalogSyncStage.SYNC_PRICES -> add(R.string.catalog_cloud_badge_download)
+                CatalogSyncStage.SYNC_HISTORY -> add(R.string.catalog_cloud_badge_sessions)
+                CatalogSyncStage.IDLE,
+                CatalogSyncStage.COMPLETED -> Unit
+            }
+        }
+
+        lastSummary?.let { summary ->
+            val fullMode = summary.fullCatalogFetch || summary.fullPriceFetch
+            val pushedLocal = summary.pushedSuppliers + summary.pushedCategories +
+                summary.pushedProducts + summary.pushedProductPrices
+            val receivedRemote = summary.pulledSuppliers + summary.pulledCategories +
+                summary.pulledProducts + summary.pulledProductPrices +
+                summary.targetedProductsFetched + summary.targetedPricesFetched +
+                summary.remoteUpdatesApplied
+
+            if (summary.manualFullSyncRequired ||
+                (
+                    incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS &&
+                        !summary.incrementalRemoteSubsetVerifiable
+                    )
+            ) {
+                add(R.string.catalog_cloud_badge_full_required)
+            } else if (fullMode) {
+                add(R.string.catalog_cloud_badge_complete)
+            } else {
+                add(R.string.catalog_cloud_badge_quick)
+            }
+            if (pendingCatalogWork || pushedLocal > 0 || summary.syncEventOutboxPending > 0) {
+                add(R.string.catalog_cloud_badge_upload)
+            }
+            if (receivedRemote > 0) {
+                add(R.string.catalog_cloud_badge_download)
+            }
+        }
+
+        if (pendingCatalogWork) {
+            add(R.string.catalog_cloud_badge_upload)
+        }
+        if (historySessionSummary?.hasVisibleWork == true) {
+            add(R.string.catalog_cloud_badge_sessions)
+        }
+
+        return badges
+    }
 
     private fun formatTime(epochMs: Long): String {
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
@@ -474,6 +608,13 @@ class CatalogSyncViewModel(
             parts.add(str(R.string.catalog_cloud_pending_catalog_hint))
         }
         lastSummary?.let { s ->
+            if (s.manualFullSyncRequired) {
+                parts.add(str(R.string.catalog_cloud_manual_full_sync_required_hint))
+            } else if (!s.incrementalRemoteSubsetVerifiable &&
+                incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
+            ) {
+                parts.add(str(R.string.catalog_cloud_remote_incremental_not_verifiable_hint))
+            }
             if (incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS) {
                 val pushedLocal =
                     s.pushedSuppliers + s.pushedCategories + s.pushedProducts + s.pushedProductPrices
@@ -504,14 +645,10 @@ class CatalogSyncViewModel(
                     )
                 )
             }
-            if (!s.incrementalRemoteSubsetVerifiable &&
-                incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
-            ) {
-                parts.add(str(R.string.catalog_cloud_remote_incremental_not_verifiable_hint))
-            }
             if (incrementalSurface == CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS &&
                 s.syncEventsAvailable &&
-                !s.syncEventsFallback044
+                !s.syncEventsFallback044 &&
+                (s.syncEventsProcessed > 0 || s.remoteUpdatesApplied > 0)
             ) {
                 parts.add(
                     str(
@@ -523,9 +660,6 @@ class CatalogSyncViewModel(
             }
             if (s.syncEventOutboxPending > 0) {
                 parts.add(str(R.string.catalog_cloud_sync_event_outbox_hint, s.syncEventOutboxPending))
-            }
-            if (s.manualFullSyncRequired) {
-                parts.add(str(R.string.catalog_cloud_manual_full_sync_required_hint))
             }
         }
         return parts.joinToString("\n").takeIf { it.isNotEmpty() }

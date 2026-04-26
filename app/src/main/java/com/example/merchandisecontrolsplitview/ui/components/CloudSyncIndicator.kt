@@ -36,7 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
@@ -113,8 +114,12 @@ fun CloudSyncIndicator(
         val iconModifier = Modifier
             .size(16.dp)
             .let { base -> if (state.isBusy) base.rotate(-angle) else base }
+        val stageMessage = catalogSyncStageMessage(state)
+        val indicatorDescription = stringResource(R.string.cloud_sync_indicator_status_cd, stageMessage)
         Surface(
-            modifier = Modifier.widthIn(max = 280.dp),
+            modifier = Modifier
+                .widthIn(max = 300.dp)
+                .semantics { contentDescription = indicatorDescription },
             shape = CircleShape,
             color = containerColor,
             tonalElevation = 2.dp,
@@ -136,18 +141,17 @@ fun CloudSyncIndicator(
                 ) {
                     Icon(
                         imageVector = icon,
-                        contentDescription = stringResource(R.string.cloud_sync_indicator_cd),
+                        contentDescription = null,
                         tint = iconTint,
                         modifier = iconModifier
                     )
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = catalogSyncStageMessage(state),
+                    text = stageMessage,
                     style = MaterialTheme.typography.labelMedium,
                     color = contentColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    maxLines = 2
                 )
             }
         }
@@ -171,25 +175,25 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
             CatalogSyncStatus.FAILED -> stringResource(R.string.catalog_cloud_state_last_failed)
             else -> stringResource(R.string.catalog_cloud_state_synced)
         }
-        CatalogSyncStage.REALIGN -> stringResource(R.string.catalog_cloud_stage_realign)
+        CatalogSyncStage.REALIGN -> stringResource(R.string.catalog_cloud_stage_realign_short)
         CatalogSyncStage.PUSH_SUPPLIERS -> counted(
-            R.string.catalog_cloud_stage_push_suppliers,
-            R.string.catalog_cloud_stage_push_suppliers_count
+            R.string.catalog_cloud_stage_push_suppliers_short,
+            R.string.catalog_cloud_stage_push_suppliers_count_short
         )
         CatalogSyncStage.PUSH_CATEGORIES -> counted(
-            R.string.catalog_cloud_stage_push_categories,
-            R.string.catalog_cloud_stage_push_categories_count
+            R.string.catalog_cloud_stage_push_categories_short,
+            R.string.catalog_cloud_stage_push_categories_count_short
         )
         CatalogSyncStage.PUSH_PRODUCTS -> counted(
-            R.string.catalog_cloud_stage_push_products,
-            R.string.catalog_cloud_stage_push_products_count
+            R.string.catalog_cloud_stage_push_products_short,
+            R.string.catalog_cloud_stage_push_products_count_short
         )
-        CatalogSyncStage.PULL_CATALOG -> stringResource(R.string.catalog_cloud_stage_pull_catalog)
+        CatalogSyncStage.PULL_CATALOG -> stringResource(R.string.catalog_cloud_stage_pull_catalog_short)
         CatalogSyncStage.SYNC_PRICES -> counted(
-            R.string.catalog_cloud_stage_sync_prices,
-            R.string.catalog_cloud_stage_sync_prices_count
+            R.string.catalog_cloud_stage_sync_prices_short,
+            R.string.catalog_cloud_stage_sync_prices_count_short
         )
-        CatalogSyncStage.SYNC_HISTORY -> stringResource(R.string.catalog_cloud_stage_sync_history)
+        CatalogSyncStage.SYNC_HISTORY -> stringResource(R.string.catalog_cloud_stage_sync_history_short)
         CatalogSyncStage.IDLE -> stringResource(R.string.catalog_cloud_state_syncing)
     }
 }
