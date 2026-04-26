@@ -7,13 +7,13 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-060 |
-| Stato | `REVIEW` |
+| Stato | `BLOCKED` / sospeso |
 | Priorità | `ALTA` |
 | Area | Supabase sync / `DatabaseScreen` / Paging 3 / refresh UI |
 | Creato | 2026-04-25 |
-| Ultimo aggiornamento | 2026-04-25 |
+| Ultimo aggiornamento | 2026-04-26 |
 
-**Nota governance:** stato **`REVIEW` bloccante** — in attesa review planner (CLAUDE) e/o ciclo **`FIX` → `REVIEW`**. Non promuovere **TASK-061** (o altro) come unico task attivo in `MASTER-PLAN` senza chiusura esplicita di questo ciclo o decisione utente documentata.
+**Nota governance:** stato **`BLOCKED` / sospeso** dal 2026-04-26 per decisione esplicita dell'utente: TASK-060 non e' `DONE` e la review resta non chiusa, ma non blocca piu' l'attivazione di TASK-061. Riprendere TASK-060 solo con nuova decisione utente/planner documentata.
 
 ---
 
@@ -314,6 +314,7 @@ _(post chiusura)_
 
 ## Handoff
 
+- **SOSPESO 2026-04-26:** su decisione esplicita utente, TASK-060 passa a `BLOCKED` / sospeso senza `DONE`; TASK-061 e' ora il task attivo in `REVIEW`.
 - **A REVIEW:** task in `REVIEW`, non `DONE`.
 - Verifiche tecniche verdi: `assembleDebug`, `lintDebug`, test JVM mirati separati, `git diff --check`.
 - Rischio residuo non bloccante: smoke reale multi-device/scroll/filtro/tab da eseguire in TASK-063.

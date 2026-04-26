@@ -192,11 +192,18 @@ class CatalogAutoSyncCoordinator(
             }
             ok = true
             val s = summary
+            s?.let {
+                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
+            }
             logger(
                 "cycle=catalog_push outcome=ok reason=$reason durationMs=$durationMs " +
                     "dirtyHints=${hinted.size} dirtySample=${hinted.take(LOG_SAMPLE_LIMIT).joinToString(",")} " +
                     "productsPushed=${s?.pushedProducts ?: 0} pricesPushed=${s?.pushedProductPrices ?: 0} " +
                     "syncEventsProcessed=${s?.syncEventsProcessed ?: 0} " +
+                    "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
+                    "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
+                    "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
+                    "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
                     "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
                     "priceSyncFailed=${s?.priceSyncFailed ?: false}"
             )
@@ -320,10 +327,17 @@ class CatalogAutoSyncCoordinator(
             }
             ok = true
             val s = summary
+            s?.let {
+                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
+            }
             logger(
                 "cycle=sync_events_drain outcome=ok reason=$reason durationMs=$durationMs " +
                     "eventsFetched=${s?.syncEventsFetched ?: 0} eventsProcessed=${s?.syncEventsProcessed ?: 0} " +
                     "skippedSelf=${s?.syncEventsSkippedSelf ?: 0} outboxPending=${s?.syncEventOutboxPending ?: 0} " +
+                    "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
+                    "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
+                    "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
+                    "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
                     "targetedProductsFetched=${s?.targetedProductsFetched ?: 0} " +
                     "targetedPricesFetched=${s?.targetedPricesFetched ?: 0} " +
                     "fullCatalogFetch=${s?.fullCatalogFetch ?: false} fullPriceFetch=${s?.fullPriceFetch ?: false}"

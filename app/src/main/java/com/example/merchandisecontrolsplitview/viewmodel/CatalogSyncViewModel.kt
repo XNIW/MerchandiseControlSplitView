@@ -18,6 +18,7 @@ import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressRepository
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
 import com.example.merchandisecontrolsplitview.data.CatalogSyncStage
+import com.example.merchandisecontrolsplitview.data.CatalogSyncOutcomeState
 import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -153,13 +155,25 @@ class CatalogSyncViewModel(
     private var lastLoggedStage: CatalogSyncStage? = null
 
     private val quickSyncLaneAvailable: Boolean get() = autoSyncRepository != null
+    private val trackerOutcomeFlow = syncStateTracker?.lastOutcome ?: flowOf<CatalogSyncOutcomeState?>(null)
+    private val catalogSyncSummaryForUi = combine(
+        authFlow,
+        lastCatalogSyncSummary,
+        trackerOutcomeFlow
+    ) { auth, localSummary, trackerOutcome ->
+        when {
+            syncStateTracker == null -> localSummary
+            auth is AuthState.SignedIn && trackerOutcome?.ownerUserId == auth.userId -> trackerOutcome.summary
+            else -> null
+        }
+    }
 
     val uiState: StateFlow<CatalogSyncUiState> = combine(
         combine(authFlow, busy, lastErrorKind, lastSuccessAt, pendingHint) { auth, isBusy, err, successAt, pending ->
             SyncInputs(auth, isBusy, err, successAt, pending)
         },
         syncProgress,
-        lastCatalogSyncSummary,
+        catalogSyncSummaryForUi,
         lastHistorySessionSyncSummary,
         incrementalDetailSurface
     ) { inputs, progress, summary, historySessionSummary, incrementalSurface ->
@@ -753,6 +767,19 @@ class CatalogSyncViewModel(
         }
     }
 
+    private fun publishCatalogSummary(
+        ownerUserId: String,
+        source: CatalogSyncFlightOwner,
+        summary: CatalogSyncSummary
+    ) {
+        val tracker = syncStateTracker
+        if (tracker != null) {
+            tracker.publishSummary(ownerUserId, source, summary)
+        } else {
+            lastCatalogSyncSummary.value = summary
+        }
+    }
+
     fun refreshCatalog() {
         viewModelScope.launch {
             val auth = authFlow.value
@@ -793,7 +820,7 @@ class CatalogSyncViewModel(
                     onSuccess = { summary ->
                         logCatalogOk = true
                         logSummary = summary
-                        lastCatalogSyncSummary.value = summary
+                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
                         lastSuccessAt.value = System.currentTimeMillis()
                         val err = when {
                             historySessionOutcome?.hasIssues == true -> ErrorKind.HistorySessionsIncomplete
@@ -910,7 +937,7 @@ class CatalogSyncViewModel(
                 result.fold(
                     onSuccess = { summary ->
                         logSummary = summary
-                        lastCatalogSyncSummary.value = summary
+                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
                         incrementalDetailSurface.value = CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
                         val err = if (summary.priceSyncFailed) ErrorKind.CatalogOkPricesIncomplete else null
                         lastErrorKind.value = err

@@ -2839,6 +2839,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "syncEventsWatermarkBefore=${drain.watermarkBefore} " +
                 "syncEventsWatermarkAfter=${drain.watermarkAfter} " +
                 "syncEventsTooLarge=${drain.tooLarge} syncEventsGapDetected=${drain.gapDetected} " +
+                "manualFullSyncRequired=${drain.manualFullSyncRequired} " +
                 "targetedProductsFetched=${drain.targetedProductsFetched} " +
                 "targetedPricesFetched=${drain.targetedPricesFetched} " +
                 "fullCatalogFetch=false fullPriceFetch=false"

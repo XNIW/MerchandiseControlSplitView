@@ -7,6 +7,7 @@ import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
 import com.example.merchandisecontrolsplitview.data.CatalogIncrementalRemoteContract044A
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncFlightOwner
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressRepository
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
@@ -26,6 +27,7 @@ import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionUpsertRow
+import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import io.ktor.client.call.HttpClientCall
 import io.ktor.client.plugins.ClientRequestException
@@ -1027,6 +1029,339 @@ class CatalogSyncViewModelTest {
             viewModel.uiState.value.catalogDetail!!.contains(
                 app.getString(R.string.catalog_cloud_remote_incremental_not_verifiable_hint)
             )
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 manual quick sync with events recommends full sync when required`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        val syncEventRemote = mockk<SyncEventRemoteDataSource>()
+        every { syncEventRemote.isConfigured } returns true
+        coEvery {
+            autoRepository.syncCatalogQuickWithEvents(any(), any(), syncEventRemote, OWNER_VM_021, any())
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                syncEventsAvailable = true,
+                recordSyncEventAvailable = true,
+                manualFullSyncRequired = true,
+                syncEventsGapDetected = true
+            )
+        )
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns true
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            autoSyncRepository = autoRepository,
+            syncEventRemote = syncEventRemote
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.fullSyncRecommended)
+        assertFalse(viewModel.uiState.value.quickSyncRecommended)
+        assertTrue(
+            viewModel.uiState.value.statusBadges.any {
+                it.labelRes == R.string.catalog_cloud_badge_full_required
+            }
+        )
+        assertTrue(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_manual_full_sync_required_hint)
+            )
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 automatic sync event outcome recommends full sync without quick copy`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061-auto@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        tracker.publishSummary(
+            ownerUserId = OWNER_VM_021,
+            source = CatalogSyncFlightOwner.SYNC_EVENTS,
+            summary = CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 2,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                manualFullSyncRequired = true,
+                syncEventsAvailable = true,
+                syncEventsGapDetected = true
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.fullSyncRecommended)
+        assertTrue(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_manual_full_sync_required_hint)
+            )
+        )
+        assertFalse(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_quick_sync_locals_sent, 2)
+            )
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 automatic sync event outcome shows outbox pending hint`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061-outbox@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        tracker.publishSummary(
+            ownerUserId = OWNER_VM_021,
+            source = CatalogSyncFlightOwner.AUTO_PUSH,
+            summary = CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                syncEventOutboxPending = 3
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue(
+            viewModel.uiState.value.catalogDetail!!.contains(
+                app.getString(R.string.catalog_cloud_sync_event_outbox_hint, 3)
+            )
+        )
+        assertTrue(
+            viewModel.uiState.value.statusBadges.any {
+                it.labelRes == R.string.catalog_cloud_badge_upload
+            }
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 full refresh clears previous automatic full sync recommendation`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                pulledProductPrices = 1,
+                fullCatalogFetch = true,
+                fullPriceFetch = true,
+                manualFullSyncRequired = false
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061-full@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+        tracker.publishSummary(
+            ownerUserId = OWNER_VM_021,
+            source = CatalogSyncFlightOwner.SYNC_EVENTS,
+            summary = CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                manualFullSyncRequired = true
+            )
+        )
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.fullSyncRecommended)
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.fullSyncRecommended)
+        assertFalse(
+            viewModel.uiState.value.catalogDetail?.contains(
+                app.getString(R.string.catalog_cloud_manual_full_sync_required_hint)
+            ) == true
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 tracker outcome from another owner is ignored`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061-owner@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        tracker.publishSummary(
+            ownerUserId = "00000000-0000-4000-8000-000000000999",
+            source = CatalogSyncFlightOwner.SYNC_EVENTS,
+            summary = CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                manualFullSyncRequired = true,
+                syncEventOutboxPending = 4
+            )
+        )
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.fullSyncRecommended)
+        assertFalse(
+            viewModel.uiState.value.catalogDetail?.contains(
+                app.getString(R.string.catalog_cloud_manual_full_sync_required_hint)
+            ) == true
+        )
+        assertFalse(
+            viewModel.uiState.value.catalogDetail?.contains(
+                app.getString(R.string.catalog_cloud_sync_event_outbox_hint, 4)
+            ) == true
+        )
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `061 signed out hides tracker outcome after publish`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "061-signed-out@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        tracker.publishSummary(
+            ownerUserId = OWNER_VM_021,
+            source = CatalogSyncFlightOwner.SYNC_EVENTS,
+            summary = CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                manualFullSyncRequired = true,
+                syncEventOutboxPending = 5
+            )
+        )
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.fullSyncRecommended)
+
+        auth.value = AuthState.SignedOut
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_sign_in_required),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertFalse(viewModel.uiState.value.fullSyncRecommended)
+        assertNull(viewModel.uiState.value.catalogDetail)
+        assertFalse(
+            viewModel.uiState.value.statusBadges.any {
+                it.labelRes == R.string.catalog_cloud_badge_full_required
+            }
         )
 
         collectJob.cancel()

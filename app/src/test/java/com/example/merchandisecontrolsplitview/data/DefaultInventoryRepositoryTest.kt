@@ -3168,6 +3168,245 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `061 drain marks manual full sync for null entity ids gap`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000611"
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016(configured = false)
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 11,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = null,
+                createdAt = "2026-04-26T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertFalse(summary.syncEventsTooLarge)
+        assertEquals(11, summary.syncEventsWatermarkAfter)
+        assertEquals(11, db.syncEventWatermarkDao().get(owner, "")!!.lastSyncEventId)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+    }
+
+    @Test
+    fun `061 drain marks manual full sync for empty entity ids with changed count`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000612"
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 12,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(),
+                createdAt = "2026-04-26T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(12, summary.syncEventsWatermarkAfter)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+    }
+
+    @Test
+    fun `061 drain does not mark manual full sync for empty entity ids with zero changed count`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000613"
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 13,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 0,
+                entityIds = SyncEventEntityIds(),
+                createdAt = "2026-04-26T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertFalse(summary.syncEventsTooLarge)
+        assertEquals(13, summary.syncEventsWatermarkAfter)
+    }
+
+    @Test
+    fun `061 drain marks manual full sync for entity ids over budget`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000614"
+        val productIds = (1..251).map { "00000000-0000-4000-8000-${it.toString().padStart(12, '0')}" }
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 14,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = productIds.size,
+                entityIds = SyncEventEntityIds(productIds = productIds),
+                createdAt = "2026-04-26T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsTooLarge)
+        assertFalse(summary.syncEventsGapDetected)
+        assertEquals(14, summary.syncEventsWatermarkAfter)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+    }
+
+    @Test
+    fun `061 drain marks manual full sync when max iterations reached`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000615"
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = "self-device-061", createdAtMs = 1L)
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            repeat(2_000) { index ->
+                externalEvents += SyncEventRemoteRow(
+                    id = (index + 1).toLong(),
+                    ownerUserId = owner,
+                    domain = SyncEventDomains.CATALOG,
+                    eventType = SyncEventTypes.CATALOG_CHANGED,
+                    sourceDeviceId = "self-device-061",
+                    changedCount = 1,
+                    entityIds = SyncEventEntityIds(productIds = listOf("remote-$index")),
+                    createdAt = "2026-04-26T10:00:00Z"
+                )
+            }
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(2_000, summary.syncEventsFetched)
+        assertEquals(2_000, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(2_000, summary.syncEventsWatermarkAfter)
+    }
+
+    @Test
+    fun `061 drain capability false returns disabled fallback without hidden pull`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000616"
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016().apply {
+            failIfCalled = true
+        }
+        val syncEvents = FakeSyncEventRemote(
+            capabilities = SyncEventRemoteCapabilities.disabled("test_schema_missing")
+        )
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.syncEventsDisabled)
+        assertTrue(summary.syncEventsFallback044)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+    }
+
+    @Test
+    fun `061 quick sync record rpc unavailable falls back push only`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000617"
+        repository.addProduct(
+            Product(
+                barcode = "sync-event-061-rpc-unavailable",
+                productName = "RPC unavailable",
+                purchasePrice = 5.0,
+                retailPrice = 8.0
+            )
+        )
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val syncEvents = FakeSyncEventRemote(
+            capabilities = SyncEventRemoteCapabilities(
+                syncEventsAvailable = true,
+                recordSyncEventAvailable = false,
+                realtimeSyncEventsAvailable = true
+            )
+        )
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.syncEventsDisabled)
+        assertTrue(summary.syncEventsFallback044)
+        assertTrue(summary.syncEventsAvailable)
+        assertFalse(summary.recordSyncEventAvailable)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, priceRemote.fetchCount)
+    }
+
+    @Test
     fun `044A manual sync summary marks full catalog and price fetch`() = runTest {
         val owner = "00000000-0000-4000-8000-00000000044a"
         val productRemoteId = "00000000-0000-4000-8000-00000000044b"

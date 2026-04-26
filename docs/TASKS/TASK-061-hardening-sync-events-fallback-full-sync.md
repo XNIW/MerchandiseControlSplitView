@@ -7,20 +7,20 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-061 |
-| Stato | `PLANNING` |
+| Stato | `DONE` |
 | Priorità | `MEDIA` / `ALTA` (hardening) |
 | Area | Supabase `sync_events` / repository / coordinator / ViewModel / test JVM / fallback UX |
 | Creato | 2026-04-25 |
-| Ultimo aggiornamento | 2026-04-25 |
+| Ultimo aggiornamento | 2026-04-26 |
 
-**Governance:** **`TASK-060`** risulta **unico task attivo** in `docs/MASTER-PLAN.md` in fase **`REVIEW`** (**bloccante**). Questo file inizializza **solo il piano** per TASK-061. **Non** impostare TASK-061 come task attivo nel `MASTER-PLAN` né avviare `EXECUTION` senza transizione esplicita (chiusura / sospensione documentata di TASK-060 o decisione utente).
+**Governance:** il 2026-04-26 l'utente ha deciso esplicitamente di sospendere **TASK-060** (`BLOCKED` / sospeso, non `DONE`) e attivare **TASK-061**. Execution, review e fix opzionali completati; su conferma utente del 2026-04-26 TASK-061 e' chiuso in `DONE`.
 
 ---
 
 ## Dipendenze
 
 - **TASK-055** `PARTIAL` — contesto audit sync Supabase / UX
-- **TASK-060** `REVIEW` (bloccante in master-plan alla data di creazione di questo file) — nessun conflitto di codice previsto; ordine operativo: rispettare «un solo task attivo»
+- **TASK-060** `BLOCKED` / sospeso (decisione esplicita utente 2026-04-26) — review non chiusa, ma non piu' bloccante per TASK-061
 
 ---
 
@@ -131,19 +131,95 @@ Legenda: B=Build, S=Static/unit, M=Manual.
 
 ## Execution
 
-_(vuoto — non avviare finché TASK-060 non esce da `REVIEW` bloccante o non c’è transizione governance esplicita.)_
+### Esecuzione — 2026-04-26
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogSyncStateTracker.kt` — aggiunto canale minimo `lastOutcome` per pubblicare l'ultimo `CatalogSyncSummary` concluso da manual/auto/drain, filtrabile per owner.
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogAutoSyncCoordinator.kt` — i cicli automatici `syncCatalogQuickWithEvents` e `drainSyncEventsFromRemote` pubblicano il summary riuscito nel tracker e loggano `manualFullSyncRequired`, gap, tooLarge e outbox.
+- `app/src/main/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModel.kt` — la UI usa un summary unico derivato dal tracker quando presente, filtrato per utente; i percorsi manuali pubblicano nello stesso canale, evitando una doppia fonte di verita.
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt` — il log `sync_events` include anche `manualFullSyncRequired`.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/DefaultInventoryRepositoryTest.kt` — aggiunti casi limite `sync_events`: ids null/empty, zero changed count, budget superato, max iterations, capability false, RPC `record_sync_event` non disponibile.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/CatalogAutoSyncCoordinatorTest.kt` — aggiunti test su pubblicazione summary auto/drain, log fallback e nessuna pubblicazione su errore.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModelTest.kt` — aggiunti test su `fullSyncRecommended`, outbox hint, owner filtering e reset tramite full refresh.
+- `docs/MASTER-PLAN.md`, `docs/TASKS/TASK-060-pull-remoto-refresh-puntuale-databasescreen.md`, `docs/TASKS/TASK-061-hardening-sync-events-fallback-full-sync.md` — governance: TASK-060 sospesa/BLOCKED; TASK-061 portata a EXECUTION, poi REVIEW, e infine DONE su conferma utente.
+- `docs/AI-HANDOFF/TASK-061/execution-blocked.md` — marcato come superseded dopo override esplicito utente.
+
+**Azioni eseguite:**
+1. Verificata governance dopo override esplicito utente: TASK-060 sospesa/BLOCKED, TASK-061 autorizzata a EXECUTION.
+2. Implementato un canale tracker minimale per propagare `CatalogSyncSummary` dai cicli automatici senza collegare direttamente coordinator e ViewModel.
+3. Collegato `CatalogSyncViewModel` al summary del tracker con filtro `ownerUserId`; quando non c'e' tracker resta attivo il comportamento locale precedente.
+4. Pubblicati i summary dei cicli automatici solo dopo successi effettivi; su failure il tracker non viene aggiornato.
+5. Nessun cambio schema Room/DAO, nessuna migrazione, nessuna modifica Gradle, nessun redesign `OptionsScreen`.
+6. UI/UX: nessun composable nuovo; la raccomandazione full sync esistente in Options riceve ora anche gli outcome automatici via ViewModel/tracker (motivo: chiarezza senza redesign).
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ✅ ESEGUITO | `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug` → BUILD SUCCESSFUL |
+| Lint | ✅ ESEGUITO | `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lintDebug` → BUILD SUCCESSFUL |
+| Warning nuovi | ✅ ESEGUITO | Nessun warning nuovo dal codice modificato; restano warning preesistenti Gradle/AGP e Compose in file non toccati |
+| Coerenza con planning | ✅ ESEGUITO | Implementati test edge `sync_events`, propagazione auto summary tramite tracker, fallback UX via stato esistente |
+| Criteri di accettazione | ✅ ESEGUITO | Vedi dettaglio sotto |
+
+**Baseline regressione TASK-004 (se applicabile):**
+- Test eseguiti:
+  - `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" JAVA_TOOL_OPTIONS="-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading" ./gradlew testDebugUnitTest --tests "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest" --tests "com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest"` → BUILD SUCCESSFUL.
+  - `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" JAVA_TOOL_OPTIONS="-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading" ./gradlew --no-daemon testDebugUnitTest --tests "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest"` → BUILD SUCCESSFUL.
+  - `git diff --check` → OK.
+- Test aggiunti/aggiornati:
+  - `DefaultInventoryRepositoryTest`: `manualFullSyncRequired` su gap ids null/empty, no false positive con `changedCount=0`, tooLarge, max iterations, capability false, RPC record fallback.
+  - `CatalogAutoSyncCoordinatorTest`: publish outcome auto/drain, log fallback, no publish on failure.
+  - `CatalogSyncViewModelTest`: manual/auto fallback full sync, outbox pending hint, owner filtering, full refresh reset.
+- Limiti residui:
+  - Smoke live multi-device non eseguito e non dichiarato; resta per TASK-063.
+  - Il comando multi-classe combinato con `CatalogSyncViewModelTest` dopo le suite repository/coordinator fallisce in questo ambiente per attach MockK/ByteBuddy (`AttachNotSupportedException`); le stesse classi mirate eseguite separatamente sono verdi.
+
+**Dettaglio criteri di accettazione:**
+| # | Verifica | Stato | Evidenza |
+|---|----------|-------|----------|
+| 1 | Test repository su tooLarge, gap ID e max iterations con flag attesi | ESEGUITO | `DefaultInventoryRepositoryTest` verde con casi TASK-061 |
+| 2 | Percorsi automatici rendono visibile fallback full sync nella UX esistente | ESEGUITO | `CatalogAutoSyncCoordinator` pubblica nel tracker; `CatalogSyncViewModelTest` verifica `fullSyncRecommended` e outbox hint senza toccare `OptionsScreen` |
+| 3 | Nessun accesso rete da composable; VM/repository restano confini | ESEGUITO | Nessun composable modificato; rete invariata dietro repository/data source |
+| 4 | `assembleDebug` e `lintDebug` OK; nessun warning nuovo | ESEGUITO | Build/lint verdi; warning solo preesistenti |
+| 5 | Baseline TASK-004 eseguita | ESEGUITO | Test repository/coordinator/ViewModel mirati verdi come sopra |
+| 6 | Nessuna dichiarazione smoke live senza evidenza | ESEGUITO | Smoke live non eseguito e documentato come residuo TASK-063 |
+
+**Incertezze:**
+- INCERTEZZA: la validazione live multi-device dei fallback automatici resta fuori scope e va coperta in TASK-063.
+
+**Handoff notes:**
+- Execution lasciata intenzionalmente in `REVIEW`; chiusura `DONE` applicata solo dopo review APPROVED e conferma utente del 2026-04-26.
+- Reviewer: controllare soprattutto owner filtering del tracker, assenza di doppia fonte di verita tra `lastCatalogSyncSummary` e `lastOutcome`, e correttezza del segnale `manualFullSyncRequired` nei test repository.
 
 ---
 
 ## Review
 
-_(vuoto)_
+Verdict finale post-fix: `APPROVED`. TASK-061 puo' essere chiuso in `DONE` su conferma utente.
 
 ---
 
 ## Fix
 
-_(vuoto)_
+### Fix — 2026-04-26 (opzionali review)
+
+**File modificati:**
+- `docs/AI-HANDOFF/TASK-061/plan-final.md` — aggiunta nota esplicita `superseded by user override` sul gate storico "Execution blocked by governance".
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/CatalogSyncViewModelTest.kt` — aggiunto test signed-out dopo `tracker.publishSummary(...)` per garantire che Options non mostri summary/outbox/full-sync-required di un owner precedente.
+- `docs/TASKS/TASK-061-hardening-sync-events-fallback-full-sync.md` — documentato follow-up non bloccante su eventuale timestamp/clear di `CatalogSyncStateTracker.lastOutcome`.
+
+**Azioni eseguite:**
+1. Chiarita la lettura futura di `plan-final.md`: il blocco governance originario resta storico, ma e' stato superato dall'override utente gia documentato in Master Plan e TASK-061.
+2. Coperto il contratto signed-out citato nel piano: dopo un outcome automatico pubblicato, il passaggio a `AuthState.SignedOut` nasconde raccomandazione full sync, detail e badge.
+3. Valutazione timestamp/clear: non introdotti ora per mantenere il canale tracker minimale; se TASK-063 o un task successivo richiede distinguere "outcome corrente" da "outcome vecchio", aggiungere `updatedAtMs` e/o `clearSummary(ownerUserId)` con test dedicati.
+
+**Check fix:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Test ViewModel mirato | ✅ ESEGUITO | `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" JAVA_TOOL_OPTIONS="-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading" ./gradlew --no-daemon testDebugUnitTest --tests "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest"` → BUILD SUCCESSFUL |
+| `assembleDebug` | ✅ ESEGUITO | `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew assembleDebug` → BUILD SUCCESSFUL |
+| `lintDebug` | ✅ ESEGUITO | `ANDROID_HOME="$HOME/Library/Android/sdk" JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew lintDebug` → BUILD SUCCESSFUL |
+| `git diff --check` | ✅ ESEGUITO | OK |
 
 ---
 
@@ -151,18 +227,36 @@ _(vuoto)_
 
 | Campo | Valore |
 |-------|--------|
-| Stato finale | — |
-| Data chiusura | — |
+| Stato finale | `DONE` |
+| Data chiusura | 2026-04-26 |
 
 ---
 
 ## Riepilogo finale
 
-_(post chiusura)_
+TASK-061 chiuso in `DONE` il 2026-04-26 su conferma utente.
+
+**Sintesi finale:**
+- Introdotto tracker minimale owner-scoped per l'ultimo `CatalogSyncSummary` rilevante da sync manuale, auto-push e drain `sync_events`.
+- `CatalogAutoSyncCoordinator` propaga i summary riusciti e rende visibile `manualFullSyncRequired` dai cicli automatici, con log aggiuntivi per gap, tooLarge e outbox.
+- `CatalogSyncViewModel` usa il summary owner-scoped del tracker quando disponibile e mantiene il fallback locale solo per istanze senza tracker.
+- Aggiunti test repository, ViewModel e coordinator su `sync_events`, `manualFullSyncRequired`, capability false, outbox, owner filtering e signed-out.
+- Nessun redesign sync / OptionsScreen.
+- Nessun cambio schema Room, DAO o Gradle.
+
+**Check eseguiti e documentati:**
+- `DefaultInventoryRepositoryTest` + `CatalogAutoSyncCoordinatorTest` mirati: pass.
+- `CatalogSyncViewModelTest` mirato con `--no-daemon`: pass.
+- `assembleDebug`: pass.
+- `lintDebug`: pass.
+- `git diff --check`: pass.
+- Nota: il batch combinato multi-classe con `CatalogSyncViewModelTest` resta fragile in questo ambiente per attach MockK/ByteBuddy (`AttachNotSupportedException`); non bloccante per la chiusura perche le suite mirate sono verdi.
 
 ---
 
 ## Handoff
 
-- Riprendere da **Planning → Analisi** quando TASK-061 diventa task attivo.
-- Ripetere lettura `InventoryRepository` drain e `CatalogSyncViewModel` summary prima del primo commit.
+- TASK-061 chiuso in `DONE` su conferma utente del 2026-04-26.
+- TASK-060 resta `BLOCKED` / sospeso, non `DONE`.
+- TASK-055 resta `PARTIAL` finche TASK-062/TASK-063 o una decisione futura non lo chiudono.
+- Nessun nuovo task attivato automaticamente; prossimo passo da scegliere: TASK-062 o TASK-063.
