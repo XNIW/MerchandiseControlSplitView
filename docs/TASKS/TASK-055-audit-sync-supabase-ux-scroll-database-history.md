@@ -11,7 +11,7 @@
 | Priorita | ALTA |
 | Area | Supabase sync / UX / DatabaseScreen / HistoryScreen |
 | Creato | 2026-04-24 |
-| Ultimo aggiornamento | 2026-04-24 — audit consolidato, patch minima scroll applicata, build/lint verdi, unit test bloccati da MockK/ByteBuddy attach |
+| Ultimo aggiornamento | 2026-04-26 — TASK-065/TASK-064 chiusi e TASK-060 chiuso; TASK-063 resta incompleto (S3-S6 non eseguiti), quindi audit resta `PARTIAL` |
 
 ---
 
@@ -612,7 +612,8 @@ La patch stabilizza `DatabaseScreen` e `HistoryScreen` con `LazyListState` espli
 ## Handoff
 
 - Stato finale `PARTIAL`, non `DONE`.
-- **Aggiornamento TASK-063/TASK-064 2026-04-26:** smoke `ACCEPTABLE` non completo. TASK-064 resta `BLOCKED` per nuova outbox `PayloadValidation` su A durante S2; TASK-063 resta `BLOCKED` con S1 PASS, S2 solo parziale e S3-S6 non eseguiti. TASK-060 riceve evidenza UX positiva parziale sul refresh remoto/scroll, ma non e' chiuso. TASK-055 resta quindi `PARTIAL`; manca validazione FULL e manca smoke core S1-S6 verde senza outbox bloccante.
+- **Aggiornamento TASK-065/TASK-064/TASK-063/TASK-060 2026-04-26:** TASK-065 `DONE` con fix client-side `record_sync_event`; TASK-064 `DONE` con B1-B9 verdi/con limite documentato; TASK-060 `DONE` per S2 remoto puntuale senza scroll/search jump. TASK-063 resta `BLOCKED` perche' S3-S6 non sono stati eseguiti; nessuna modalita `FULL` dichiarata.
+- TASK-055 resta `PARTIAL`: audit/follow-up principali sono avanzati, ma manca smoke core S1-S6 completo e resta assente validazione `FULL` con due device reali.
 - Rerun necessario: `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:testDebugUnitTest` dopo correzione/validazione ambiente MockK/ByteBuddy attach.
 - Smoke manuali da fare:
   1. Database prodotti: scroll in basso, edit prezzo/prodotto, salva, attendi auto-sync, verifica posizione.

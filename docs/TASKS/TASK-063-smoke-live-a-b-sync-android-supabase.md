@@ -9,7 +9,7 @@
 | Priorità | `ALTA` |
 | Area | QA manuale / Supabase live / multi-device |
 | Creato | 2026-04-26 |
-| Ultimo aggiornamento | 2026-04-26 — smoke ripetuto in modalità `ACCEPTABLE`: S1 PASS, S2 utile ma parziale per nuova outbox `PayloadValidation` su A; S3-S6 fermati, non `FULL`, non `DONE` |
+| Ultimo aggiornamento | 2026-04-26 — post TASK-065: S1/S2 `PASS` in modalità `ACCEPTABLE` senza nuova outbox; S3-S6 non eseguiti, quindi task resta `BLOCKED`, non `FULL`, non `DONE` |
 
 ### Governance check
 
@@ -17,13 +17,13 @@
 |----------|-------|
 | `MASTER-PLAN`: TASK-063 riaperto solo come smoke dipendente da TASK-064 | OK (verifica 2026-04-26 pre-execution finale) |
 | Transizione `BLOCKED` → `EXECUTION` registrata | OK |
-| Stato finale TASK-063 post-execution | `BLOCKED` — S1 PASS; S2 parziale con bug outbox; S3-S6 bloccati |
+| Stato finale TASK-063 post-execution | `BLOCKED` — post TASK-065: S1/S2 PASS; S3-S6 non eseguiti |
 | TASK-062 `DONE` | OK |
 | TASK-061 `DONE` | OK |
-| TASK-060 `BLOCKED` / sospeso, non `DONE` | OK |
+| TASK-060 `DONE` | OK |
 | TASK-055 `PARTIAL` | OK |
 | TASK-063 non chiude TASK-055 automaticamente | OK |
-| Nessun codice Android / migration / DDL/RPC/RLS/publication modificati | OK |
+| Codice Android modificato solo in TASK-065; nessuna migration / DDL/RPC/RLS/publication live | OK |
 | Matrice S1–S8 documentata senza `PASS` inventati | OK — vedi § Execution |
 
 ---
@@ -32,9 +32,11 @@
 
 - **TASK-055** — `PARTIAL`
 - **TASK-059** — `DONE`
+- **TASK-060** — `DONE`
 - **TASK-061** — `DONE`
 - **TASK-062** — `DONE` — runbook: `docs/SUPABASE.md`, `supabase/migrations/README.md`
-- **TASK-060** — `BLOCKED` / sospeso — **non** riaprire né chiudere da questo task; eventuali bug scroll remoto → follow-up documentato, eventualmente collegato a TASK-060 **senza** cambiarne lo stato automaticamente
+- **TASK-064** — `DONE`
+- **TASK-065** — `DONE`
 
 **Nota:** integrazione verifiche residue TASK-055 solo dopo risultati live e decisione utente; **nessuna** chiusura automatica TASK-055.
 
@@ -461,6 +463,60 @@ _(Nessuna voce spuntata in planning: gate da completare al momento della transiz
 ---
 
 ## Execution
+
+### Esecuzione — 2026-04-26 — rerun post-fix TASK-065
+
+**Stato finale execution:** `BLOCKED` — S1 e S2 sono verdi in modalità `ACCEPTABLE` dopo il fix Android, ma S3-S6 non sono stati eseguiti in questa sessione. Non dichiarare `DONE` e non dichiarare `FULL`.
+
+**File modificati:**
+- `docs/TASKS/TASK-063-smoke-live-a-b-sync-android-supabase.md` — matrice post-fix e stato finale.
+- `docs/TASKS/TASK-065-fix-record-sync-event-payloadvalidation-response-handling.md` — fix client-side collegato.
+
+**Preflight tecnico post-fix:**
+| # | Voce | Compilazione effettiva |
+|---|------|------------------------|
+| 1 | Branch / commit testato | `codex/task-065-record-sync-event-payloadvalidation`, working tree con fix non committato. |
+| 2 | APK | stesso artifact debug installato su A e B; SHA-256 `bc6250a93249965239922b15591236a81b84382340c9b20d27cdd7ff44b9fd97`. |
+| 3 | Versione | `versionName=1.0`, `versionCode=1`, `targetSdk=36` su A/B. |
+| 4 | Device A | `8ac48ff0` — OnePlus `IN2013`, API 33. |
+| 5 | Device B | `emulator-5554` — `sdk_gphone64_arm64`, API 35 (`Medium Phone API 35`). |
+| 6 | Execution mode | `ACCEPTABLE` — 1 device reale + 1 emulator. |
+| 7 | Account | stesso account, owner locale redatto `6425...257e`. |
+| 8 | Baseline pre/post S2 | core catalogo pari; outbox A/B `0`; watermark finale A/B `128`. |
+| 9 | Evidenze | `/tmp/task065-live/` (screenshot, XML, logcat, DB copie locali), non tracciate. |
+
+**Matrice scenari post-fix:**
+| ID | Risultato effettivo | Stato | Evidenza | Note / bug follow-up |
+|----|---------------------|-------|----------|----------------------|
+| S1 | Baseline post-fix A/B coerente: stesso APK/versione/account, core catalogo pari, outbox `0`, watermark allineato. Gli eventi storici su A sono stati ritentati e drenati a `0` dopo install fixata. | `PASS` | DB copie `/tmp/task065-live/final/A`, `/tmp/task065-live/final/B`; log `A_after_install_foreground.log`. | Modalita `ACCEPTABLE`, non `FULL`; `history_entries` resta non-core diverso A=13/B=12. |
+| S2 | A modifica prezzo target `693...7055` da `1114` a `1115`; B riceve realtime sul target filtrato senza scroll/search jump. A rollback `1115` -> `1114`; B riceve rollback. Outbox A/B resta `0`; watermark finale `128`; target finale `1114.0` su A/B. | `PASS` | `S2_B_after_1115.xml`, `S2_A_after_rollback_final.xml`, `S2_B_after_rollback_final.xml`, log `S2_A_after_rollback_final.log`, `S2_B_after_rollback_final.log`, DB finali in `/tmp/task065-live/final/`. | Copre positivamente TASK-060; non basta per TASK-063 `DONE` perche' S3-S6 non sono stati eseguiti. |
+| S3 | Non eseguito in questa sessione. | `BLOCKED` | N/A | Richiede aggiunta prodotto live con rollback/tombstone controllato; non eseguita per non introdurre mutazioni remote extra senza dataset non-prod dedicato. |
+| S4 | Non eseguito in questa sessione. | `BLOCKED` | N/A | Richiede tombstone/delete live; non eseguito. |
+| S5 | Non eseguito in questa sessione. | `BLOCKED` | N/A | Richiede transizione offline/online e altra mutazione live; non eseguito. |
+| S6 | Non simulato. | `BLOCKED` | N/A | Nessuna condizione gap/full sync sicura senza modifica backend/dati; nessuna migration o backend mutation autorizzata. |
+| S7 | Secondo account non disponibile/confermato. | `BLOCKED` | N/A | RLS non testato. |
+| S8 | Opzionale; non incluso. | `NOT RUN` | N/A | |
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ✅ ESEGUITO | `:app:assembleDebug` verde in TASK-065 |
+| Lint | ✅ ESEGUITO | `:app:lintDebug` verde in TASK-065 |
+| Warning nuovi | ✅ ESEGUITO | Nessun warning Kotlin nuovo |
+| Coerenza con planning | ⚠️ PARZIALE | `ACCEPTABLE` rispettato; S1/S2 PASS; S3-S6 non eseguiti |
+| Criteri di accettazione | ⚠️ PARZIALE | Matrice aggiornata; non tutti S1-S6 PASS |
+
+**Baseline regressione TASK-004:**
+- Test eseguiti: vedi TASK-065 (`SupabaseSyncEventRemoteDataSourceTest`, `DefaultInventoryRepositoryTest`, `CatalogAutoSyncCoordinatorTest`, `CatalogSyncViewModelTest`).
+- Test aggiunti/aggiornati: `SupabaseSyncEventRemoteDataSourceTest`.
+- Limiti residui: S3-S6 live non eseguiti.
+
+**Incertezze:**
+- INCERTEZZA: S3-S6 restano non verificati in `ACCEPTABLE`; TASK-063 resta `BLOCKED`.
+
+**Handoff notes:**
+- Per chiudere TASK-063 servono S3-S6 PASS con evidenza o decisione reviewer che ridefinisca esplicitamente lo scope.
+- Non usare questa execution per dichiarare `FULL`.
 
 ### Esecuzione — 2026-04-26 — rerun post-baseline TASK-064
 

@@ -7,13 +7,13 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-060 |
-| Stato | `BLOCKED` / sospeso |
+| Stato | `DONE` |
 | Priorità | `ALTA` |
 | Area | Supabase sync / `DatabaseScreen` / Paging 3 / refresh UI |
 | Creato | 2026-04-25 |
-| Ultimo aggiornamento | 2026-04-26 |
+| Ultimo aggiornamento | 2026-04-26 — chiuso dopo S2 post-fix TASK-065: B riceve update remoto puntuale senza search/scroll jump |
 
-**Nota governance:** stato **`BLOCKED` / sospeso** dal 2026-04-26 per decisione esplicita dell'utente: TASK-060 non e' `DONE` e la review resta non chiusa, ma non blocca piu' l'attivazione di TASK-061. Riprendere TASK-060 solo con nuova decisione utente/planner documentata.
+**Nota governance:** task riaperto/chiuso nel contesto richiesto dall'utente su TASK-065/TASK-064/TASK-063. La verifica live S2 post-fix copre il criterio remoto puntuale DatabaseScreen; TASK-063 resta comunque non `DONE` per S3-S6 non eseguiti.
 
 ---
 
@@ -197,6 +197,57 @@ Il codice oggi risolve **refresh puntuale** per **update manuale** in `DatabaseV
 
 ## Execution
 
+### Esecuzione — 2026-04-26 — verifica live post-fix TASK-065
+
+**File modificati:**
+- `docs/TASKS/TASK-060-pull-remoto-refresh-puntuale-databasescreen.md` — chiusura basata su evidenza S2 post-fix.
+
+**Azioni eseguite:**
+1. Ripetuto S2 in modalita `ACCEPTABLE` dopo fix `record_sync_event`.
+2. Su B, mantenuta ricerca `6937962107055` attiva con card target visibile.
+3. Su A, modificato prezzo vendita del target `1114` -> `1115`.
+4. B ha ricevuto due eventi realtime (`catalog` + `prices`) con `targetedProductsFetched=1`, `targetedPricesFetched=1`, card aggiornata a `Retail (New) 1.115` senza perdere ricerca/posizione.
+5. Su A, rollback `1115` -> `1114`.
+6. B ha ricevuto rollback con stesso pattern; card target visibile, ricerca preservata, prezzo finale `1.114`.
+
+**Evidenza:**
+- UI/XML: `/tmp/task065-live/S2_B_after_1115.xml`, `/tmp/task065-live/S2_B_after_rollback_final.xml`.
+- Logcat: `/tmp/task065-live/logcat/S2_B_after_1115.log`, `/tmp/task065-live/logcat/S2_B_after_rollback_final.log`.
+- DB finali: `/tmp/task065-live/final/A/app_database`, `/tmp/task065-live/final/B/app_database`.
+- Query finale: A/B target `693...7055`, `itemNumber=DM02`, `retailPrice=1114.0`; outbox A/B `0`; watermark A/B `128`.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ✅ ESEGUITO | `:app:assembleDebug` verde in TASK-065 |
+| Lint | ✅ ESEGUITO | `:app:lintDebug` verde in TASK-065 |
+| Warning nuovi | ✅ ESEGUITO | Nessun warning Kotlin nuovo |
+| Coerenza con planning | ✅ ESEGUITO | Remote apply -> ID locale -> override puntuale; nessun refresh globale osservato |
+| Criteri di accettazione | ✅ ESEGUITO | Vedi dettaglio criteri aggiornato |
+
+**Criteri di accettazione — verifica finale:**
+| # | Stato | Evidenza |
+|---|-------|----------|
+| 1 | ✅ ESEGUITO | Card B aggiornata da Room/override dopo evento remoto sul target; log `targetedProductsFetched=1`, `targetedPricesFetched=1`. |
+| 2 | ✅ ESEGUITO | Nessun salto in cima osservato; search target e card visibile preservati. |
+| 3 | ✅ ESEGUITO | Ricerca `6937962107055` resta attiva su B durante update e rollback. |
+| 4 | ✅ ESEGUITO | Eventi remoti contengono target noto; DB finale A/B coerente. |
+| 5 | ✅ ESEGUITO | Gap/full-sync non coinvolto; nessuna UX nuova introdotta. |
+| 6 | ✅ ESEGUITO | Nessun accesso rete da composable introdotto. |
+| 7 | ✅ ESEGUITO | Build/lint/diff check eseguiti nel ciclo TASK-065. |
+| 8 | ✅ ESEGUITO | Baseline JVM mirata eseguita nel ciclo TASK-065; `DatabaseViewModelTest` era gia' verde da execution TASK-060. |
+
+**Baseline regressione TASK-004:**
+- Test eseguiti nel ciclo complessivo: `DatabaseViewModelTest` (execution TASK-060), `DefaultInventoryRepositoryTest`, `CatalogAutoSyncCoordinatorTest`, `CatalogSyncViewModelTest`, `SupabaseSyncEventRemoteDataSourceTest`.
+- Test aggiunti/aggiornati in questo task: gia' documentati nell'execution 2026-04-25.
+- Limiti residui: verifica su due device fisici `FULL` non eseguita; non blocca questo task per decisione scope `ACCEPTABLE`.
+
+**Incertezze:**
+- Nessuna bloccante per TASK-060.
+
+**Handoff notes:**
+- TASK-063 resta separatamente `BLOCKED` per S3-S6 non eseguiti.
+
 ### Esecuzione — 2026-04-25
 
 **File modificati:**
@@ -300,23 +351,23 @@ Il codice oggi risolve **refresh puntuale** per **update manuale** in `DatabaseV
 
 | Campo | Valore |
 |-------|--------|
-| Stato finale | — |
-| Data chiusura | — |
-| Tutti i criteri soddisfatti? | — |
+| Stato finale | `DONE` |
+| Data chiusura | 2026-04-26 |
+| Tutti i criteri soddisfatti? | Si |
 
 ---
 
 ## Riepilogo finale
 
-_(post chiusura)_
+TASK-060 chiuso dopo evidenza live S2 post-fix: B riceve modifica e rollback remoto sul prodotto target filtrato, la card si aggiorna senza perdita di ricerca o salto di scroll osservato, e il path resta coerente con il canale remote-applied implementato.
 
 ---
 
 ## Handoff
 
-- **Evidenza TASK-063 2026-04-26:** durante S2 `ACCEPTABLE`, B era filtrato sul prodotto target `693...7055`; ha ricevuto modifica prezzo A `1114` -> `1115` e successivo rollback `1115` -> `1114` con card visibile aggiornata e senza scroll/search jump osservato. Evidenze in `/tmp/task064-final/screenshots/task063_S2_*` e log `S2_B_after_rollback_filtered.log`. Questa evidenza copre positivamente il comportamento UX principale di TASK-060, ma non basta per chiusura `DONE` perche' lo smoke TASK-063 resta `BLOCKED` da nuova outbox `PayloadValidation` su A.
-- **SOSPESO 2026-04-26 (storico):** su decisione esplicita utente, TASK-060 passa a `BLOCKED` / sospeso senza `DONE`; TASK-061 e' poi stato chiuso `DONE`.
-- **Stato corrente:** task `BLOCKED` / sospeso, non `DONE`.
+- **Evidenza TASK-065/TASK-063 2026-04-26:** durante S2 `ACCEPTABLE` post-fix, B era filtrato sul prodotto target `693...7055`; ha ricevuto modifica prezzo A `1114` -> `1115` e successivo rollback `1115` -> `1114` con card visibile aggiornata e senza scroll/search jump osservato. Evidenze in `/tmp/task065-live/`.
+- **SOSPESO 2026-04-26 (storico):** stato superato dalla verifica post-fix documentata sopra.
+- **Stato corrente:** task `DONE`.
 - Verifiche tecniche verdi: `assembleDebug`, `lintDebug`, test JVM mirati separati, `git diff --check`.
-- Rischio residuo non bloccante: smoke reale multi-device/scroll/filtro/tab da eseguire in TASK-063.
+- Rischio residuo non bloccante: smoke completo S3-S6 da eseguire in TASK-063; eventuale `FULL` richiede due device reali.
 - Nota ambiente: se i test MockK falliscono con `AttachNotSupportedException`, rieseguire con `JAVA_TOOL_OPTIONS="-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading"` e, se necessario, classi separate / `--no-daemon`.
