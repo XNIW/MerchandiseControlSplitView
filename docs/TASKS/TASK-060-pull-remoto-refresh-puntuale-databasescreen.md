@@ -314,8 +314,9 @@ _(post chiusura)_
 
 ## Handoff
 
-- **SOSPESO 2026-04-26:** su decisione esplicita utente, TASK-060 passa a `BLOCKED` / sospeso senza `DONE`; TASK-061 e' ora il task attivo in `REVIEW`.
-- **A REVIEW:** task in `REVIEW`, non `DONE`.
+- **Evidenza TASK-063 2026-04-26:** durante S2 `ACCEPTABLE`, B era filtrato sul prodotto target `693...7055`; ha ricevuto modifica prezzo A `1114` -> `1115` e successivo rollback `1115` -> `1114` con card visibile aggiornata e senza scroll/search jump osservato. Evidenze in `/tmp/task064-final/screenshots/task063_S2_*` e log `S2_B_after_rollback_filtered.log`. Questa evidenza copre positivamente il comportamento UX principale di TASK-060, ma non basta per chiusura `DONE` perche' lo smoke TASK-063 resta `BLOCKED` da nuova outbox `PayloadValidation` su A.
+- **SOSPESO 2026-04-26 (storico):** su decisione esplicita utente, TASK-060 passa a `BLOCKED` / sospeso senza `DONE`; TASK-061 e' poi stato chiuso `DONE`.
+- **Stato corrente:** task `BLOCKED` / sospeso, non `DONE`.
 - Verifiche tecniche verdi: `assembleDebug`, `lintDebug`, test JVM mirati separati, `git diff --check`.
 - Rischio residuo non bloccante: smoke reale multi-device/scroll/filtro/tab da eseguire in TASK-063.
 - Nota ambiente: se i test MockK falliscono con `AttachNotSupportedException`, rieseguire con `JAVA_TOOL_OPTIONS="-Djdk.attach.allowAttachSelf=true -XX:+EnableDynamicAgentLoading"` e, se necessario, classi separate / `--no-daemon`.

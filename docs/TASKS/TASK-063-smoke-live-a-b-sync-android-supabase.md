@@ -9,15 +9,15 @@
 | Priorità | `ALTA` |
 | Area | QA manuale / Supabase live / multi-device |
 | Creato | 2026-04-26 |
-| Ultimo aggiornamento | 2026-04-26 — `EXECUTION` limitata eseguita in modalità `ACCEPTABLE`; S1 non conforme e S2–S6 bloccati da baseline non coerente / outbox sync pendente / conferme dataset non-prod mancanti; stato finale `BLOCKED`, non `DONE` |
+| Ultimo aggiornamento | 2026-04-26 — smoke ripetuto in modalità `ACCEPTABLE`: S1 PASS, S2 utile ma parziale per nuova outbox `PayloadValidation` su A; S3-S6 fermati, non `FULL`, non `DONE` |
 
 ### Governance check
 
 | Verifica | Esito |
 |----------|-------|
-| `MASTER-PLAN`: TASK-063 unico task attivo in `PLANNING` prima della execution | OK (verifica 2026-04-26 pre-execution) |
-| Transizione `PLANNING` → `EXECUTION` registrata | OK |
-| Stato finale TASK-063 post-execution | `BLOCKED` — S1 non conforme; S2–S6 bloccati |
+| `MASTER-PLAN`: TASK-063 riaperto solo come smoke dipendente da TASK-064 | OK (verifica 2026-04-26 pre-execution finale) |
+| Transizione `BLOCKED` → `EXECUTION` registrata | OK |
+| Stato finale TASK-063 post-execution | `BLOCKED` — S1 PASS; S2 parziale con bug outbox; S3-S6 bloccati |
 | TASK-062 `DONE` | OK |
 | TASK-061 `DONE` | OK |
 | TASK-060 `BLOCKED` / sospeso, non `DONE` | OK |
@@ -462,7 +462,96 @@ _(Nessuna voce spuntata in planning: gate da completare al momento della transiz
 
 ## Execution
 
-### Esecuzione — 2026-04-26
+### Esecuzione — 2026-04-26 — rerun post-baseline TASK-064
+
+**Stato finale execution:** `BLOCKED` — smoke `ACCEPTABLE` avviato dopo baseline A/B verde; S1 superato, S2 ha verificato ricezione remota e stabilita scroll sul target, ma ha riprodotto nuova outbox `PayloadValidation` su A. S3-S6 fermati per non introdurre altre mutazioni/outbox.
+
+**File modificati:**
+- `docs/TASKS/TASK-063-smoke-live-a-b-sync-android-supabase.md` — stato finale, matrice aggiornata, evidenze e blocco.
+- `docs/TASKS/TASK-064-diagnosi-outbox-payloadvalidation-baseline-ab.md` — B1-B9 finale e classificazione outbox nuova.
+- `docs/MASTER-PLAN.md` — governance finale.
+
+**Conferme utente / pre-execution gate registrate:**
+| Voce | Risposta registrata | Impatto |
+|------|---------------------|---------|
+| Modalità | `ACCEPTABLE` autorizzata con OnePlus IN2013 + Medium Phone API 35 | Non dichiarare `FULL`. |
+| Stesso account S1-S6 | Autorizzato ed eseguito; email redatta | S1-S2 validi solo nel perimetro stesso account. |
+| Reset locale / reinstall APK | Autorizzato ed eseguito in TASK-064 | Gate baseline aperto. |
+| Dataset | Nessun non-prod confermato; dataset corrente consentito solo evitando operazioni remote distruttive non reversibili | S2 eseguito su modifica prezzo reversibile e rollback osservato. |
+| S7 secondo account | Non disponibile / non fornito | S7 `BLOCKED`. |
+| S8 | Opzionale, non incluso prima dello sblocco core | S8 `NOT RUN`. |
+
+**Preflight tecnico corrente:**
+| # | Voce | Compilazione effettiva |
+|---|------|------------------------|
+| 1 | Branch / commit testato | `main`, `6a935a1`. |
+| 2 | APK | stesso artifact debug installato su A e B; SHA-256 `e88364c51dd13e439b6732df50849777fd38e440a52fff755c68e7a133a53b94`. |
+| 3 | Versione | `versionName=1.0`, `versionCode=1`, `targetSdk=36` su A/B. |
+| 4 | Device A | `8ac48ff0` — OnePlus `IN2013`, API 33. |
+| 5 | Device B | `emulator-5554` — `sdk_gphone64_arm64`, API 35 (`Medium Phone API 35`). |
+| 6 | Execution mode | `ACCEPTABLE` — 1 device reale + 1 emulator. |
+| 7 | Supabase host | stesso host redatto `jpg...yvm.supabase.co`; nessuna chiave stampata. |
+| 8 | Account | stesso account redatto (`x***@gmail.com`), owner locale `6425...257e`. |
+| 9 | Baseline pre-smoke | core catalogo pari: prodotti 18867, fornitori 70, categorie 43, prezzi 37928; outbox 0 su A/B; watermark 120 su A/B. |
+| 10 | Evidenze | `/tmp/task064-final/screenshots/`, `/tmp/task064-final/logcat/`, `/tmp/task064-final/db-after/`; non tracciate. |
+
+**Matrice scenari execution finale:**
+| ID | Risultato effettivo | Stato | Evidenza | Note / bug follow-up |
+|----|---------------------|-------|----------|----------------------|
+| S1 | Login stesso account, stesso APK, baseline core A/B pari, outbox 0, watermark 120 su entrambi. Options summary mostra pending catalogo 0 dopo quick sync, con label principale ancora ambigua. | `PASS` | `/tmp/task064-final/screenshots/task063_S1_database_A.png`, `task063_S1_database_B.png`; DB post quick sync in `/tmp/task064-final/db-after/A_post_quick_sync`, `B_post_quick_sync`. | Modalita `ACCEPTABLE`, non `FULL`; history locale resta A=13/B=12. |
+| S2 | A modifica prezzo target `693...7055` da `1114` a `1115`; B riceve realtime sul target filtrato senza scroll/search jump. A ripristina `1115` -> `1114`; B riceve rollback senza scroll/search jump. Tuttavia A crea outbox nuova `PayloadValidation`: 2 eventi dopo modifica, 4 dopo rollback. | `PARTIAL` | Prima: `task063_S2_B_before_target.png`; dopo modifica: `task063_S2_A_after_real_save.png`, `task063_S2_B_after_real_observe.png`; dopo rollback: `task063_S2_A_after_rollback_real_save.png`, `task063_S2_B_after_rollback_observe.png`; log `S2_A_after_rollback_filtered.log`, `S2_B_after_rollback_filtered.log`. | UI/remote refresh positivo, ma non `PASS` pieno per chiusura smoke: outbox nuova blocca B6/B9 TASK-064. |
+| S3 | Non eseguito dopo nuovo bug outbox su S2. | `BLOCKED` | N/A | Evitata aggiunta prodotto live per non moltiplicare mutazioni/outbox. |
+| S4 | Non eseguito dopo nuovo bug outbox su S2. | `BLOCKED` | N/A | Evitato tombstone live. |
+| S5 | Non eseguito dopo nuovo bug outbox su S2. | `BLOCKED` | N/A | Offline/online avrebbe richiesto altra modifica live. |
+| S6 | Non simulato: nessuna condizione gap/full sync sicura senza ulteriore alterazione; S2 gia' blocca smoke. | `BLOCKED` | N/A | Fallback full sync non chiudibile. |
+| S7 | Secondo account non disponibile/confermato. | `BLOCKED` | N/A | RLS non testato. |
+| S8 | Opzionale; non incluso prima dello sblocco core. | `NOT RUN` | N/A | |
+
+**Dettaglio S2 / TASK-060:**
+- B era filtrato sul prodotto target (`693...7055`) prima della modifica.
+- Dopo modifica A -> B: log B `sync_events_apply domain=catalog remoteProducts=1 applied=1` e `domain=prices remotePrices=1 pricesPulled=1`; summary `eventsFetched=2`, `eventsProcessed=2`, watermark 120 -> 122, outbox 0.
+- Dopo rollback A -> B: stesso pattern, watermark 122 -> 124, outbox B 0.
+- La card visibile su B resta sul target e mostra `Retail (New)` aggiornato, senza salto in cima osservato.
+- Questo fornisce evidenza utile per il comportamento TASK-060, ma TASK-060 non viene chiuso perche' TASK-063 non e' verde e l'outbox nuova resta bloccante.
+
+**Bug / follow-up:**
+| Campo | Contenuto |
+|-------|-----------|
+| Scenario ID | S2 |
+| Titolo bug | Evento live nuovo propaga a B ma resta in outbox A con `PayloadValidation` |
+| Severità | `ALTA` |
+| Repro step | 1. Baseline A/B pulita con stesso APK/account. 2. A modifica prezzo prodotto esistente. 3. B riceve realtime. 4. Ispezionare outbox A. |
+| Risultato atteso | Evento registrato/drenato senza outbox pendente; B riceve update. |
+| Risultato effettivo | B riceve update, ma A conserva eventi `catalog_changed` e `prices_changed` in `sync_event_outbox` con `lastErrorType=PayloadValidation`. Dopo rollback gli eventi diventano 4. |
+| Evidenza | DB finale `/tmp/task064-final/db-after/A_after_rollback`, log `S2_A_after_rollback_filtered.log`, screenshot S2 dopo modifica/rollback. |
+| Area probabile | `Android client response/decode` oppure `Supabase RPC/schema live drift`; payload client meno probabile ma non escluso senza corpo errore live. |
+| Blocca chiusura TASK-063? | Si': S1-S6 non sono tutti PASS e B6/B9 TASK-064 falliscono. |
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ESEGUITO | `assembleDebug` eseguito in TASK-064 con JBR Android Studio sullo stesso commit/artifact installato. |
+| Lint | N/A | Nessun codice/risorsa/build config modificato. |
+| Warning nuovi | N/A | Nessun codice modificato. |
+| Coerenza con planning | ESEGUITO | Modalita `ACCEPTABLE`, nessun `FULL`, stop dopo bug reale. |
+| Criteri di accettazione | ESEGUITO | Matrice S1-S8 aggiornata; nessun `PASS` pieno inventato su S2-S6. |
+| `git diff --check` | ESEGUITO | OK. |
+| `git status` | ESEGUITO | Solo documentazione modificata; evidenze locali in `/tmp/task064-final/` non tracciate. |
+
+**Baseline regressione TASK-004:**
+- Test eseguiti: N/A; nessun codice Android modificato.
+- Test aggiunti/aggiornati: nessuno.
+- Limiti residui: fix client futuro dovra' rieseguire test repository/coordinator/ViewModel pertinenti.
+
+**Incertezze:**
+- INCERTEZZA: manca corpo errore live `record_sync_event`; serve strumentare/catturare risposta per classificare definitivamente client vs backend.
+
+**Handoff notes:**
+- TASK-063 resta `BLOCKED`; non promuovere a `REVIEW`/`DONE` finche' S1-S6 non passano in `ACCEPTABLE` senza nuova outbox bloccante.
+- TASK-060 ha evidenza positiva parziale da S2, ma non va chiuso automaticamente.
+- TASK-055 resta `PARTIAL`.
+
+### Esecuzione — 2026-04-26 (storica pre-TASK-064)
 
 **Stato finale execution:** `BLOCKED` — smoke A/B core non proseguibile in sicurezza dopo preflight e S1 osservativo.
 

@@ -612,6 +612,7 @@ La patch stabilizza `DatabaseScreen` e `HistoryScreen` con `LazyListState` espli
 ## Handoff
 
 - Stato finale `PARTIAL`, non `DONE`.
+- **Aggiornamento TASK-063/TASK-064 2026-04-26:** smoke `ACCEPTABLE` non completo. TASK-064 resta `BLOCKED` per nuova outbox `PayloadValidation` su A durante S2; TASK-063 resta `BLOCKED` con S1 PASS, S2 solo parziale e S3-S6 non eseguiti. TASK-060 riceve evidenza UX positiva parziale sul refresh remoto/scroll, ma non e' chiuso. TASK-055 resta quindi `PARTIAL`; manca validazione FULL e manca smoke core S1-S6 verde senza outbox bloccante.
 - Rerun necessario: `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:testDebugUnitTest` dopo correzione/validazione ambiente MockK/ByteBuddy attach.
 - Smoke manuali da fare:
   1. Database prodotti: scroll in basso, edit prezzo/prodotto, salva, attendi auto-sync, verifica posizione.
