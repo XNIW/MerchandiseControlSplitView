@@ -58,7 +58,112 @@ class CatalogAutoSyncCoordinatorTest {
         coordinator.runPushCycle("manual_busy")
 
         assertEquals(0, repository.pushCalls)
+        assertEquals(null, tracker.lastOutcome.value)
         tracker.finish(CatalogSyncFlightOwner.MANUAL)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `061 auto push with sync events publishes summary outcome`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            nextQuickSummary = emptySummary(pushedProducts = 1).copy(
+                manualFullSyncRequired = true,
+                syncEventsGapDetected = true,
+                syncEventsTooLarge = true,
+                syncEventOutboxRetried = 1,
+                syncEventOutboxPending = 2
+            )
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("sync_events")
+
+        assertEquals(0, repository.pushCalls)
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(CatalogSyncFlightOwner.AUTO_PUSH, tracker.lastOutcome.value?.source)
+        assertEquals(USER_ID, tracker.lastOutcome.value?.ownerUserId)
+        assertEquals(true, tracker.lastOutcome.value?.summary?.manualFullSyncRequired)
+        assertTrue(logs.any { it.contains("manualFullSyncRequired=true") })
+        assertTrue(logs.any { it.contains("syncEventsGapDetected=true") })
+        assertTrue(logs.any { it.contains("syncEventsTooLarge=true") })
+        assertTrue(logs.any { it.contains("syncEventOutboxRetried=1") })
+        assertTrue(logs.any { it.contains("syncEventOutboxPending=2") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `061 sync event drain publishes summary outcome`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            nextDrainSummary = emptySummary(pulledProducts = 1).copy(
+                manualFullSyncRequired = true,
+                syncEventsFetched = 3,
+                syncEventsProcessed = 2,
+                syncEventsGapDetected = true,
+                syncEventOutboxRetried = 1,
+                syncEventOutboxPending = 1
+            )
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = { logs += it }
+        )
+
+        coordinator.runSyncEventDrainCycle("test")
+
+        assertEquals(1, repository.drainCalls)
+        assertEquals(CatalogSyncFlightOwner.SYNC_EVENTS, tracker.lastOutcome.value?.source)
+        assertEquals(USER_ID, tracker.lastOutcome.value?.ownerUserId)
+        assertEquals(true, tracker.lastOutcome.value?.summary?.manualFullSyncRequired)
+        assertTrue(logs.any { it.contains("manualFullSyncRequired=true") })
+        assertTrue(logs.any { it.contains("syncEventsGapDetected=true") })
+        assertTrue(logs.any { it.contains("syncEventOutboxRetried=1") })
+        assertTrue(logs.any { it.contains("outboxPending=1") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `061 auto push failure does not publish summary outcome`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            failQuick = IllegalStateException("quick failed")
+        }
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE
+        )
+
+        coordinator.runPushCycle("failure")
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(null, tracker.lastOutcome.value)
+        assertEquals(false, tracker.isSyncing.value)
         coordinator.shutdown()
     }
 
@@ -144,7 +249,12 @@ class CatalogAutoSyncCoordinatorTest {
 
     private class FakeCatalogAutoSyncRepository043 : CatalogAutoSyncRepository {
         var pushCalls = 0
+        var quickWithEventsCalls = 0
+        var drainCalls = 0
         var bootstrapCalls = 0
+        var nextQuickSummary: CatalogSyncSummary = emptySummary(pushedProducts = 1, pushedProductPrices = 1)
+        var nextDrainSummary: CatalogSyncSummary = emptySummary(pulledProducts = 1)
+        var failQuick: Throwable? = null
 
         override suspend fun pushDirtyCatalogDeltaToRemote(
             remote: CatalogRemoteDataSource,
@@ -155,6 +265,31 @@ class CatalogAutoSyncCoordinatorTest {
             pushCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
             return Result.success(emptySummary(pushedProducts = 1, pushedProductPrices = 1))
+        }
+
+        override suspend fun syncCatalogQuickWithEvents(
+            remote: CatalogRemoteDataSource,
+            priceRemote: ProductPriceRemoteDataSource,
+            syncEventRemote: SyncEventRemoteDataSource,
+            ownerUserId: String,
+            progressReporter: CatalogSyncProgressReporter
+        ): Result<CatalogSyncSummary> {
+            quickWithEventsCalls++
+            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
+            failQuick?.let { return Result.failure(it) }
+            return Result.success(nextQuickSummary)
+        }
+
+        override suspend fun drainSyncEventsFromRemote(
+            remote: CatalogRemoteDataSource,
+            priceRemote: ProductPriceRemoteDataSource,
+            syncEventRemote: SyncEventRemoteDataSource,
+            ownerUserId: String,
+            progressReporter: CatalogSyncProgressReporter
+        ): Result<CatalogSyncSummary> {
+            drainCalls++
+            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+            return Result.success(nextDrainSummary)
         }
 
         override suspend fun pullCatalogBootstrapFromRemote(
@@ -193,6 +328,30 @@ class CatalogAutoSyncCoordinatorTest {
         override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>): Result<Unit> = Result.success(Unit)
         override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> = Result.success(emptyList())
         override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+            Result.success(emptyList())
+    }
+
+    private class FakeSyncEventRemote043(
+        override val isConfigured: Boolean = true
+    ) : SyncEventRemoteDataSource {
+        override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
+            Result.success(
+                SyncEventRemoteCapabilities(
+                    syncEventsAvailable = true,
+                    recordSyncEventAvailable = true,
+                    realtimeSyncEventsAvailable = true
+                )
+            )
+
+        override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> =
+            Result.failure(UnsupportedOperationException("not used"))
+
+        override suspend fun fetchSyncEventsAfter(
+            ownerUserId: String,
+            storeId: String?,
+            afterId: Long,
+            limit: Long
+        ): Result<List<SyncEventRemoteRow>> =
             Result.success(emptyList())
     }
 

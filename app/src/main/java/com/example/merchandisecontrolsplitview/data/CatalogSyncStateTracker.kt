@@ -106,6 +106,12 @@ enum class CatalogSyncFlightOwner {
     SYNC_EVENTS
 }
 
+data class CatalogSyncOutcomeState(
+    val ownerUserId: String,
+    val source: CatalogSyncFlightOwner,
+    val summary: CatalogSyncSummary
+)
+
 interface CatalogSyncProgressRepository {
     suspend fun syncCatalogWithRemote(
         remote: CatalogRemoteDataSource,
@@ -175,6 +181,9 @@ class CatalogSyncStateTracker {
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    private val _lastOutcome = MutableStateFlow<CatalogSyncOutcomeState?>(null)
+    val lastOutcome: StateFlow<CatalogSyncOutcomeState?> = _lastOutcome.asStateFlow()
+
     private val ownerLock = Any()
     private var activeOwner: CatalogSyncFlightOwner? = null
 
@@ -212,5 +221,17 @@ class CatalogSyncStateTracker {
         if (previous.isBusy != next.isBusy || previous.status != next.status) {
             Log.i("CatalogCloudSync", "tracker busy=${next.isBusy} stage=${next.stage} status=${next.status}")
         }
+    }
+
+    fun publishSummary(
+        ownerUserId: String,
+        source: CatalogSyncFlightOwner,
+        summary: CatalogSyncSummary
+    ) {
+        _lastOutcome.value = CatalogSyncOutcomeState(
+            ownerUserId = ownerUserId,
+            source = source,
+            summary = summary
+        )
     }
 }
