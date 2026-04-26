@@ -115,6 +115,42 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `updateProduct then getProductDetailsById returns current and previous prices`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "87654322",
+                productName = "Original",
+                purchasePrice = 10.0,
+                retailPrice = 15.0
+            )
+        )
+        val saved = repository.findProductByBarcode("87654322")!!
+
+        Thread.sleep(2_100)
+
+        repository.updateProduct(
+            saved.copy(
+                productName = "Updated",
+                purchasePrice = 12.0,
+                retailPrice = 18.0
+            )
+        )
+
+        val details = repository.getProductDetailsById(saved.id)
+
+        assertNotNull(details)
+        assertEquals("Updated", details!!.product.productName)
+        assertEquals(12.0, details.product.purchasePrice ?: -1.0, 0.0)
+        assertEquals(18.0, details.product.retailPrice ?: -1.0, 0.0)
+        assertEquals(12.0, details.currentPurchasePrice ?: -1.0, 0.0)
+        assertEquals(18.0, details.currentRetailPrice ?: -1.0, 0.0)
+        assertEquals(12.0, details.lastPurchase ?: -1.0, 0.0)
+        assertEquals(10.0, details.prevPurchase ?: -1.0, 0.0)
+        assertEquals(18.0, details.lastRetail ?: -1.0, 0.0)
+        assertEquals(15.0, details.prevRetail ?: -1.0, 0.0)
+    }
+
+    @Test
     fun `applyImport persists new and updated products with prev and current import prices`() = runTest {
         repository.addProduct(
             Product(

@@ -284,6 +284,9 @@ class RealtimeRefreshCoordinatorTest {
         override suspend fun getAllProducts(): List<Product> =
             throw UnsupportedOperationException()
 
+        override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
+            throw UnsupportedOperationException()
+
         override suspend fun addProduct(product: Product): Unit =
             throw UnsupportedOperationException()
 

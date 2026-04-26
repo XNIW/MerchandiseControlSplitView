@@ -79,6 +79,7 @@ interface InventoryRepository {
     suspend fun findProductByBarcode(barcode: String): Product?
     suspend fun findProductsByBarcodes(barcodes: List<String>): List<Product>
     suspend fun getAllProducts(): List<Product>
+    suspend fun getProductDetailsById(productId: Long): ProductWithDetails?
     suspend fun addProduct(product: Product)
     suspend fun updateProduct(product: Product)
     suspend fun deleteProduct(product: Product)
@@ -345,6 +346,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             else productDao.findDetailsByBarcodes(barcodes).map { it.productWithCurrentPrices() }
         }
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
+    override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
+        withContext(Dispatchers.IO) { productDao.getDetailsById(productId) }
+
     override suspend fun addProduct(product: Product) {
         val persistedId = withContext(Dispatchers.IO) {
             productDao.insert(product)

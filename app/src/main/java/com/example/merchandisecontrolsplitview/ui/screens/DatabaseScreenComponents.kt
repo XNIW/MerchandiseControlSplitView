@@ -419,6 +419,7 @@ private fun DatabaseCatalogRow(
 internal fun DatabaseProductListSection(
     filter: String,
     products: LazyPagingItems<ProductWithDetails>,
+    productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
     listState: LazyListState,
     onProductClick: (Product) -> Unit,
     onDeleteRequest: (Product) -> Unit,
@@ -475,13 +476,13 @@ internal fun DatabaseProductListSection(
             ) {
                 items(products.itemCount, key = { idx -> products[idx]?.product?.id ?: "placeholder-$idx" }) { idx ->
                     products[idx]?.let { details ->
-                        val product = details.product
-                        val currentProduct = details.productWithCurrentPrices()
+                        val effectiveDetails = productDetailsOverrides[details.product.id] ?: details
+                        val currentProduct = effectiveDetails.productWithCurrentPrices()
 
                         val dismissState = rememberSwipeToDismissBoxState(
                             confirmValueChange = { value ->
                                 if (value == SwipeToDismissBoxValue.EndToStart) {
-                                    onDeleteRequest(product)
+                                    onDeleteRequest(currentProduct)
                                     false
                                 } else {
                                     false
@@ -496,7 +497,7 @@ internal fun DatabaseProductListSection(
                             backgroundContent = { DismissBackground(dismissState) },
                             content = {
                                 ProductRow(
-                                    productDetails = details,
+                                    productDetails = effectiveDetails,
                                     onClick = { onProductClick(currentProduct) },
                                     onShowHistory = { onShowHistory(currentProduct) }
                                 )

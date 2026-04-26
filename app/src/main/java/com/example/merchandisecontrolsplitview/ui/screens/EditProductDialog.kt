@@ -174,6 +174,40 @@ internal fun EditProductDialog(
         }
     }
 
+    LaunchedEffect(
+        product.id,
+        product.barcode,
+        product.productName,
+        product.secondProductName,
+        product.itemNumber,
+        product.purchasePrice,
+        product.retailPrice,
+        product.stockQuantity,
+        product.supplierId,
+        product.categoryId
+    ) {
+        barcode = product.barcode
+        productName = product.productName ?: ""
+        secondProductName = product.secondProductName ?: ""
+        itemNumber = product.itemNumber ?: ""
+        purchasePrice = formatClPriceInput(product.purchasePrice)
+        val formattedRetailPrice = formatClPriceInput(product.retailPrice)
+        retailPrice = formattedRetailPrice
+        retailPriceTf = TextFieldValue(
+            formattedRetailPrice,
+            TextRange(formattedRetailPrice.length)
+        )
+        stockQuantity = formatClQuantityInput(product.stockQuantity)
+        supplierId = product.supplierId
+        categoryId = product.categoryId
+        showSecondNameField = !product.secondProductName.isNullOrBlank()
+        showItemNumberField = !product.itemNumber.isNullOrBlank()
+        barcodeError = null
+        productNameError = null
+        retailPriceError = null
+        askedKeyboard = false
+    }
+
     LaunchedEffect(product.id) {
         if (product.id != 0L) {
             delay(60)

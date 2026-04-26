@@ -89,6 +89,7 @@ class DatabaseViewModelTest {
         )
         coEvery { repository.getProductsWithDetailsPage(any(), any()) } returns emptyList()
         coEvery { repository.getPriceHistoryRowsPage(any(), any()) } returns emptyList()
+        coEvery { repository.getProductDetailsById(any()) } returns null
 
         viewModel = DatabaseViewModel(app, repository)
     }
@@ -190,6 +191,24 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `updateProduct success stores fresh product details override`() = runTest {
+        val product = sampleProduct(id = 9L, barcode = "22223333")
+        val freshDetails = sampleProductDetails(
+            product = product.copy(productName = "Updated", retailPrice = 9.0),
+            lastRetail = 9.0,
+            prevRetail = 4.0
+        )
+        coEvery { repository.updateProduct(product) } just runs
+        coEvery { repository.getProductDetailsById(product.id) } returns freshDetails
+
+        viewModel.updateProduct(product)
+        advanceUntilIdle()
+
+        assertEquals(freshDetails, viewModel.productDetailsOverrides.value[product.id])
+        coVerify(exactly = 1) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
     fun `updateProduct constraint error emits duplicate error`() = runTest {
         val product = sampleProduct(id = 9L, barcode = "22223333")
         coEvery { repository.updateProduct(product) } throws SQLiteConstraintException("duplicate")
@@ -204,6 +223,36 @@ class DatabaseViewModelTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `updateProduct failure does not store product details override`() = runTest {
+        val product = sampleProduct(id = 9L, barcode = "22223333")
+        coEvery { repository.updateProduct(product) } throws IllegalStateException("db unavailable")
+
+        viewModel.updateProduct(product)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.productDetailsOverrides.value.containsKey(product.id))
+        coVerify(exactly = 0) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `updateProduct sequential saves leave latest product details override`() = runTest {
+        val first = sampleProduct(id = 9L, barcode = "22223333", productName = "First")
+        val second = sampleProduct(id = 9L, barcode = "22223333", productName = "Second")
+        val firstDetails = sampleProductDetails(first.copy(retailPrice = 8.0), lastRetail = 8.0)
+        val secondDetails = sampleProductDetails(second.copy(retailPrice = 12.0), lastRetail = 12.0)
+        coEvery { repository.updateProduct(first) } just runs
+        coEvery { repository.updateProduct(second) } just runs
+        coEvery { repository.getProductDetailsById(9L) } returnsMany listOf(firstDetails, secondDetails)
+
+        viewModel.updateProduct(first)
+        advanceUntilIdle()
+        viewModel.updateProduct(second)
+        advanceUntilIdle()
+
+        assertEquals(secondDetails, viewModel.productDetailsOverrides.value[9L])
     }
 
     @Test
@@ -222,6 +271,24 @@ class DatabaseViewModelTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `deleteProduct success removes product details override`() = runTest {
+        val product = sampleProduct(id = 12L, barcode = "44445555")
+        val freshDetails = sampleProductDetails(product.copy(retailPrice = 10.0), lastRetail = 10.0)
+        coEvery { repository.updateProduct(product) } just runs
+        coEvery { repository.getProductDetailsById(product.id) } returns freshDetails
+        coEvery { repository.deleteProduct(product) } just runs
+
+        viewModel.updateProduct(product)
+        advanceUntilIdle()
+        assertTrue(viewModel.productDetailsOverrides.value.containsKey(product.id))
+
+        viewModel.deleteProduct(product)
+        advanceUntilIdle()
+
+        assertFalse(viewModel.productDetailsOverrides.value.containsKey(product.id))
     }
 
     @Test
@@ -902,6 +969,22 @@ class DatabaseViewModelTest {
         purchasePrice = 3.0,
         retailPrice = 4.0,
         stockQuantity = 1.0
+    )
+
+    private fun sampleProductDetails(
+        product: Product,
+        lastPurchase: Double? = product.purchasePrice,
+        prevPurchase: Double? = null,
+        lastRetail: Double? = product.retailPrice,
+        prevRetail: Double? = null
+    ) = ProductWithDetails(
+        product = product,
+        supplierName = null,
+        categoryName = null,
+        lastPurchase = lastPurchase,
+        prevPurchase = prevPurchase,
+        lastRetail = lastRetail,
+        prevRetail = prevRetail
     )
 
     private suspend fun preparePreview(): Long {

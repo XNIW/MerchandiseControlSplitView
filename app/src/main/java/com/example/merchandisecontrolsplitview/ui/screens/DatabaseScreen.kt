@@ -94,6 +94,7 @@ fun DatabaseScreen(
     val categoryCatalogQuery by viewModel.categoryCatalogQuery.collectAsState()
     val supplierOptions by viewModel.suppliers.collectAsState()
     val categoryOptions by viewModel.categories.collectAsState()
+    val productDetailsOverrides by viewModel.productDetailsOverrides.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val productListState = key(filter.orEmpty()) { rememberLazyListState() }
     val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
@@ -302,6 +303,7 @@ fun DatabaseScreen(
                         DatabaseProductListSection(
                             filter = filter.orEmpty(),
                             products = products,
+                            productDetailsOverrides = productDetailsOverrides,
                             listState = productListState,
                             onProductClick = { itemToEdit = it },
                             onDeleteRequest = {

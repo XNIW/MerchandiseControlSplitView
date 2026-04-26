@@ -73,6 +73,20 @@ interface ProductDao {
     """)
     suspend fun findDetailsByBarcode(barcode: String): ProductWithDetails?
 
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON p.supplierId = s.id
+        LEFT JOIN categories c ON p.categoryId = c.id
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        WHERE p.id = :productId
+        LIMIT 1
+    """)
+    suspend fun getDetailsById(productId: Long): ProductWithDetails?
+
     /**
      * Task 041 (hardening): match barcode tollerante a whitespace sul lato locale.
      * Coerente con la partial UNIQUE remota `(owner_user_id, barcode) WHERE deleted_at IS NULL`:

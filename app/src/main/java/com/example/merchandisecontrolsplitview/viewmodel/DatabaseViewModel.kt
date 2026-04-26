@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 
 sealed class UiState {
@@ -120,6 +121,8 @@ private class ExportProgressTracker(
 
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
+private const val PRODUCT_DETAILS_OVERRIDE_LIMIT = 100
+
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(
     app: Application,
@@ -139,6 +142,10 @@ class DatabaseViewModel(
 
     fun consumeUiState() { _uiState.value = UiState.Idle }
     private val _filter = MutableStateFlow<String?>(null)
+    private val productDetailsOverrideMutex = Mutex()
+    private val _productDetailsOverrides = MutableStateFlow<Map<Long, ProductWithDetails>>(emptyMap())
+    val productDetailsOverrides: StateFlow<Map<Long, ProductWithDetails>> =
+        _productDetailsOverrides.asStateFlow()
 
     private val appContext = getApplication<Application>().applicationContext
     val filter: StateFlow<String?> = _filter.asStateFlow()
@@ -984,7 +991,14 @@ class DatabaseViewModel(
     fun updateProduct(product: Product) {
         viewModelScope.launch {
             try {
-                repository.updateProduct(product)
+                productDetailsOverrideMutex.withLock {
+                    repository.updateProduct(product)
+                    repository.getProductDetailsById(product.id)?.let { details ->
+                        _productDetailsOverrides.update { current ->
+                            current.withCappedProductDetailsOverride(product.id, details)
+                        }
+                    }
+                }
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
             } catch (e: android.database.sqlite.SQLiteConstraintException) {
                 e.printStackTrace()
@@ -999,7 +1013,12 @@ class DatabaseViewModel(
     fun deleteProduct(product: Product) {
         viewModelScope.launch {
             try {
-                repository.deleteProduct(product)
+                productDetailsOverrideMutex.withLock {
+                    repository.deleteProduct(product)
+                    _productDetailsOverrides.update { current ->
+                        if (current.containsKey(product.id)) current - product.id else current
+                    }
+                }
                 _uiState.value = UiState.Success(appContext.getString(R.string.success_product_deleted))
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1213,5 +1232,19 @@ class DatabaseViewModel(
                 }
             }
         }
+    }
+
+    private fun Map<Long, ProductWithDetails>.withCappedProductDetailsOverride(
+        productId: Long,
+        details: ProductWithDetails
+    ): Map<Long, ProductWithDetails> {
+        val updated = LinkedHashMap(this)
+        updated.remove(productId)
+        updated[productId] = details
+        while (updated.size > PRODUCT_DETAILS_OVERRIDE_LIMIT) {
+            val oldestProductId = updated.keys.firstOrNull() ?: break
+            updated.remove(oldestProductId)
+        }
+        return updated.toMap()
     }
 }
