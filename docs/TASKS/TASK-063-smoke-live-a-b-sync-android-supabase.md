@@ -5,11 +5,11 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-063 |
-| Stato | `BLOCKED` |
+| Stato | `DONE` |
 | Priorità | `ALTA` |
 | Area | QA manuale / Supabase live / multi-device |
 | Creato | 2026-04-26 |
-| Ultimo aggiornamento | 2026-04-26 — post TASK-065: S1/S2 `PASS` in modalità `ACCEPTABLE` senza nuova outbox; S3-S6 non eseguiti, quindi task resta `BLOCKED`, non `FULL`, non `DONE` |
+| Ultimo aggiornamento | 2026-04-26 — `DONE` in modalita `ACCEPTABLE` con OnePlus IN2013 + Medium Phone API 35: S1-S5 `PASS`, S6 non distruttivo non disponibile e coperto da TASK-061, S7 `BLOCKED`, S8 `NOT RUN`; non `FULL` |
 
 ### Governance check
 
@@ -17,12 +17,12 @@
 |----------|-------|
 | `MASTER-PLAN`: TASK-063 riaperto solo come smoke dipendente da TASK-064 | OK (verifica 2026-04-26 pre-execution finale) |
 | Transizione `BLOCKED` → `EXECUTION` registrata | OK |
-| Stato finale TASK-063 post-execution | `BLOCKED` — post TASK-065: S1/S2 PASS; S3-S6 non eseguiti |
+| Stato corrente TASK-063 | `DONE` — execution finale: S1-S5 PASS, S6 non distruttivo non disponibile/coperto da TASK-061, S7/S8 non bloccanti |
 | TASK-062 `DONE` | OK |
 | TASK-061 `DONE` | OK |
-| TASK-060 `DONE` | OK |
-| TASK-055 `PARTIAL` | OK |
-| TASK-063 non chiude TASK-055 automaticamente | OK |
+| TASK-060 `DONE` | OK — riconfermato no-op da S2 post-fix |
+| TASK-055 `DONE` | OK — chiuso dopo valutazione post TASK-063 |
+| TASK-063 non chiude TASK-055 automaticamente | OK — TASK-055 chiuso solo dopo verifica criteri/follow-up |
 | Codice Android modificato solo in TASK-065; nessuna migration / DDL/RPC/RLS/publication live | OK |
 | Matrice S1–S8 documentata senza `PASS` inventati | OK — vedi § Execution |
 
@@ -30,7 +30,7 @@
 
 ## Dipendenze
 
-- **TASK-055** — `PARTIAL`
+- **TASK-055** — `DONE`
 - **TASK-059** — `DONE`
 - **TASK-060** — `DONE`
 - **TASK-061** — `DONE`
@@ -38,7 +38,7 @@
 - **TASK-064** — `DONE`
 - **TASK-065** — `DONE`
 
-**Nota:** integrazione verifiche residue TASK-055 solo dopo risultati live e decisione utente; **nessuna** chiusura automatica TASK-055.
+**Nota:** integrazione verifiche residue TASK-055 completata solo dopo risultati live e valutazione documentata; **nessuna** chiusura automatica TASK-055 prima della matrice finale.
 
 ---
 
@@ -212,14 +212,14 @@ Compilare in `EXECUTION`. Stati ammessi: § Stati scenario.
 
 | ID | Obiettivo | Precondizioni | Passi Device A | Passi Device B | Evidenza richiesta | Risultato atteso | Risultato effettivo | Stato | Note / bug follow-up |
 |----|-----------|---------------|----------------|----------------|-------------------|------------------|---------------------|-------|----------------------|
-| S1 | Login e baseline sync | App, account, rete | Login, Database, attendi sync idle | Stesso account, stessa vista, allineamento | Screenshot A+B; logcat `sync_start`/`sync_finish`; timestamp | Catalogo coerente; nessun blocco critico | | NOT RUN | |
-| S2 | A modifica → B riceve **senza scroll jump** | S1; **§ UX S2** rispettata | Modifica prodotto/prezzo; salva | **Non** toccare scroll fino a osservazione | Video o screenshot prima/dopo + logcat; posizione lista annotata | Dati aggiornati su B; **no** jump in cima; card aggiornata senza refresh globale fastidioso | | NOT RUN | Scroll ko → bug + possibile link a TASK-060 **senza** riaprirlo |
-| S3 | A aggiunge prodotto → B riceve | S1 | Crea prodotto; salva | Attesa Realtime / osservazione | logcat + screenshot B | B vede nuovo prodotto | | NOT RUN | |
-| S4 | Tombstone delete → B riceve | Prodotto di test | Elimina (flusso tombstone) | Osserva | logcat + screenshot | B coerente con UX eliminazione | | NOT RUN | |
-| S5 | Offline → modifica → online → push; B riceve | Rete controllabile | Offline; modifica; online; attendi | Osserva ricezione | logcat transizione rete | Push senza passi manuali non documentati; B aggiornato | | NOT RUN | |
-| S6 | Gap / `sync_events` weak → UI full sync | Condizione sicura § Supabase live safety | Provocare **solo** se non distruttivo; altrimenti BLOCKED | Osserva Options / `manualFullSyncRequired` | Screenshot UI + logcat | Messaggio chiaro full sync; no loop silenzioso | | NOT RUN | |
-| S7 | RLS: account B non vede dati A | 2 account | Crea dato su A | Login B; verifica assenza | Screenshot | Isolamento owner | | NOT RUN | 1 account → BLOCKED / NOT RUN |
-| S8 | `shared_sheet_sessions` (opzionale) | Scope business | Scrivere sessione | Realtime/pull | logcat `SupabaseRealtime`, `HistorySessionSyncV2` | Coerenza cross-device | | NOT RUN | |
+| S1 | Login e baseline sync | App, account, rete | Login, Database, attendi sync idle | Stesso account, stessa vista, allineamento | Screenshot A+B; logcat `sync_start`/`sync_finish`; timestamp | Catalogo coerente; nessun blocco critico | Baseline finale A/B coerente: stesso APK/versione/account, core catalogo pari, outbox 0, watermark allineato. | PASS | `ACCEPTABLE`, non `FULL`; history locale non-core diverso gia documentato. |
+| S2 | A modifica → B riceve **senza scroll jump** | S1; **§ UX S2** rispettata | Modifica prodotto/prezzo; salva | **Non** toccare scroll fino a osservazione | Video o screenshot prima/dopo + logcat; posizione lista annotata | Dati aggiornati su B; **no** jump in cima; card aggiornata senza refresh globale fastidioso | PASS post-fix TASK-065: B filtrato sul target riceve update e rollback senza search/scroll jump; outbox A/B 0. | PASS | Riconferma no-op TASK-060 DONE. |
+| S3 | A aggiunge prodotto → B riceve | S1 | Crea prodotto; salva | Attesa Realtime / osservazione | logcat + screenshot B | B vede nuovo prodotto | A crea `TASK063_TEST_S3_20260426`; B riceve via Realtime; outbox A/B 0; watermark 128 -> 130. | PASS | Evidenze in `/tmp/task063-final/`. |
+| S4 | Tombstone delete → B riceve | Prodotto di test | Elimina (flusso tombstone) | Osserva | logcat + screenshot | B coerente con UX eliminazione | A elimina il prodotto test S3 da UI; B non lo mostra piu; outbox A/B 0; watermark 130 -> 131. | PASS | Nessun delete remoto manuale distruttivo. |
+| S5 | Offline → modifica → online → push; B riceve | Rete controllabile | Offline; modifica; online; attendi | Osserva ricezione | logcat transizione rete | Push senza passi manuali non documentati; B aggiornato | A offline modifica prezzo target; push automatico al ritorno online; B riceve; rollback finale da B via app; outbox A/B 0; watermark 131 -> 133 -> 135. | PASS | Prezzo finale A/B `1114.0`; history prezzi +2 righe intenzionali e coerenti. |
+| S6 | Gap / `sync_events` weak → UI full sync | Condizione sicura § Supabase live safety | Provocare **solo** se non distruttivo; altrimenti BLOCKED | Osserva Options / `manualFullSyncRequired` | Screenshot UI + logcat | Messaggio chiaro full sync; no loop silenzioso | Nessun modo live sicuro/non distruttivo trovato per forzare `manualFullSyncRequired` senza alterare backend o dati. Coperto tecnicamente da TASK-061 test/UX. | BLOCKED | Non bloccante per chiusura `ACCEPTABLE`; live destructive non eseguito. |
+| S7 | RLS: account B non vede dati A | 2 account | Crea dato su A | Login B; verifica assenza | Screenshot | Isolamento owner | Secondo account non disponibile/fornito. | BLOCKED | Non bloccante per S1-S6 stesso account. |
+| S8 | `shared_sheet_sessions` (opzionale) | Scope business | Scrivere sessione | Realtime/pull | logcat `SupabaseRealtime`, `HistorySessionSyncV2` | Coerenza cross-device | Scenario opzionale non incluso. | NOT RUN | Non bloccante. |
 
 ---
 
@@ -422,7 +422,7 @@ Usare per ogni `FAIL` o `PARTIAL` significativo:
 | 1 | Execution mode + preflight + stati + naming + safety + decision tree + bug template | Refinement 2026-04-26 |
 | 2 | Setup disponibile + emulator caveats + Android Studio checklist + gate pre-`EXECUTION` | Micro-refinement device 2026-04-26 |
 | 3 | Matrice S1–S8 + UX S2 rafforzata | |
-| 4 | TASK-063 resta `PLANNING` | |
+| 4 | Transizioni governance TASK-063 tracciate fino a `DONE` | |
 | 5 | Nessun `PASS` precompilato senza evidenza | |
 | 6 | TASK-055/060 governance rispettata | |
 | 7 | ADB cheat sheet + privacy + timing + conferma utente pre-execution | Micro-refinement operativo 2026-04-26 |
@@ -463,6 +463,81 @@ _(Nessuna voce spuntata in planning: gate da completare al momento della transiz
 ---
 
 ## Execution
+
+### Esecuzione — 2026-04-26 — completamento finale S3-S6
+
+**Stato finale execution:** `DONE` — smoke live chiuso in modalita `ACCEPTABLE` con OnePlus IN2013 + Medium Phone API 35. S1-S5 sono `PASS`; S6 live non distruttivo non e' disponibile senza staging/feature flag/backend condition separata ed e' coperto da TASK-061 test/UX; S7 e' `BLOCKED` per assenza secondo account; S8 `NOT RUN` perche' opzionale. Non dichiarare `FULL`.
+
+**File modificati:**
+- `docs/TASKS/TASK-063-smoke-live-a-b-sync-android-supabase.md` — stato finale, matrice S1-S8, evidenze, limiti e chiusura.
+- `docs/TASKS/TASK-055-audit-sync-supabase-ux-scroll-database-history.md` — verdict finale audit dopo TASK-063.
+- `docs/MASTER-PLAN.md` — governance finale: nessun task attivo, TASK-063/TASK-055 `DONE`.
+
+**Preflight tecnico finale:**
+| # | Voce | Compilazione effettiva |
+|---|------|------------------------|
+| 1 | Branch / commit testato | `codex/task-065-record-sync-event-payloadvalidation`, working tree con documentazione aggiornata. |
+| 2 | APK | `app-debug.apk` installato su A e B; SHA-256 locale/A/B `bc6250a93249965239922b15591236a81b84382340c9b20d27cdd7ff44b9fd97`. |
+| 3 | Versione | `versionName=1.0`, `versionCode=1`, `targetSdk=36` su A/B. |
+| 4 | Device A | `8ac48ff0` — OnePlus `IN2013`, API 33. |
+| 5 | Device B | `emulator-5554` — `sdk_gphone64_arm64`, API 35 (`Medium Phone API 35`). |
+| 6 | Execution mode | `ACCEPTABLE` — 1 device reale + 1 emulator; possibile flakiness Realtime/timing/rete/scroll. |
+| 7 | Supabase host/config | stesso host redatto `jpg...yvm.supabase.co`; nessuna chiave stampata. |
+| 8 | Account / owner | stesso account per S1-S6; owner redatto `6425...257e`. |
+| 9 | Baseline pre-S3 | core catalogo A/B pari: `products=18867`, `suppliers=70`, `categories=43`, `product_prices=37932`; outbox A/B `0`; watermark A/B `128`. |
+| 10 | Evidenze locali | `/tmp/task063-final/` (`screenshots/`, `logcat/`, `db/`, `apk/`); non tracciate e non da committare senza redazione. |
+
+**Azioni eseguite:**
+1. Rieseguito `:app:assembleDebug` con JBR Android Studio e installato lo stesso APK su A/B.
+2. Verificati APK hash, versione app, device, host Supabase redatto, owner redatto, outbox `0`, watermark e core catalogo coerente.
+3. Eseguito S3 con prodotto test `TASK063_TEST_S3_20260426`, barcode `990630426001`, tramite UI su A e osservazione Realtime su B.
+4. Eseguito S4 eliminando da UI/app il prodotto test creato in S3; nessun delete remoto manuale distruttivo.
+5. Eseguito S5: A offline, modifica prezzo locale, ritorno online, auto-push, ricezione su B e rollback finale tramite app.
+6. Valutato S6: nessun trigger live non distruttivo disponibile; scenario non forzato per rispettare safety Supabase.
+7. Verificato TASK-060 no-op: resta `DONE`, riconfermato da S2 post-fix.
+8. Valutato TASK-055: follow-up principali coperti; chiusura possibile con limiti espliciti.
+
+**Matrice scenari finale:**
+| ID | Risultato effettivo | Stato | Evidenza | Note / bug follow-up |
+|----|---------------------|-------|----------|----------------------|
+| S1 | Baseline A/B finale coerente: stesso APK/versione/account, host redatto allineato, core catalogo pari, outbox A/B `0`, watermark A/B `128`. | `PASS` | DB `/tmp/task063-final/db/preflight`; logcat preflight; APK `/tmp/task063-final/apk/`. | `ACCEPTABLE`, non `FULL`; `history_entries` non-core A=13/B=12. |
+| S2 | Verifica post-fix TASK-065 gia documentata: A modifica target `693...7055`; B riceve sul target filtrato senza search/scroll jump; rollback ricevuto; outbox A/B `0`, watermark finale `128`. | `PASS` | `/tmp/task065-live/final/`; `S2_B_after_1115.xml`, `S2_A_after_rollback_final.xml`, `S2_B_after_rollback_final.xml`, log finali A/B. | Riconferma TASK-060 `DONE`; nessuna riapertura. |
+| S3 | A crea `TASK063_TEST_S3_20260426` (`990630426001`); B riceve via Realtime; conteggi A/B `products=18868`, `product_prices=37934`; outbox A/B `0`; watermark `128 -> 130`. | `PASS` | Screenshot `S3_*`, logcat `S3_after_*`, DB `/tmp/task063-final/db/S3/{8ac48ff0,emulator-5554}/`. | Nessun `PayloadValidation` osservato. |
+| S4 | A elimina da UI/app il prodotto test S3; B lo rimuove coerentemente; barcode non presente su A/B; tombstone/refs pendenti `0`; outbox A/B `0`; watermark `130 -> 131`. | `PASS` | Screenshot `S4_*`, logcat `S4_after_*`, DB `/tmp/task063-final/db/S4/{8ac48ff0,emulator-5554}/`. | Core catalogo torna a baseline; nessuna cancellazione remota manuale. |
+| S5 | A offline modifica prezzo target da `1114` a `1116`; al ritorno online auto-push OK, B riceve `1116`; rollback finale via app da B a `1114`, ricevuto da A; outbox A/B `0`; watermark `131 -> 133 -> 135`. | `PASS` | Screenshot `S5_*`, logcat `S5_A_offline_saved.log`, `S5_after_online_*`, `S5_rollback_from_B_*`, DB `/tmp/task063-final/db/S5_*`. | Log offline registra failure attesa `NetworkOfflineOrTimeout`; stato finale A/B `1114.0`, dirty refs `0`; `product_prices=37934` per due righe history intenzionali. |
+| S6 | Non esiste un modo live sicuro/non distruttivo per forzare `manualFullSyncRequired` senza alterare backend o dati; la UX/test coverage e' gia stata coperta da TASK-061. | `BLOCKED` | Review codice/task TASK-061 e assenza trigger sicuro in questa execution. | "S6 non distruttivo non disponibile; coperto da TASK-061 test/UX, live destructive non eseguito". Non blocca chiusura `ACCEPTABLE`. |
+| S7 | Secondo account non disponibile/fornito. | `BLOCKED` | N/A | RLS non testato; non blocca S1-S6 stesso account. |
+| S8 | Scenario opzionale `shared_sheet_sessions` non incluso. | `NOT RUN` | N/A | Non bloccante. |
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ESEGUITO | `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug` -> BUILD SUCCESSFUL. |
+| Lint | ESEGUITO | `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:lintDebug` -> BUILD SUCCESSFUL. |
+| Warning nuovi | ESEGUITO | Nessun codice Android modificato; solo warning/deprecation Gradle/AGP preesistenti nei task precedenti. |
+| Coerenza con planning | ESEGUITO | Modalita `ACCEPTABLE`, non `FULL`; S3-S5 eseguiti con rollback; S6 non forzato per safety; S7/S8 documentati. |
+| Criteri di accettazione | ESEGUITO | Matrice S1-S8 compilata con evidenze e limiti; nessun `PASS` inventato. |
+| `git diff --check` | ESEGUITO | OK. |
+| `git status` | ESEGUITO | Solo documentazione modificata; evidenze locali in `/tmp/task063-final/` non tracciate. |
+
+**Baseline regressione TASK-004:**
+- Test eseguiti: N/A; nessun codice Kotlin, risorsa o build config modificato in questa execution finale.
+- Test aggiunti/aggiornati: nessuno.
+- Limiti residui: task live/documentale; test mirati codice gia eseguiti in TASK-065.
+
+**Incertezze:**
+- Nessuna incertezza bloccante per `ACCEPTABLE`.
+
+**Limiti dichiarati:**
+- Smoke chiuso in `ACCEPTABLE`, non `FULL`, perche' B e' un emulator e non un secondo device fisico.
+- S6 non simulato live perche' richiederebbe condizione backend/staging separata o mutazione non sicura; copertura tecnica gia in TASK-061.
+- S7 RLS non eseguito per assenza secondo account.
+- S8 opzionale non incluso.
+
+**Handoff notes:**
+- Nessuna migration live, nessun `supabase db push`, nessuna modifica DDL/RPC/RLS/publication Supabase e nessun backend destructive change.
+- Evidenze sensibili restano solo in `/tmp/task063-final/`; non committare screenshot/log/DB copy senza redazione.
+- Un eventuale rerun `FULL` richiede due device Android fisici e, per S7, secondo account.
 
 ### Esecuzione — 2026-04-26 — rerun post-fix TASK-065
 
@@ -735,13 +810,26 @@ _(Vuoto.)_
 
 ## Chiusura
 
-_(Vuoto.)_
+| Campo | Valore |
+|-------|--------|
+| Stato finale | `DONE` |
+| Data | 2026-04-26 |
+| Modalita | `ACCEPTABLE`, non `FULL` |
+| Esito | S1-S5 `PASS`; S6 `BLOCKED` motivato/non distruttivo non disponibile e coperto da TASK-061; S7 `BLOCKED`; S8 `NOT RUN`. |
+| Criteri tutti gestiti? | Si, con limiti espliciti documentati. |
+
+**Conferme finali:**
+- Nessun `supabase db push`.
+- Nessuna migration live.
+- Nessuna modifica live DDL/RPC/RLS/publication.
+- Nessuna alterazione remota distruttiva manuale.
+- Evidenze locali non tracciate in `/tmp/task063-final/`.
 
 ---
 
 ## Handoff
 
-- **Executor:** dichiarare execution mode; completare preflight; rispettare Supabase live safety; nominare evidenze; nessun `PASS` senza file/log; bug con template.
-- **Reviewer:** validare evidenze per ogni `PASS`; rifiutare chiusura “FULL” se solo `LIMITED`; TASK-055/060 non riaperti automaticamente.
-- **TASK-055:** solo integrazione risultati; chiusura solo utente.
-- **TASK-060:** bug scroll remoto possibili → follow-up / nuovo task; non cambiare `BLOCKED` da qui.
+- **Executor:** task chiuso `DONE` in `ACCEPTABLE`; mantenere evidenze fuori repo e non dichiarare `FULL`.
+- **Reviewer:** limiti residui accettati per chiusura: emulator, S6 non distruttivo non disponibile, S7 senza secondo account, S8 opzionale.
+- **TASK-055:** chiuso `DONE` dopo valutazione follow-up principali e TASK-063 finale.
+- **TASK-060:** resta `DONE`; S2 post-fix e TASK-063 confermano update remoto puntuale senza search/scroll jump.
