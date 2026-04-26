@@ -5,8 +5,15 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.postgrest.rpc
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 private const val SYNC_EVENTS_TABLE = "sync_events"
+
+private val syncEventResponseJson = Json {
+    ignoreUnknownKeys = true
+}
 
 class SupabaseSyncEventRemoteDataSource(
     private val client: SupabaseClient?
@@ -40,10 +47,10 @@ class SupabaseSyncEventRemoteDataSource(
 
     override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> =
         runCatching {
-            requireClient()
+            val result = requireClient()
                 .postgrest
                 .rpc("record_sync_event", params)
-                .decodeSingle()
+            decodeRecordSyncEventResponse(result.data)
         }
 
     override suspend fun fetchSyncEventsAfter(
@@ -68,4 +75,18 @@ class SupabaseSyncEventRemoteDataSource(
                 range(0, limit - 1)
             }.decodeList()
         }
+}
+
+internal fun decodeRecordSyncEventResponse(data: String): SyncEventRemoteRow {
+    val trimmed = data.trim()
+    if (trimmed.isEmpty()) {
+        throw SerializationException("record_sync_event returned an empty response")
+    }
+    return when (trimmed.first()) {
+        '[' -> syncEventResponseJson.decodeFromString<List<SyncEventRemoteRow>>(trimmed)
+            .firstOrNull()
+            ?: throw SerializationException("record_sync_event returned an empty array")
+        '{' -> syncEventResponseJson.decodeFromString(trimmed)
+        else -> throw SerializationException("record_sync_event returned an unsupported response shape")
+    }
 }

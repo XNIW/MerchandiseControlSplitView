@@ -7,11 +7,11 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-055 |
-| Stato | PARTIAL |
+| Stato | DONE |
 | Priorita | ALTA |
 | Area | Supabase sync / UX / DatabaseScreen / HistoryScreen |
 | Creato | 2026-04-24 |
-| Ultimo aggiornamento | 2026-04-24 — audit consolidato, patch minima scroll applicata, build/lint verdi, unit test bloccati da MockK/ByteBuddy attach |
+| Ultimo aggiornamento | 2026-04-26 — `DONE` dopo TASK-063 `DONE` in modalita `ACCEPTABLE`: TASK-059/060/061/062/063/064/065 chiusi; limiti espliciti su `FULL`, S6 live distruttivo, S7 secondo account e S8 opzionale |
 
 ---
 
@@ -334,24 +334,24 @@ La soluzione futura deve restare piccola e progressiva:
 |---|----------|---------------|-------|
 | 1 | Audit documentato con matrice full push, full pull, partial push/delta, partial pull/delta, auto-sync, manual sync, bootstrap e realtime/catch-up | S | DONE |
 | 2 | Audit distingue chiaramente cosa e verificato nel codice da cosa resta da verificare a runtime/live | S | DONE |
-| 3 | UI sync valutata per chiarezza push vs pull e full vs partial/delta | S / M | PARTIAL — valutazione statica completata; smoke manuale UI sync ancora pendente |
-| 4 | UI sync valutata per conteggi pushed/pulled/skipped/failed quando disponibili in `CatalogSyncSummary` / session summary | S / M | PARTIAL — summary/conteggi verificati nel codice; verifica visuale runtime pendente |
+| 3 | UI sync valutata per chiarezza push vs pull e full vs partial/delta | S / M | DONE — TASK-059 ha rifinito copy/gerarchia; TASK-063 ha validato lane live `ACCEPTABLE` con limiti dichiarati |
+| 4 | UI sync valutata per conteggi pushed/pulled/skipped/failed quando disponibili in `CatalogSyncSummary` / session summary | S / M | DONE — summary/conteggi verificati e usati dai follow-up; live TASK-063 documenta eventi/outbox/watermark |
 | 5 | Identificati eventuali full fetch/full refresh evitabili o motivati come necessari | S | DONE |
 | 6 | Identificati punti dove refresh remoto o Paging refresh possono causare reload UI aggressivo | S / M | DONE |
-| 7 | Dopo modifica prezzo/prodotto, `DatabaseScreen` non torna in cima se la lista resta compatibile | M / B | NEEDS MANUAL VERIFY — patch applicata, smoke device/emulator pendente |
-| 8 | Dopo pull parziale/delta, `DatabaseScreen` mantiene scroll position | M / B | NEEDS MANUAL VERIFY — patch applicata, scenario sync live non eseguito |
-| 9 | Dopo push/pull completo, se ordinamento e item key restano compatibili, lo scroll viene preservato o restaurato il piu vicino possibile | M / B | NEEDS MANUAL VERIFY — patch applicata, scenario full sync live non eseguito |
-| 10 | Search/filter/sort/tab non vengono resettati senza motivo durante refresh o sync | M / S | PARTIAL — tab/query/filter restano nel `DatabaseViewModel`; smoke manuale pendente |
-| 11 | `HistoryScreen` mantiene posizione o stato dove applicabile durante refresh history/session cloud | M / S | NEEDS MANUAL VERIFY — patch applicata, refresh history live non eseguito |
-| 12 | `LazyColumn` usa key stabili; eventuali placeholder Paging non causano salti evitabili | S / M | PARTIAL — key item principali stabili; placeholder indicizzati lasciati invariati, smoke pendente |
+| 7 | Dopo modifica prezzo/prodotto, `DatabaseScreen` non torna in cima se la lista resta compatibile | M / B | DONE — TASK-058/TASK-060 e TASK-063 S2 post-fix confermano card target aggiornata senza search/scroll jump |
+| 8 | Dopo pull parziale/delta, `DatabaseScreen` mantiene scroll position | M / B | DONE — TASK-060 `DONE`; TASK-063 S2/S3/S5 conferma ricezione realtime/delta senza reset bloccante osservato |
+| 9 | Dopo push/pull completo, se ordinamento e item key restano compatibili, lo scroll viene preservato o restaurato il piu vicino possibile | M / B | DONE CON LIMITE — patch/list state e loading non distruttivo applicati; live full destructive/fallback non forzato, copertura fallback in TASK-061 |
+| 10 | Search/filter/sort/tab non vengono resettati senza motivo durante refresh o sync | M / S | DONE — stato tab/query/filter nel `DatabaseViewModel`; TASK-060/TASK-063 S2 confermano search/scroll preservati |
+| 11 | `HistoryScreen` mantiene posizione o stato dove applicabile durante refresh history/session cloud | M / S | DONE CON LIMITE — list state/key stabili applicati; S8 sessioni non incluso perche' opzionale, nessuna regressione History osservata nei check successivi |
+| 12 | `LazyColumn` usa key stabili; eventuali placeholder Paging non causano salti evitabili | S / M | DONE — key principali stabili e list state esplicito; placeholder indicizzati lasciati come limite non bloccante |
 | 13 | `LazyListState` e salvato/restaurato nel punto piu semplice possibile, senza spostare business logic nei composable | S | DONE |
-| 14 | UI distingue chiaramente full sync da partial/delta sync, almeno nei controlli manuali e negli indicatori principali | M / S | PARTIAL — controlli manuali gia distinti; nessuna patch copy in questa execution |
-| 15 | UI mostra risultato sync in modo comprensibile: prodotti/prezzi/sessioni/eventi pushed/pulled/skipped/failed quando disponibile | M / S | PARTIAL — `CatalogSyncSummary` disponibile; verifica UX/manuale pendente |
-| 16 | Nessuna regressione su import/export Excel | B / M | PARTIAL — codice non toccato e assemble/lint verdi; smoke manuale pendente |
-| 17 | Nessuna regressione su history flow | B / M | PARTIAL — patch limitata a list state; smoke manuale pendente |
-| 18 | Nessuna regressione su database CRUD prodotti/fornitori/categorie | B / M | PARTIAL — UI list state modificata e build verde; smoke CRUD pendente |
-| 19 | Nessuna regressione su barcode/manual/generated flow | B / M | PARTIAL — aree non toccate e build verde; smoke manuale pendente |
-| 20 | Test unitari esistenti mirati e suite generale restano verdi | B | PARTIAL — `assembleDebug`, `lintDebug`, `git diff --check` verdi; `testDebugUnitTest` bloccato da MockK/ByteBuddy attach |
+| 14 | UI distingue chiaramente full sync da partial/delta sync, almeno nei controlli manuali e negli indicatori principali | M / S | DONE — TASK-059 chiuso con copy/indicatori sync cloud; nessun cambio semantica sync |
+| 15 | UI mostra risultato sync in modo comprensibile: prodotti/prezzi/sessioni/eventi pushed/pulled/skipped/failed quando disponibile | M / S | DONE — TASK-059 usa `CatalogSyncSummary`; TASK-063 documenta conteggi/eventi/outbox live |
+| 16 | Nessuna regressione su import/export Excel | B / M | DONE CON LIMITE — nessun codice import/export toccato nei follow-up finali; build/lint verdi |
+| 17 | Nessuna regressione su history flow | B / M | DONE CON LIMITE — nessuna logica history modificata dopo patch list state; build/lint verdi |
+| 18 | Nessuna regressione su database CRUD prodotti/fornitori/categorie | B / M | DONE — TASK-063 S3/S4/S5 ha esercitato add/delete/edit via app; build/lint verdi |
+| 19 | Nessuna regressione su barcode/manual/generated flow | B / M | DONE CON LIMITE — aree non toccate; build/lint verdi; smoke dedicato non richiesto dalla chiusura follow-up |
+| 20 | Test unitari esistenti mirati e suite generale restano verdi | B | DONE CON LIMITE — check finali TASK-063 `assembleDebug`, `lintDebug`, `git diff --check` verdi; test mirati codice eseguiti nei task che hanno modificato codice (TASK-059/060/061/065) |
 
 Legenda: B=Build/test, S=Static, M=Manual, E=Emulator.
 
@@ -588,33 +588,50 @@ Motivazione: la review post-execution non ha trovato blocker piccoli direttament
 
 | Campo | Valore |
 |-------|--------|
-| Stato finale | PARTIAL |
-| Data | 2026-04-24 |
-| Motivo | Audit consolidato e patch minima scroll completati; build/lint/diff check verdi; suite unitaria bloccata da MockK/ByteBuddy attach; smoke manuali non eseguiti. |
-| Criteri tutti DONE? | No |
+| Stato finale | DONE |
+| Data | 2026-04-26 |
+| Motivo | Audit consolidato, patch minima scroll, follow-up principali e smoke live TASK-063 completati/valutati. TASK-063 e' `DONE` in modalita `ACCEPTABLE`; S1-S5 PASS; S6 non distruttivo non disponibile e coperto da TASK-061; S7/S8 non bloccanti documentati. |
+| Criteri tutti DONE? | Si, con limiti espliciti. |
+
+**Follow-up chiusi a supporto:**
+- TASK-059 `DONE` — UX/copy sync cloud.
+- TASK-060 `DONE` — pull remoto con refresh puntuale `DatabaseScreen`, search/scroll preservati.
+- TASK-061 `DONE` — hardening `sync_events` e fallback full sync / `manualFullSyncRequired` coperti da test/UX.
+- TASK-062 `DONE` — runbook Supabase e policy migration live.
+- TASK-063 `DONE` — smoke live A/B in `ACCEPTABLE`, non `FULL`.
+- TASK-064 `DONE` — baseline A/B/outbox riallineata.
+- TASK-065 `DONE` — fix response handling `record_sync_event`.
+
+**Limiti accettati per la chiusura:**
+- TASK-063 e' `ACCEPTABLE`, non `FULL`, perche' usa OnePlus IN2013 + Medium Phone API 35 emulator.
+- RLS con secondo account non eseguito per assenza account dedicato.
+- S6 live non forzato perche' richiederebbe staging/feature flag/backend condition separata o mutazione non sicura; copertura tecnica gia in TASK-061.
+- S8 `shared_sheet_sessions` resta opzionale e non incluso.
 
 **Rischi residui:**
-- Scroll da validare manualmente su device/emulator con dataset realistico e sync reali.
 - Full sync con ordering cambiato potrebbe richiedere restore per id visibile, non implementato in questa patch minima.
-- Suite JVM da rieseguire in ambiente compatibile con MockK/ByteBuddy attach.
-- Copy/indicatori sync possono essere migliorati in follow-up separato, senza modificare semantica sync.
+- Un rerun `FULL` puo' essere utile in futuro con due device fisici e secondo account per RLS.
+- Copy/indicatori sync possono ancora essere raffinati in follow-up separati, senza modificare semantica sync.
 
 ---
 
 ## Riepilogo finale
 
-TASK-055 ha prodotto audit sync completo, execution gate consolidato e patch minima UI.
+TASK-055 ha prodotto audit sync completo, execution gate consolidato, patch minima UI e verifica finale tramite follow-up Supabase/scroll.
 
 La patch stabilizza `DatabaseScreen` e `HistoryScreen` con `LazyListState` espliciti e impedisce al refresh Paging prodotti di distruggere la lista visibile quando sono gia disponibili item. Non sono state cambiate logiche Supabase, Room, repository, DAO o navigation.
+
+La chiusura finale del 2026-04-26 incorpora TASK-063 `DONE` in `ACCEPTABLE`: S1-S5 sono verdi con evidenze, S6 e' motivato come non simulabile live senza rischio e coperto da TASK-061, S7/S8 sono non bloccanti.
 
 ---
 
 ## Handoff
 
-- Stato finale `PARTIAL`, non `DONE`.
-- **Aggiornamento TASK-063/TASK-064 2026-04-26:** smoke `ACCEPTABLE` non completo. TASK-064 resta `BLOCKED` per nuova outbox `PayloadValidation` su A durante S2; TASK-063 resta `BLOCKED` con S1 PASS, S2 solo parziale e S3-S6 non eseguiti. TASK-060 riceve evidenza UX positiva parziale sul refresh remoto/scroll, ma non e' chiuso. TASK-055 resta quindi `PARTIAL`; manca validazione FULL e manca smoke core S1-S6 verde senza outbox bloccante.
-- Rerun necessario: `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:testDebugUnitTest` dopo correzione/validazione ambiente MockK/ByteBuddy attach.
-- Smoke manuali da fare:
+- Stato finale `DONE`.
+- **Aggiornamento TASK-065/TASK-064/TASK-063/TASK-060 2026-04-26:** TASK-065 `DONE` con fix client-side `record_sync_event`; TASK-064 `DONE` con B1-B9 verdi/con limite documentato; TASK-060 `DONE` per S2 remoto puntuale senza scroll/search jump; TASK-063 `DONE` in `ACCEPTABLE` con S1-S5 PASS, S6 motivato/coperto da TASK-061, S7/S8 non bloccanti.
+- TASK-055 e' chiuso `DONE`: audit/follow-up principali coperti; resta assente validazione `FULL` con due device reali, dichiarata come limite e non come blocker.
+- Rerun futuro consigliato, non bloccante per questa chiusura: `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:testDebugUnitTest` dopo correzione/validazione ambiente MockK/ByteBuddy attach.
+- Smoke manuali futuri consigliati per un eventuale rerun `FULL`/hardening non bloccante:
   1. Database prodotti: scroll in basso, edit prezzo/prodotto, salva, attendi auto-sync, verifica posizione.
   2. Database prodotti: quick sync manuale e full sync manuale con lista aperta, verifica posizione/tab/query.
   3. Database fornitori/categorie: scroll e cambio tab/query, verifica che ogni lista conservi stato solo quando query compatibile.

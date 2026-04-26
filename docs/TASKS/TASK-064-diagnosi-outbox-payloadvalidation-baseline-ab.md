@@ -5,21 +5,21 @@
 | Campo | Valore |
 |-------|--------|
 | ID | TASK-064 |
-| Stato | `BLOCKED` |
+| Stato | `DONE` |
 | Priorità | `ALTA` |
 | Area | Supabase sync / outbox / QA baseline / multi-device |
 | Creato | 2026-04-26 |
-| Ultimo aggiornamento | 2026-04-26 — ciclo finale controllato **Livello 1B** completato: baseline locale A/B verde prima dello smoke, ma S2 ha generato nuova outbox `PayloadValidation` su A; TASK-063 fermato, nessuna migration live / modifica Supabase remoto |
+| Ultimo aggiornamento | 2026-04-26 — post TASK-065: baseline A/B verde, outbox A/B `0`, B1-B9 chiusi; nessuna migration live / modifica Supabase remoto |
 
 ### Governance check
 
 | Verifica | Esito |
 |----------|-------|
-| `MASTER-PLAN`: **TASK-064** avviato come task attivo in `EXECUTION`, finale `BLOCKED` | OK (verifica 2026-04-26 vs `docs/MASTER-PLAN.md`) |
+| `MASTER-PLAN`: **TASK-064** chiuso `DONE` dopo TASK-065 | OK (verifica 2026-04-26 vs `docs/MASTER-PLAN.md`) |
 | **TASK-063** riaperto solo dopo gate baseline, finale `BLOCKED`, non `DONE` | OK |
 | **TASK-062** `DONE` | OK |
 | **TASK-061** `DONE` | OK |
-| **TASK-060** `BLOCKED` / sospeso | OK |
+| **TASK-060** `DONE` | OK |
 | **TASK-055** `PARTIAL` | OK |
 | **TASK-063** non dichiarato risolto da questo file | OK |
 | Nessun codice Android modificato in planning/refinement | OK |
@@ -29,7 +29,7 @@
 
 ## Contesto
 
-**TASK-063** (`ACCEPTABLE`, OnePlus IN2013 + Medium Phone API 35): dopo reset/bootstrap e APK parity, **S1 PASS** e **S2 parziale** (B riceve update/rollback senza scroll jump sul target), ma A genera nuova outbox `PayloadValidation`; **S3–S6** restano bloccati. **TASK-063** resta **`BLOCKED`**.
+**TASK-063** (`ACCEPTABLE`, OnePlus IN2013 + Medium Phone API 35): dopo TASK-065, **S1 PASS** e **S2 PASS** senza nuova outbox `PayloadValidation`; **S3-S6** non sono stati eseguiti e TASK-063 resta **`BLOCKED`**.
 
 ---
 
@@ -261,6 +261,66 @@ Senza queste risposte, **non** promuovere `EXECUTION`.
 ---
 
 ## Execution
+
+### Esecuzione — 2026-04-26 — post-fix TASK-065
+
+**Stato finale execution:** `DONE` — la root cause e' stata isolata come mismatch client-side di decoding della risposta RPC `record_sync_event`; TASK-065 ha applicato fix Android minimo. Baseline A/B post-fix verde, outbox A/B `0`, nessun nuovo `PayloadValidation` durante S2 modifica+rollback.
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseSyncEventRemoteDataSource.kt` — fix response handling in TASK-065.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseSyncEventRemoteDataSourceTest.kt` — test decoder RPC object/array/extra fields.
+- `docs/TASKS/TASK-065-fix-record-sync-event-payloadvalidation-response-handling.md` — task follow-up dedicato.
+- `docs/TASKS/TASK-064-diagnosi-outbox-payloadvalidation-baseline-ab.md` — chiusura baseline B1-B9 post-fix.
+
+**Root cause confermata:**
+- `decodeSingle()` della libreria PostgREST decodifica `data` come `List<T>` e poi prende il primo elemento.
+- Il SQL locale di riferimento `20260424021936_task045_sync_events.sql` ritorna un singolo row composite (`return v_row;`), non `setof`.
+- L'evento remoto veniva inserito (B lo riceveva), ma A falliva nel decode della risposta e accodava localmente `PayloadValidation`.
+
+**Evidenza live post-fix:**
+| Voce | A OnePlus | B Emulator | Esito |
+|------|-----------|------------|-------|
+| APK SHA-256 | `bc6250a93249965239922b15591236a81b84382340c9b20d27cdd7ff44b9fd97` | stesso | PASS |
+| Versione | `1.0` / `1` | `1.0` / `1` | PASS |
+| Owner redatto | `6425...257e` | `6425...257e` | PASS |
+| Core counts finali | prodotti 18867, fornitori 70, categorie 43, prezzi 37932 | stessi | PASS |
+| Outbox finale | 0 | 0 | PASS |
+| Watermark finale | 128 | 128 | PASS |
+| Target rollback | barcode `693...7055`, `retailPrice=1114.0`, `itemNumber=DM02` | stessi | PASS |
+
+**Baseline verde B1-B9 finale post-fix:**
+| # | Criterio | Stato | Evidenza / nota |
+|---|----------|-------|-----------------|
+| B1 | Stesso hash APK | PASS | A/B/local artifact SHA-256 `bc6250a93249965239922b15591236a81b84382340c9b20d27cdd7ff44b9fd97`. |
+| B2 | Stesso `versionName` / `versionCode` | PASS | `1.0` / `1` su entrambi. |
+| B3 | Stesso Supabase URL/progetto | PASS | stesso APK/config; nessun runtime override osservato; host non stampato per privacy. |
+| B4 | Stesso account | PASS | owner locale redatto `6425...257e` su A/B. |
+| B5 | Dataset non-prod o rollback/reset controllato | PASS con limite | Dataset corrente usato con modifica reversibile; prezzo target ripristinato a `1114.0` e verificato su A/B. |
+| B6 | Outbox vuota / non bloccante | PASS | Outbox A/B `0` dopo retry storico, modifica e rollback. |
+| B7 | Options non ambiguo o limite documentato | PASS con limite documentato | Nessun nuovo blocco outbox; resta limite UX storico sulla label principale, non bloccante per baseline tecnica. |
+| B8 | Conteggi baseline concordati | PASS con limite | Core catalogo pari; `history_entries` resta diverso A=13/B=12 ed e' fuori core catalogo per questa baseline. |
+| B9 | Nessun nuovo `PayloadValidation` non spiegato | PASS | S2 modifica+rollback: A/B outbox `0`, log senza nuovo `PayloadValidation`. |
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|-------|-------|------|
+| Build Gradle | ✅ ESEGUITO | `:app:assembleDebug` verde in TASK-065 |
+| Lint | ✅ ESEGUITO | `:app:lintDebug` verde in TASK-065 |
+| Warning nuovi | ✅ ESEGUITO | Nessun warning Kotlin nuovo |
+| Coerenza con planning | ✅ ESEGUITO | Diagnosi root cause, fix Android separato, baseline B1-B9 ripetuta |
+| Criteri di accettazione | ✅ ESEGUITO | B1-B9 valutati singolarmente e verdi/con limite documentato |
+
+**Baseline regressione TASK-004:**
+- Test eseguiti: `SupabaseSyncEventRemoteDataSourceTest`, `DefaultInventoryRepositoryTest`, `CatalogAutoSyncCoordinatorTest`, `CatalogSyncViewModelTest`.
+- Test aggiunti/aggiornati: `SupabaseSyncEventRemoteDataSourceTest`.
+- Limiti residui: TASK-063 S3-S6 non eseguiti; non incide su chiusura TASK-064.
+
+**Incertezze:**
+- Nessuna bloccante per TASK-064. Il backend live non e' stato modificato o migrato.
+
+**Handoff notes:**
+- TASK-063 puo' ripartire solo per completare S3-S6/S7-S8 se serve; S1/S2 post-fix sono verdi in `ACCEPTABLE`, non `FULL`.
+- Evidenze locali in `/tmp/task065-live/`, non tracciate.
 
 ### Esecuzione — 2026-04-26 — ciclo finale Livello 1B
 
@@ -638,12 +698,18 @@ _(Vuoto.)_
 
 ## Chiusura
 
-_(Vuoto.)_
+| Campo | Valore |
+|-------|--------|
+| Stato finale | `DONE` |
+| Data chiusura | 2026-04-26 |
+| Tutti i criteri soddisfatti? | Si — B1-B9 verdi o con limite documentato non bloccante |
+| Note | Chiusura dopo TASK-065; non equivale a chiusura TASK-063 completo. |
 
 ---
 
 ## Handoff
 
-- **Executor:** rispettare **Livelli 0/1/2**; compilare **Review gate** prima di `EXECUTION`; seguire **Decision tree**; evidenze solo § **Evidence / privacy**; **Baseline verde** prima di TASK-063.
-- **Reviewer:** rifiutare conclusioni senza distinzione causa; **TASK-063** resta `BLOCKED` finché baseline non è verificata; non cambiare **TASK-060**/**TASK-055** da qui.
-- **Task separati tipici:** fix Kotlin; migration Supabase approvata; cleanup outbox; UX Options (§ UX diagnostic note).
+- **TASK-065:** `DONE`; fix Android client-side applicato.
+- **TASK-063:** resta da completare per S3-S6; non dichiarare `DONE` senza matrice completa.
+- **TASK-060:** S2 post-fix copre il comportamento remoto puntuale DatabaseScreen; vedi task dedicato.
+- **TASK-055:** resta `PARTIAL` finche' smoke/live follow-up non sono tutti chiusi.
