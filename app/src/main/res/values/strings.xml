@@ -608,11 +608,14 @@
     <string name="catalog_cloud_stage_push_products_short">Invio prodotti</string>
     <string name="catalog_cloud_stage_push_products_count_short">Prodotti %1$d/%2$d</string>
     <string name="catalog_cloud_stage_pull_catalog_short">Ricezione catalogo</string>
-    <string name="catalog_cloud_stage_sync_prices_short">Ricezione prezzi</string>
+    <string name="catalog_cloud_stage_sync_prices_short">Sincronizzazione prezzi</string>
     <string name="catalog_cloud_stage_sync_prices_count_short">Prezzi %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_history_short">Sessioni</string>
     <string name="cloud_sync_indicator_cd">Sincronizzazione cloud in corso</string>
     <string name="cloud_sync_indicator_status_cd">Sincronizzazione cloud: %1$s</string>
+    <string name="cloud_sync_indicator_local_ready">Database locale già disponibile</string>
+    <string name="cloud_sync_indicator_completed">Catalogo cloud sincronizzato</string>
+    <string name="cloud_sync_indicator_failed">Sincronizzazione cloud non completata, riprova</string>
     <string name="catalog_cloud_state_synced">Sincronizzato</string>
     <string name="catalog_cloud_state_pending">Da sincronizzare</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>

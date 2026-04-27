@@ -26,6 +26,7 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
+import kotlin.math.abs
 
 // ⬇️ aggiungi subito sotto gli import esistenti (prima dell'interfaccia)
 data class PriceHistoryExportRow(
@@ -1262,14 +1263,19 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
         val resolvedNewProducts = request.newProducts.map { resolveProduct(it) }
         val resolvedUpdatedProducts = request.updatedProducts.map { update ->
-            resolveProduct(update.newProduct).copy(id = update.oldProduct.id)
+            val resolved = resolveProduct(update.newProduct).copy(id = update.oldProduct.id)
+            update.oldProduct to resolved
         }
+        val actuallyChangedUpdates = resolvedUpdatedProducts.filter { (oldProduct, resolvedProduct) ->
+            !productsEquivalentForImportDirty(oldProduct, resolvedProduct)
+        }
+        val resolvedUpdatedProductEntities = actuallyChangedUpdates.map { it.second }
 
         if (resolvedNewProducts.isNotEmpty()) {
             productDao.insertAll(resolvedNewProducts)
         }
-        if (resolvedUpdatedProducts.isNotEmpty()) {
-            productDao.updateAll(resolvedUpdatedProducts)
+        if (resolvedUpdatedProductEntities.isNotEmpty()) {
+            productDao.updateAll(resolvedUpdatedProductEntities)
         }
 
         DefaultInventoryRepositoryTestHooks.afterProductsPersisted?.invoke()
@@ -1280,7 +1286,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
         val allBarcodes = (
             resolvedNewProducts.map { it.barcode } +
-                resolvedUpdatedProducts.map { it.barcode } +
+                resolvedUpdatedProductEntities.map { it.barcode } +
                 request.pendingPriceHistory.map { it.barcode }
             ).distinct()
         val persistedProducts = if (allBarcodes.isEmpty()) {
@@ -1289,20 +1295,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             productDao.findByBarcodes(allBarcodes)
         }
         val productIdsByBarcode = persistedProducts.associate { it.barcode to it.id }
+        val priceChangedProductIds = linkedSetOf<Long>()
+        var importedPriceRowsInserted = 0
 
         suspend fun recordImportedCurrentAndPreviousPrices(productId: Long, product: Product) {
-            product.oldPurchasePrice?.let {
-                priceDao.insertIfChanged(productId, "PURCHASE", it, prevTs, "IMPORT_PREV")
+            suspend fun record(type: String, price: Double?, timestamp: String, source: String) {
+                price?.let {
+                    if (priceDao.insertIfChanged(productId, type, it, timestamp, source)) {
+                        priceChangedProductIds += productId
+                        importedPriceRowsInserted++
+                    }
+                }
             }
-            product.oldRetailPrice?.let {
-                priceDao.insertIfChanged(productId, "RETAIL", it, prevTs, "IMPORT_PREV")
-            }
-            product.purchasePrice?.let {
-                priceDao.insertIfChanged(productId, "PURCHASE", it, nowTs, "IMPORT")
-            }
-            product.retailPrice?.let {
-                priceDao.insertIfChanged(productId, "RETAIL", it, nowTs, "IMPORT")
-            }
+            record("PURCHASE", product.oldPurchasePrice, prevTs, "IMPORT_PREV")
+            record("RETAIL", product.oldRetailPrice, prevTs, "IMPORT_PREV")
+            record("PURCHASE", product.purchasePrice, nowTs, "IMPORT")
+            record("RETAIL", product.retailPrice, nowTs, "IMPORT")
         }
 
         resolvedNewProducts.forEach { product ->
@@ -1310,7 +1318,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 recordImportedCurrentAndPreviousPrices(productId, product)
             }
         }
-        resolvedUpdatedProducts.forEach { product ->
+        resolvedUpdatedProductEntities.forEach { product ->
             recordImportedCurrentAndPreviousPrices(product.id, product)
         }
 
@@ -1324,20 +1332,70 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 source = entry.source ?: "IMPORT_SHEET"
             )
         }
-        if (pendingPriceHistoryPoints.isNotEmpty()) {
-            priceDao.insertAll(pendingPriceHistoryPoints)
+        val pendingPriceInsertIds = if (pendingPriceHistoryPoints.isNotEmpty()) {
+            priceDao.insertAllReturningIds(pendingPriceHistoryPoints)
+        } else {
+            emptyList()
         }
-        val touchedProductIds = persistedProducts.map { it.id }.filter { it > 0L }.toSet()
+        val pendingPriceRowsInserted = pendingPriceInsertIds.count { it > 0L }
+        pendingPriceHistoryPoints.zip(pendingPriceInsertIds).forEach { (point, insertedId) ->
+            if (insertedId > 0L) {
+                priceChangedProductIds += point.productId
+            }
+        }
+
+        val insertedProductIds = resolvedNewProducts.mapNotNull { productIdsByBarcode[it.barcode] }
+            .filter { it > 0L }
+            .toSet()
+        val updatedProductIds = resolvedUpdatedProductEntities.map { it.id }
+            .filter { it > 0L }
+            .toSet()
+        val catalogDirtyProductIds = (insertedProductIds + updatedProductIds).toSet()
         createdSupplierIds.forEach { touchSupplierDirty(it) }
         createdCategoryIds.forEach { touchCategoryDirty(it) }
-        touchedProductIds.forEach { touchProductDirty(it) }
+        catalogDirtyProductIds.forEach { touchProductDirty(it) }
+        val priceOnlyProductIds = priceChangedProductIds - catalogDirtyProductIds
+        var productRefsCreatedForPriceOnly = 0
+        priceOnlyProductIds.forEach { productId ->
+            if (ensureProductRefForPricePushIfMissing(productId)) {
+                productRefsCreatedForPriceOnly++
+            }
+        }
+        val touchedProductIds = (catalogDirtyProductIds + priceChangedProductIds).toSet()
         Log.d(
             TAG,
             "import_dirty_marking productsTouched=${touchedProductIds.size} " +
+                "insertedProducts=${resolvedNewProducts.size} " +
+                "updatedProducts=${resolvedUpdatedProductEntities.size} " +
+                "unchangedProductUpdates=${resolvedUpdatedProducts.size - resolvedUpdatedProductEntities.size} " +
+                "dirtyMarkedProducts=${catalogDirtyProductIds.size} " +
+                "priceHistoryRows=${request.pendingPriceHistory.size} " +
+                "priceHistoryInserted=$pendingPriceRowsInserted " +
+                "dirtyMarkedPrices=${importedPriceRowsInserted + pendingPriceRowsInserted} " +
+                "dirtyMarkedPriceProducts=${priceChangedProductIds.size} " +
+                "priceOnlyProducts=${priceOnlyProductIds.size} " +
+                "priceProductRefsCreated=$productRefsCreatedForPriceOnly " +
                 "suppliersCreated=${createdSupplierIds.size} categoriesCreated=${createdCategoryIds.size}"
         )
         return touchedProductIds
     }
+
+    private fun productsEquivalentForImportDirty(old: Product, new: Product): Boolean =
+        normalizedImportText(old.barcode).equals(normalizedImportText(new.barcode), ignoreCase = true) &&
+            normalizedImportText(old.itemNumber).equals(normalizedImportText(new.itemNumber), ignoreCase = true) &&
+            normalizedImportText(old.productName).equals(normalizedImportText(new.productName), ignoreCase = true) &&
+            normalizedImportText(old.secondProductName).equals(normalizedImportText(new.secondProductName), ignoreCase = true) &&
+            priceEquivalentForImportDirty(old.purchasePrice, new.purchasePrice) &&
+            priceEquivalentForImportDirty(old.retailPrice, new.retailPrice) &&
+            priceEquivalentForImportDirty(old.stockQuantity, new.stockQuantity) &&
+            old.supplierId == new.supplierId &&
+            old.categoryId == new.categoryId
+
+    private fun normalizedImportText(value: String?): String =
+        value?.trim().orEmpty()
+
+    private fun priceEquivalentForImportDirty(old: Double?, new: Double?): Boolean =
+        abs((old ?: 0.0) - (new ?: 0.0)) <= IMPORT_DIRTY_PRICE_TOLERANCE
 
     private suspend fun normalizedNameFor(
         kind: CatalogEntityKind,
@@ -2850,6 +2908,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val TAG = "CatalogCloudSync"
         const val HISTORY_SESSION_SYNC_TAG = "HistorySessionSyncV2"
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
+        const val IMPORT_DIRTY_PRICE_TOLERANCE = 0.001
         const val SYNC_EVENT_FETCH_LIMIT = 100L
         const val SYNC_EVENT_DRAIN_MAX_ITERATIONS = 20
         const val SYNC_EVENT_ENTITY_ID_BUDGET = 250
@@ -3045,11 +3104,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             Log.i(
                 TAG,
                 "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH " +
-                    "pricesEvaluated=${candidates.size} pricesPushed=0 requireProductSynced=$requireProductSynced"
+                    "pricesEvaluated=${candidates.size} pricesPushed=0 requireProductSynced=$requireProductSynced " +
+                    "batchSize=$PRODUCT_PRICE_PUSH_CHUNK batchCount=0 avgBatchMs=0"
             )
             return ProductPricePushResult(count = 0, remoteIds = emptyList())
         }
         var pushed = 0
+        var batchCount = 0
+        var totalBatchMs = 0L
         val pushedRemoteIds = mutableListOf<String>()
         for (chunk in rows.chunked(PRODUCT_PRICE_PUSH_CHUNK)) {
             val pairs = chunk.map { r ->
@@ -3069,7 +3131,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     createdAt = r.createdAt
                 )
             }
+            val batchStartedAt = System.currentTimeMillis()
             priceRemote.upsertProductPrices(upsertRows).getOrThrow()
+            totalBatchMs += System.currentTimeMillis() - batchStartedAt
+            batchCount++
             db.withTransaction {
                 for ((r, rid) in pairs) {
                     if (r.existingPriceRemoteId == null) {
@@ -3093,7 +3158,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             TAG,
             "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH " +
                 "pricesEvaluated=${candidates.size} pricesEligible=${rows.size} pricesPushed=$pushed " +
-                "requireProductSynced=$requireProductSynced"
+                "requireProductSynced=$requireProductSynced batchSize=$PRODUCT_PRICE_PUSH_CHUNK " +
+                "batchCount=$batchCount avgBatchMs=${if (batchCount == 0) 0 else totalBatchMs / batchCount}"
         )
         return ProductPricePushResult(count = pushed, remoteIds = pushedRemoteIds.distinct())
     }
@@ -3206,6 +3272,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         } else {
             productRemoteRefDao.incrementLocalRevision(productId)
         }
+    }
+
+    private suspend fun ensureProductRefForPricePushIfMissing(productId: Long): Boolean {
+        if (productRemoteRefDao.getByProductId(productId) != null) return false
+        productRemoteRefDao.insert(
+            ProductRemoteRef(
+                productId = productId,
+                remoteId = java.util.UUID.randomUUID().toString()
+            )
+        )
+        return productRemoteRefDao.getByProductId(productId) != null
     }
 
     private fun supplierNeedsPush(ref: SupplierRemoteRef): Boolean =
@@ -3343,6 +3420,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var dirty = 0
         var skippedMissingDependencyRef = 0
         var skippedAlreadySynced = 0
+        var productPushCallCount = 0
+        var productPushCallMs = 0L
         val pushedRemoteIds = mutableListOf<String>()
         val productTotal = productDao.count()
         val candidates = productDao.getCatalogPushCandidates()
@@ -3358,6 +3437,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             val ref = candidate.remoteRef ?: ensureProductRefForPush(p.id)
             if (productNeedsPush(ref)) {
                 dirty++
+                val pushStartedAt = System.currentTimeMillis()
                 val pushed = pushCatalogProductRow(
                     remote = remote,
                     ownerUserId = ownerUserId,
@@ -3366,6 +3446,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     recoveryCache = recoveryCache,
                     allowCreatingDependencyRefs = allowCreatingDependencyRefs
                 )
+                productPushCallMs += System.currentTimeMillis() - pushStartedAt
+                productPushCallCount++
                 if (pushed) {
                     n++
                     pushedRemoteIds += productRemoteRefDao.getByProductId(p.id)?.remoteId ?: ref.remoteId
@@ -3388,7 +3470,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             "phase_metrics syncDomain=CATALOG phase=PUSH_PRODUCTS productsTotal=$productTotal " +
                 "productsEvaluated=${candidates.size} productsDirty=$dirty productsPushed=$n " +
                 "productsSkippedAlreadySynced=${(productTotal - candidates.size + skippedAlreadySynced).coerceAtLeast(0)} " +
-                "productsSkippedMissingDependencyRef=$skippedMissingDependencyRef"
+                "productsSkippedMissingDependencyRef=$skippedMissingDependencyRef " +
+                "batchSize=1 batchCount=$productPushCallCount " +
+                "avgBatchMs=${if (productPushCallCount == 0) 0 else productPushCallMs / productPushCallCount}"
         )
         return CatalogEntityPushResult(count = n, remoteIds = pushedRemoteIds.distinct())
     }

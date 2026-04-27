@@ -589,11 +589,14 @@
     <string name="catalog_cloud_stage_push_products_short">Sending products</string>
     <string name="catalog_cloud_stage_push_products_count_short">Products %1$d/%2$d</string>
     <string name="catalog_cloud_stage_pull_catalog_short">Receiving catalog</string>
-    <string name="catalog_cloud_stage_sync_prices_short">Receiving prices</string>
+    <string name="catalog_cloud_stage_sync_prices_short">Syncing prices</string>
     <string name="catalog_cloud_stage_sync_prices_count_short">Prices %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_history_short">Sessions</string>
     <string name="cloud_sync_indicator_cd">Cloud sync in progress</string>
     <string name="cloud_sync_indicator_status_cd">Cloud sync: %1$s</string>
+    <string name="cloud_sync_indicator_local_ready">Local database is ready</string>
+    <string name="cloud_sync_indicator_completed">Cloud catalog synced</string>
+    <string name="cloud_sync_indicator_failed">Cloud sync did not finish, retry</string>
     <string name="catalog_cloud_state_synced">Up to date</string>
     <string name="catalog_cloud_state_pending">Waiting to sync</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>

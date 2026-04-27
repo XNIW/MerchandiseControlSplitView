@@ -587,11 +587,14 @@
     <string name="catalog_cloud_stage_push_products_short">Enviando productos</string>
     <string name="catalog_cloud_stage_push_products_count_short">Productos %1$d/%2$d</string>
     <string name="catalog_cloud_stage_pull_catalog_short">Recibiendo catálogo</string>
-    <string name="catalog_cloud_stage_sync_prices_short">Recibiendo precios</string>
+    <string name="catalog_cloud_stage_sync_prices_short">Sincronizando precios</string>
     <string name="catalog_cloud_stage_sync_prices_count_short">Precios %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_history_short">Sesiones</string>
     <string name="cloud_sync_indicator_cd">Sincronizacion en la nube en curso</string>
     <string name="cloud_sync_indicator_status_cd">Sincronización en la nube: %1$s</string>
+    <string name="cloud_sync_indicator_local_ready">La base local ya está disponible</string>
+    <string name="cloud_sync_indicator_completed">Catálogo en la nube sincronizado</string>
+    <string name="cloud_sync_indicator_failed">La sincronización en la nube no terminó, reintenta</string>
     <string name="catalog_cloud_state_synced">Actualizado</string>
     <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
     <string name="catalog_cloud_state_last_failed">El ultimo intento fallo</string>

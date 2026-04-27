@@ -314,6 +314,255 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `067 full import with identical bridged price history does not dirty the catalog`() = runTest {
+        val products = (0 until 10).map { index ->
+            seedSyncedProductWithPriceBridge(
+                barcode = "067-identical-${index.toString().padStart(2, '0')}",
+                productName = "Identical Product $index",
+                purchasePrice = 10.0 + index,
+                retailPrice = 20.0 + index
+            )
+        }
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertTrue(changedProductIds.isEmpty())
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+        products.forEach { product ->
+            val ref = db.productRemoteRefDao().getByProductId(product.id)!!
+            assertEquals(0, ref.localChangeRevision)
+            assertEquals(0, ref.lastSyncedLocalRevision)
+        }
+    }
+
+    @Test
+    fun `067 full import with few modified products marks only changed products dirty`() = runTest {
+        val products = (0 until 10).map { index ->
+            seedSyncedProductWithPriceBridge(
+                barcode = "067-delta-${index.toString().padStart(2, '0')}",
+                productName = "Delta Product $index",
+                purchasePrice = 30.0 + index,
+                retailPrice = 40.0 + index
+            )
+        }
+        val changedTargets = listOf(products[2], products[7])
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = changedTargets.map { product ->
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(productName = "${product.productName} Updated"),
+                        changedFields = emptyList()
+                    )
+                },
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(changedTargets.map { it.id }.toSet(), changedProductIds.toSet())
+        assertEquals(
+            changedTargets.map { it.id }.toSet(),
+            db.productDao().getCatalogPushCandidates().map { it.product.id }.toSet()
+        )
+        products.filterNot { it in changedTargets }.forEach { product ->
+            assertEquals(0, db.productRemoteRefDao().getByProductId(product.id)!!.localChangeRevision)
+        }
+    }
+
+    @Test
+    fun `067 full import with only a new price event does not dirty product fields`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "067-price-only",
+            productName = "Price Only Product",
+            purchasePrice = 11.0,
+            retailPrice = 22.0
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                pendingPriceHistory = listOf(
+                    ImportPriceHistoryEntry(
+                        barcode = product.barcode,
+                        type = "PURCHASE",
+                        timestamp = "2026-04-27 12:30:00",
+                        price = 12.5,
+                        source = "IMPORT_SHEET"
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(product.id), changedProductIds)
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+        assertEquals(0, db.productRemoteRefDao().getByProductId(product.id)!!.localChangeRevision)
+        assertEquals(1, db.productPriceDao().getAllForCloudPush().size)
+
+        val priceRemote = RecordingPriceRemote016()
+        val push = repository.pushDirtyCatalogDeltaToRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = priceRemote,
+            ownerUserId = "00000000-0000-4000-8000-000000000671",
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(push.isSuccess)
+        assertEquals(0, push.getOrThrow().pushedProducts)
+        assertEquals(1, push.getOrThrow().pushedProductPrices)
+        assertEquals(1, priceRemote.upsertBatches.flatten().size)
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+    }
+
+    @Test
+    fun `067 price-only import creates conservative product ref when bridge is missing`() = runTest {
+        db.productDao().insert(
+            Product(
+                barcode = "067-price-missing-ref",
+                productName = "Price Missing Ref Product",
+                purchasePrice = 9.0,
+                retailPrice = 19.0,
+                stockQuantity = 3.0
+            )
+        )
+        val product = repository.findProductByBarcode("067-price-missing-ref")!!
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                pendingPriceHistory = listOf(
+                    ImportPriceHistoryEntry(
+                        barcode = product.barcode,
+                        type = "RETAIL",
+                        timestamp = "2026-04-27 12:45:00",
+                        price = 21.0,
+                        source = "IMPORT_SHEET"
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(product.id), changedProductIds)
+        assertNotNull(db.productRemoteRefDao().getByProductId(product.id))
+        assertEquals(listOf(product.id), db.productDao().getCatalogPushCandidates().map { it.product.id })
+        assertEquals(1, db.productPriceDao().getAllForCloudPush().size)
+
+        val catalogRemote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016()
+        val push = repository.pushDirtyCatalogDeltaToRemote(
+            remote = catalogRemote,
+            priceRemote = priceRemote,
+            ownerUserId = "00000000-0000-4000-8000-000000000672",
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(push.isSuccess)
+        assertEquals(1, push.getOrThrow().pushedProducts)
+        assertEquals(1, push.getOrThrow().pushedProductPrices)
+        assertEquals(product.barcode, catalogRemote.upsertedProducts.flatten().single().barcode)
+        assertEquals(1, priceRemote.upsertBatches.flatten().size)
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+    }
+
+    @Test
+    fun `067 supplier and category equivalent after temp resolution do not dirty product`() = runTest {
+        val supplierId = db.supplierDao().insert(Supplier(name = "Equivalent Supplier"))
+        val categoryId = db.categoryDao().insert(Category(name = "Equivalent Category"))
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "067-equivalent-relations",
+            productName = "Equivalent Relations Product",
+            purchasePrice = 15.0,
+            retailPrice = 25.0,
+            supplierId = supplierId,
+            categoryId = categoryId
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(supplierId = -1L, categoryId = -2L),
+                        changedFields = emptyList()
+                    )
+                ),
+                pendingTempSuppliers = mapOf(-1L to " equivalent supplier "),
+                pendingTempCategories = mapOf(-2L to "Equivalent Category")
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertTrue(changedProductIds.isEmpty())
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+        assertEquals(0, db.productRemoteRefDao().getByProductId(product.id)!!.localChangeRevision)
+    }
+
+    @Test
+    fun `067 medium full import price sheet does not scale dirty set with total rows`() = runTest {
+        val products = (0 until 500).map { index ->
+            seedSyncedProductWithPriceBridge(
+                barcode = "067-medium-${index.toString().padStart(4, '0')}",
+                productName = "Medium Product $index",
+                purchasePrice = 100.0 + index,
+                retailPrice = 150.0 + index
+            )
+        }
+        val target = products[321]
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = target,
+                        newProduct = target.copy(stockQuantity = (target.stockQuantity ?: 0.0) + 5.0),
+                        changedFields = emptyList()
+                    )
+                ),
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(target.id), changedProductIds)
+        assertEquals(
+            listOf(target.id),
+            db.productDao().getCatalogPushCandidates().map { it.product.id }
+        )
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+    }
+
+    @Test
     fun `applyImport updating one synced product marks only that product dirty`() = runTest {
         val supplierId = db.supplierDao().insert(Supplier(name = "Import Supplier 057"))
         val categoryId = db.categoryDao().insert(Category(name = "Import Category 057"))
@@ -985,6 +1234,81 @@ class DefaultInventoryRepositoryTest {
         pendingTempCategories = pendingTempCategories,
         pendingPriceHistory = pendingPriceHistory
     )
+
+    private suspend fun seedSyncedProductWithPriceBridge(
+        barcode: String,
+        productName: String,
+        purchasePrice: Double,
+        retailPrice: Double,
+        supplierId: Long? = null,
+        categoryId: Long? = null
+    ): Product {
+        db.productDao().insert(
+            Product(
+                barcode = barcode,
+                productName = productName,
+                purchasePrice = purchasePrice,
+                retailPrice = retailPrice,
+                supplierId = supplierId,
+                categoryId = categoryId,
+                stockQuantity = 0.0
+            )
+        )
+        val product = db.productDao().findByBarcode(barcode)!!
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = product.id,
+                remoteId = stableUuid("product-$barcode"),
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "product-$barcode"
+            )
+        )
+        val purchaseId = db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "PURCHASE",
+                price = purchasePrice,
+                effectiveAt = "2026-04-27 10:00:00",
+                source = "IMPORT_SHEET"
+            )
+        )
+        val retailId = db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "RETAIL",
+                price = retailPrice,
+                effectiveAt = "2026-04-27 10:00:00",
+                source = "IMPORT_SHEET"
+            )
+        )
+        db.productPriceRemoteRefDao().insert(
+            ProductPriceRemoteRef(
+                productPriceId = purchaseId,
+                remoteId = stableUuid("purchase-$barcode")
+            )
+        )
+        db.productPriceRemoteRefDao().insert(
+            ProductPriceRemoteRef(
+                productPriceId = retailId,
+                remoteId = stableUuid("retail-$barcode")
+            )
+        )
+        return product
+    }
+
+    private suspend fun currentPriceHistoryAsImportRows(): List<ImportPriceHistoryEntry> =
+        repository.getAllPriceHistoryRows().map { row ->
+            ImportPriceHistoryEntry(
+                barcode = row.barcode,
+                type = row.type,
+                timestamp = row.timestamp,
+                price = row.price,
+                source = row.source
+            )
+        }
+
+    private fun stableUuid(seed: String): String =
+        java.util.UUID.nameUUIDFromBytes(seed.toByteArray()).toString()
 
     // --- Test bridge locale: identità remota stabile (task 007 / DEC-017) ---
 

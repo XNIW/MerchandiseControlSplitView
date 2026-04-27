@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -147,12 +148,22 @@ fun CloudSyncIndicator(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stageMessage,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = contentColor,
-                    maxLines = 2
-                )
+                Column {
+                    Text(
+                        text = stageMessage,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = contentColor,
+                        maxLines = 2
+                    )
+                    catalogSyncDetailMessage(state)?.let { detail ->
+                        Text(
+                            text = detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = contentColor,
+                            maxLines = 1
+                        )
+                    }
+                }
             }
         }
     }
@@ -172,8 +183,8 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
 
     return when (state.stage) {
         CatalogSyncStage.COMPLETED -> when (state.status) {
-            CatalogSyncStatus.FAILED -> stringResource(R.string.catalog_cloud_state_last_failed)
-            else -> stringResource(R.string.catalog_cloud_state_synced)
+            CatalogSyncStatus.FAILED -> stringResource(R.string.cloud_sync_indicator_failed)
+            else -> stringResource(R.string.cloud_sync_indicator_completed)
         }
         CatalogSyncStage.REALIGN -> stringResource(R.string.catalog_cloud_stage_realign_short)
         CatalogSyncStage.PUSH_SUPPLIERS -> counted(
@@ -197,3 +208,11 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
         CatalogSyncStage.IDLE -> stringResource(R.string.catalog_cloud_state_syncing)
     }
 }
+
+@Composable
+private fun catalogSyncDetailMessage(state: CatalogSyncProgressState): String? =
+    if (state.status == CatalogSyncStatus.RUNNING) {
+        stringResource(R.string.cloud_sync_indicator_local_ready)
+    } else {
+        null
+    }
