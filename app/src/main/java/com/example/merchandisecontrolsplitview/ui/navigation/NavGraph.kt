@@ -624,10 +624,10 @@ private fun navigateToGeneratedExitDestination(
             val startRoute = navController.graph.findStartDestination().route ?: Screen.FilePicker.route
             navController.navigate(Screen.Database.route) {
                 popUpTo(startRoute) {
-                    saveState = true
+                    saveState = false
                 }
                 launchSingleTop = true
-                restoreState = true
+                restoreState = false
             }
         }
         is GeneratedExitDestination.Generated -> {

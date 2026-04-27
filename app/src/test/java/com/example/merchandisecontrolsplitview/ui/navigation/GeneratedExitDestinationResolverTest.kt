@@ -152,4 +152,163 @@ class GeneratedExitDestinationResolverTest {
         assertEquals(GeneratedExitDestination.HistoryRoot, done)
         assertEquals(GeneratedExitDestination.HistoryRoot, back)
     }
+
+    @Test
+    fun database_import_cancel_ignores_stale_entry_uid_and_returns_database_root() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.DATABASE,
+                exitReason = GeneratedExitReason.ImportCancel,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(GeneratedExitDestination.DatabaseRoot, destination)
+    }
+
+    @Test
+    fun database_correct_rows_ignores_stale_entry_uid_and_returns_database_root() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.DATABASE,
+                exitReason = GeneratedExitReason.CorrectRows,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(GeneratedExitDestination.DatabaseRoot, destination)
+    }
+
+    @Test
+    fun database_import_success_ignores_stale_entry_uid_and_returns_database_root() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.DATABASE,
+                exitReason = GeneratedExitReason.ImportSuccess,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(GeneratedExitDestination.DatabaseRoot, destination)
+    }
+
+    @Test
+    fun database_missing_preview_uses_database_root_recoverable_fallback_with_stale_entry_uid() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.DATABASE,
+                exitReason = GeneratedExitReason.MissingPreview,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(
+            GeneratedExitDestination.RecoverableError(GeneratedExitDestination.DatabaseRoot),
+            destination
+        )
+    }
+
+    @Test
+    fun database_missing_session_uses_database_root_recoverable_fallback_with_stale_entry_uid() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.DATABASE,
+                exitReason = GeneratedExitReason.MissingSession,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(
+            GeneratedExitDestination.RecoverableError(GeneratedExitDestination.DatabaseRoot),
+            destination
+        )
+    }
+
+    @Test
+    fun generated_import_cancel_with_entry_uid_returns_to_generated_session() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.GENERATED,
+                exitReason = GeneratedExitReason.ImportCancel,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                isNewEntry = false,
+                isManualEntry = true,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(
+            GeneratedExitDestination.Generated(
+                entryUid = 91L,
+                isNewEntry = false,
+                isManualEntry = true
+            ),
+            destination
+        )
+    }
+
+    @Test
+    fun generated_correct_rows_with_entry_uid_returns_to_generated_session() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.GENERATED,
+                exitReason = GeneratedExitReason.CorrectRows,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                isNewEntry = false,
+                isManualEntry = false,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(
+            GeneratedExitDestination.Generated(
+                entryUid = 91L,
+                isNewEntry = false,
+                isManualEntry = false
+            ),
+            destination
+        )
+    }
+
+    @Test
+    fun history_import_success_resolves_to_history_root() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.HISTORY,
+                exitReason = GeneratedExitReason.ImportSuccess,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(GeneratedExitDestination.HistoryRoot, destination)
+    }
+
+    @Test
+    fun home_import_success_resolves_to_new_excel_destination() {
+        val destination = GeneratedExitDestinationResolver.resolve(
+            GeneratedExitRequest(
+                origin = ImportNavOrigin.HOME,
+                exitReason = GeneratedExitReason.ImportSuccess,
+                currentRoute = Screen.ImportAnalysis.route,
+                entryUid = 91L,
+                previewId = 4L
+            )
+        )
+
+        assertEquals(GeneratedExitDestination.NewExcelDestination, destination)
+    }
 }

@@ -40,7 +40,7 @@ object GeneratedExitDestinationResolver {
         when (request.exitReason) {
             GeneratedExitReason.HistoryTabSelected -> GeneratedExitDestination.HistoryRoot
             GeneratedExitReason.ImportCancel,
-            GeneratedExitReason.CorrectRows -> generatedOrRecover(request)
+            GeneratedExitReason.CorrectRows -> importAnalysisCorrectionDestination(request)
             GeneratedExitReason.MissingPreview,
             GeneratedExitReason.MissingSession -> GeneratedExitDestination.RecoverableError(
                 fallback = recoverableFallbackForOrigin(request)
@@ -91,4 +91,13 @@ object GeneratedExitDestinationResolver {
             )
         }
     }
+
+    private fun importAnalysisCorrectionDestination(
+        request: GeneratedExitRequest
+    ): GeneratedExitDestination =
+        if (request.origin == ImportNavOrigin.DATABASE) {
+            GeneratedExitDestination.DatabaseRoot
+        } else {
+            generatedOrRecover(request)
+        }
 }
