@@ -297,6 +297,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val tooLarge: Boolean,
         val gapDetected: Boolean,
         val manualFullSyncRequired: Boolean,
+        val skippedProtectedLocalCommit: Int = 0,
         val remoteAppliedProductIds: Set<Long> = emptySet()
     )
 
@@ -1269,6 +1270,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val actuallyChangedUpdates = resolvedUpdatedProducts.filter { (oldProduct, resolvedProduct) ->
             !productsEquivalentForImportDirty(oldProduct, resolvedProduct)
         }
+        val actualProductDirtyReasons = actuallyChangedUpdates.map { (oldProduct, resolvedProduct) ->
+            importDirtyChangedFields(oldProduct, resolvedProduct)
+        }
         val resolvedUpdatedProductEntities = actuallyChangedUpdates.map { it.second }
 
         if (resolvedNewProducts.isNotEmpty()) {
@@ -1338,11 +1342,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             emptyList()
         }
         val pendingPriceRowsInserted = pendingPriceInsertIds.count { it > 0L }
+        val pendingPriceRowsAlreadyPresent = (pendingPriceHistoryPoints.size - pendingPriceRowsInserted)
+            .coerceAtLeast(0)
         pendingPriceHistoryPoints.zip(pendingPriceInsertIds).forEach { (point, insertedId) ->
             if (insertedId > 0L) {
                 priceChangedProductIds += point.productId
             }
         }
+        val priceRowsPendingBridgeAfter = priceDao.countPriceRowsPendingPriceBridge()
 
         val insertedProductIds = resolvedNewProducts.mapNotNull { productIdsByBarcode[it.barcode] }
             .filter { it > 0L }
@@ -1369,10 +1376,16 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "updatedProducts=${resolvedUpdatedProductEntities.size} " +
                 "unchangedProductUpdates=${resolvedUpdatedProducts.size - resolvedUpdatedProductEntities.size} " +
                 "dirtyMarkedProducts=${catalogDirtyProductIds.size} " +
+                "productFieldChangedCount=${actualProductDirtyReasons.sumOf { it.size }} " +
+                "productDirtyReasons=${formatImportDirtyReasonCounts(actualProductDirtyReasons)} " +
+                "productDirtyReasonSample=${formatImportDirtyReasonSample(actualProductDirtyReasons)} " +
                 "priceHistoryRows=${request.pendingPriceHistory.size} " +
                 "priceHistoryInserted=$pendingPriceRowsInserted " +
+                "priceHistoryAlreadyPresent=$pendingPriceRowsAlreadyPresent " +
                 "dirtyMarkedPrices=${importedPriceRowsInserted + pendingPriceRowsInserted} " +
                 "dirtyMarkedPriceProducts=${priceChangedProductIds.size} " +
+                "priceRowsPendingBridgeAfter=$priceRowsPendingBridgeAfter " +
+                "priceDirtyReason=syntheticProductPrice:$importedPriceRowsInserted,pendingPriceInsert:$pendingPriceRowsInserted " +
                 "priceOnlyProducts=${priceOnlyProductIds.size} " +
                 "priceProductRefsCreated=$productRefsCreatedForPriceOnly " +
                 "suppliersCreated=${createdSupplierIds.size} categoriesCreated=${createdCategoryIds.size}"
@@ -1396,6 +1409,39 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     private fun priceEquivalentForImportDirty(old: Double?, new: Double?): Boolean =
         abs((old ?: 0.0) - (new ?: 0.0)) <= IMPORT_DIRTY_PRICE_TOLERANCE
+
+    private fun importDirtyChangedFields(old: Product, new: Product): List<String> = buildList {
+        if (!normalizedImportText(old.barcode).equals(normalizedImportText(new.barcode), ignoreCase = true)) add("barcode")
+        if (!normalizedImportText(old.itemNumber).equals(normalizedImportText(new.itemNumber), ignoreCase = true)) add("itemNumber")
+        if (!normalizedImportText(old.productName).equals(normalizedImportText(new.productName), ignoreCase = true)) add("productName")
+        if (!normalizedImportText(old.secondProductName).equals(normalizedImportText(new.secondProductName), ignoreCase = true)) add("secondProductName")
+        if (!priceEquivalentForImportDirty(old.purchasePrice, new.purchasePrice)) add("purchasePrice")
+        if (!priceEquivalentForImportDirty(old.retailPrice, new.retailPrice)) add("retailPrice")
+        if (!priceEquivalentForImportDirty(old.stockQuantity, new.stockQuantity)) add("stockQuantity")
+        if (old.supplierId != new.supplierId) add("supplierId")
+        if (old.categoryId != new.categoryId) add("categoryId")
+    }
+
+    private fun formatImportDirtyReasonCounts(reasons: List<List<String>>): String {
+        val counts = reasons.flatten()
+            .groupingBy { it }
+            .eachCount()
+            .entries
+            .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .take(LOG_SAMPLE_LIMIT)
+        return if (counts.isEmpty()) {
+            "none"
+        } else {
+            counts.joinToString(",") { "${it.key}:${it.value}" }
+        }
+    }
+
+    private fun formatImportDirtyReasonSample(reasons: List<List<String>>): String {
+        val sample = reasons
+            .map { fields -> fields.ifEmpty { listOf("unknown") }.joinToString("+") }
+            .take(LOG_SAMPLE_LIMIT)
+        return if (sample.isEmpty()) "none" else sample.joinToString("|")
+    }
 
     private suspend fun normalizedNameFor(
         kind: CatalogEntityKind,
@@ -1833,7 +1879,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (priceRemote.isConfigured) {
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
-                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PULL))
                         val pullOutcome = pullProductPricesFromRemote(priceRemote, progressReporter)
                         pulledPrices = pullOutcome.pulled
                         skippedPullPrices = pullOutcome.skippedNoLocalProduct
@@ -1914,7 +1960,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (priceRemote.isConfigured) {
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
-                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PUSH))
                         pushedPrices = pushProductPricesToRemote(
                             priceRemote = priceRemote,
                             ownerUserId = ownerUserId,
@@ -2033,7 +2079,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (priceRemote.isConfigured) {
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
-                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PUSH))
                         pushedPrices = pushProductPricesToRemote(
                             priceRemote = priceRemote,
                             ownerUserId = ownerUserId,
@@ -2090,7 +2136,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 syncEventRemote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 deviceId = deviceId,
-                progressReporter = progressReporter
+                progressReporter = progressReporter,
+                protectedLocalCommitIds = SyncEventEntityIds(
+                    supplierIds = catalogIds.supplierIds,
+                    categoryIds = catalogIds.categoryIds,
+                    productIds = catalogIds.productIds,
+                    priceIds = pushedPrices.remoteIds.distinct()
+                )
             )
             val outboxPending = syncEventOutboxDao.countPending(ownerUserId)
             logCatalogSyncPhaseDurations(
@@ -2273,7 +2325,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (priceRemote.isConfigured) {
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
-                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PULL))
                         val pullOutcome = pullProductPricesFromRemote(priceRemote, progressReporter)
                         pulledPrices = pullOutcome.pulled
                         skippedPullPrices = pullOutcome.skippedNoLocalProduct
@@ -2440,7 +2492,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         syncEventRemote: SyncEventRemoteDataSource,
         ownerUserId: String,
         deviceId: String,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        protectedLocalCommitIds: SyncEventEntityIds = SyncEventEntityIds()
     ): SyncEventDrainResult {
         val storeScope = syncEventStoreScope(null)
         var watermark = currentSyncEventWatermark(ownerUserId, storeScope)
@@ -2455,6 +2508,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var tooLarge = false
         var gapDetected = false
         var manualFullSyncRequired = false
+        var skippedProtectedLocalCommit = 0
         val remoteAppliedProductIds = linkedSetOf<Long>()
         var iterations = 0
 
@@ -2475,15 +2529,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
                     continue
                 }
-                val eventDirty = ids?.let { countDirtyLocalRefsForEvent(it) } ?: 0
+                val effectiveIds = ids?.withoutProtected(protectedLocalCommitIds)
+                skippedProtectedLocalCommit += when {
+                    ids == null || effectiveIds == null -> 0
+                    else -> ids.totalIds - effectiveIds.totalIds
+                }
+                if (ids != null && ids.totalIds > 0 && effectiveIds != null && effectiveIds.isEmpty) {
+                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    continue
+                }
+                val idsForApply = effectiveIds
+                val eventDirty = idsForApply?.let { countDirtyLocalRefsForEvent(it) } ?: 0
                 skippedDirty += eventDirty
-                if (ids == null || (ids.isEmpty && event.changedCount > 0)) {
+                if (idsForApply == null || (idsForApply.isEmpty && event.changedCount > 0)) {
                     gapDetected = true
                     manualFullSyncRequired = true
                     watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
                     continue
                 }
-                if (ids.totalIds > SYNC_EVENT_ENTITY_ID_BUDGET) {
+                if (idsForApply.totalIds > SYNC_EVENT_ENTITY_ID_BUDGET) {
                     tooLarge = true
                     manualFullSyncRequired = true
                     watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
@@ -2491,13 +2555,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 }
                 val applied = when (event.domain) {
                     SyncEventDomains.CATALOG -> {
-                        val counts = applyCatalogEventByIds(remote, ids, progressReporter)
+                        val counts = applyCatalogEventByIds(remote, idsForApply, progressReporter)
                         targetedProductsFetched += counts.remoteProductRows
                         remoteAppliedProductIds += counts.appliedProductIds
                         counts.suppliers + counts.categories + counts.products
                     }
                     SyncEventDomains.PRICES -> {
-                        val outcome = applyPriceEventByIds(remote, priceRemote, ids, progressReporter)
+                        val outcome = applyPriceEventByIds(remote, priceRemote, idsForApply, progressReporter)
                         targetedProductsFetched += outcome.first
                         targetedPricesFetched += outcome.second.remoteRowsEvaluated
                         remoteAppliedProductIds += outcome.second.appliedProductIds
@@ -2529,7 +2593,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             tooLarge = tooLarge,
             gapDetected = gapDetected,
             manualFullSyncRequired = manualFullSyncRequired,
+            skippedProtectedLocalCommit = skippedProtectedLocalCommit,
             remoteAppliedProductIds = remoteAppliedProductIds
+        )
+    }
+
+    private fun SyncEventEntityIds.withoutProtected(protected: SyncEventEntityIds): SyncEventEntityIds {
+        if (protected.isEmpty) return this
+        val protectedSupplierIds = protected.supplierIds.toSet()
+        val protectedCategoryIds = protected.categoryIds.toSet()
+        val protectedProductIds = protected.productIds.toSet()
+        val protectedPriceIds = protected.priceIds.toSet()
+        return SyncEventEntityIds(
+            supplierIds = supplierIds.filterNot { it in protectedSupplierIds },
+            categoryIds = categoryIds.filterNot { it in protectedCategoryIds },
+            productIds = productIds.filterNot { it in protectedProductIds },
+            priceIds = priceIds.filterNot { it in protectedPriceIds }
         )
     }
 
@@ -2538,7 +2617,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ids: SyncEventEntityIds,
         progressReporter: CatalogSyncProgressReporter
     ): CatalogPullApplyCounts {
-        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
         val first = remote.fetchCatalogByIds(
             supplierIds = ids.supplierIds.toSet(),
             categoryIds = ids.categoryIds.toSet(),
@@ -2581,7 +2660,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (ids.priceIds.isEmpty() || !priceRemote.isConfigured) {
             return 0 to PricePullApplyResult(0, 0, 0)
         }
-        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES))
+        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
         val rows = priceRemote.fetchProductPricesByIds(ids.priceIds.toSet()).getOrThrow()
         val missingProductIds = rows
             .map { it.productId }
@@ -2638,7 +2717,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             for ((index, row) in remotes.withIndex()) {
                 progressReporter.onProgress(
                     CatalogSyncProgressState.running(
-                        CatalogSyncStage.SYNC_PRICES,
+                        CatalogSyncStage.SYNC_EVENTS_DRAIN,
                         current = index + 1,
                         total = remotes.size
                     )
@@ -2894,6 +2973,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "syncEventsFetched=${drain.fetched} syncEventsProcessed=${drain.processed} " +
                 "syncEventsSkippedSelf=${drain.skippedSelf} " +
                 "syncEventsSkippedDirtyLocal=${drain.skippedDirtyLocal} " +
+                "syncEventsSkippedProtectedLocalCommit=${drain.skippedProtectedLocalCommit} " +
                 "syncEventsWatermarkBefore=${drain.watermarkBefore} " +
                 "syncEventsWatermarkAfter=${drain.watermarkAfter} " +
                 "syncEventsTooLarge=${drain.tooLarge} syncEventsGapDetected=${drain.gapDetected} " +
@@ -3148,7 +3228,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             pushedRemoteIds += pairs.map { it.second }
             progressReporter.onProgress(
                 CatalogSyncProgressState.running(
-                    CatalogSyncStage.SYNC_PRICES,
+                    CatalogSyncStage.SYNC_PRICES_PUSH,
                     current = pushed,
                     total = rows.size
                 )
@@ -3180,7 +3260,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             for ((index, row) in remotes.withIndex()) {
                 progressReporter.onProgress(
                     CatalogSyncProgressState.running(
-                        CatalogSyncStage.SYNC_PRICES,
+                        CatalogSyncStage.SYNC_PRICES_PULL,
                         current = index + 1,
                         total = remotes.size
                     )

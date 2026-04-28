@@ -146,21 +146,50 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyze treats second product name comparison as case sensitive`() = runTest {
-        val current = existingProduct(secondProductName = "Second Name")
+    fun `analyze treats trim case and blank differences as semantic no-op`() = runTest {
+        val current = existingProduct(
+            barcode = " 55556666 ",
+            itemNumber = " ITEM-ABC ",
+            productName = "Alpha Product",
+            secondProductName = "Second Name"
+        )
 
         val analysis = analyze(
             importedRows = listOf(
                 importedRow(
-                    barcode = current.barcode,
-                    secondProductName = "second name"
+                    barcode = "55556666",
+                    itemNumber = "item-abc",
+                    productName = " alpha product ",
+                    secondProductName = " second name "
                 )
             ),
             currentDbProducts = listOf(current)
         )
 
-        val update = analysis.updatedProducts.single()
-        assertTrue(update.changedFields.contains(R.string.field_second_product_name))
+        assertTrue(analysis.updatedProducts.isEmpty())
+        assertTrue(analysis.errors.isEmpty())
+    }
+
+    @Test
+    fun `analyze treats imported blank optional text as unchanged`() = runTest {
+        val current = existingProduct(
+            itemNumber = "ITEM-ABC",
+            secondProductName = "Second Name"
+        )
+
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    barcode = current.barcode,
+                    itemNumber = "",
+                    secondProductName = ""
+                )
+            ),
+            currentDbProducts = listOf(current)
+        )
+
+        assertTrue(analysis.updatedProducts.isEmpty())
+        assertTrue(analysis.errors.isEmpty())
     }
 
     @Test

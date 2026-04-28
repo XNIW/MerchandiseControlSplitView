@@ -94,6 +94,51 @@ class FullDbExportImportRoundTripTest {
         }
 
     @Test
+    fun `RT-FULL reimporting the same workbook after apply is product and price no-op`() =
+        runTest {
+            val sourceDb = createInMemoryDb()
+            val sourceRepository = DefaultInventoryRepository(sourceDb)
+            seedStandardRoundTripFixture(sourceDb, sourceRepository)
+            val workbookFile = exportFullDatabase(app, sourceRepository, "rt-full-noop")
+
+            val targetDb = createInMemoryDb()
+            val targetRepository = DefaultInventoryRepository(targetDb)
+            importWorkbookIntoTarget(app, workbookFile, targetRepository)
+            val priceRowsBefore = targetRepository.getAllPriceHistoryRows().size
+            val changedProductIds = mutableListOf<Long>()
+            targetRepository.onProductCatalogChanged = { productId ->
+                changedProductIds += productId
+            }
+
+            val second = analyzeFullDbImportStreaming(
+                context = app,
+                uri = Uri.fromFile(workbookFile),
+                currentDbProducts = targetRepository.getAllProducts(),
+                repository = targetRepository
+            )
+
+            assertTrue(second.analysis.analysis.newProducts.isEmpty())
+            assertTrue(second.analysis.analysis.updatedProducts.isEmpty())
+            assertTrue(second.analysis.analysis.errors.isEmpty())
+
+            val secondApply = targetRepository.applyImport(
+                ImportApplyRequest(
+                    newProducts = second.analysis.analysis.newProducts,
+                    updatedProducts = second.analysis.analysis.updatedProducts,
+                    pendingSupplierNames = second.pendingSupplierNames,
+                    pendingCategoryNames = second.pendingCategoryNames,
+                    pendingTempSuppliers = second.analysis.pendingSuppliers,
+                    pendingTempCategories = second.analysis.pendingCategories,
+                    pendingPriceHistory = second.pendingPriceHistory
+                )
+            )
+
+            assertEquals(ImportApplyResult.Success, secondApply)
+            assertTrue(changedProductIds.isEmpty())
+            assertEquals(priceRowsBefore, targetRepository.getAllPriceHistoryRows().size)
+        }
+
+    @Test
     fun `RT-NOPH round trip without PriceHistory sheet keeps exported product snapshot and only synthetic history`() =
         runTest {
             val sourceDb = createInMemoryDb()

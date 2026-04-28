@@ -288,7 +288,7 @@ class CatalogAutoSyncCoordinatorTest {
             progressReporter: CatalogSyncProgressReporter
         ): Result<CatalogSyncSummary> {
             drainCalls++
-            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+            progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
             return Result.success(nextDrainSummary)
         }
 

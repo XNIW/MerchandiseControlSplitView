@@ -244,6 +244,17 @@ class CatalogSyncViewModel(
                 R.string.catalog_cloud_stage_sync_prices,
                 R.string.catalog_cloud_stage_sync_prices_count
             )
+            CatalogSyncStage.SYNC_PRICES_PUSH -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_sync_prices_push,
+                R.string.catalog_cloud_stage_sync_prices_push_count
+            )
+            CatalogSyncStage.SYNC_PRICES_PULL -> stageMessage(
+                progress,
+                R.string.catalog_cloud_stage_sync_prices_pull,
+                R.string.catalog_cloud_stage_sync_prices_pull_count
+            )
+            CatalogSyncStage.SYNC_EVENTS_DRAIN -> str(R.string.catalog_cloud_stage_sync_events_drain)
             CatalogSyncStage.SYNC_HISTORY -> str(R.string.catalog_cloud_stage_sync_history)
             CatalogSyncStage.IDLE,
             CatalogSyncStage.COMPLETED -> str(R.string.catalog_cloud_state_syncing)
@@ -555,8 +566,11 @@ class CatalogSyncViewModel(
                 CatalogSyncStage.PUSH_SUPPLIERS,
                 CatalogSyncStage.PUSH_CATEGORIES,
                 CatalogSyncStage.PUSH_PRODUCTS -> add(R.string.catalog_cloud_badge_upload)
+                CatalogSyncStage.SYNC_PRICES_PUSH -> add(R.string.catalog_cloud_badge_upload)
                 CatalogSyncStage.PULL_CATALOG,
-                CatalogSyncStage.SYNC_PRICES -> add(R.string.catalog_cloud_badge_download)
+                CatalogSyncStage.SYNC_PRICES,
+                CatalogSyncStage.SYNC_PRICES_PULL,
+                CatalogSyncStage.SYNC_EVENTS_DRAIN -> add(R.string.catalog_cloud_badge_download)
                 CatalogSyncStage.SYNC_HISTORY -> add(R.string.catalog_cloud_badge_sessions)
                 CatalogSyncStage.IDLE,
                 CatalogSyncStage.COMPLETED -> Unit

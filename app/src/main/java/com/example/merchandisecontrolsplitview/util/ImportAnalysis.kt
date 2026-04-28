@@ -106,7 +106,7 @@ object ImportAnalyzer {
         repository: InventoryRepository,
         rowProducer: ((Map<String, String>) -> Unit) -> Unit
     ): DeferredRelationImportAnalysis {
-        val dbProductByBarcode = currentDbProducts.associateBy { it.barcode }
+        val dbProductByBarcode = currentDbProducts.associateBy { normalizedImportKey(it.barcode) }
 
         val initialSuppliersById = repository.getAllSuppliers().associateBy { it.id }
         val initialCategoriesById = repository.getAllCategories().associateBy { it.id }
@@ -271,7 +271,7 @@ object ImportAnalyzer {
                     continue
                 }
 
-                val existing = dbProductByBarcode[barcode]
+                val existing = dbProductByBarcode[normalizedImportKey(barcode)]
                 if (existing != null && retailPriceFromFile != null && retailPriceFromFile <= 0.0) {
                     errors += RowImportError(pending.lastRowNumber, finalRow, R.string.error_invalid_or_missing_retail_price)
                     continue
@@ -346,9 +346,9 @@ object ImportAnalyzer {
     ): List<Int> {
         val fields = mutableListOf<Int>()
 
-        if (!old.productName.orEmpty().equals(new.productName.orEmpty(), ignoreCase = true)) fields.add(R.string.field_product_name)
-        if (old.secondProductName.orEmpty() != new.secondProductName.orEmpty()) fields.add(R.string.field_second_product_name)
-        if (!old.itemNumber.orEmpty().equals(new.itemNumber.orEmpty(), ignoreCase = true)) fields.add(R.string.header_item_number)
+        if (!semanticImportTextEquals(old.productName, new.productName)) fields.add(R.string.field_product_name)
+        if (!semanticImportTextEquals(old.secondProductName, new.secondProductName)) fields.add(R.string.field_second_product_name)
+        if (!semanticImportTextEquals(old.itemNumber, new.itemNumber)) fields.add(R.string.header_item_number)
 
         if (abs((old.purchasePrice ?: 0.0) - (new.purchasePrice ?: 0.0)) > PRICE_COMPARISON_TOLERANCE) fields.add(R.string.purchase_price_label)
         if (abs((old.retailPrice ?: 0.0) - (new.retailPrice ?: 0.0)) > PRICE_COMPARISON_TOLERANCE) fields.add(R.string.retail_price_label)
@@ -357,7 +357,7 @@ object ImportAnalyzer {
         if (old.supplierId != new.supplierId) {
             val oldSupplierName = old.supplierId?.let { suppliersById[it]?.name }
             val newSupplierName = new.supplierId?.let { suppliersById[it]?.name }
-            if (!oldSupplierName.orEmpty().equals(newSupplierName.orEmpty(), ignoreCase = true)) {
+            if (!semanticImportTextEquals(oldSupplierName, newSupplierName)) {
                 fields.add(R.string.field_supplier)
             }
         }
@@ -365,12 +365,18 @@ object ImportAnalyzer {
         if (old.categoryId != new.categoryId) {
             val oldCategoryName = old.categoryId?.let { categoriesById[it]?.name }
             val newCategoryName = new.categoryId?.let { categoriesById[it]?.name }
-            if (!oldCategoryName.orEmpty().equals(newCategoryName.orEmpty(), ignoreCase = true)) {
+            if (!semanticImportTextEquals(oldCategoryName, newCategoryName)) {
                 fields.add(R.string.field_category)
             }
         }
         return fields
     }
+
+    private fun semanticImportTextEquals(old: String?, new: String?): Boolean =
+        old?.trim().orEmpty().equals(new?.trim().orEmpty(), ignoreCase = true)
+
+    private fun normalizedImportKey(value: String?): String =
+        value?.trim().orEmpty().lowercase()
 
     private fun unexpectedRowProcessingError(
         rowNumber: Int,

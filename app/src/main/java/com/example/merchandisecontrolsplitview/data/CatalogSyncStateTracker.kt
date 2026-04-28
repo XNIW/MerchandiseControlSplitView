@@ -13,6 +13,9 @@ enum class CatalogSyncStage {
     PUSH_PRODUCTS,
     PULL_CATALOG,
     SYNC_PRICES,
+    SYNC_PRICES_PUSH,
+    SYNC_PRICES_PULL,
+    SYNC_EVENTS_DRAIN,
     SYNC_HISTORY,
     COMPLETED
 }
@@ -42,7 +45,10 @@ val CatalogSyncStage.group: CatalogSyncStageGroup
         CatalogSyncStage.PUSH_CATEGORIES,
         CatalogSyncStage.PUSH_PRODUCTS -> CatalogSyncStageGroup.SEND_CHANGES
         CatalogSyncStage.PULL_CATALOG -> CatalogSyncStageGroup.UPDATE_FROM_CLOUD
-        CatalogSyncStage.SYNC_PRICES -> CatalogSyncStageGroup.PRICES
+        CatalogSyncStage.SYNC_PRICES,
+        CatalogSyncStage.SYNC_PRICES_PUSH,
+        CatalogSyncStage.SYNC_PRICES_PULL -> CatalogSyncStageGroup.PRICES
+        CatalogSyncStage.SYNC_EVENTS_DRAIN -> CatalogSyncStageGroup.UPDATE_FROM_CLOUD
         CatalogSyncStage.SYNC_HISTORY -> CatalogSyncStageGroup.HISTORY
         CatalogSyncStage.COMPLETED -> CatalogSyncStageGroup.COMPLETED
     }

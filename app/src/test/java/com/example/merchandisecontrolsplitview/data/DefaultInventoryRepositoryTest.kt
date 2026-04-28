@@ -346,6 +346,71 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `068 semantic text differences do not dirty product or prices`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-semantic-noop",
+            itemNumber = "ITEM-068",
+            productName = "Semantic Product",
+            secondProductName = "Secondary Name",
+            purchasePrice = 12.0,
+            retailPrice = 18.0,
+            stockQuantity = 4.0
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(
+                            itemNumber = " item-068 ",
+                            productName = " semantic product ",
+                            secondProductName = " secondary name "
+                        ),
+                        changedFields = listOf(1, 2, 3)
+                    )
+                ),
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertTrue(changedProductIds.isEmpty())
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+        assertEquals(0, db.productRemoteRefDao().getByProductId(product.id)!!.localChangeRevision)
+    }
+
+    @Test
+    fun `068 existing price history rows with bridges are not marked dirty again`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-price-noop",
+            productName = "Price Noop Product",
+            purchasePrice = 21.0,
+            retailPrice = 31.0
+        )
+        val existingRows = currentPriceHistoryAsImportRows()
+            .filter { it.barcode == product.barcode }
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(pendingPriceHistory = existingRows)
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertTrue(changedProductIds.isEmpty())
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+        assertEquals(0, db.productRemoteRefDao().getByProductId(product.id)!!.localChangeRevision)
+    }
+
+    @Test
     fun `067 full import with few modified products marks only changed products dirty`() = runTest {
         val products = (0 until 10).map { index ->
             seedSyncedProductWithPriceBridge(
@@ -1237,21 +1302,26 @@ class DefaultInventoryRepositoryTest {
 
     private suspend fun seedSyncedProductWithPriceBridge(
         barcode: String,
+        itemNumber: String? = null,
         productName: String,
+        secondProductName: String? = null,
         purchasePrice: Double,
         retailPrice: Double,
         supplierId: Long? = null,
-        categoryId: Long? = null
+        categoryId: Long? = null,
+        stockQuantity: Double = 0.0
     ): Product {
         db.productDao().insert(
             Product(
                 barcode = barcode,
+                itemNumber = itemNumber,
                 productName = productName,
+                secondProductName = secondProductName,
                 purchasePrice = purchasePrice,
                 retailPrice = retailPrice,
                 supplierId = supplierId,
                 categoryId = categoryId,
-                stockQuantity = 0.0
+                stockQuantity = stockQuantity
             )
         )
         val product = db.productDao().findByBarcode(barcode)!!
@@ -3277,6 +3347,63 @@ class DefaultInventoryRepositoryTest {
         assertEquals(30, syncEvents.recordedParams[0].entityIds!!.productIds.size)
         assertEquals(60, syncEvents.recordedParams[1].entityIds!!.priceIds.size)
         assertEquals(syncEvents.recordedParams[0].batchId, syncEvents.recordedParams[1].batchId)
+    }
+
+    @Test
+    fun `068 quick sync does not let stale event overwrite product pushed in same local commit`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000680"
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-protect-local-commit",
+            productName = "Remote Stale Product",
+            purchasePrice = 9.0,
+            retailPrice = 19.0
+        )
+        val productRemoteId = stableUuid("product-${product.barcode}")
+        db.productDao().update(product.copy(productName = "Local Fresh Product"))
+        db.productRemoteRefDao().incrementLocalRevision(product.id)
+
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = product.barcode,
+                        productName = "Remote Stale Product",
+                        purchasePrice = 9.0,
+                        retailPrice = 19.0
+                    )
+                )
+            )
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 100L,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+                createdAt = "2026-04-27T21:00:00Z"
+            )
+        }
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        assertEquals("Local Fresh Product", repository.findProductByBarcode(product.barcode)!!.productName)
+        assertEquals("Local Fresh Product", remote.upsertedProducts.single().single().productName)
+        assertEquals(0, remote.targetedFetchCount)
+        assertEquals(0, summary.pulledProducts)
     }
 
     @Test

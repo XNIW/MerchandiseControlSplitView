@@ -204,6 +204,15 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
             R.string.catalog_cloud_stage_sync_prices_short,
             R.string.catalog_cloud_stage_sync_prices_count_short
         )
+        CatalogSyncStage.SYNC_PRICES_PUSH -> counted(
+            R.string.catalog_cloud_stage_sync_prices_push_short,
+            R.string.catalog_cloud_stage_sync_prices_push_count_short
+        )
+        CatalogSyncStage.SYNC_PRICES_PULL -> counted(
+            R.string.catalog_cloud_stage_sync_prices_pull_short,
+            R.string.catalog_cloud_stage_sync_prices_pull_count_short
+        )
+        CatalogSyncStage.SYNC_EVENTS_DRAIN -> stringResource(R.string.catalog_cloud_stage_sync_events_drain_short)
         CatalogSyncStage.SYNC_HISTORY -> stringResource(R.string.catalog_cloud_stage_sync_history_short)
         CatalogSyncStage.IDLE -> stringResource(R.string.catalog_cloud_state_syncing)
     }

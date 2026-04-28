@@ -312,7 +312,7 @@ class CatalogAutoSyncCoordinator(
         var ok = false
         val startedAt = System.currentTimeMillis()
         try {
-            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
             var summary: CatalogSyncSummary? = null
             val durationMs = measureTimeMillis {
                 summary = repository.drainSyncEventsFromRemote(
