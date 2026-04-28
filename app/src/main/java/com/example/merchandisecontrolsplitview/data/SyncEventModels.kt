@@ -214,8 +214,32 @@ interface SyncEventOutboxDao {
     )
     suspend fun listPending(ownerUserId: String, limit: Int): List<SyncEventOutboxEntry>
 
+    @Query(
+        """
+        SELECT * FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId
+          AND attemptCount < :maxAttempts
+        ORDER BY createdAtMs ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun listPendingRetryable(
+        ownerUserId: String,
+        maxAttempts: Int,
+        limit: Int
+    ): List<SyncEventOutboxEntry>
+
     @Query("SELECT COUNT(*) FROM sync_event_outbox WHERE ownerUserId = :ownerUserId")
     suspend fun countPending(ownerUserId: String): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId
+          AND attemptCount >= :maxAttempts
+        """
+    )
+    suspend fun countPendingAtOrAboveAttempts(ownerUserId: String, maxAttempts: Int): Int
 
     @Query("DELETE FROM sync_event_outbox WHERE id = :id")
     suspend fun deleteById(id: Long)

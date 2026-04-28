@@ -22,6 +22,7 @@ import kotlinx.serialization.json.put
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
+import java.security.MessageDigest
 import java.text.Normalizer
 import java.time.LocalDate
 import java.time.YearMonth
@@ -339,6 +340,82 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         data class Valid(val localState: RemoteSessionLocalState) : OverlayApplyState()
         object Missing : OverlayApplyState()
         object Invalid : OverlayApplyState()
+    }
+
+    private data class RetryOutboxResult(
+        val pendingBefore: Int,
+        val pendingAfter: Int,
+        val retryLoaded: Int,
+        val retryEligible: Int,
+        val retrySkippedMaxAttempts: Int,
+        val retrySucceeded: Int,
+        val retryFailed: Int,
+        val retryDeletedOnSuccess: Int
+    ) {
+        val outboxRetried: Int get() = retrySucceeded
+    }
+
+    private sealed class SyncEventRecordOutcome {
+        abstract val attemptedChunks: Int
+        abstract val recordedChunks: Int
+        abstract val enqueuedChunks: Int
+        abstract val outboxInserted: Int
+
+        val recordedFully: Boolean get() = this is Recorded
+
+        val logName: String
+            get() = when (this) {
+                NoOp -> "no_op"
+                is Recorded -> "recorded"
+                is Enqueued -> "enqueued"
+                is PartiallyRecordedAndEnqueued -> "partially_recorded_and_enqueued"
+            }
+
+        object NoOp : SyncEventRecordOutcome() {
+            override val attemptedChunks = 0
+            override val recordedChunks = 0
+            override val enqueuedChunks = 0
+            override val outboxInserted = 0
+        }
+
+        data class Recorded(private val chunks: Int) : SyncEventRecordOutcome() {
+            override val attemptedChunks = chunks
+            override val recordedChunks = chunks
+            override val enqueuedChunks = 0
+            override val outboxInserted = 0
+        }
+
+        data class Enqueued(
+            private val chunks: Int,
+            override val outboxInserted: Int
+        ) : SyncEventRecordOutcome() {
+            override val attemptedChunks = chunks
+            override val recordedChunks = 0
+            override val enqueuedChunks = chunks
+        }
+
+        data class PartiallyRecordedAndEnqueued(
+            override val recordedChunks: Int,
+            override val enqueuedChunks: Int,
+            override val outboxInserted: Int
+        ) : SyncEventRecordOutcome() {
+            override val attemptedChunks = recordedChunks + enqueuedChunks
+        }
+
+        companion object {
+            fun from(
+                attemptedChunks: Int,
+                recordedChunks: Int,
+                enqueuedChunks: Int,
+                outboxInserted: Int
+            ): SyncEventRecordOutcome =
+                when {
+                    attemptedChunks == 0 -> NoOp
+                    enqueuedChunks == 0 -> Recorded(recordedChunks)
+                    recordedChunks == 0 -> Enqueued(enqueuedChunks, outboxInserted)
+                    else -> PartiallyRecordedAndEnqueued(recordedChunks, enqueuedChunks, outboxInserted)
+                }
+        }
     }
 
     private val productDao: ProductDao = db.productDao()
@@ -2350,7 +2427,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             val deviceId = getOrCreateSyncEventDeviceId()
             val storeScope = syncEventStoreScope(null)
             val watermarkBefore = currentSyncEventWatermark(ownerUserId, storeScope)
-            val outboxRetried = retrySyncEventOutbox(syncEventRemote, ownerUserId)
+            val retryOutboxResult = retrySyncEventOutbox(syncEventRemote, ownerUserId)
             val recoveryCache = CatalogConflictRecoveryCache(allowRemoteFetch = false)
             val tombstonedIds = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
                 progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
@@ -2410,7 +2487,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             } else {
                 SyncEventTypes.CATALOG_CHANGED
             }
-            val catalogEventEmitted = recordOrEnqueueSyncEvent(
+            val catalogEventOutcome = recordOrEnqueueSyncEvent(
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
@@ -2422,7 +2499,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 changedCountOverride = catalogIds.changedCount,
                 entityIdsCompacted = catalogIds.compacted
             )
-            val priceEventEmitted = recordOrEnqueueSyncEvent(
+            val priceEventOutcome = recordOrEnqueueSyncEvent(
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
@@ -2459,10 +2536,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 phase = "quick",
                 capabilities = capabilities,
                 outboxPending = outboxPending,
-                outboxRetried = outboxRetried,
+                retryOutboxResult = retryOutboxResult,
                 drain = drain,
-                catalogEventEmitted = catalogEventEmitted,
-                priceEventEmitted = priceEventEmitted
+                catalogEventOutcome = catalogEventOutcome,
+                priceEventOutcome = priceEventOutcome
             )
             notifyRemoteProductCatalogApplied(drain.remoteAppliedProductIds)
             Result.success(
@@ -2491,7 +2568,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     recordSyncEventAvailable = capabilities.recordSyncEventAvailable,
                     realtimeSyncEventsAvailable = capabilities.realtimeSyncEventsAvailable,
                     syncEventOutboxPending = outboxPending,
-                    syncEventOutboxRetried = outboxRetried,
+                    syncEventOutboxRetried = retryOutboxResult.outboxRetried,
                     syncEventsFetched = drain.fetched,
                     syncEventsProcessed = drain.processed,
                     syncEventsSkippedSelf = drain.skippedSelf,
@@ -2548,7 +2625,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         try {
             val deviceId = getOrCreateSyncEventDeviceId()
-            val outboxRetried = retrySyncEventOutbox(syncEventRemote, ownerUserId)
+            val retryOutboxResult = retrySyncEventOutbox(syncEventRemote, ownerUserId)
             val drain = drainSyncEventsInternal(
                 remote = remote,
                 priceRemote = priceRemote,
@@ -2562,10 +2639,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 phase = "drain",
                 capabilities = capabilities,
                 outboxPending = outboxPending,
-                outboxRetried = outboxRetried,
+                retryOutboxResult = retryOutboxResult,
                 drain = drain,
-                catalogEventEmitted = false,
-                priceEventEmitted = false
+                catalogEventOutcome = SyncEventRecordOutcome.NoOp,
+                priceEventOutcome = SyncEventRecordOutcome.NoOp
             )
             notifyRemoteProductCatalogApplied(drain.remoteAppliedProductIds)
             Result.success(
@@ -2589,7 +2666,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     recordSyncEventAvailable = capabilities.recordSyncEventAvailable,
                     realtimeSyncEventsAvailable = capabilities.realtimeSyncEventsAvailable,
                     syncEventOutboxPending = outboxPending,
-                    syncEventOutboxRetried = outboxRetried,
+                    syncEventOutboxRetried = retryOutboxResult.outboxRetried,
                     syncEventsFetched = drain.fetched,
                     syncEventsProcessed = drain.processed,
                     syncEventsSkippedSelf = drain.skippedSelf,
@@ -3112,11 +3189,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private suspend fun retrySyncEventOutbox(
         remote: SyncEventRemoteDataSource,
         ownerUserId: String
-    ): Int {
-        var retried = 0
-        val pending = syncEventOutboxDao.listPending(ownerUserId, SYNC_EVENT_OUTBOX_RETRY_LIMIT)
+    ): RetryOutboxResult {
+        val pendingBefore = syncEventOutboxDao.countPending(ownerUserId)
+        val skippedMaxAttempts = syncEventOutboxDao.countPendingAtOrAboveAttempts(
+            ownerUserId,
+            SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+        )
+        val pending = syncEventOutboxDao.listPendingRetryable(
+            ownerUserId,
+            SYNC_EVENT_OUTBOX_MAX_ATTEMPTS,
+            SYNC_EVENT_OUTBOX_RETRY_LIMIT
+        )
+        var retryEligible = 0
+        var retrySucceeded = 0
+        var retryFailed = 0
+        var retryDeletedOnSuccess = 0
         for (entry in pending) {
             if (entry.attemptCount >= SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) continue
+            retryEligible++
             val ids = syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
             val params = SyncEventRecordRpcParams(
                 domain = entry.domain,
@@ -3133,20 +3223,57 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             val result = remote.recordSyncEvent(params)
             if (result.isSuccess) {
                 syncEventOutboxDao.deleteById(entry.id)
-                retried++
+                retrySucceeded++
+                retryDeletedOnSuccess++
+                logSyncEventOutboxRetryEntry(
+                    outcome = "success",
+                    entry = entry,
+                    lastErrorType = entry.lastErrorType,
+                    attemptCount = entry.attemptCount,
+                    retryDeletedOnSuccess = 1
+                )
             } else {
                 val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
                     ?: "unknown"
+                val nextAttemptCount = entry.attemptCount + 1
                 syncEventOutboxDao.update(
                     entry.copy(
-                        attemptCount = entry.attemptCount + 1,
+                        attemptCount = nextAttemptCount,
                         lastAttemptAtMs = System.currentTimeMillis(),
                         lastErrorType = errorType
                     )
                 )
+                retryFailed++
+                logSyncEventOutboxRetryEntry(
+                    outcome = "failure",
+                    entry = entry,
+                    lastErrorType = errorType,
+                    attemptCount = nextAttemptCount,
+                    retryDeletedOnSuccess = 0
+                )
             }
         }
-        return retried
+        val pendingAfter = syncEventOutboxDao.countPending(ownerUserId)
+        val result = RetryOutboxResult(
+            pendingBefore = pendingBefore,
+            pendingAfter = pendingAfter,
+            retryLoaded = pending.size,
+            retryEligible = retryEligible,
+            retrySkippedMaxAttempts = skippedMaxAttempts,
+            retrySucceeded = retrySucceeded,
+            retryFailed = retryFailed,
+            retryDeletedOnSuccess = retryDeletedOnSuccess
+        )
+        Log.i(
+            TAG,
+            "sync_event_outbox_retry_summary " +
+                "pendingBefore=${result.pendingBefore} pendingAfter=${result.pendingAfter} " +
+                "retryLoaded=${result.retryLoaded} retryEligible=${result.retryEligible} " +
+                "retrySkippedMaxAttempts=${result.retrySkippedMaxAttempts} " +
+                "retrySucceeded=${result.retrySucceeded} retryFailed=${result.retryFailed} " +
+                "retryDeletedOnSuccess=${result.retryDeletedOnSuccess}"
+        )
+        return result
     }
 
     private suspend fun recordOrEnqueueSyncEvent(
@@ -3160,10 +3287,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         deviceId: String,
         changedCountOverride: Int? = null,
         entityIdsCompacted: Boolean = false
-    ): Boolean {
+    ): SyncEventRecordOutcome {
         val totalChangedCount = changedCountOverride ?: ids.totalIds
-        if (ids.isEmpty && totalChangedCount <= 0) return false
-        var allRecorded = true
+        if (ids.isEmpty && totalChangedCount <= 0) {
+            val outcome = SyncEventRecordOutcome.NoOp
+            logSyncEventRecordOutcome(
+                domain = domain,
+                eventType = eventType,
+                totalChangedCount = totalChangedCount,
+                entityIdsCompacted = entityIdsCompacted,
+                outcome = outcome
+            )
+            return outcome
+        }
+        var recordedChunks = 0
+        var enqueuedChunks = 0
+        var outboxInserted = 0
         val chunks = if (ids.isEmpty) listOf(ids) else chunkSyncEventIds(ids)
         for ((index, chunk) in chunks.withIndex()) {
             val clientEventId = buildClientEventId(batchId, domain, eventType, chunk, index)
@@ -3191,9 +3330,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 metadata = metadata
             )
             val result = remote.recordSyncEvent(params)
-            if (result.isSuccess) continue
-            allRecorded = false
-            syncEventOutboxDao.insert(
+            if (result.isSuccess) {
+                recordedChunks++
+                continue
+            }
+            enqueuedChunks++
+            val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
+                ?: "unknown"
+            val insertId = syncEventOutboxDao.insert(
                 SyncEventOutboxEntry(
                     ownerUserId = ownerUserId,
                     storeScope = storeScope,
@@ -3208,11 +3352,34 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     metadataJson = syncEventJson.encodeToString(metadata),
                     createdAtMs = System.currentTimeMillis(),
                     lastAttemptAtMs = System.currentTimeMillis(),
-                    lastErrorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
+                    lastErrorType = errorType
                 )
             )
+            val inserted = insertId != -1L
+            if (inserted) outboxInserted++
+            Log.w(
+                TAG,
+                "sync_event_outbox_enqueue " +
+                    "eventType=$eventType domain=$domain outboxInserted=${if (inserted) 1 else 0} " +
+                    "lastErrorType=$errorType attemptCount=0 " +
+                    "clientEventIdHash=${clientEventIdHash(clientEventId)} " +
+                    "changedCount=$chunkChangedCount entityIdsCompacted=$entityIdsCompacted"
+            )
         }
-        return allRecorded
+        val outcome = SyncEventRecordOutcome.from(
+            attemptedChunks = chunks.size,
+            recordedChunks = recordedChunks,
+            enqueuedChunks = enqueuedChunks,
+            outboxInserted = outboxInserted
+        )
+        logSyncEventRecordOutcome(
+            domain = domain,
+            eventType = eventType,
+            totalChangedCount = totalChangedCount,
+            entityIdsCompacted = entityIdsCompacted,
+            outcome = outcome
+        )
+        return outcome
     }
 
     private fun syncEventRecordIdsForRecord(ids: SyncEventEntityIds): SyncEventRecordIds {
@@ -3285,19 +3452,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         phase: String,
         capabilities: SyncEventRemoteCapabilities,
         outboxPending: Int,
-        outboxRetried: Int,
+        retryOutboxResult: RetryOutboxResult,
         drain: SyncEventDrainResult,
-        catalogEventEmitted: Boolean,
-        priceEventEmitted: Boolean
+        catalogEventOutcome: SyncEventRecordOutcome,
+        priceEventOutcome: SyncEventRecordOutcome
     ) {
+        val outboxInserted = catalogEventOutcome.outboxInserted + priceEventOutcome.outboxInserted
         Log.i(
             TAG,
             "sync_events_summary phase=$phase " +
                 "syncEventsAvailable=${capabilities.syncEventsAvailable} " +
                 "recordSyncEventAvailable=${capabilities.recordSyncEventAvailable} " +
                 "realtimeSyncEventsAvailable=${capabilities.realtimeSyncEventsAvailable} " +
-                "syncEventOutboxPending=$outboxPending syncEventOutboxRetried=$outboxRetried " +
-                "catalogEventEmitted=$catalogEventEmitted priceEventEmitted=$priceEventEmitted " +
+                "syncEventOutboxPending=$outboxPending " +
+                "syncEventOutboxPendingBefore=${retryOutboxResult.pendingBefore} " +
+                "syncEventOutboxPendingAfter=$outboxPending " +
+                "syncEventOutboxRetried=${retryOutboxResult.outboxRetried} " +
+                "syncEventOutboxRetryLoaded=${retryOutboxResult.retryLoaded} " +
+                "syncEventOutboxRetryEligible=${retryOutboxResult.retryEligible} " +
+                "syncEventOutboxRetrySkippedMaxAttempts=${retryOutboxResult.retrySkippedMaxAttempts} " +
+                "syncEventOutboxRetrySucceeded=${retryOutboxResult.retrySucceeded} " +
+                "syncEventOutboxRetryFailed=${retryOutboxResult.retryFailed} " +
+                "syncEventOutboxRetryDeletedOnSuccess=${retryOutboxResult.retryDeletedOnSuccess} " +
+                "syncEventOutboxInserted=$outboxInserted " +
+                "catalogEventEmitted=${catalogEventOutcome.recordedFully} " +
+                "priceEventEmitted=${priceEventOutcome.recordedFully} " +
+                "catalogEventOutcome=${catalogEventOutcome.logName} " +
+                "priceEventOutcome=${priceEventOutcome.logName} " +
                 "syncEventsFetched=${drain.fetched} syncEventsProcessed=${drain.processed} " +
                 "syncEventsSkippedSelf=${drain.skippedSelf} " +
                 "syncEventsSkippedDirtyLocal=${drain.skippedDirtyLocal} " +
@@ -3310,6 +3491,48 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "targetedPricesFetched=${drain.targetedPricesFetched} " +
                 "fullCatalogFetch=false fullPriceFetch=false"
         )
+    }
+
+    private fun logSyncEventRecordOutcome(
+        domain: String,
+        eventType: String,
+        totalChangedCount: Int,
+        entityIdsCompacted: Boolean,
+        outcome: SyncEventRecordOutcome
+    ) {
+        Log.i(
+            TAG,
+            "sync_event_record_outcome " +
+                "domain=$domain eventType=$eventType outcome=${outcome.logName} " +
+                "attemptedChunks=${outcome.attemptedChunks} recordedChunks=${outcome.recordedChunks} " +
+                "enqueuedChunks=${outcome.enqueuedChunks} outboxInserted=${outcome.outboxInserted} " +
+                "changedCount=$totalChangedCount entityIdsCompacted=$entityIdsCompacted"
+        )
+    }
+
+    private fun logSyncEventOutboxRetryEntry(
+        outcome: String,
+        entry: SyncEventOutboxEntry,
+        lastErrorType: String?,
+        attemptCount: Int,
+        retryDeletedOnSuccess: Int
+    ) {
+        Log.i(
+            TAG,
+            "sync_event_outbox_retry_entry " +
+                "outcome=$outcome eventType=${entry.eventType} domain=${entry.domain} " +
+                "lastErrorType=${lastErrorType ?: "none"} attemptCount=$attemptCount " +
+                "clientEventIdHash=${clientEventIdHash(entry.clientEventId)} " +
+                "retryDeletedOnSuccess=$retryDeletedOnSuccess"
+        )
+    }
+
+    private fun clientEventIdHash(clientEventId: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(clientEventId.toByteArray(Charsets.UTF_8))
+        return digest.take(6).joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
     }
 
     private companion object {

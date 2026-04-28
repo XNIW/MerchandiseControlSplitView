@@ -33,6 +33,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -4017,6 +4018,249 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `070 listPendingRetryable excludes max attempts and preserves retryable fifo`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000700"
+        val dao = db.syncEventOutboxDao()
+        val maxAttemptId = dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "max-attempt",
+                createdAtMs = 1L,
+                attemptCount = 5
+            )
+        )
+        dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = "00000000-0000-4000-8000-000000000701",
+                clientEventId = "other-owner",
+                createdAtMs = 2L,
+                attemptCount = 0
+            )
+        )
+        val firstRetryableId = dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retryable-first",
+                createdAtMs = 10L,
+                attemptCount = 0
+            )
+        )
+        val sameTimestampRetryableId = dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retryable-same-created",
+                createdAtMs = 10L,
+                attemptCount = 4
+            )
+        )
+        val laterRetryableId = dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retryable-later",
+                createdAtMs = 20L,
+                attemptCount = 1
+            )
+        )
+
+        val retryable = dao.listPendingRetryable(owner, maxAttempts = 5, limit = 10)
+        val auditPending = dao.listPending(owner, limit = 10)
+
+        assertEquals(
+            listOf(firstRetryableId, sameTimestampRetryableId, laterRetryableId),
+            retryable.map { it.id }
+        )
+        assertTrue(retryable.none { it.attemptCount >= 5 })
+        assertEquals(maxAttemptId, auditPending.first().id)
+    }
+
+    @Test
+    fun `070 retry reaches retryable rows behind exhausted fifo head`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000702"
+        val dao = db.syncEventOutboxDao()
+        repeat(20) { index ->
+            dao.insert(
+                testSyncEventOutboxEntry(
+                    ownerUserId = owner,
+                    clientEventId = "max-head-$index",
+                    createdAtMs = index.toLong(),
+                    attemptCount = 5
+                )
+            )
+        }
+        dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retryable-after-head-1",
+                createdAtMs = 100L,
+                attemptCount = 0
+            )
+        )
+        dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retryable-after-head-2",
+                createdAtMs = 101L,
+                attemptCount = 2,
+                domain = SyncEventDomains.PRICES,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                ids = SyncEventEntityIds(priceIds = listOf("price-retryable"))
+            )
+        )
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(2, summary.syncEventOutboxRetried)
+        assertEquals(20, summary.syncEventOutboxPending)
+        assertEquals(
+            listOf("retryable-after-head-1", "retryable-after-head-2"),
+            syncEvents.recordedParams.map { it.clientEventId }
+        )
+        assertTrue(db.syncEventOutboxDao().listPending(owner, 25).all { it.attemptCount >= 5 })
+    }
+
+    @Test
+    fun `070 retry failure increments attempt count and records error type`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000703"
+        db.syncEventOutboxDao().insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "retry-fails",
+                createdAtMs = 1L,
+                attemptCount = 0
+            )
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            failRecordForDomains += SyncEventDomains.CATALOG
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(0, summary.syncEventOutboxRetried)
+        assertEquals(1, summary.syncEventOutboxPending)
+        assertEquals(1, pending.attemptCount)
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout.name, pending.lastErrorType)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+    }
+
+    @Test
+    fun `070 no op sync event does not insert outbox rows`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000704"
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(0, summary.pushedProducts)
+        assertEquals(0, summary.syncEventOutboxPending)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+        assertTrue(db.syncEventOutboxDao().listPending(owner, 10).isEmpty())
+    }
+
+    @Test
+    fun `070 rpc failure enqueues event and logs privacy safe lifecycle fields`() = runTest {
+        ShadowLog.clear()
+        val owner = "00000000-0000-4000-8000-000000000705"
+        val sensitiveBarcode = "070-privacy-barcode"
+        val sensitiveProductName = "070 Privacy Product"
+        repository.addProduct(
+            Product(
+                barcode = sensitiveBarcode,
+                productName = sensitiveProductName,
+                purchasePrice = 4.0,
+                retailPrice = 6.0
+            )
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            failRecordForDomains += SyncEventDomains.CATALOG
+        }
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        val logs = ShadowLog.getLogsForTag("CatalogCloudSync").map { it.msg }
+        assertEquals(1, summary.syncEventOutboxPending)
+        assertTrue(
+            logs.any {
+                it.contains("sync_event_outbox_enqueue") &&
+                    it.contains("outboxInserted=1") &&
+                    it.contains("eventType=catalog_changed") &&
+                    it.contains("lastErrorType=NetworkOfflineOrTimeout") &&
+                    it.contains("attemptCount=0") &&
+                    it.contains("clientEventIdHash=")
+            }
+        )
+        assertTrue(
+            logs.any {
+                it.contains("sync_events_summary") &&
+                    it.contains("catalogEventOutcome=enqueued") &&
+                    it.contains("syncEventOutboxInserted=1")
+            }
+        )
+        assertTrue(logs.none { it.contains(sensitiveBarcode) })
+        assertTrue(logs.none { it.contains(sensitiveProductName) })
+        assertTrue(logs.none { it.contains("clientEventId=android-") })
+        assertTrue(logs.none { it.contains("entityIds=") })
+    }
+
+    @Test
+    fun `070 summary distinguishes recorded and enqueued event outcomes`() = runTest {
+        ShadowLog.clear()
+        val owner = "00000000-0000-4000-8000-000000000706"
+        repository.addProduct(
+            Product(
+                barcode = "070-partial-outcome",
+                productName = "Partial Outcome",
+                purchasePrice = 2.0,
+                retailPrice = 3.0
+            )
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            failRecordForDomains += SyncEventDomains.PRICES
+        }
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        val summaryLog = ShadowLog.getLogsForTag("CatalogCloudSync")
+            .map { it.msg }
+            .single { it.contains("sync_events_summary phase=quick") }
+        assertEquals(1, summary.syncEventOutboxPending)
+        assertEquals(listOf(SyncEventDomains.CATALOG), syncEvents.recordedParams.map { it.domain })
+        assertTrue(summaryLog.contains("catalogEventOutcome=recorded"))
+        assertTrue(summaryLog.contains("priceEventOutcome=enqueued"))
+        assertTrue(summaryLog.contains("syncEventOutboxInserted=1"))
+    }
+
+    @Test
     fun `045 watermark advances only after event apply succeeds`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000458"
         val productRemoteId = "00000000-0000-4000-8000-000000000459"
@@ -4962,6 +5206,39 @@ class DefaultInventoryRepositoryTest {
         val second = repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
         assertEquals(1, second.skipped)
     }
+}
+
+private fun testSyncEventOutboxEntry(
+    ownerUserId: String,
+    clientEventId: String,
+    createdAtMs: Long,
+    attemptCount: Int,
+    domain: String = SyncEventDomains.CATALOG,
+    eventType: String = SyncEventTypes.CATALOG_CHANGED,
+    ids: SyncEventEntityIds = SyncEventEntityIds(productIds = listOf("product-retryable")),
+    lastErrorType: String? = null
+): SyncEventOutboxEntry {
+    val json = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
+    }
+    return SyncEventOutboxEntry(
+        ownerUserId = ownerUserId,
+        storeScope = "",
+        domain = domain,
+        eventType = eventType,
+        source = "android",
+        sourceDeviceId = "test-device",
+        batchId = "test-batch",
+        clientEventId = clientEventId,
+        changedCount = ids.totalIds,
+        entityIdsJson = json.encodeToString(SyncEventEntityIds.serializer(), ids),
+        metadataJson = "{}",
+        createdAtMs = createdAtMs,
+        attemptCount = attemptCount,
+        lastAttemptAtMs = if (attemptCount > 0) createdAtMs else null,
+        lastErrorType = lastErrorType
+    )
 }
 
 private class FakeSessionBackupRemote023(
