@@ -1,10 +1,12 @@
 package com.example.merchandisecontrolsplitview.util
 
 import android.content.Context
+import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.*
+import java.text.Normalizer
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.round
-import com.example.merchandisecontrolsplitview.R
 
 object ImportAnalyzer {
 
@@ -12,6 +14,7 @@ object ImportAnalyzer {
     /** Massimo numeri riga elencati per barcode duplicato (il totale resta in [DuplicateWarning.totalOccurrences]). */
     private const val MAX_DUPLICATE_ROW_NUMBERS_LISTED = 50
     private const val PRICE_COMPARISON_TOLERANCE = 0.001
+    private val COMBINING_MARKS = Regex("\\p{Mn}+")
     private val DEFERRED_RELATION_ROW_KEYS = setOf(
         "barcode",
         "itemNumber",
@@ -113,10 +116,10 @@ object ImportAnalyzer {
         val suppliersById = initialSuppliersById.toMutableMap()
         val categoriesById = initialCategoriesById.toMutableMap()
         val supplierCacheByName = initialSuppliersById.values
-            .associateBy { it.name.trim().lowercase() }
+            .associateBy { normalizedRelationKey(it.name) }
             .toMutableMap()
         val categoryCacheByName = initialCategoriesById.values
-            .associateBy { it.name.trim().lowercase() }
+            .associateBy { normalizedRelationKey(it.name) }
             .toMutableMap()
         val pendingSuppliers = linkedMapOf<Long, String>()
         val pendingCategories = linkedMapOf<Long, String>()
@@ -125,7 +128,7 @@ object ImportAnalyzer {
 
         suspend fun resolveSupplierId(name: String): Long? {
             val normalizedName = name.trim()
-            val key = normalizedName.lowercase()
+            val key = normalizedRelationKey(normalizedName)
             if (key.isBlank()) return null
             supplierCacheByName[key]?.let { return it.id }
             repository.findSupplierByName(normalizedName)?.let {
@@ -144,7 +147,7 @@ object ImportAnalyzer {
 
         suspend fun resolveCategoryId(name: String): Long? {
             val normalizedName = name.trim()
-            val key = normalizedName.lowercase()
+            val key = normalizedRelationKey(normalizedName)
             if (key.isBlank()) return null
             categoryCacheByName[key]?.let { return it.id }
             repository.findCategoryByName(normalizedName)?.let {
@@ -159,6 +162,22 @@ object ImportAnalyzer {
             categoriesById[tempId] = tempCategory
             pendingCategories[tempId] = normalizedName
             return tempId
+        }
+
+        suspend fun resolveSupplierIdForExisting(existing: Product, name: String): Long? {
+            val currentName = existing.supplierId?.let { suppliersById[it]?.name }
+            if (existing.supplierId != null && semanticRelationNameEquals(currentName, name)) {
+                return existing.supplierId
+            }
+            return resolveSupplierId(name)
+        }
+
+        suspend fun resolveCategoryIdForExisting(existing: Product, name: String): Long? {
+            val currentName = existing.categoryId?.let { categoriesById[it]?.name }
+            if (existing.categoryId != null && semanticRelationNameEquals(currentName, name)) {
+                return existing.categoryId
+            }
+            return resolveCategoryId(name)
         }
 
         val newProducts = mutableListOf<Product>()
@@ -285,10 +304,9 @@ object ImportAnalyzer {
                     continue
                 }
 
-                val supplierId = supplierName?.let { resolveSupplierId(it) }
-                val categoryId = categoryName?.let { resolveCategoryId(it) }
-
                 if (existing == null) {
+                    val supplierId = supplierName?.let { resolveSupplierId(it) }
+                    val categoryId = categoryName?.let { resolveCategoryId(it) }
                     newProducts += Product(
                         barcode = barcode,
                         itemNumber = itemNumber,
@@ -303,6 +321,8 @@ object ImportAnalyzer {
                         oldRetailPrice = prevRetailFromFile
                     )
                 } else {
+                    val supplierId = supplierName?.let { resolveSupplierIdForExisting(existing, it) }
+                    val categoryId = categoryName?.let { resolveCategoryIdForExisting(existing, it) }
                     val updated = existing.copy(
                         itemNumber = itemNumber ?: existing.itemNumber,
                         productName = productName ?: existing.productName,
@@ -357,7 +377,7 @@ object ImportAnalyzer {
         if (old.supplierId != new.supplierId) {
             val oldSupplierName = old.supplierId?.let { suppliersById[it]?.name }
             val newSupplierName = new.supplierId?.let { suppliersById[it]?.name }
-            if (!semanticImportTextEquals(oldSupplierName, newSupplierName)) {
+            if (!semanticRelationNameEquals(oldSupplierName, newSupplierName)) {
                 fields.add(R.string.field_supplier)
             }
         }
@@ -365,7 +385,7 @@ object ImportAnalyzer {
         if (old.categoryId != new.categoryId) {
             val oldCategoryName = old.categoryId?.let { categoriesById[it]?.name }
             val newCategoryName = new.categoryId?.let { categoriesById[it]?.name }
-            if (!semanticImportTextEquals(oldCategoryName, newCategoryName)) {
+            if (!semanticRelationNameEquals(oldCategoryName, newCategoryName)) {
                 fields.add(R.string.field_category)
             }
         }
@@ -375,8 +395,18 @@ object ImportAnalyzer {
     private fun semanticImportTextEquals(old: String?, new: String?): Boolean =
         old?.trim().orEmpty().equals(new?.trim().orEmpty(), ignoreCase = true)
 
+    private fun semanticRelationNameEquals(old: String?, new: String?): Boolean =
+        normalizedRelationKey(old) == normalizedRelationKey(new)
+
     private fun normalizedImportKey(value: String?): String =
         value?.trim().orEmpty().lowercase()
+
+    private fun normalizedRelationKey(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isEmpty()) return ""
+        val decomposed = Normalizer.normalize(trimmed, Normalizer.Form.NFD)
+        return COMBINING_MARKS.replace(decomposed, "").lowercase(Locale.ROOT)
+    }
 
     private fun unexpectedRowProcessingError(
         rowNumber: Int,

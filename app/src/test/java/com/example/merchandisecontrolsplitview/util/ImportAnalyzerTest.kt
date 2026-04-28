@@ -210,6 +210,32 @@ class ImportAnalyzerTest {
     }
 
     @Test
+    fun `analyze preserves existing supplier id when equivalent supplier name accompanies another change`() = runTest {
+        val current = existingProduct(supplierId = 1L, stockQuantity = 2.0)
+        coEvery { repository.getAllSuppliers() } returns listOf(
+            Supplier(id = 1L, name = "Café Supplier"),
+            Supplier(id = 2L, name = " cafe supplier ")
+        )
+
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    barcode = current.barcode,
+                    supplier = "CAFE SUPPLIER",
+                    quantity = "3"
+                )
+            ),
+            currentDbProducts = listOf(current)
+        )
+
+        val update = analysis.updatedProducts.single()
+        assertEquals(1L, update.newProduct.supplierId)
+        assertFalse(update.changedFields.contains(R.string.field_supplier))
+        assertTrue(update.changedFields.contains(R.string.field_stock_quantity))
+        assertTrue(analysis.errors.isEmpty())
+    }
+
+    @Test
     fun `analyze skips category changed field when category names match ignoring case`() = runTest {
         val current = existingProduct(categoryId = 11L)
         coEvery { repository.getAllCategories() } returns listOf(
@@ -223,6 +249,32 @@ class ImportAnalyzerTest {
         )
 
         assertTrue(analysis.updatedProducts.isEmpty())
+        assertTrue(analysis.errors.isEmpty())
+    }
+
+    @Test
+    fun `analyze preserves existing category id when equivalent category name accompanies another change`() = runTest {
+        val current = existingProduct(categoryId = 11L, stockQuantity = 2.0)
+        coEvery { repository.getAllCategories() } returns listOf(
+            Category(id = 11L, name = "Bebidas"),
+            Category(id = 12L, name = " bebidas ")
+        )
+
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    barcode = current.barcode,
+                    category = "BEBIDAS",
+                    quantity = "3"
+                )
+            ),
+            currentDbProducts = listOf(current)
+        )
+
+        val update = analysis.updatedProducts.single()
+        assertEquals(11L, update.newProduct.categoryId)
+        assertFalse(update.changedFields.contains(R.string.field_category))
+        assertTrue(update.changedFields.contains(R.string.field_stock_quantity))
         assertTrue(analysis.errors.isEmpty())
     }
 

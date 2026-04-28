@@ -22,10 +22,12 @@ import kotlinx.serialization.json.put
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.emptyFlow
+import java.text.Normalizer
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
+import java.util.Locale
 import kotlin.math.abs
 
 // ⬇️ aggiungi subito sotto gli import esistenti (prima dell'interfaccia)
@@ -277,6 +279,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private data class CatalogEntityPushResult(
         val count: Int,
         val remoteIds: List<String>
+    )
+
+    private data class ProductPushCandidatePrepared(
+        val product: Product,
+        val ref: ProductRemoteRef,
+        val row: InventoryProductRow
+    )
+
+    private class ProductPushBatchAccumulator(
+        var pushed: Int = 0,
+        var completed: Int = 0,
+        var batchCount: Int = 0,
+        var totalBatchMs: Long = 0L,
+        var splitFallbackCount: Int = 0,
+        var singleFallbackCount: Int = 0
+    ) {
+        val remoteIds = mutableListOf<String>()
+    }
+
+    private data class SyncEventRecordIds(
+        val ids: SyncEventEntityIds,
+        val changedCount: Int,
+        val compacted: Boolean
     )
 
     private data class ProductPricePushResult(
@@ -1182,80 +1207,161 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private suspend fun applyImportAtomically(request: ImportApplyRequest): Set<Long> {
-        val supplierIdsByName = supplierDao.getAll()
-            .associate { it.name.trim().lowercase() to it.id }
+        val existingSuppliers = supplierDao.getAll()
+        val existingCategories = categoryDao.getAll()
+        val supplierIdsByName = existingSuppliers
+            .associate { normalizedRelationKey(it.name) to it.id }
             .toMutableMap()
-        val categoryIdsByName = categoryDao.getAll()
-            .associate { it.name.trim().lowercase() to it.id }
+        val categoryIdsByName = existingCategories
+            .associate { normalizedRelationKey(it.name) to it.id }
+            .toMutableMap()
+        val supplierNamesById = existingSuppliers
+            .associate { it.id to it.name }
+            .toMutableMap()
+        val categoryNamesById = existingCategories
+            .associate { it.id to it.name }
             .toMutableMap()
         val createdSupplierIds = mutableSetOf<Long>()
         val createdCategoryIds = mutableSetOf<Long>()
 
         suspend fun resolveSupplierIdByName(name: String): Long? {
             val normalizedName = name.trim()
-            val key = normalizedName.lowercase()
+            val key = normalizedRelationKey(normalizedName)
             if (key.isBlank()) return null
             supplierIdsByName[key]?.let { return it }
 
-            supplierDao.findByNameIgnoreCase(normalizedName)?.id?.let { existingId ->
-                supplierIdsByName[key] = existingId
-                return existingId
+            supplierDao.findByNormalizedName(key)?.let { existing ->
+                supplierIdsByName[key] = existing.id
+                supplierNamesById[existing.id] = existing.name
+                return existing.id
             }
 
             val insertedId = supplierDao.insert(Supplier(name = normalizedName))
             val resolvedId = when {
                 insertedId > 0L -> insertedId
-                else -> supplierDao.findByNameIgnoreCase(normalizedName)?.id
+                else -> supplierDao.findByNormalizedName(key)?.id
             } ?: return null
 
             if (insertedId > 0L) {
                 createdSupplierIds += resolvedId
             }
             supplierIdsByName[key] = resolvedId
+            supplierNamesById[resolvedId] = normalizedName
             return resolvedId
         }
 
         suspend fun resolveCategoryIdByName(name: String): Long? {
             val normalizedName = name.trim()
-            val key = normalizedName.lowercase()
+            val key = normalizedRelationKey(normalizedName)
             if (key.isBlank()) return null
             categoryIdsByName[key]?.let { return it }
 
-            categoryDao.findByName(normalizedName)?.id?.let { existingId ->
-                categoryIdsByName[key] = existingId
-                return existingId
+            categoryDao.findByNormalizedName(key)?.let { existing ->
+                categoryIdsByName[key] = existing.id
+                categoryNamesById[existing.id] = existing.name
+                return existing.id
             }
 
             val insertedId = categoryDao.insert(Category(name = normalizedName))
             val resolvedId = when {
                 insertedId > 0L -> insertedId
-                else -> categoryDao.findByName(normalizedName)?.id
+                else -> categoryDao.findByNormalizedName(key)?.id
             } ?: return null
             if (insertedId > 0L) {
                 createdCategoryIds += resolvedId
             }
             categoryIdsByName[key] = resolvedId
+            categoryNamesById[resolvedId] = normalizedName
             return resolvedId
         }
 
-        suspend fun resolveProduct(product: Product): Product {
-            val resolvedSupplierId = when {
-                product.supplierId == null -> null
-                product.supplierId >= 0L -> product.supplierId
-                else -> request.pendingTempSuppliers[product.supplierId]?.let { name ->
-                    resolveSupplierIdByName(name)
-                }
+        suspend fun supplierNameFor(id: Long?): String? = when {
+            id == null -> null
+            id < 0L -> request.pendingTempSuppliers[id]
+            else -> supplierNamesById[id] ?: supplierDao.getById(id)?.name?.also { supplierNamesById[id] = it }
+        }
+
+        suspend fun categoryNameFor(id: Long?): String? = when {
+            id == null -> null
+            id < 0L -> request.pendingTempCategories[id]
+            else -> categoryNamesById[id] ?: categoryDao.getById(id)?.name?.also { categoryNamesById[id] = it }
+        }
+
+        suspend fun resolveSupplierIdForProduct(product: Product, oldProduct: Product?): Long? {
+            val requestedId = product.supplierId ?: return null
+            val requestedName = supplierNameFor(requestedId)
+            if (
+                oldProduct?.supplierId != null &&
+                semanticRelationNameEquals(supplierNameFor(oldProduct.supplierId), requestedName)
+            ) {
+                return oldProduct.supplierId
             }
-            val resolvedCategoryId = when {
-                product.categoryId == null -> null
-                product.categoryId >= 0L -> product.categoryId
-                else -> request.pendingTempCategories[product.categoryId]?.let { name ->
-                    resolveCategoryIdByName(name)
-                }
+            return when {
+                requestedId >= 0L -> requestedId
+                requestedName != null -> resolveSupplierIdByName(requestedName)
+                else -> null
             }
+        }
+
+        suspend fun resolveCategoryIdForProduct(product: Product, oldProduct: Product?): Long? {
+            val requestedId = product.categoryId ?: return null
+            val requestedName = categoryNameFor(requestedId)
+            if (
+                oldProduct?.categoryId != null &&
+                semanticRelationNameEquals(categoryNameFor(oldProduct.categoryId), requestedName)
+            ) {
+                return oldProduct.categoryId
+            }
+            return when {
+                requestedId >= 0L -> requestedId
+                requestedName != null -> resolveCategoryIdByName(requestedName)
+                else -> null
+            }
+        }
+
+        suspend fun resolveProduct(product: Product, oldProduct: Product? = null): Product {
             return product.copy(
-                supplierId = resolvedSupplierId,
-                categoryId = resolvedCategoryId
+                supplierId = resolveSupplierIdForProduct(product, oldProduct),
+                categoryId = resolveCategoryIdForProduct(product, oldProduct)
+            )
+        }
+
+        suspend fun buildRelationDirtySummary(updates: List<ProductUpdate>): ImportRelationDirtySummary {
+            var realChanged = 0
+            var semanticEquivalent = 0
+            var unknown = 0
+
+            suspend fun classify(oldId: Long?, newId: Long?, oldName: String?, newName: String?) {
+                if (oldId == newId) return
+                when {
+                    oldName != null && newName != null && semanticRelationNameEquals(oldName, newName) ->
+                        semanticEquivalent++
+                    oldName != null || newName != null ->
+                        realChanged++
+                    else ->
+                        unknown++
+                }
+            }
+
+            for (update in updates) {
+                classify(
+                    oldId = update.oldProduct.supplierId,
+                    newId = update.newProduct.supplierId,
+                    oldName = supplierNameFor(update.oldProduct.supplierId),
+                    newName = supplierNameFor(update.newProduct.supplierId)
+                )
+                classify(
+                    oldId = update.oldProduct.categoryId,
+                    newId = update.newProduct.categoryId,
+                    oldName = categoryNameFor(update.oldProduct.categoryId),
+                    newName = categoryNameFor(update.newProduct.categoryId)
+                )
+            }
+
+            return ImportRelationDirtySummary(
+                realChangedCount = realChanged,
+                semanticEquivalentCount = semanticEquivalent,
+                unknownCount = unknown
             )
         }
 
@@ -1264,15 +1370,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
         val resolvedNewProducts = request.newProducts.map { resolveProduct(it) }
         val resolvedUpdatedProducts = request.updatedProducts.map { update ->
-            val resolved = resolveProduct(update.newProduct).copy(id = update.oldProduct.id)
+            val resolved = resolveProduct(update.newProduct, update.oldProduct).copy(id = update.oldProduct.id)
             update.oldProduct to resolved
         }
+        val relationDirtySummary = buildRelationDirtySummary(request.updatedProducts)
         val actuallyChangedUpdates = resolvedUpdatedProducts.filter { (oldProduct, resolvedProduct) ->
             !productsEquivalentForImportDirty(oldProduct, resolvedProduct)
         }
         val actualProductDirtyReasons = actuallyChangedUpdates.map { (oldProduct, resolvedProduct) ->
             importDirtyChangedFields(oldProduct, resolvedProduct)
         }
+        val relationDirtySamples = formatImportRelationDirtySamples(
+            changes = actuallyChangedUpdates,
+            supplierNamesById = supplierNamesById,
+            categoryNamesById = categoryNamesById
+        )
         val resolvedUpdatedProductEntities = actuallyChangedUpdates.map { it.second }
 
         if (resolvedNewProducts.isNotEmpty()) {
@@ -1298,36 +1410,87 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         } else {
             productDao.findByBarcodes(allBarcodes)
         }
-        val productIdsByBarcode = persistedProducts.associate { it.barcode to it.id }
+        val productIdsByBarcode = persistedProducts.associate { normalizedImportKey(it.barcode) to it.id }
+        val importedPricesByProductAndType = request.pendingPriceHistory
+            .mapNotNull { entry ->
+                val productId = productIdsByBarcode[normalizedImportKey(entry.barcode)] ?: return@mapNotNull null
+                (productId to entry.type) to entry.price
+            }
+            .groupBy(
+                keySelector = { it.first },
+                valueTransform = { it.second }
+            )
         val priceChangedProductIds = linkedSetOf<Long>()
         var importedPriceRowsInserted = 0
+        var syntheticPriceCandidates = 0
+        var syntheticPriceSkippedAlreadyRepresented = 0
+        var priceDirtyFromPriceFieldChange = 0
+        var priceDirtySkippedBecauseNonPriceProductUpdate = 0
+        val priceRowsPendingBridgeBefore = priceDao.countPriceRowsPendingPriceBridge()
 
-        suspend fun recordImportedCurrentAndPreviousPrices(productId: Long, product: Product) {
+        suspend fun recordImportedCurrentAndPreviousPrices(
+            productId: Long,
+            product: Product,
+            priceChanges: ImportPriceChangeSet
+        ): Int {
+            val insertedBefore = importedPriceRowsInserted
             suspend fun record(type: String, price: Double?, timestamp: String, source: String) {
                 price?.let {
+                    syntheticPriceCandidates++
+                    val alreadyRepresented = (
+                        importedPricesByProductAndType[productId to type]
+                            ?.any { representedPrice -> priceEquivalentForImportDirty(representedPrice, it) }
+                            == true
+                        )
+                    if (alreadyRepresented) {
+                        syntheticPriceSkippedAlreadyRepresented++
+                        return
+                    }
                     if (priceDao.insertIfChanged(productId, type, it, timestamp, source)) {
                         priceChangedProductIds += productId
                         importedPriceRowsInserted++
                     }
                 }
             }
-            record("PURCHASE", product.oldPurchasePrice, prevTs, "IMPORT_PREV")
-            record("RETAIL", product.oldRetailPrice, prevTs, "IMPORT_PREV")
-            record("PURCHASE", product.purchasePrice, nowTs, "IMPORT")
-            record("RETAIL", product.retailPrice, nowTs, "IMPORT")
+            if (priceChanges.purchase) {
+                record("PURCHASE", product.oldPurchasePrice, prevTs, "IMPORT_PREV")
+                record("PURCHASE", product.purchasePrice, nowTs, "IMPORT")
+            }
+            if (priceChanges.retail) {
+                record("RETAIL", product.oldRetailPrice, prevTs, "IMPORT_PREV")
+                record("RETAIL", product.retailPrice, nowTs, "IMPORT")
+            }
+            return importedPriceRowsInserted - insertedBefore
         }
 
         resolvedNewProducts.forEach { product ->
-            productIdsByBarcode[product.barcode]?.let { productId ->
-                recordImportedCurrentAndPreviousPrices(productId, product)
+            productIdsByBarcode[normalizedImportKey(product.barcode)]?.let { productId ->
+                recordImportedCurrentAndPreviousPrices(
+                    productId = productId,
+                    product = product,
+                    priceChanges = ImportPriceChangeSet(purchase = true, retail = true)
+                )
             }
         }
-        resolvedUpdatedProductEntities.forEach { product ->
-            recordImportedCurrentAndPreviousPrices(product.id, product)
+        actuallyChangedUpdates.forEach { (oldProduct, product) ->
+            val priceChanges = importPriceChangeSet(
+                old = oldProduct,
+                new = product,
+                includePreviousPriceFields = request.pendingPriceHistory.isEmpty()
+            )
+            if (priceChanges.hasAny) {
+                priceDirtyFromPriceFieldChange += recordImportedCurrentAndPreviousPrices(
+                    productId = product.id,
+                    product = product,
+                    priceChanges = priceChanges
+                )
+            } else {
+                priceDirtySkippedBecauseNonPriceProductUpdate++
+            }
         }
 
         val pendingPriceHistoryPoints = request.pendingPriceHistory.mapNotNull { entry ->
-            val productId = productIdsByBarcode[entry.barcode] ?: return@mapNotNull null
+            val productId = productIdsByBarcode[normalizedImportKey(entry.barcode)] ?: return@mapNotNull null
             ProductPrice(
                 productId = productId,
                 type = entry.type,
@@ -1369,9 +1532,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
         }
         val touchedProductIds = (catalogDirtyProductIds + priceChangedProductIds).toSet()
+        val diagnostics = request.diagnostics
+        val importDiagnosticsLog = diagnostics?.let {
+            "fileProductCount=${it.fileProductCount} " +
+                "fileSupplierCount=${it.fileSupplierCount} " +
+                "fileCategoryCount=${it.fileCategoryCount} " +
+                "filePriceHistoryCount=${it.filePriceHistoryCount} " +
+                "dbProductCountBefore=${it.dbProductCountBefore} " +
+                "dbSupplierCountBefore=${it.dbSupplierCountBefore} " +
+                "dbCategoryCountBefore=${it.dbCategoryCountBefore} " +
+                "dbPriceHistoryCountBefore=${it.dbPriceHistoryCountBefore} " +
+                "importFingerprintShort=${it.importFingerprintShort} " +
+                "dbSnapshotFingerprintShort=${it.dbSnapshotFingerprintShort} " +
+                "classificazione_risultato=${it.resultClassification} "
+        }.orEmpty()
         Log.d(
             TAG,
             "import_dirty_marking productsTouched=${touchedProductIds.size} " +
+                importDiagnosticsLog +
                 "insertedProducts=${resolvedNewProducts.size} " +
                 "updatedProducts=${resolvedUpdatedProductEntities.size} " +
                 "unchangedProductUpdates=${resolvedUpdatedProducts.size - resolvedUpdatedProductEntities.size} " +
@@ -1379,13 +1557,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "productFieldChangedCount=${actualProductDirtyReasons.sumOf { it.size }} " +
                 "productDirtyReasons=${formatImportDirtyReasonCounts(actualProductDirtyReasons)} " +
                 "productDirtyReasonSample=${formatImportDirtyReasonSample(actualProductDirtyReasons)} " +
+                "relationDirtySample=$relationDirtySamples " +
+                "relationDirtyRealChangedCount=${relationDirtySummary.realChangedCount} " +
+                "relationDirtySemanticEquivalentCount=${relationDirtySummary.semanticEquivalentCount} " +
+                "relationDirtyUnknownCount=${relationDirtySummary.unknownCount} " +
                 "priceHistoryRows=${request.pendingPriceHistory.size} " +
                 "priceHistoryInserted=$pendingPriceRowsInserted " +
                 "priceHistoryAlreadyPresent=$pendingPriceRowsAlreadyPresent " +
+                "syntheticPriceCandidates=$syntheticPriceCandidates " +
+                "syntheticPriceSkippedAlreadyRepresented=$syntheticPriceSkippedAlreadyRepresented " +
+                "syntheticPriceBridgeCreated=0 syntheticPriceBridgeAlreadyExists=0 " +
                 "dirtyMarkedPrices=${importedPriceRowsInserted + pendingPriceRowsInserted} " +
                 "dirtyMarkedPriceProducts=${priceChangedProductIds.size} " +
+                "priceRowsPendingBridgeBefore=$priceRowsPendingBridgeBefore " +
                 "priceRowsPendingBridgeAfter=$priceRowsPendingBridgeAfter " +
                 "priceDirtyReason=syntheticProductPrice:$importedPriceRowsInserted,pendingPriceInsert:$pendingPriceRowsInserted " +
+                "priceDirtyFromPriceFieldChange=$priceDirtyFromPriceFieldChange " +
+                "priceDirtyFromSyntheticFallback=$importedPriceRowsInserted " +
+                "priceDirtySkippedBecauseNonPriceProductUpdate=$priceDirtySkippedBecauseNonPriceProductUpdate " +
                 "priceOnlyProducts=${priceOnlyProductIds.size} " +
                 "priceProductRefsCreated=$productRefsCreatedForPriceOnly " +
                 "suppliersCreated=${createdSupplierIds.size} categoriesCreated=${createdCategoryIds.size}"
@@ -1407,8 +1596,53 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private fun normalizedImportText(value: String?): String =
         value?.trim().orEmpty()
 
+    private fun normalizedImportKey(value: String?): String =
+        normalizedImportText(value).lowercase(Locale.ROOT)
+
+    private fun semanticRelationNameEquals(old: String?, new: String?): Boolean =
+        normalizedRelationKey(old) == normalizedRelationKey(new)
+
+    private fun normalizedRelationKey(value: String?): String {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isEmpty()) return ""
+        val decomposed = Normalizer.normalize(trimmed, Normalizer.Form.NFD)
+        return COMBINING_MARKS.replace(decomposed, "").lowercase(Locale.ROOT)
+    }
+
     private fun priceEquivalentForImportDirty(old: Double?, new: Double?): Boolean =
         abs((old ?: 0.0) - (new ?: 0.0)) <= IMPORT_DIRTY_PRICE_TOLERANCE
+
+    private data class ImportPriceChangeSet(
+        val purchase: Boolean,
+        val retail: Boolean
+    ) {
+        val hasAny: Boolean
+            get() = purchase || retail
+    }
+
+    private data class ImportRelationDirtySummary(
+        val realChangedCount: Int,
+        val semanticEquivalentCount: Int,
+        val unknownCount: Int
+    )
+
+    private fun importPriceChangeSet(
+        old: Product,
+        new: Product,
+        includePreviousPriceFields: Boolean
+    ): ImportPriceChangeSet =
+        ImportPriceChangeSet(
+            purchase = !priceEquivalentForImportDirty(old.purchasePrice, new.purchasePrice) ||
+                (
+                    includePreviousPriceFields &&
+                        !priceEquivalentForImportDirty(old.oldPurchasePrice, new.oldPurchasePrice)
+                    ),
+            retail = !priceEquivalentForImportDirty(old.retailPrice, new.retailPrice) ||
+                (
+                    includePreviousPriceFields &&
+                        !priceEquivalentForImportDirty(old.oldRetailPrice, new.oldRetailPrice)
+                    )
+        )
 
     private fun importDirtyChangedFields(old: Product, new: Product): List<String> = buildList {
         if (!normalizedImportText(old.barcode).equals(normalizedImportText(new.barcode), ignoreCase = true)) add("barcode")
@@ -1421,6 +1655,70 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (old.supplierId != new.supplierId) add("supplierId")
         if (old.categoryId != new.categoryId) add("categoryId")
     }
+
+    private fun formatImportRelationDirtySamples(
+        changes: List<Pair<Product, Product>>,
+        supplierNamesById: Map<Long, String>,
+        categoryNamesById: Map<Long, String>
+    ): String {
+        val samples = buildList {
+            for ((old, new) in changes) {
+                if (size >= LOG_SAMPLE_LIMIT) break
+                if (old.supplierId != new.supplierId) {
+                    add(
+                        formatImportRelationDirtySample(
+                            kind = "supplier",
+                            barcode = old.barcode,
+                            oldId = old.supplierId,
+                            newId = new.supplierId,
+                            oldName = old.supplierId?.let { supplierNamesById[it] },
+                            newName = new.supplierId?.let { supplierNamesById[it] }
+                        )
+                    )
+                }
+                if (size >= LOG_SAMPLE_LIMIT) break
+                if (old.categoryId != new.categoryId) {
+                    add(
+                        formatImportRelationDirtySample(
+                            kind = "category",
+                            barcode = old.barcode,
+                            oldId = old.categoryId,
+                            newId = new.categoryId,
+                            oldName = old.categoryId?.let { categoryNamesById[it] },
+                            newName = new.categoryId?.let { categoryNamesById[it] }
+                        )
+                    )
+                }
+            }
+        }
+        return if (samples.isEmpty()) "none" else samples.joinToString("|")
+    }
+
+    private fun formatImportRelationDirtySample(
+        kind: String,
+        barcode: String,
+        oldId: Long?,
+        newId: Long?,
+        oldName: String?,
+        newName: String?
+    ): String =
+        "$kind:${maskImportBarcode(barcode)}:${oldId ?: "null"}:${sanitizeLogToken(oldName)}->" +
+            "${newId ?: "null"}:${sanitizeLogToken(newName)}"
+
+    private fun maskImportBarcode(barcode: String): String {
+        val normalized = normalizedImportText(barcode)
+        if (normalized.isEmpty()) return "empty"
+        val suffix = normalized.takeLast(4)
+        return "***$suffix"
+    }
+
+    private fun sanitizeLogToken(value: String?): String =
+        normalizedImportText(value)
+            .replace(Regex("\\s+"), "_")
+            .replace("|", "_")
+            .replace(":", "_")
+            .take(40)
+            .ifBlank { "blank" }
 
     private fun formatImportDirtyReasonCounts(reasons: List<List<String>>): String {
         val counts = reasons.flatten()
@@ -2096,11 +2394,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
 
             val batchId = java.util.UUID.randomUUID().toString()
-            val catalogIds = SyncEventEntityIds(
+            val rawCatalogIds = SyncEventEntityIds(
                 supplierIds = (pushedSuppliers.remoteIds + tombstonedIds.supplierIds).distinct(),
                 categoryIds = (pushedCategories.remoteIds + tombstonedIds.categoryIds).distinct(),
                 productIds = (pushedProducts.remoteIds + tombstonedIds.productIds).distinct()
             )
+            val catalogIds = syncEventRecordIdsForRecord(rawCatalogIds)
+            val rawPriceIds = SyncEventEntityIds(priceIds = pushedPrices.remoteIds.distinct())
+            val priceIds = syncEventRecordIdsForRecord(rawPriceIds)
             val catalogEventType = if (
                 pushedSuppliers.count + pushedCategories.count + pushedProducts.count == 0 &&
                 !tombstonedIds.isEmpty
@@ -2113,21 +2414,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
-                ids = catalogIds,
+                ids = catalogIds.ids,
                 domain = SyncEventDomains.CATALOG,
                 eventType = catalogEventType,
                 batchId = batchId,
-                deviceId = deviceId
+                deviceId = deviceId,
+                changedCountOverride = catalogIds.changedCount,
+                entityIdsCompacted = catalogIds.compacted
             )
             val priceEventEmitted = recordOrEnqueueSyncEvent(
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
-                ids = SyncEventEntityIds(priceIds = pushedPrices.remoteIds.distinct()),
+                ids = priceIds.ids,
                 domain = SyncEventDomains.PRICES,
                 eventType = SyncEventTypes.PRICES_CHANGED,
                 batchId = batchId,
-                deviceId = deviceId
+                deviceId = deviceId,
+                changedCountOverride = priceIds.changedCount,
+                entityIdsCompacted = priceIds.compacted
             )
 
             val drain = drainSyncEventsInternal(
@@ -2138,10 +2443,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 deviceId = deviceId,
                 progressReporter = progressReporter,
                 protectedLocalCommitIds = SyncEventEntityIds(
-                    supplierIds = catalogIds.supplierIds,
-                    categoryIds = catalogIds.categoryIds,
-                    productIds = catalogIds.productIds,
-                    priceIds = pushedPrices.remoteIds.distinct()
+                    supplierIds = rawCatalogIds.supplierIds,
+                    categoryIds = rawCatalogIds.categoryIds,
+                    productIds = rawCatalogIds.productIds,
+                    priceIds = rawPriceIds.priceIds
                 )
             )
             val outboxPending = syncEventOutboxDao.countPending(ownerUserId)
@@ -2852,23 +3157,31 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         domain: String,
         eventType: String,
         batchId: String,
-        deviceId: String
+        deviceId: String,
+        changedCountOverride: Int? = null,
+        entityIdsCompacted: Boolean = false
     ): Boolean {
-        if (ids.isEmpty) return false
+        val totalChangedCount = changedCountOverride ?: ids.totalIds
+        if (ids.isEmpty && totalChangedCount <= 0) return false
         var allRecorded = true
-        val chunks = chunkSyncEventIds(ids)
+        val chunks = if (ids.isEmpty) listOf(ids) else chunkSyncEventIds(ids)
         for ((index, chunk) in chunks.withIndex()) {
             val clientEventId = buildClientEventId(batchId, domain, eventType, chunk, index)
+            val chunkChangedCount = if (ids.isEmpty) totalChangedCount else chunk.totalIds
             val metadata = buildJsonObject {
                 put("task", "045")
                 put("source", "android_repository")
                 put("chunk_index", index)
                 put("chunk_count", chunks.size)
+                put("entity_ids_compacted", entityIdsCompacted)
+                if (entityIdsCompacted) {
+                    put("original_changed_count", totalChangedCount)
+                }
             }
             val params = SyncEventRecordRpcParams(
                 domain = domain,
                 eventType = eventType,
-                changedCount = chunk.totalIds,
+                changedCount = chunkChangedCount,
                 entityIds = chunk,
                 storeId = storeScope.ifBlank { null },
                 source = "android",
@@ -2890,7 +3203,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     sourceDeviceId = deviceId,
                     batchId = batchId,
                     clientEventId = clientEventId,
-                    changedCount = chunk.totalIds,
+                    changedCount = chunkChangedCount,
                     entityIdsJson = syncEventJson.encodeToString(chunk),
                     metadataJson = syncEventJson.encodeToString(metadata),
                     createdAtMs = System.currentTimeMillis(),
@@ -2900,6 +3213,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             )
         }
         return allRecorded
+    }
+
+    private fun syncEventRecordIdsForRecord(ids: SyncEventEntityIds): SyncEventRecordIds {
+        if (ids.totalIds <= SYNC_EVENT_ENTITY_ID_BUDGET) {
+            return SyncEventRecordIds(
+                ids = ids,
+                changedCount = ids.totalIds,
+                compacted = false
+            )
+        }
+        return SyncEventRecordIds(
+            ids = SyncEventEntityIds(),
+            changedCount = ids.totalIds,
+            compacted = true
+        )
     }
 
     private fun buildClientEventId(
@@ -2987,6 +3315,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private companion object {
         const val TAG = "CatalogCloudSync"
         const val HISTORY_SESSION_SYNC_TAG = "HistorySessionSyncV2"
+        const val PRODUCT_BULK_PUSH_ENABLED = true
+        const val PRODUCT_BULK_PUSH_CHUNK = 100
+        const val PRODUCT_BULK_PUSH_FALLBACK_50 = 50
+        const val PRODUCT_BULK_PUSH_FALLBACK_25 = 25
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
         const val IMPORT_DIRTY_PRICE_TOLERANCE = 0.001
         const val SYNC_EVENT_FETCH_LIMIT = 100L
@@ -2997,6 +3329,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val SESSION_BACKUP_PUSH_CHUNK = 80
         const val LOG_SAMPLE_LIMIT = 5
         const val POSTGREST_UNIQUE_VIOLATION = "23505"
+        val COMBINING_MARKS = Regex("\\p{Mn}+")
         val SUPPORTED_SESSION_PAYLOAD_VERSIONS = setOf(
             SESSION_PAYLOAD_VERSION_LEGACY_V1,
             SESSION_PAYLOAD_VERSION
@@ -3496,19 +3829,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         progressReporter: CatalogSyncProgressReporter,
         allowCreatingDependencyRefs: Boolean = true
     ): CatalogEntityPushResult {
-        var n = 0
         var dirty = 0
         var skippedMissingDependencyRef = 0
         var skippedAlreadySynced = 0
-        var productPushCallCount = 0
-        var productPushCallMs = 0L
-        val pushedRemoteIds = mutableListOf<String>()
         val productTotal = productDao.count()
         val candidates = productDao.getCatalogPushCandidates()
+        val prepared = mutableListOf<ProductPushCandidatePrepared>()
+        val accumulator = ProductPushBatchAccumulator()
         progressReporter.onProgress(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 0, total = candidates.size)
         )
-        for ((index, candidate) in candidates.withIndex()) {
+        for (candidate in candidates) {
             val p = candidate.product
             val productForPush = p.copy(
                 purchasePrice = candidate.lastPurchase ?: p.purchasePrice,
@@ -3517,45 +3848,259 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             val ref = candidate.remoteRef ?: ensureProductRefForPush(p.id)
             if (productNeedsPush(ref)) {
                 dirty++
-                val pushStartedAt = System.currentTimeMillis()
-                val pushed = pushCatalogProductRow(
-                    remote = remote,
-                    ownerUserId = ownerUserId,
+                val row = buildProductPushRow(
                     product = productForPush,
                     ref = ref,
-                    recoveryCache = recoveryCache,
+                    ownerUserId = ownerUserId,
                     allowCreatingDependencyRefs = allowCreatingDependencyRefs
                 )
-                productPushCallMs += System.currentTimeMillis() - pushStartedAt
-                productPushCallCount++
-                if (pushed) {
-                    n++
-                    pushedRemoteIds += productRemoteRefDao.getByProductId(p.id)?.remoteId ?: ref.remoteId
-                } else if (!allowCreatingDependencyRefs) {
+                if (row == null) {
                     skippedMissingDependencyRef++
+                    accumulator.completed++
+                    reportProductPushProgress(progressReporter, accumulator.completed, candidates.size)
+                } else {
+                    prepared += ProductPushCandidatePrepared(
+                        product = productForPush,
+                        ref = ref,
+                        row = row
+                    )
                 }
             } else {
                 skippedAlreadySynced++
+                accumulator.completed++
+                reportProductPushProgress(progressReporter, accumulator.completed, candidates.size)
             }
-            progressReporter.onProgress(
-                CatalogSyncProgressState.running(
-                    CatalogSyncStage.PUSH_PRODUCTS,
-                    current = index + 1,
-                    total = candidates.size
+        }
+        if (prepared.isNotEmpty()) {
+            if (PRODUCT_BULK_PUSH_ENABLED) {
+                pushPreparedProductBatches(
+                    remote = remote,
+                    ownerUserId = ownerUserId,
+                    recoveryCache = recoveryCache,
+                    progressReporter = progressReporter,
+                    total = candidates.size,
+                    allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                    prepared = prepared,
+                    accumulator = accumulator
                 )
-            )
+            } else {
+                pushPreparedProductsOneByOne(
+                    remote = remote,
+                    ownerUserId = ownerUserId,
+                    recoveryCache = recoveryCache,
+                    progressReporter = progressReporter,
+                    total = candidates.size,
+                    allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                    prepared = prepared,
+                    accumulator = accumulator
+                )
+            }
         }
         Log.i(
             TAG,
             "phase_metrics syncDomain=CATALOG phase=PUSH_PRODUCTS productsTotal=$productTotal " +
-                "productsEvaluated=${candidates.size} productsDirty=$dirty productsPushed=$n " +
+                "productsEvaluated=${candidates.size} productsDirty=$dirty productsPushed=${accumulator.pushed} " +
+                "productsPrepared=${prepared.size} " +
                 "productsSkippedAlreadySynced=${(productTotal - candidates.size + skippedAlreadySynced).coerceAtLeast(0)} " +
                 "productsSkippedMissingDependencyRef=$skippedMissingDependencyRef " +
-                "batchSize=1 batchCount=$productPushCallCount " +
-                "avgBatchMs=${if (productPushCallCount == 0) 0 else productPushCallMs / productPushCallCount}"
+                "bulkEnabled=$PRODUCT_BULK_PUSH_ENABLED batchSize=$PRODUCT_BULK_PUSH_CHUNK " +
+                "batchCount=${accumulator.batchCount} productsPushed=${accumulator.pushed} " +
+                "pushProductsMs=${accumulator.totalBatchMs} " +
+                "avgBatchMs=${if (accumulator.batchCount == 0) 0 else accumulator.totalBatchMs / accumulator.batchCount} " +
+                "splitFallbackCount=${accumulator.splitFallbackCount} " +
+                "singleFallbackCount=${accumulator.singleFallbackCount}"
         )
-        return CatalogEntityPushResult(count = n, remoteIds = pushedRemoteIds.distinct())
+        return CatalogEntityPushResult(count = accumulator.pushed, remoteIds = accumulator.remoteIds.distinct())
     }
+
+    private suspend fun pushPreparedProductBatches(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter,
+        total: Int,
+        allowCreatingDependencyRefs: Boolean,
+        prepared: List<ProductPushCandidatePrepared>,
+        accumulator: ProductPushBatchAccumulator
+    ) {
+        for (chunk in prepared.chunked(PRODUCT_BULK_PUSH_CHUNK)) {
+            pushPreparedProductBatchWithFallback(
+                remote = remote,
+                ownerUserId = ownerUserId,
+                recoveryCache = recoveryCache,
+                progressReporter = progressReporter,
+                total = total,
+                allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                batch = chunk,
+                accumulator = accumulator
+            )
+        }
+    }
+
+    private suspend fun pushPreparedProductBatchWithFallback(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter,
+        total: Int,
+        allowCreatingDependencyRefs: Boolean,
+        batch: List<ProductPushCandidatePrepared>,
+        accumulator: ProductPushBatchAccumulator
+    ) {
+        if (batch.isEmpty()) return
+        if (batch.size == 1) {
+            pushPreparedProductSingle(
+                remote = remote,
+                ownerUserId = ownerUserId,
+                recoveryCache = recoveryCache,
+                progressReporter = progressReporter,
+                total = total,
+                allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                prepared = batch.single(),
+                accumulator = accumulator
+            )
+            return
+        }
+
+        val startedAt = System.currentTimeMillis()
+        val first = remote.upsertProducts(batch.map { it.row })
+        accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
+        accumulator.batchCount++
+        val error = first.exceptionOrNull()
+        if (error == null) {
+            markProductPushBatchApplied(batch)
+            accumulator.pushed += batch.size
+            accumulator.completed += batch.size
+            accumulator.remoteIds += batch.map { it.row.id }
+            reportProductPushProgress(progressReporter, accumulator.completed, total)
+            return
+        }
+        if (error is CancellationException) throw error
+
+        val fallbackSize = nextProductPushFallbackSize(batch.size)
+        if (fallbackSize <= 1) {
+            accumulator.singleFallbackCount += batch.size
+            for (prepared in batch) {
+                pushPreparedProductSingle(
+                    remote = remote,
+                    ownerUserId = ownerUserId,
+                    recoveryCache = recoveryCache,
+                    progressReporter = progressReporter,
+                    total = total,
+                    allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                    prepared = prepared,
+                    accumulator = accumulator
+                )
+            }
+            return
+        }
+
+        accumulator.splitFallbackCount += batch.size.ceilDiv(fallbackSize)
+        for (chunk in batch.chunked(fallbackSize)) {
+            pushPreparedProductBatchWithFallback(
+                remote = remote,
+                ownerUserId = ownerUserId,
+                recoveryCache = recoveryCache,
+                progressReporter = progressReporter,
+                total = total,
+                allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                batch = chunk,
+                accumulator = accumulator
+            )
+        }
+    }
+
+    private suspend fun pushPreparedProductsOneByOne(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter,
+        total: Int,
+        allowCreatingDependencyRefs: Boolean,
+        prepared: List<ProductPushCandidatePrepared>,
+        accumulator: ProductPushBatchAccumulator
+    ) {
+        accumulator.singleFallbackCount += prepared.size
+        for (candidate in prepared) {
+            pushPreparedProductSingle(
+                remote = remote,
+                ownerUserId = ownerUserId,
+                recoveryCache = recoveryCache,
+                progressReporter = progressReporter,
+                total = total,
+                allowCreatingDependencyRefs = allowCreatingDependencyRefs,
+                prepared = candidate,
+                accumulator = accumulator
+            )
+        }
+    }
+
+    private suspend fun pushPreparedProductSingle(
+        remote: CatalogRemoteDataSource,
+        ownerUserId: String,
+        recoveryCache: CatalogConflictRecoveryCache,
+        progressReporter: CatalogSyncProgressReporter,
+        total: Int,
+        allowCreatingDependencyRefs: Boolean,
+        prepared: ProductPushCandidatePrepared,
+        accumulator: ProductPushBatchAccumulator
+    ) {
+        val startedAt = System.currentTimeMillis()
+        val pushed = pushCatalogProductRow(
+            remote = remote,
+            ownerUserId = ownerUserId,
+            product = prepared.product,
+            ref = prepared.ref,
+            recoveryCache = recoveryCache,
+            allowCreatingDependencyRefs = allowCreatingDependencyRefs
+        )
+        accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
+        accumulator.batchCount++
+        accumulator.completed++
+        if (pushed) {
+            accumulator.pushed++
+            accumulator.remoteIds += productRemoteRefDao.getByProductId(prepared.product.id)?.remoteId
+                ?: prepared.ref.remoteId
+        }
+        reportProductPushProgress(progressReporter, accumulator.completed, total)
+    }
+
+    private suspend fun markProductPushBatchApplied(batch: List<ProductPushCandidatePrepared>) {
+        val appliedAt = System.currentTimeMillis()
+        db.withTransaction {
+            for (prepared in batch) {
+                productRemoteRefDao.updateRemoteApplyState(
+                    prepared.product.id,
+                    prepared.ref.localChangeRevision,
+                    appliedAt,
+                    fingerprintProductInbound(prepared.row)
+                )
+            }
+        }
+    }
+
+    private fun nextProductPushFallbackSize(size: Int): Int = when {
+        size > PRODUCT_BULK_PUSH_FALLBACK_50 -> PRODUCT_BULK_PUSH_FALLBACK_50
+        size > PRODUCT_BULK_PUSH_FALLBACK_25 -> PRODUCT_BULK_PUSH_FALLBACK_25
+        size > 1 -> 1
+        else -> 1
+    }
+
+    private fun reportProductPushProgress(
+        progressReporter: CatalogSyncProgressReporter,
+        current: Int,
+        total: Int
+    ) {
+        progressReporter.onProgress(
+            CatalogSyncProgressState.running(
+                CatalogSyncStage.PUSH_PRODUCTS,
+                current = current.coerceAtMost(total),
+                total = total
+            )
+        )
+    }
+
+    private fun Int.ceilDiv(other: Int): Int = (this + other - 1) / other
 
     private fun buildSupplierPushRow(
         supplier: Supplier,

@@ -590,6 +590,242 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `068 equivalent relation ids are preserved when another product field changes`() = runTest {
+        val originalSupplierId = db.supplierDao().insert(Supplier(name = "Café Supplier"))
+        val duplicateSupplierId = db.supplierDao().insert(Supplier(name = " cafe supplier "))
+        val originalCategoryId = db.categoryDao().insert(Category(name = "Bebidas"))
+        val duplicateCategoryId = db.categoryDao().insert(Category(name = " bebidas "))
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-relation-preserve",
+            productName = "Relation Preserve Product",
+            purchasePrice = 15.0,
+            retailPrice = 25.0,
+            supplierId = originalSupplierId,
+            categoryId = originalCategoryId,
+            stockQuantity = 2.0
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(
+                            supplierId = duplicateSupplierId,
+                            categoryId = duplicateCategoryId,
+                            stockQuantity = 3.0
+                        ),
+                        changedFields = emptyList()
+                    )
+                ),
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val reloaded = repository.findProductByBarcode(product.barcode)!!
+        assertEquals(originalSupplierId, reloaded.supplierId)
+        assertEquals(originalCategoryId, reloaded.categoryId)
+        assertEquals(3.0, reloaded.stockQuantity ?: -1.0, 0.0001)
+        assertEquals(listOf(product.id), changedProductIds)
+        assertEquals(listOf(product.id), db.productDao().getCatalogPushCandidates().map { it.product.id })
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+    }
+
+    @Test
+    fun `068 real relation name change dirties only the target product`() = runTest {
+        val oldSupplierId = db.supplierDao().insert(Supplier(name = "Old Supplier 068"))
+        val newSupplierId = db.supplierDao().insert(Supplier(name = "New Supplier 068"))
+        val oldCategoryId = db.categoryDao().insert(Category(name = "Old Category 068"))
+        val newCategoryId = db.categoryDao().insert(Category(name = "New Category 068"))
+        val target = seedSyncedProductWithPriceBridge(
+            barcode = "068-real-relation-target",
+            productName = "Real Relation Target",
+            purchasePrice = 15.0,
+            retailPrice = 25.0,
+            supplierId = oldSupplierId,
+            categoryId = oldCategoryId
+        )
+        val other = seedSyncedProductWithPriceBridge(
+            barcode = "068-real-relation-other",
+            productName = "Real Relation Other",
+            purchasePrice = 16.0,
+            retailPrice = 26.0,
+            supplierId = oldSupplierId,
+            categoryId = oldCategoryId
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = target,
+                        newProduct = target.copy(
+                            supplierId = newSupplierId,
+                            categoryId = newCategoryId
+                        ),
+                        changedFields = emptyList()
+                    )
+                ),
+                pendingPriceHistory = currentPriceHistoryAsImportRows()
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        val reloadedTarget = repository.findProductByBarcode(target.barcode)!!
+        val reloadedOther = repository.findProductByBarcode(other.barcode)!!
+        assertEquals(newSupplierId, reloadedTarget.supplierId)
+        assertEquals(newCategoryId, reloadedTarget.categoryId)
+        assertEquals(oldSupplierId, reloadedOther.supplierId)
+        assertEquals(oldCategoryId, reloadedOther.categoryId)
+        assertEquals(listOf(target.id), changedProductIds)
+        assertEquals(listOf(target.id), db.productDao().getCatalogPushCandidates().map { it.product.id })
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+        assertEquals(0, db.productRemoteRefDao().getByProductId(other.id)!!.localChangeRevision)
+    }
+
+    @Test
+    fun `068 supplier-only product update dirties product but not prices`() = runTest {
+        val oldSupplierId = db.supplierDao().insert(Supplier(name = "Supplier Old 068"))
+        val newSupplierId = db.supplierDao().insert(Supplier(name = "Supplier New 068"))
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-supplier-only",
+            productName = "Supplier Only Product",
+            purchasePrice = 10.0,
+            retailPrice = 20.0,
+            supplierId = oldSupplierId
+        )
+
+        assertProductOnlyImportDoesNotDirtyPrices(
+            oldProduct = product,
+            newProduct = product.copy(supplierId = newSupplierId)
+        )
+    }
+
+    @Test
+    fun `068 category-only product update dirties product but not prices`() = runTest {
+        val oldCategoryId = db.categoryDao().insert(Category(name = "Category Old 068"))
+        val newCategoryId = db.categoryDao().insert(Category(name = "Category New 068"))
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-category-only",
+            productName = "Category Only Product",
+            purchasePrice = 11.0,
+            retailPrice = 21.0,
+            categoryId = oldCategoryId
+        )
+
+        assertProductOnlyImportDoesNotDirtyPrices(
+            oldProduct = product,
+            newProduct = product.copy(categoryId = newCategoryId)
+        )
+    }
+
+    @Test
+    fun `068 stock-only product update dirties product but not prices`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-stock-only",
+            productName = "Stock Only Product",
+            purchasePrice = 12.0,
+            retailPrice = 22.0,
+            stockQuantity = 4.0
+        )
+
+        assertProductOnlyImportDoesNotDirtyPrices(
+            oldProduct = product,
+            newProduct = product.copy(stockQuantity = 9.0)
+        )
+    }
+
+    @Test
+    fun `068 productName-only product update dirties product but not prices`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-name-only",
+            productName = "Name Only Product",
+            purchasePrice = 13.0,
+            retailPrice = 23.0
+        )
+
+        assertProductOnlyImportDoesNotDirtyPrices(
+            oldProduct = product,
+            newProduct = product.copy(productName = "Name Only Product Updated")
+        )
+    }
+
+    @Test
+    fun `068 purchasePrice update dirties only purchase price rows`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-purchase-price-delta",
+            productName = "Purchase Delta Product",
+            purchasePrice = 14.0,
+            retailPrice = 24.0
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(purchasePrice = 15.5),
+                        changedFields = emptyList()
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(product.id), changedProductIds)
+        assertEquals(listOf(product.id), db.productDao().getCatalogPushCandidates().map { it.product.id })
+        val pricePushRows = db.productPriceDao().getAllForCloudPush()
+        assertEquals(listOf("PURCHASE"), pricePushRows.map { it.type })
+        assertEquals(15.5, pricePushRows.single().price, 0.0001)
+    }
+
+    @Test
+    fun `068 retailPrice update dirties only retail price rows`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "068-retail-price-delta",
+            productName = "Retail Delta Product",
+            purchasePrice = 15.0,
+            retailPrice = 25.0
+        )
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = product,
+                        newProduct = product.copy(retailPrice = 27.5),
+                        changedFields = emptyList()
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(product.id), changedProductIds)
+        assertEquals(listOf(product.id), db.productDao().getCatalogPushCandidates().map { it.product.id })
+        val pricePushRows = db.productPriceDao().getAllForCloudPush()
+        assertEquals(listOf("RETAIL"), pricePushRows.map { it.type })
+        assertEquals(27.5, pricePushRows.single().price, 0.0001)
+    }
+
+    @Test
     fun `067 medium full import price sheet does not scale dirty set with total rows`() = runTest {
         val products = (0 until 500).map { index ->
             seedSyncedProductWithPriceBridge(
@@ -1299,6 +1535,38 @@ class DefaultInventoryRepositoryTest {
         pendingTempCategories = pendingTempCategories,
         pendingPriceHistory = pendingPriceHistory
     )
+
+    private suspend fun assertProductOnlyImportDoesNotDirtyPrices(
+        oldProduct: Product,
+        newProduct: Product
+    ) {
+        val priceRowsBefore = repository.getAllPriceHistoryRows().size
+        val changedProductIds = mutableListOf<Long>()
+        repository.onProductCatalogChanged = { productId ->
+            changedProductIds += productId
+        }
+
+        val result = repository.applyImport(
+            importRequest(
+                updatedProducts = listOf(
+                    ProductUpdate(
+                        oldProduct = oldProduct,
+                        newProduct = newProduct,
+                        changedFields = emptyList()
+                    )
+                )
+            )
+        )
+
+        assertEquals(ImportApplyResult.Success, result)
+        assertEquals(listOf(oldProduct.id), changedProductIds)
+        assertEquals(
+            listOf(oldProduct.id),
+            db.productDao().getCatalogPushCandidates().map { it.product.id }
+        )
+        assertEquals(priceRowsBefore, repository.getAllPriceHistoryRows().size)
+        assertTrue(db.productPriceDao().getAllForCloudPush().isEmpty())
+    }
 
     private suspend fun seedSyncedProductWithPriceBridge(
         barcode: String,
@@ -3350,6 +3618,192 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `068 bulk product push uses bounded batches and compact catalog event`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000681"
+        repeat(260) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "068-bulk-success-${index.toString().padStart(3, '0')}",
+                    productName = "Bulk Success $index",
+                    purchasePrice = 10.0 + index,
+                    retailPrice = 20.0 + index
+                )
+            )
+        }
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(260, summary.pushedProducts)
+        assertEquals(listOf(100, 100, 60), remote.upsertedProducts.map { it.size })
+        assertEquals(listOf(100, 100, 60), remote.productUpsertAttemptSizes)
+        assertEquals(3, remote.productUpsertCallCount)
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+        assertEquals(1, syncEvents.recordedParams.size)
+        val catalogEvent = syncEvents.recordedParams.single()
+        assertEquals(SyncEventDomains.CATALOG, catalogEvent.domain)
+        assertEquals(260, catalogEvent.changedCount)
+        assertTrue(catalogEvent.entityIds!!.isEmpty)
+    }
+
+    @Test
+    fun `068 compact catalog event remains compact when enqueued offline`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000685"
+        repeat(260) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "068-compact-outbox-${index.toString().padStart(3, '0')}",
+                    productName = "Compact Outbox $index",
+                    purchasePrice = 4.0 + index,
+                    retailPrice = 7.0 + index
+                )
+            )
+        }
+        val syncEvents = FakeSyncEventRemote().apply {
+            failRecordForDomains += SyncEventDomains.CATALOG
+        }
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(260, summary.pushedProducts)
+        assertEquals(1, summary.syncEventOutboxPending)
+        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(SyncEventDomains.CATALOG, pending.domain)
+        assertEquals(260, pending.changedCount)
+        assertTrue(pending.entityIdsJson.length < 120)
+    }
+
+    @Test
+    fun `068 bulk product push falls back to single rows after split failures`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000682"
+        repeat(30) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "068-bulk-single-fallback-${index.toString().padStart(2, '0')}",
+                    productName = "Single Fallback $index",
+                    purchasePrice = 5.0 + index,
+                    retailPrice = 8.0 + index
+                )
+            )
+        }
+        val remote = FakeCatalogRemote016().apply {
+            productUpsertFailure = { rows, _ ->
+                if (rows.size > 1) IOException("batch rejected") else null
+            }
+        }
+
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(30, summary.pushedProducts)
+        assertTrue(remote.productUpsertAttemptSizes.containsAll(listOf(30, 25, 5)))
+        assertEquals(30, remote.upsertedProducts.size)
+        assertTrue(remote.upsertedProducts.all { it.size == 1 })
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+    }
+
+    @Test
+    fun `068 bulk product push keeps failed tail dirty and retries idempotently`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000683"
+        repeat(150) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "068-bulk-partial-${index.toString().padStart(3, '0')}",
+                    productName = "Partial Retry $index",
+                    purchasePrice = 3.0 + index,
+                    retailPrice = 6.0 + index
+                )
+            )
+        }
+        val firstRemote = FakeCatalogRemote016().apply {
+            productUpsertFailure = { _, call ->
+                if (call >= 2) IOException("offline after first batch") else null
+            }
+        }
+
+        val first = repository.pushDirtyCatalogDeltaToRemote(
+            remote = firstRemote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(first.isFailure)
+        assertEquals(listOf(100), firstRemote.upsertedProducts.map { it.size })
+        assertEquals(50, db.productDao().getCatalogPushCandidates().size)
+
+        val retryRemote = FakeCatalogRemote016()
+        val retry = repository.pushDirtyCatalogDeltaToRemote(
+            remote = retryRemote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(50, retry.pushedProducts)
+        assertEquals(listOf(50), retryRemote.upsertedProducts.map { it.size })
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+    }
+
+    @Test
+    fun `068 bulk product push leaves all rows dirty for offline retry`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000684"
+        repeat(80) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "068-bulk-offline-${index.toString().padStart(2, '0')}",
+                    productName = "Offline Retry $index",
+                    purchasePrice = 7.0 + index,
+                    retailPrice = 9.0 + index
+                )
+            )
+        }
+        val offlineRemote = FakeCatalogRemote016().apply {
+            productUpsertFailure = { _, _ -> IOException("network unavailable") }
+        }
+
+        val first = repository.pushDirtyCatalogDeltaToRemote(
+            remote = offlineRemote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(first.isFailure)
+        assertTrue(offlineRemote.upsertedProducts.isEmpty())
+        assertEquals(80, db.productDao().getCatalogPushCandidates().size)
+
+        val retryRemote = FakeCatalogRemote016()
+        val retry = repository.pushDirtyCatalogDeltaToRemote(
+            remote = retryRemote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(80, retry.pushedProducts)
+        assertEquals(listOf(80), retryRemote.upsertedProducts.map { it.size })
+        assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+    }
+
+    @Test
     fun `068 quick sync does not let stale event overwrite product pushed in same local commit`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000680"
         val product = seedSyncedProductWithPriceBridge(
@@ -4544,6 +4998,7 @@ private class FakeCatalogRemote016(
     val upsertedSuppliers = mutableListOf<List<InventorySupplierRow>>()
     val upsertedCategories = mutableListOf<List<InventoryCategoryRow>>()
     val upsertedProducts = mutableListOf<List<InventoryProductRow>>()
+    val productUpsertAttemptSizes = mutableListOf<Int>()
     var fetchCount = 0
     var targetedFetchCount = 0
     val targetedSupplierIds = mutableListOf<Set<String>>()
@@ -4556,6 +5011,7 @@ private class FakeCatalogRemote016(
     var failNextSupplierUpsert: Throwable? = null
     var failNextCategoryUpsert: Throwable? = null
     var failNextProductUpsert: Throwable? = null
+    var productUpsertFailure: ((rows: List<InventoryProductRow>, call: Int) -> Throwable?)? = null
     var failNextSupplierTombstone: Throwable? = null
     override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
         supplierUpsertCallCount++
@@ -4577,8 +5033,12 @@ private class FakeCatalogRemote016(
     }
     override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
         productUpsertCallCount++
+        productUpsertAttemptSizes += rows.size
         failNextProductUpsert?.let { t ->
             failNextProductUpsert = null
+            return Result.failure(t)
+        }
+        productUpsertFailure?.invoke(rows, productUpsertCallCount)?.let { t ->
             return Result.failure(t)
         }
         upsertedProducts.add(rows)

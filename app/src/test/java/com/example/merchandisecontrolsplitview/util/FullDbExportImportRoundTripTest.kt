@@ -15,6 +15,7 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.PriceHistoryExportRow
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
+import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteRef
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
@@ -89,8 +90,7 @@ class FullDbExportImportRoundTripTest {
             assertEquals(expected.nonSyntheticHistory, targetHistory.filterNot(::isSyntheticImportRow))
 
             val syntheticRows = targetHistory.filter(::isSyntheticImportRow)
-            assertEquals(expected.syntheticRowCount, syntheticRows.size)
-            assertEquals(setOf("IMPORT", "IMPORT_PREV"), syntheticRows.mapNotNull { it.source }.toSet())
+            assertTrue(syntheticRows.isEmpty())
         }
 
     @Test
@@ -104,6 +104,9 @@ class FullDbExportImportRoundTripTest {
             val targetDb = createInMemoryDb()
             val targetRepository = DefaultInventoryRepository(targetDb)
             importWorkbookIntoTarget(app, workbookFile, targetRepository)
+            markProductAndPricePushStateSynced(targetDb)
+            assertTrue(targetDb.productDao().getCatalogPushCandidates().isEmpty())
+            assertTrue(targetDb.productPriceDao().getAllForCloudPush().isEmpty())
             val priceRowsBefore = targetRepository.getAllPriceHistoryRows().size
             val changedProductIds = mutableListOf<Long>()
             targetRepository.onProductCatalogChanged = { productId ->
@@ -136,6 +139,8 @@ class FullDbExportImportRoundTripTest {
             assertEquals(ImportApplyResult.Success, secondApply)
             assertTrue(changedProductIds.isEmpty())
             assertEquals(priceRowsBefore, targetRepository.getAllPriceHistoryRows().size)
+            assertTrue(targetDb.productDao().getCatalogPushCandidates().isEmpty())
+            assertTrue(targetDb.productPriceDao().getAllForCloudPush().isEmpty())
         }
 
     @Test
@@ -195,7 +200,7 @@ class FullDbExportImportRoundTripTest {
     }
 
     @Test
-    fun `RT-PART keeps real price history and adds expected IMPORT rows separately`() = runTest {
+    fun `RT-PART keeps real price history without synthetic rows when represented`() = runTest {
         val sourceDb = createInMemoryDb()
         val sourceRepository = DefaultInventoryRepository(sourceDb)
         val expected = seedPartitionFixture(sourceDb, sourceRepository)
@@ -210,9 +215,7 @@ class FullDbExportImportRoundTripTest {
         val synthetic = targetHistory.filter(::isSyntheticImportRow)
 
         assertEquals(expected.nonSyntheticHistory, nonSynthetic)
-        assertEquals(expected.syntheticRowCount, synthetic.size)
-        assertEquals(2, synthetic.count { it.source == "IMPORT" })
-        assertEquals(2, synthetic.count { it.source == "IMPORT_PREV" })
+        assertTrue(synthetic.isEmpty())
     }
 
     @Test
@@ -425,6 +428,26 @@ class FullDbExportImportRoundTripTest {
         assertEquals(ImportApplyResult.Success, applyResult)
 
         return importResult
+    }
+
+    private suspend fun markProductAndPricePushStateSynced(db: AppDatabase) {
+        db.productDao().getCatalogPushCandidates().forEach { candidate ->
+            val ref = candidate.remoteRef ?: return@forEach
+            db.productRemoteRefDao().updateRemoteApplyState(
+                productId = candidate.product.id,
+                rev = ref.localChangeRevision,
+                appliedAt = 1L,
+                fingerprint = "synced-${candidate.product.barcode}"
+            )
+        }
+        db.productPriceDao().getAllForCloudPush().forEach { row ->
+            db.productPriceRemoteRefDao().insert(
+                ProductPriceRemoteRef(
+                    productPriceId = row.id,
+                    remoteId = java.util.UUID.nameUUIDFromBytes("price-${row.id}".toByteArray()).toString()
+                )
+            )
+        }
     }
 
     private suspend fun seedStandardRoundTripFixture(

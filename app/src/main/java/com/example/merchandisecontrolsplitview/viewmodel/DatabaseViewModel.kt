@@ -15,9 +15,11 @@ import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.ImportAnalyzer
+import com.example.merchandisecontrolsplitview.util.ImportDatasetFingerprint
 import com.example.merchandisecontrolsplitview.util.SmartImportWorkbookOutcome
 import com.example.merchandisecontrolsplitview.util.analyzeSmartImportWorkbook
 import com.example.merchandisecontrolsplitview.util.analyzeFullDbImportStreaming
+import com.example.merchandisecontrolsplitview.util.buildDatabaseSnapshotFingerprint
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
@@ -56,6 +58,11 @@ data class ExportUiState(
     val inProgress: Boolean = false,
     val message: String? = null,
     val progress: Int? = null
+)
+
+private data class FullImportDbSnapshot(
+    val products: List<Product>,
+    val fingerprint: ImportDatasetFingerprint
 )
 
 private data class ExportProgressSnapshot(
@@ -209,6 +216,8 @@ class DatabaseViewModel(
     private var pendingCategoryNames: Set<String> = emptySet()
     private var pendingTempSuppliers: Map<Long, String> = emptyMap()
     private var pendingTempCategories: Map<Long, String> = emptyMap()
+    private var pendingImportDiagnostics: ImportApplyDiagnostics? = null
+    private var pendingDbSnapshotFingerprint: ImportDatasetFingerprint? = null
     private var activePreviewId: Long? = null
     private var nextPreviewId = 1L
     private var nextPendingSupplierTempId = -1L
@@ -280,6 +289,7 @@ class DatabaseViewModel(
         pendingCategoryNames: Set<String> = emptySet(),
         pendingTempSuppliers: Map<Long, String> = emptyMap(),
         pendingTempCategories: Map<Long, String> = emptyMap(),
+        diagnostics: ImportApplyDiagnostics? = null,
         navigationOrigin: ImportNavOrigin = ImportNavOrigin.HOME
     ) {
         _importNavigationOrigin.value = navigationOrigin
@@ -289,6 +299,7 @@ class DatabaseViewModel(
         this.pendingCategoryNames = pendingCategoryNames
         this.pendingTempSuppliers = pendingTempSuppliers
         this.pendingTempCategories = pendingTempCategories
+        this.pendingImportDiagnostics = diagnostics
         updatePendingTempCounters()
         val previewId = allocatePreviewId()
         activePreviewId = previewId
@@ -305,6 +316,8 @@ class DatabaseViewModel(
         pendingCategoryNames = emptySet()
         pendingTempSuppliers = emptyMap()
         pendingTempCategories = emptyMap()
+        pendingImportDiagnostics = null
+        pendingDbSnapshotFingerprint = null
         activePreviewId = null
         nextPendingSupplierTempId = -1L
         nextPendingCategoryTempId = -1L
@@ -596,7 +609,8 @@ class DatabaseViewModel(
                 progress = 55
             )
         }
-        val currentDbProducts = repository.getAllProducts()
+        val dbSnapshot = loadFullImportDbSnapshot()
+        pendingDbSnapshotFingerprint = dbSnapshot.fingerprint
 
         withContext(Dispatchers.Main) {
             _uiState.value = UiState.Loading(
@@ -605,13 +619,77 @@ class DatabaseViewModel(
             )
         }
 
-        return currentDbProducts
+        return dbSnapshot.products
+    }
+
+    private suspend fun loadFullImportDbSnapshot(): FullImportDbSnapshot {
+        val products = repository.getAllProducts()
+        val productDetails = repository.getAllProductsWithDetails()
+        val suppliers = repository.getAllSuppliers()
+        val categories = repository.getAllCategories()
+        val priceHistoryRows = repository.getAllPriceHistoryRows()
+        return FullImportDbSnapshot(
+            products = products,
+            fingerprint = buildDatabaseSnapshotFingerprint(
+                products = productDetails,
+                suppliers = suppliers,
+                categories = categories,
+                priceHistoryRows = priceHistoryRows
+            )
+        )
+    }
+
+    private fun buildImportApplyDiagnostics(
+        importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult
+    ): ImportApplyDiagnostics? {
+        val dbSnapshot = pendingDbSnapshotFingerprint ?: return null
+        val importFingerprint = importResult.datasetFingerprint
+        return ImportApplyDiagnostics(
+            fileProductCount = importFingerprint.productCount,
+            fileSupplierCount = importFingerprint.supplierCount,
+            fileCategoryCount = importFingerprint.categoryCount,
+            filePriceHistoryCount = importFingerprint.priceHistoryCount,
+            dbProductCountBefore = dbSnapshot.productCount,
+            dbSupplierCountBefore = dbSnapshot.supplierCount,
+            dbCategoryCountBefore = dbSnapshot.categoryCount,
+            dbPriceHistoryCountBefore = dbSnapshot.priceHistoryCount,
+            importFingerprintShort = importFingerprint.fingerprintShort,
+            dbSnapshotFingerprintShort = dbSnapshot.fingerprintShort
+        )
+    }
+
+    private fun logFullImportSuccess(
+        importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult,
+        diagnostics: ImportApplyDiagnostics?
+    ) {
+        val diagnosticsLog = diagnostics?.let {
+            "fileProductCount=${it.fileProductCount} " +
+                "fileSupplierCount=${it.fileSupplierCount} " +
+                "fileCategoryCount=${it.fileCategoryCount} " +
+                "filePriceHistoryCount=${it.filePriceHistoryCount} " +
+                "dbProductCountBefore=${it.dbProductCountBefore} " +
+                "dbSupplierCountBefore=${it.dbSupplierCountBefore} " +
+                "dbCategoryCountBefore=${it.dbCategoryCountBefore} " +
+                "dbPriceHistoryCountBefore=${it.dbPriceHistoryCountBefore} " +
+                "importFingerprintShort=${it.importFingerprintShort} " +
+                "dbSnapshotFingerprintShort=${it.dbSnapshotFingerprintShort} " +
+                "classificazione_risultato=${it.resultClassification}"
+        }.orEmpty()
+        Log.d(
+            "DB_IMPORT",
+            "FULL_IMPORT SUCCESS products=${importResult.productsRowCount} " +
+                "suppliers=${importResult.supplierRowCount} " +
+                "categories=${importResult.categoryRowCount} " +
+                "priceHistory=${importResult.hasPriceHistorySheet} " +
+                diagnosticsLog
+        )
     }
 
     private suspend fun finalizeFullImportAnalysisSuccess(
         importResult: com.example.merchandisecontrolsplitview.util.FullDbImportStreamingResult,
         navigationOrigin: ImportNavOrigin
     ) {
+        val diagnostics = buildImportApplyDiagnostics(importResult)
         publishPreviewAnalysis(
             analysis = importResult.analysis.analysis,
             pendingPriceHistory = importResult.pendingPriceHistory,
@@ -619,16 +697,11 @@ class DatabaseViewModel(
             pendingCategoryNames = importResult.pendingCategoryNames,
             pendingTempSuppliers = importResult.analysis.pendingSuppliers,
             pendingTempCategories = importResult.analysis.pendingCategories,
+            diagnostics = diagnostics,
             navigationOrigin = navigationOrigin
         )
         _uiState.value = UiState.Idle
-        Log.d(
-            "DB_IMPORT",
-            "FULL_IMPORT SUCCESS products=${importResult.productsRowCount} " +
-                "suppliers=${importResult.supplierRowCount} " +
-                "categories=${importResult.categoryRowCount} " +
-                "priceHistory=${importResult.hasPriceHistorySheet}"
-        )
+        logFullImportSuccess(importResult, diagnostics)
     }
 
     private suspend fun handleSmartFullImportCancelled() {
@@ -818,7 +891,8 @@ class DatabaseViewModel(
             pendingCategoryNames = pendingCategoryNames.toSet(),
             pendingTempSuppliers = pendingTempSuppliers.toMap(),
             pendingTempCategories = pendingTempCategories.toMap(),
-            pendingPriceHistory = pendingPriceHistory.toList()
+            pendingPriceHistory = pendingPriceHistory.toList(),
+            diagnostics = pendingImportDiagnostics
         )
         _importFlowState.value = ImportFlowState.Applying(previewId)
 
@@ -1196,9 +1270,11 @@ class DatabaseViewModel(
                     message = context.getString(R.string.import_fetching_db),
                     progress = 55
                 )
-                val currentDbProducts = withContext(Dispatchers.IO) {
-                    repository.getAllProducts()
+                val dbSnapshot = withContext(Dispatchers.IO) {
+                    loadFullImportDbSnapshot()
                 }
+                pendingDbSnapshotFingerprint = dbSnapshot.fingerprint
+                val currentDbProducts = dbSnapshot.products
 
                 _uiState.value = UiState.Loading(
                     message = context.getString(R.string.import_analyzing),
@@ -1221,16 +1297,11 @@ class DatabaseViewModel(
                     pendingCategoryNames = importResult.pendingCategoryNames,
                     pendingTempSuppliers = importResult.analysis.pendingSuppliers,
                     pendingTempCategories = importResult.analysis.pendingCategories,
+                    diagnostics = buildImportApplyDiagnostics(importResult),
                     navigationOrigin = navigationOrigin
                 )
                 _uiState.value = UiState.Idle
-                Log.d(
-                    "DB_IMPORT",
-                    "FULL_IMPORT SUCCESS products=${importResult.productsRowCount} " +
-                        "suppliers=${importResult.supplierRowCount} " +
-                        "categories=${importResult.categoryRowCount} " +
-                        "priceHistory=${importResult.hasPriceHistorySheet}"
-                )
+                logFullImportSuccess(importResult, pendingImportDiagnostics)
 
             } catch (e: CancellationException) {
                 cancelImportPreview()

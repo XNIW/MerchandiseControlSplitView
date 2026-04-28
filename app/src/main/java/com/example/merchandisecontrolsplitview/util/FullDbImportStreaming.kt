@@ -50,7 +50,8 @@ data class FullDbImportStreamingResult(
     val hasPriceHistorySheet: Boolean,
     val productsRowCount: Int,
     val supplierRowCount: Int,
-    val categoryRowCount: Int
+    val categoryRowCount: Int,
+    val datasetFingerprint: ImportDatasetFingerprint
 )
 
 private data class ParsedPriceHistoryRow(
@@ -150,6 +151,7 @@ private suspend fun analyzeFullDbImportStreaming(
     val categoryNames = linkedSetOf<String>()
     var hasPriceHistorySheet = false
     val priceHistoryRows = mutableListOf<ImportPriceHistoryEntry>()
+    val fingerprintBuilder = ImportDatasetFingerprintBuilder()
 
     forEachWorkbookSheet(reader) { sheetName, sheetStream ->
         when (normalizeExcelHeader(sheetName)) {
@@ -157,12 +159,14 @@ private suspend fun analyzeFullDbImportStreaming(
                 val parsedNames = parseEntityNamesSheet(sheetStream, styles, sharedStrings)
                 supplierRowCount += parsedNames.size
                 supplierNames += parsedNames
+                parsedNames.forEach(fingerprintBuilder::addSupplierName)
             }
 
             normalizeExcelHeader("Categories") -> {
                 val parsedNames = parseEntityNamesSheet(sheetStream, styles, sharedStrings)
                 categoryRowCount += parsedNames.size
                 categoryNames += parsedNames
+                parsedNames.forEach(fingerprintBuilder::addCategoryName)
             }
 
             normalizeExcelHeader("Products") -> {
@@ -172,14 +176,25 @@ private suspend fun analyzeFullDbImportStreaming(
                     styles = styles,
                     sharedStrings = sharedStrings,
                     currentDbProducts = currentDbProducts,
-                    repository = repository
+                    repository = repository,
+                    fingerprintBuilder = fingerprintBuilder
                 )
                 productsAnalysis = result.analysis
                 productsRowCount = result.rowCount
             }
 
             normalizeExcelHeader("PriceHistory") -> {
-                priceHistoryRows += parsePriceHistorySheet(sheetStream, styles, sharedStrings)
+                val parsedRows = parsePriceHistorySheet(sheetStream, styles, sharedStrings)
+                priceHistoryRows += parsedRows
+                parsedRows.forEach { row ->
+                    fingerprintBuilder.addPriceHistoryEntry(
+                        barcode = row.barcode,
+                        timestamp = row.timestamp,
+                        type = row.type,
+                        price = row.price,
+                        source = row.source
+                    )
+                }
                 hasPriceHistorySheet = true
             }
         }
@@ -196,7 +211,13 @@ private suspend fun analyzeFullDbImportStreaming(
         hasPriceHistorySheet = hasPriceHistorySheet,
         productsRowCount = productsRowCount,
         supplierRowCount = supplierRowCount,
-        categoryRowCount = categoryRowCount
+        categoryRowCount = categoryRowCount,
+        datasetFingerprint = fingerprintBuilder.build(
+            productCount = productsRowCount,
+            supplierCount = supplierRowCount,
+            categoryCount = categoryRowCount,
+            priceHistoryCount = priceHistoryRows.size
+        )
     )
 }
 
@@ -300,7 +321,8 @@ private suspend fun analyzeProductsSheet(
     styles: StylesTable,
     sharedStrings: ReadOnlySharedStringsTable,
     currentDbProducts: List<Product>,
-    repository: InventoryRepository
+    repository: InventoryRepository,
+    fingerprintBuilder: ImportDatasetFingerprintBuilder
 ): ProductsSheetAnalysis {
     var header: List<String>? = null
     var rowCount = 0
@@ -321,6 +343,7 @@ private suspend fun analyzeProductsSheet(
                 key to (row.getOrNull(index) ?: "")
             }.toMap()
             rowCount++
+            fingerprintBuilder.addProductRow(mappedRow)
             consumer(mappedRow)
         }
     }
