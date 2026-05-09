@@ -4,6 +4,7 @@ import android.database.sqlite.SQLiteConstraintException
 import android.util.Log
 import androidx.paging.PagingSource
 import androidx.room.withTransaction
+import com.example.merchandisecontrolsplitview.BuildConfig
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
@@ -2762,6 +2763,39 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
     }
 
+    internal suspend fun pullTask087CatalogFromRemote(
+        remote: SupabaseCatalogRemoteDataSource
+    ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(BuildConfig.DEBUG) { "TASK087 smoke disabled" }
+            val bundle = remote.fetchTask087CatalogByBarcodes(
+                setOf("TASK087_BAR_A", "TASK087_BAR_I")
+            ).getOrThrow()
+            val counts = applyCatalogBundleInbound(bundle)
+            notifyRemoteProductCatalogApplied(counts.appliedProductIds)
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = counts.suppliers,
+                pulledCategories = counts.categories,
+                pulledProducts = counts.products,
+                pushedProductPrices = 0,
+                pulledProductPrices = 0,
+                fullCatalogFetch = false,
+                fullPriceFetch = false,
+                remoteProductIdsRequested = bundle.products.size,
+                remoteProductsFetched = bundle.products.size,
+                remotePriceIdsRequested = 0,
+                remotePricesFetched = 0,
+                incrementalRemoteSubsetVerifiable = true,
+                incrementalRemoteNotVerifiableReason = null,
+                targetedProductsFetched = bundle.products.size,
+                remoteUpdatesApplied = counts.suppliers + counts.categories + counts.products
+            )
+        }
+    }
+
     private suspend fun pullCatalogFromRemote(
         remote: CatalogRemoteDataSource,
         progressReporter: CatalogSyncProgressReporter
@@ -4296,7 +4330,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     prepared.product.id,
                     prepared.ref.localChangeRevision,
                     appliedAt,
-                    fingerprintProductInbound(prepared.row)
+                    fingerprintProductInbound(prepared.row),
+                    prepared.row.updatedAt
                 )
             }
         }
@@ -4478,7 +4513,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             supplierId,
             ref.localChangeRevision,
             System.currentTimeMillis(),
-            fingerprintSupplierInbound(row)
+            fingerprintSupplierInbound(row),
+            row.updatedAt
         )
     }
 
@@ -4491,7 +4527,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             categoryId,
             ref.localChangeRevision,
             System.currentTimeMillis(),
-            fingerprintCategoryInbound(row)
+            fingerprintCategoryInbound(row),
+            row.updatedAt
         )
     }
 
@@ -4504,7 +4541,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             productId,
             ref.localChangeRevision,
             System.currentTimeMillis(),
-            fingerprintProductInbound(row)
+            fingerprintProductInbound(row),
+            row.updatedAt
         )
     }
 
@@ -4738,7 +4776,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                                 localChangeRevision = 0,
                                 lastSyncedLocalRevision = 0,
                                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                                lastRemotePayloadFingerprint = fingerprintSupplierInbound(row)
+                                lastRemotePayloadFingerprint = fingerprintSupplierInbound(row),
+                                remoteUpdatedAt = row.updatedAt
                             )
                         )
                         supplierStats.linked++
@@ -4793,7 +4832,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                                 localChangeRevision = 0,
                                 lastSyncedLocalRevision = 0,
                                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                                lastRemotePayloadFingerprint = fingerprintCategoryInbound(row)
+                                lastRemotePayloadFingerprint = fingerprintCategoryInbound(row),
+                                remoteUpdatedAt = row.updatedAt
                             )
                         )
                         categoryStats.linked++
@@ -4847,7 +4887,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                                 localChangeRevision = 0,
                                 lastSyncedLocalRevision = 0,
                                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                                lastRemotePayloadFingerprint = fingerprintProductInbound(row)
+                                lastRemotePayloadFingerprint = fingerprintProductInbound(row),
+                                remoteUpdatedAt = row.updatedAt
                             )
                         )
                         productStats.linked++
@@ -4968,7 +5009,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 existingRef.supplierId,
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
-                fp
+                fp,
+                row.updatedAt
             )
             return true
         }
@@ -4991,7 +5033,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                lastRemotePayloadFingerprint = fp
+                lastRemotePayloadFingerprint = fp,
+                remoteUpdatedAt = row.updatedAt
             )
         )
         return true
@@ -5021,7 +5064,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 existingRef.categoryId,
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
-                fp
+                fp,
+                row.updatedAt
             )
             return true
         }
@@ -5044,7 +5088,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                lastRemotePayloadFingerprint = fp
+                lastRemotePayloadFingerprint = fp,
+                remoteUpdatedAt = row.updatedAt
             )
         )
         return true
@@ -5086,7 +5131,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 existingRef.productId,
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
-                fp
+                fp,
+                row.updatedAt
             )
             return existingRef.productId
         }
@@ -5142,7 +5188,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
-                lastRemotePayloadFingerprint = fp
+                lastRemotePayloadFingerprint = fp,
+                remoteUpdatedAt = row.updatedAt
             )
         )
         return targetId

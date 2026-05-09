@@ -25,7 +25,8 @@ interface SupplierDao {
                r.localChangeRevision AS ref_localChangeRevision,
                r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
                r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
-               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint,
+               r.remoteUpdatedAt AS ref_remoteUpdatedAt
         FROM suppliers s
         LEFT JOIN supplier_remote_refs r ON r.supplierId = s.id
         WHERE r.id IS NULL

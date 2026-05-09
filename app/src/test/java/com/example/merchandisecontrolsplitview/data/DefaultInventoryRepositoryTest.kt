@@ -2517,6 +2517,9 @@ class DefaultInventoryRepositoryTest {
         assertEquals(BOOTSTRAP_SUPPLIER_REMOTE_021, db.supplierRemoteRefDao().getBySupplierId(supplier.id)!!.remoteId)
         assertEquals(BOOTSTRAP_CATEGORY_REMOTE_021, db.categoryRemoteRefDao().getByCategoryId(category.id)!!.remoteId)
         assertEquals(BOOTSTRAP_PRODUCT_REMOTE_021, db.productRemoteRefDao().getByProductId(product.id)!!.remoteId)
+        assertEquals(BOOTSTRAP_SUPPLIER_UPDATED_AT_021, db.supplierRemoteRefDao().getBySupplierId(supplier.id)!!.remoteUpdatedAt)
+        assertEquals(BOOTSTRAP_CATEGORY_UPDATED_AT_021, db.categoryRemoteRefDao().getByCategoryId(category.id)!!.remoteUpdatedAt)
+        assertEquals(BOOTSTRAP_PRODUCT_UPDATED_AT_021, db.productRemoteRefDao().getByProductId(product.id)!!.remoteUpdatedAt)
         assertEquals(BOOTSTRAP_PRICE_REMOTE_021, db.productPriceRemoteRefDao().getByProductPriceId(purchaseHistory.single().id)!!.remoteId)
         assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
     }
@@ -5479,6 +5482,9 @@ private const val BOOTSTRAP_CATEGORY_REMOTE_021 = "00000000-0000-4000-8000-00000
 private const val BOOTSTRAP_PRODUCT_REMOTE_021 = "00000000-0000-4000-8000-000000000213"
 private const val BOOTSTRAP_PRICE_REMOTE_021 = "00000000-0000-4000-8000-000000000214"
 private const val BOOTSTRAP_BARCODE_021 = "bootstrap-021"
+private const val BOOTSTRAP_SUPPLIER_UPDATED_AT_021 = "2026-05-09T10:00:01Z"
+private const val BOOTSTRAP_CATEGORY_UPDATED_AT_021 = "2026-05-09T10:00:02Z"
+private const val BOOTSTRAP_PRODUCT_UPDATED_AT_021 = "2026-05-09T10:00:03Z"
 
 private fun bootstrapBundle021(owner: String): InventoryCatalogFetchBundle =
     InventoryCatalogFetchBundle(
@@ -5486,14 +5492,16 @@ private fun bootstrapBundle021(owner: String): InventoryCatalogFetchBundle =
             InventorySupplierRow(
                 id = BOOTSTRAP_SUPPLIER_REMOTE_021,
                 ownerUserId = owner,
-                name = "Bootstrap Supplier 021"
+                name = "Bootstrap Supplier 021",
+                updatedAt = BOOTSTRAP_SUPPLIER_UPDATED_AT_021
             )
         ),
         categories = listOf(
             InventoryCategoryRow(
                 id = BOOTSTRAP_CATEGORY_REMOTE_021,
                 ownerUserId = owner,
-                name = "Bootstrap Category 021"
+                name = "Bootstrap Category 021",
+                updatedAt = BOOTSTRAP_CATEGORY_UPDATED_AT_021
             )
         ),
         products = listOf(
@@ -5506,7 +5514,8 @@ private fun bootstrapBundle021(owner: String): InventoryCatalogFetchBundle =
                 retailPrice = 18.99,
                 supplierId = BOOTSTRAP_SUPPLIER_REMOTE_021,
                 categoryId = BOOTSTRAP_CATEGORY_REMOTE_021,
-                stockQuantity = 7.0
+                stockQuantity = 7.0,
+                updatedAt = BOOTSTRAP_PRODUCT_UPDATED_AT_021
             )
         )
     )

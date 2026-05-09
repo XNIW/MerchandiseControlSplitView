@@ -18,10 +18,16 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.util.Log
 import androidx.lifecycle.lifecycleScope
+import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import androidx.core.net.toUri
 import androidx.core.content.edit
@@ -164,6 +170,7 @@ class MainActivity : ComponentActivity() {
             OneTimeWorkRequestBuilder<PriceBackfillWorker>().build()
         )
         handleShareIntent(intent)
+        runTask087SandboxSmokeIfRequested(intent)
         setContent {
             val context = LocalContext.current
             val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
@@ -187,6 +194,43 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         this.intent = intent
         handleShareIntent(intent)
+        runTask087SandboxSmokeIfRequested(intent)
+    }
+
+    private fun runTask087SandboxSmokeIfRequested(intent: Intent?) {
+        if (!BuildConfig.DEBUG) return
+        if (intent?.getBooleanExtra("task087_smoke", false) != true) return
+
+        lifecycleScope.launch {
+            val app = application as MerchandiseControlApplication
+            val auth = withTimeoutOrNull(15_000) {
+                app.authManager.state.filterIsInstance<AuthState.SignedIn>().first()
+            }
+            if (auth == null) {
+                Log.w("Task087Smoke", "android_pull outcome=blocked reason=no_auth")
+                return@launch
+            }
+
+            val remote = app.catalogRemoteDataSource as? SupabaseCatalogRemoteDataSource
+            if (remote == null || !remote.isConfigured) {
+                Log.w("Task087Smoke", "android_pull outcome=blocked reason=remote_unconfigured")
+                return@launch
+            }
+
+            app.repository.pullTask087CatalogFromRemote(remote).fold(
+                onSuccess = { summary ->
+                    Log.i(
+                        "Task087Smoke",
+                        "android_pull outcome=ok pulledProducts=${summary.pulledProducts} " +
+                            "targetedProducts=${summary.targetedProductsFetched} " +
+                            "remoteUpdatesApplied=${summary.remoteUpdatesApplied}"
+                    )
+                },
+                onFailure = {
+                    Log.w("Task087Smoke", "android_pull outcome=partial reason=apply_failed")
+                }
+            )
+        }
     }
 
 }

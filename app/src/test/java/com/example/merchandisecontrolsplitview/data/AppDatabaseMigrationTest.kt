@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("15", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1481,6 +1481,98 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 15 to 16 adds catalog remote updated at columns`() = runTest {
+        val dbName = "task085-migration-15-16.db"
+        createLegacyDatabase(dbName, version = 15) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS suppliers(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS categories(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL COLLATE NOCASE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    itemNumber TEXT,
+                    productName TEXT,
+                    secondProductName TEXT,
+                    purchasePrice REAL,
+                    retailPrice REAL,
+                    oldPurchasePrice REAL,
+                    oldRetailPrice REAL,
+                    supplierId INTEGER,
+                    categoryId INTEGER,
+                    stockQuantity REAL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS supplier_remote_refs(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    supplierId INTEGER NOT NULL,
+                    remoteId TEXT NOT NULL,
+                    localChangeRevision INTEGER NOT NULL DEFAULT 0,
+                    lastSyncedLocalRevision INTEGER NOT NULL DEFAULT 0,
+                    lastRemoteAppliedAt INTEGER,
+                    lastRemotePayloadFingerprint TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS category_remote_refs(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    categoryId INTEGER NOT NULL,
+                    remoteId TEXT NOT NULL,
+                    localChangeRevision INTEGER NOT NULL DEFAULT 0,
+                    lastSyncedLocalRevision INTEGER NOT NULL DEFAULT 0,
+                    lastRemoteAppliedAt INTEGER,
+                    lastRemotePayloadFingerprint TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_remote_refs(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    remoteId TEXT NOT NULL,
+                    localChangeRevision INTEGER NOT NULL DEFAULT 0,
+                    lastSyncedLocalRevision INTEGER NOT NULL DEFAULT 0,
+                    lastRemoteAppliedAt INTEGER,
+                    lastRemotePayloadFingerprint TEXT
+                )
+                """.trimIndent()
+            )
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 16) { database, oldVersion, newVersion ->
+            assertEquals(15, oldVersion)
+            assertEquals(16, newVersion)
+            AppDatabase.MIGRATION_15_16.migrate(database)
+        }
+
+        assertEquals("16", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(columnExists(migrated, "supplier_remote_refs", "remoteUpdatedAt"))
+        assertTrue(columnExists(migrated, "category_remote_refs", "remoteUpdatedAt"))
+        assertTrue(columnExists(migrated, "product_remote_refs", "remoteUpdatedAt"))
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1497,7 +1589,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_11_12,
                 AppDatabase.MIGRATION_12_13,
                 AppDatabase.MIGRATION_13_14,
-                AppDatabase.MIGRATION_14_15
+                AppDatabase.MIGRATION_14_15,
+                AppDatabase.MIGRATION_15_16
             )
         }
 
@@ -1589,6 +1682,16 @@ class AppDatabaseMigrationTest {
             db,
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = '$index'"
         ) == 1
+
+    private fun columnExists(db: SupportSQLiteDatabase, table: String, column: String): Boolean =
+        db.query("PRAGMA table_info(`$table`)").use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == column) {
+                    return@use true
+                }
+            }
+            false
+        }
 
     private fun viewExists(db: AppDatabase, view: String): Boolean =
         queryCount(

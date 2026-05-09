@@ -30,11 +30,19 @@ interface CategoryRemoteRefDao {
     @Query(
         """
         UPDATE category_remote_refs SET lastSyncedLocalRevision = :rev,
-        lastRemoteAppliedAt = :appliedAt, lastRemotePayloadFingerprint = :fingerprint
+        lastRemoteAppliedAt = :appliedAt,
+        lastRemotePayloadFingerprint = :fingerprint,
+        remoteUpdatedAt = COALESCE(:remoteUpdatedAt, remoteUpdatedAt)
         WHERE categoryId = :categoryId
         """
     )
-    suspend fun updateRemoteApplyState(categoryId: Long, rev: Int, appliedAt: Long, fingerprint: String)
+    suspend fun updateRemoteApplyState(
+        categoryId: Long,
+        rev: Int,
+        appliedAt: Long,
+        fingerprint: String,
+        remoteUpdatedAt: String?
+    )
 
     @Query(
         """

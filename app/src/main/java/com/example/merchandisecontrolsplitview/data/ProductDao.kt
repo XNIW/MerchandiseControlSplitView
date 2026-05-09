@@ -119,7 +119,8 @@ interface ProductDao {
                r.localChangeRevision AS ref_localChangeRevision,
                r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
                r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
-               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint,
+               r.remoteUpdatedAt AS ref_remoteUpdatedAt
         FROM products p
         LEFT JOIN product_remote_refs r ON r.productId = p.id
         LEFT JOIN product_price_summary v ON v.productId = p.id

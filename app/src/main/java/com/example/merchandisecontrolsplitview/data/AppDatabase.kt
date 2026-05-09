@@ -28,7 +28,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncEventOutboxEntry::class
     ],
     views = [ProductPriceSummary::class],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -341,6 +341,15 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 15 -> 16: conserva `updated_at` remoto catalogo nei bridge locali.
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE supplier_remote_refs ADD COLUMN remoteUpdatedAt TEXT")
+                db.execSQL("ALTER TABLE category_remote_refs ADD COLUMN remoteUpdatedAt TEXT")
+                db.execSQL("ALTER TABLE product_remote_refs ADD COLUMN remoteUpdatedAt TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -362,7 +371,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_11_12,
                         MIGRATION_12_13,
                         MIGRATION_13_14,
-                        MIGRATION_14_15
+                        MIGRATION_14_15,
+                        MIGRATION_15_16
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

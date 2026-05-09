@@ -30,11 +30,19 @@ interface ProductRemoteRefDao {
     @Query(
         """
         UPDATE product_remote_refs SET lastSyncedLocalRevision = :rev,
-        lastRemoteAppliedAt = :appliedAt, lastRemotePayloadFingerprint = :fingerprint
+        lastRemoteAppliedAt = :appliedAt,
+        lastRemotePayloadFingerprint = :fingerprint,
+        remoteUpdatedAt = COALESCE(:remoteUpdatedAt, remoteUpdatedAt)
         WHERE productId = :productId
         """
     )
-    suspend fun updateRemoteApplyState(productId: Long, rev: Int, appliedAt: Long, fingerprint: String)
+    suspend fun updateRemoteApplyState(
+        productId: Long,
+        rev: Int,
+        appliedAt: Long,
+        fingerprint: String,
+        remoteUpdatedAt: String?
+    )
 
     @Query(
         """

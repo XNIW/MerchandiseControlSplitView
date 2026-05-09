@@ -57,7 +57,8 @@ interface CategoryDao {
                r.localChangeRevision AS ref_localChangeRevision,
                r.lastSyncedLocalRevision AS ref_lastSyncedLocalRevision,
                r.lastRemoteAppliedAt AS ref_lastRemoteAppliedAt,
-               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint
+               r.lastRemotePayloadFingerprint AS ref_lastRemotePayloadFingerprint,
+               r.remoteUpdatedAt AS ref_remoteUpdatedAt
         FROM categories c
         LEFT JOIN category_remote_refs r ON r.categoryId = c.id
         WHERE r.id IS NULL

@@ -437,7 +437,8 @@ class FullDbExportImportRoundTripTest {
                 productId = candidate.product.id,
                 rev = ref.localChangeRevision,
                 appliedAt = 1L,
-                fingerprint = "synced-${candidate.product.barcode}"
+                fingerprint = "synced-${candidate.product.barcode}",
+                remoteUpdatedAt = null
             )
         }
         db.productPriceDao().getAllForCloudPush().forEach { row ->

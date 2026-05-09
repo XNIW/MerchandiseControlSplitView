@@ -9,6 +9,7 @@ data class InventorySupplierRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
     val name: String,
+    @SerialName("updated_at") val updatedAt: String? = null,
     /** Null = attivo; valorizzato = tombstone remoto (task 019). */
     @SerialName("deleted_at")
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
@@ -20,6 +21,7 @@ data class InventoryCategoryRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
     val name: String,
+    @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("deleted_at")
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val deletedAt: String? = null
@@ -38,6 +40,7 @@ data class InventoryProductRow(
     @SerialName("supplier_id") val supplierId: String? = null,
     @SerialName("category_id") val categoryId: String? = null,
     @SerialName("stock_quantity") val stockQuantity: Double? = null,
+    @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("deleted_at")
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
     val deletedAt: String? = null
@@ -189,10 +192,10 @@ internal fun fingerprintSupplierName(name: String): String = "s:" + name.trim().
 internal fun fingerprintCategoryName(name: String): String = "c:" + name.trim().lowercase()
 
 internal fun fingerprintSupplierInbound(row: InventorySupplierRow): String =
-    fingerprintSupplierName(row.name) + "|d:" + row.deletedAt
+    fingerprintSupplierName(row.name) + "|u:" + row.updatedAt + "|d:" + row.deletedAt
 
 internal fun fingerprintCategoryInbound(row: InventoryCategoryRow): String =
-    fingerprintCategoryName(row.name) + "|d:" + row.deletedAt
+    fingerprintCategoryName(row.name) + "|u:" + row.updatedAt + "|d:" + row.deletedAt
 
 internal fun fingerprintProductRow(p: Product, supplierRemoteId: String?, categoryRemoteId: String?): String =
     buildString {
@@ -236,6 +239,8 @@ internal fun fingerprintProductInbound(row: InventoryProductRow): String =
         append(row.categoryId)
         append('|')
         append(row.stockQuantity)
+        append("|u:")
+        append(row.updatedAt)
         append("|d:")
         append(row.deletedAt)
     }

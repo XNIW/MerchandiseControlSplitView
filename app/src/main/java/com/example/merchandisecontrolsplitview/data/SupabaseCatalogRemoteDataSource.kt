@@ -1,5 +1,6 @@
 package com.example.merchandisecontrolsplitview.data
 
+import com.example.merchandisecontrolsplitview.BuildConfig
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
@@ -64,6 +65,63 @@ class SupabaseCatalogRemoteDataSource(
             )
         }
 
+    internal suspend fun fetchTask087CatalogByBarcodes(barcodes: Set<String>): Result<InventoryCatalogFetchBundle> =
+        runCatching {
+            require(BuildConfig.DEBUG) { "TASK087 smoke disabled" }
+            require(barcodes.isNotEmpty()) { "TASK087 barcode set is empty" }
+            require(barcodes.all { it in TASK087_BARCODES }) { "TASK087 barcode scope rejected" }
+
+            val pg = requireClient().postgrest
+            val products = mutableListOf<InventoryProductRow>()
+            for (chunk in barcodes.chunked(TARGETED_FETCH_CHUNK)) {
+                products += pg["inventory_products"].select {
+                    filter {
+                        isIn("barcode", chunk)
+                    }
+                }.decodeList()
+            }
+            require(products.size == barcodes.size && products.map { it.barcode }.toSet() == barcodes) {
+                "TASK087 product read-back mismatch"
+            }
+
+            require(products.all { row ->
+                row.deletedAt == null &&
+                    row.barcode in TASK087_BARCODES &&
+                    row.barcode.startsWith(TASK087_PREFIX)
+            }) {
+                "TASK087 product scope rejected"
+            }
+
+            val supplierIds = products.mapNotNull { it.supplierId }.toSet()
+            val categoryIds = products.mapNotNull { it.categoryId }.toSet()
+            require(supplierIds.isNotEmpty() && categoryIds.isNotEmpty()) {
+                "TASK087 parent reference missing"
+            }
+            val suppliers = pg.fetchInventoryRowsByIds<InventorySupplierRow>(
+                "inventory_suppliers",
+                supplierIds
+            )
+            val categories = pg.fetchInventoryRowsByIds<InventoryCategoryRow>(
+                "inventory_categories",
+                categoryIds
+            )
+            require(suppliers.map { it.id }.toSet() == supplierIds) {
+                "TASK087 supplier read-back mismatch"
+            }
+            require(categories.map { it.id }.toSet() == categoryIds) {
+                "TASK087 category read-back mismatch"
+            }
+
+            require(suppliers.all { it.deletedAt == null && it.name.startsWith(TASK087_PREFIX) }) {
+                "TASK087 supplier scope rejected"
+            }
+            require(categories.all { it.deletedAt == null && it.name.startsWith(TASK087_PREFIX) }) {
+                "TASK087 category scope rejected"
+            }
+
+            InventoryCatalogFetchBundle(suppliers, categories, products)
+        }
+
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
         patchTombstone("inventory_suppliers", patch)
 
@@ -108,5 +166,7 @@ class SupabaseCatalogRemoteDataSource(
 
     private companion object {
         const val TARGETED_FETCH_CHUNK = 80
+        const val TASK087_PREFIX = "TASK087_"
+        val TASK087_BARCODES = setOf("TASK087_BAR_A", "TASK087_BAR_I")
     }
 }
