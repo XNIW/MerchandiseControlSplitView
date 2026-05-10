@@ -4,8 +4,11 @@ import android.content.Context
 import android.util.Log
 import androidx.credentials.CredentialManager
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
@@ -140,22 +143,11 @@ class SupabaseAuthManager(
         try {
             _state.value = AuthState.Checking
 
-            // 1. Google ID Token via Credential Manager
             val credentialManager = CredentialManager.create(activityContext)
-            val googleIdOption = GetGoogleIdOption.Builder()
-                .setFilterByAuthorizedAccounts(false)
-                .setServerClientId(googleWebClientId)
-                .build()
-            val request = GetCredentialRequest.Builder()
-                .addCredentialOption(googleIdOption)
-                .build()
-            val credentialResponse = credentialManager.getCredential(
-                context = activityContext,
-                request = request
+            val googleIdToken = requestGoogleIdToken(
+                credentialManager = credentialManager,
+                activityContext = activityContext
             )
-            val googleIdToken = GoogleIdTokenCredential
-                .createFrom(credentialResponse.credential.data)
-                .idToken
 
             // 2. Scambio token con Supabase Auth
             client.auth.signInWith(IDToken) {
@@ -224,6 +216,46 @@ class SupabaseAuthManager(
     }
 
     // --- Interno ---
+
+    private suspend fun requestGoogleIdToken(
+        credentialManager: CredentialManager,
+        activityContext: Context
+    ): String {
+        val response = try {
+            credentialManager.getCredential(
+                context = activityContext,
+                request = signInButtonRequest()
+            )
+        } catch (e: NoCredentialException) {
+            Log.i(TAG, "Sign-in button flow found no Google credential, retrying account picker", e)
+            credentialManager.getCredential(
+                context = activityContext,
+                request = googleAccountPickerRequest()
+            )
+        }
+
+        return response.toGoogleIdToken()
+    }
+
+    private fun signInButtonRequest(): GetCredentialRequest {
+        val googleSignInOption = GetSignInWithGoogleOption.Builder(googleWebClientId).build()
+        return GetCredentialRequest.Builder()
+            .addCredentialOption(googleSignInOption)
+            .build()
+    }
+
+    private fun googleAccountPickerRequest(): GetCredentialRequest {
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(googleWebClientId)
+            .build()
+        return GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+    }
+
+    private fun GetCredentialResponse.toGoogleIdToken(): String =
+        GoogleIdTokenCredential.createFrom(credential.data).idToken
 
     /**
      * Osserva i cambi di stato sessione dalla libreria Supabase.
