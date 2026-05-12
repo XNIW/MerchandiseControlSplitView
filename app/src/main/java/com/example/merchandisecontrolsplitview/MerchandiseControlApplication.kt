@@ -270,7 +270,7 @@ class MerchandiseControlApplication : Application() {
                         Log.d(TAG, "Auth: verifica sessione in corso")
                     }
                     is AuthState.SignedIn -> {
-                        Log.i(TAG, "Auth: sessione attiva (userId=${state.userId})")
+                        Log.i(TAG, "Auth: sessione attiva")
                         realtimeSessionSubscriber.start()
                         val syncEventCapabilities = syncEventRemoteDataSource
                             .checkCapabilities(state.userId)
