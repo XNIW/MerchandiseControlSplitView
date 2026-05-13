@@ -18,14 +18,16 @@ class Task103AuthPreflightTest {
     @Test
     fun authSessionOwnerHashWhenEnabled() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
-        val enabled = args.getString("task103AuthPreflight")?.lowercase()
+        val task103Enabled = args.getString("task103AuthPreflight")?.lowercase()
+        val task104Enabled = args.getString("task104Pass2AuthPreflight")?.lowercase()
         assumeTrue(
-            "TASK-103 auth preflight is gated. Pass -e task103AuthPreflight true.",
-            enabled == "1" || enabled == "true"
+            "Live auth preflight is gated. Pass -e task103AuthPreflight true or -e task104Pass2AuthPreflight true.",
+            isEnabled(task103Enabled) || isEnabled(task104Enabled)
         )
 
         assertFalse(BuildConfig.SUPABASE_PUBLISHABLE_KEY.lowercase().contains("service_role"))
         assertFalse(BuildConfig.SUPABASE_PUBLISHABLE_KEY.lowercase().contains("secret_key"))
+        assertFalse(BuildConfig.SUPABASE_PUBLISHABLE_KEY.lowercase().contains("sb_secret"))
 
         val app = InstrumentationRegistry.getInstrumentation()
             .targetContext
@@ -42,8 +44,13 @@ class Task103AuthPreflightTest {
         assertTrue(app.catalogRemoteDataSource.isConfigured)
         assertTrue(app.productPriceRemoteDataSource.isConfigured)
 
+        val label = if (isEnabled(task104Enabled)) {
+            "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
+        } else {
+            "TASK103_ANDROID_AUTH_PREFLIGHT"
+        }
         println(
-            "TASK103_ANDROID_AUTH_PREFLIGHT " +
+            "$label " +
                 "project_hash=${task103Hash(BuildConfig.SUPABASE_URL)} " +
                 "owner_hash=${task103Hash(signedIn.userId)} " +
                 "signed_in=true"
@@ -54,4 +61,7 @@ class Task103AuthPreflightTest {
         val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }.take(12)
     }
+
+    private fun isEnabled(value: String?): Boolean =
+        value == "1" || value == "true"
 }

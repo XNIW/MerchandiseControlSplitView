@@ -55,7 +55,7 @@ class Task103CrossPlatformAcceptanceTest {
         assertPrice(details?.prevRetail, 18.90, "Android iOS-canary previous retail")
 
         println(
-            "TASK103_ANDROID_PULL_IOS owner_hash=${hash(runtime.ownerUserId)} " +
+            "${fixture.logPrefix}_ANDROID_PULL_IOS owner_hash=${hash(runtime.ownerUserId)} " +
                 "pulled_products=${summary.pulledProducts} pulled_prices=${summary.pulledProductPrices} " +
                 "room_detail=true"
         )
@@ -148,7 +148,7 @@ class Task103CrossPlatformAcceptanceTest {
         assertEquals(1, activeProducts(catalogAfterNoOp, setOf(fixture.barcodeAndroid)).size)
 
         println(
-            "TASK103_ANDROID_WRITE_SMOKE owner_hash=${hash(runtime.ownerUserId)} " +
+            "${fixture.logPrefix}_ANDROID_WRITE_SMOKE owner_hash=${hash(runtime.ownerUserId)} " +
                 "pushed_catalog=${summary.pushedSuppliers + summary.pushedCategories + summary.pushedProducts} " +
                 "pushed_prices=${summary.pushedProductPrices} product_hash=${hash(remote.id)} " +
                 "second_noop_pushed=${afterSecondSync.pushedSuppliers + afterSecondSync.pushedCategories + afterSecondSync.pushedProducts + afterSecondSync.pushedProductPrices}"
@@ -181,7 +181,7 @@ class Task103CrossPlatformAcceptanceTest {
         assertPrice(details?.prevRetail, 60.01, "Android MEDIUM previous retail")
 
         println(
-            "TASK103_ANDROID_PULL_MEDIUM owner_hash=${hash(runtime.ownerUserId)} " +
+            "${fixture.logPrefix}_ANDROID_PULL_MEDIUM owner_hash=${hash(runtime.ownerUserId)} " +
                 "medium_products=${mediumProducts.size} pulled_products=${summary.pulledProducts} " +
                 "pulled_prices=${summary.pulledProductPrices} room_detail=true"
         )
@@ -214,20 +214,27 @@ class Task103CrossPlatformAcceptanceTest {
     }
 
     private fun requireLiveAcceptanceEnabled() {
-        val value = InstrumentationRegistry.getArguments()
+        val args = InstrumentationRegistry.getArguments()
+        val task103Value = args
             .getString("task103LiveAcceptance")
             ?.lowercase()
+        val task104Value = args
+            .getString("task104Pass2LiveAcceptance")
+            ?.lowercase()
         assumeTrue(
-            "TASK-103 live acceptance is gated. Pass -e task103LiveAcceptance true.",
-            value == "1" || value == "true"
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true or -e task104Pass2LiveAcceptance true.",
+            task103Value == "1" || task103Value == "true" || task104Value == "1" || task104Value == "true"
         )
     }
 
     private fun fixture(): Fixture {
-        val prefix = InstrumentationRegistry.getArguments()
+        val args = InstrumentationRegistry.getArguments()
+        val prefix = args
+            .getString("task104Pass2RunPrefix")
+            ?: args
             .getString("task103RunPrefix")
-            ?: throw AssertionError("task103RunPrefix must be explicitly set for live TASK-103 acceptance.")
-        assertTrue(prefix.startsWith("TASK103_REAL_R"))
+            ?: throw AssertionError("task104Pass2RunPrefix or task103RunPrefix must be explicitly set for live acceptance.")
+        assertTrue(prefix.startsWith("TASK103_REAL_R") || prefix.startsWith("TASK104_PASS2_"))
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
     }
@@ -310,6 +317,7 @@ class Task103CrossPlatformAcceptanceTest {
     )
 
     private data class Fixture(val prefix: String) {
+        val logPrefix: String = if (prefix.startsWith("TASK104_PASS2_")) "TASK104_PASS2" else "TASK103"
         val supplierIOS: String = "${prefix}SUP_IOS_01"
         val categoryIOS: String = "${prefix}CAT_IOS_01"
         val productIOS: String = "${prefix}CANARY_IOS_01"
