@@ -137,6 +137,13 @@ interface InventoryRepository {
     suspend fun updateHistoryEntry(entry: HistoryEntry)
     suspend fun deleteHistoryEntry(entry: HistoryEntry)
     suspend fun recordPriceIfChanged(productId: Long, type: String, price: Double, at: String, source: String?)
+    suspend fun updateCurrentPriceFromHistory(
+        productId: Long,
+        type: String,
+        price: Double,
+        at: String,
+        source: String?
+    ): Product?
     suspend fun getLastPrice(productId: Long, type: String): Double?
     suspend fun getLastPriceBefore(productId: Long, type: String, before: String): Double?
     fun getPriceSeries(productId: Long, type: String): Flow<List<ProductPrice>>
@@ -490,6 +497,55 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         notifyProductCatalogChanged(product.id)
     }
+
+    override suspend fun updateCurrentPriceFromHistory(
+        productId: Long,
+        type: String,
+        price: Double,
+        at: String,
+        source: String?
+    ): Product? {
+        val result = withContext(Dispatchers.IO) {
+            db.withTransaction {
+                val current = productDao.getById(productId) ?: return@withTransaction null
+                val normalizedType = type.uppercase(Locale.ROOT)
+                val currentPrice = when (normalizedType) {
+                    "PURCHASE" -> current.purchasePrice
+                    "RETAIL" -> current.retailPrice
+                    else -> throw IllegalArgumentException("Unsupported price type: $type")
+                }
+                val priceChanged = currentPrice == null || abs(currentPrice - price) > 0.0005
+                val updated = when (normalizedType) {
+                    "PURCHASE" -> current.copy(purchasePrice = price)
+                    "RETAIL" -> current.copy(retailPrice = price)
+                    else -> current
+                }
+                val effectiveAt = uniquePriceEffectiveAtLocked(productId, normalizedType, at)
+                val inserted = priceDao.insert(
+                    ProductPrice(
+                        productId = productId,
+                        type = normalizedType,
+                        price = price,
+                        effectiveAt = effectiveAt,
+                        source = source
+                    )
+                ) > 0L
+
+                if (priceChanged) {
+                    productDao.update(updated)
+                    touchProductDirty(productId)
+                } else if (inserted) {
+                    ensureProductRefForPricePushIfMissing(productId)
+                }
+
+                if (priceChanged || inserted) updated else current
+            }
+        }
+        if (result != null) {
+            notifyProductCatalogChanged(productId)
+        }
+        return result
+    }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
 
@@ -734,6 +790,26 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (inserted) {
             notifyProductCatalogChanged(productId)
         }
+    }
+
+    private suspend fun uniquePriceEffectiveAtLocked(
+        productId: Long,
+        type: String,
+        requestedAt: String
+    ): String {
+        var timestamp = runCatching {
+            LocalDateTime.parse(requestedAt, tSFMT)
+        }.getOrDefault(LocalDateTime.now())
+
+        repeat(60) {
+            val candidate = timestamp.format(tSFMT)
+            if (priceDao.findByBusinessKey(productId, type, candidate) == null) {
+                return candidate
+            }
+            timestamp = timestamp.plusSeconds(1)
+        }
+
+        return timestamp.format(tSFMT)
     }
 
     override suspend fun getLastPrice(productId: Long, type: String): Double? =

@@ -428,6 +428,7 @@ fun DatabaseScreen(
         EditProductDialog(
             product = itemToEdit!!,
             viewModel = viewModel,
+            enablePriceHistory = !isNewProduct,
             onDismiss = { itemToEdit = null },
             onSave = { productToSave ->
                 if (isNewProduct) {
@@ -665,15 +666,28 @@ private fun PriceHistoryBottomSheetHost(
     viewModel: DatabaseViewModel,
     onDismiss: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var sheetProduct by remember(product.id) { mutableStateOf(product) }
     val purchase by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
     val retail by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
 
     key(product.id) {
         PriceHistoryBottomSheet(
-            product = product,
+            product = sheetProduct,
             purchase = purchase,
             retail = retail,
-            onDismiss = onDismiss
+            onDismiss = onDismiss,
+            onUpdateCurrentPrice = { type, price ->
+                scope.launch {
+                    viewModel.updateCurrentPriceFromHistory(
+                        productId = sheetProduct.id,
+                        type = type,
+                        price = price
+                    )?.let { updated ->
+                        sheetProduct = updated
+                    }
+                }
+            }
         )
     }
 }

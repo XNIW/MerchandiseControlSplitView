@@ -403,6 +403,16 @@
     <string name="tab_purchase">进价</string>
     <string name="tab_retail">零售价</string>
     <string name="price_history">价格历史</string>
+    <string name="price_history_current_purchase">当前进价</string>
+    <string name="price_history_current_retail">当前零售价</string>
+    <string name="price_history_no_current_price">暂无当前价格</string>
+    <string name="price_history_update_current">更新</string>
+    <string name="price_history_update_current_title">更新价格</string>
+    <string name="price_history_update_current_body">保存新的当前价格，并加入价格历史。</string>
+    <string name="price_history_price_field">价格</string>
+    <string name="price_history_invalid_price">请输入有效价格。</string>
+    <string name="price_history_current_price_updated">价格已更新</string>
+    <string name="price_history_update_failed">无法更新价格。</string>
     <string name="price_history_empty_for_tab">%1$s暂无价格历史。</string>
     <string name="price_history_source_manual">手动</string>
     <string name="price_history_source_import">导入</string>

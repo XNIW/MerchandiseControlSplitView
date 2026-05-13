@@ -119,6 +119,69 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `updateCurrentPriceFromHistory updates current price and appends manual history`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "history-current",
+                productName = "History current",
+                purchasePrice = 10.0,
+                retailPrice = 15.0
+            )
+        )
+        val saved = repository.findProductByBarcode("history-current")!!
+
+        val updated = repository.updateCurrentPriceFromHistory(
+            productId = saved.id,
+            type = "PURCHASE",
+            price = 12.5,
+            at = "2099-01-01 10:00:00",
+            source = "MANUAL"
+        )
+
+        assertEquals(12.5, updated?.purchasePrice ?: -1.0, 0.0)
+        assertEquals(12.5, repository.findProductByBarcode("history-current")?.purchasePrice ?: -1.0, 0.0)
+
+        val purchaseHistory = repository.getPriceSeries(saved.id, "PURCHASE").first()
+        assertEquals(listOf(12.5, 10.0), purchaseHistory.map { it.price })
+        assertEquals("2099-01-01 10:00:00", purchaseHistory.first().effectiveAt)
+        assertEquals("MANUAL", purchaseHistory.first().source)
+    }
+
+    @Test
+    fun `updateCurrentPriceFromHistory keeps same current price but adds a distinct history row`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "history-same-price",
+                productName = "History same price",
+                purchasePrice = 10.0,
+                retailPrice = 15.0
+            )
+        )
+        val saved = repository.findProductByBarcode("history-same-price")!!
+
+        repository.updateCurrentPriceFromHistory(
+            productId = saved.id,
+            type = "RETAIL",
+            price = 20.0,
+            at = "2099-01-01 11:00:00",
+            source = "MANUAL"
+        )
+        repository.updateCurrentPriceFromHistory(
+            productId = saved.id,
+            type = "RETAIL",
+            price = 20.0,
+            at = "2099-01-01 11:00:00",
+            source = "MANUAL"
+        )
+
+        val retailHistory = repository.getPriceSeries(saved.id, "RETAIL").first()
+        assertEquals(listOf(20.0, 20.0, 15.0), retailHistory.map { it.price })
+        assertEquals("2099-01-01 11:00:01", retailHistory[0].effectiveAt)
+        assertEquals("2099-01-01 11:00:00", retailHistory[1].effectiveAt)
+        assertEquals(20.0, repository.findProductByBarcode("history-same-price")?.retailPrice ?: -1.0, 0.0)
+    }
+
+    @Test
     fun `updateProduct then getProductDetailsById returns current and previous prices`() = runTest {
         repository.addProduct(
             Product(

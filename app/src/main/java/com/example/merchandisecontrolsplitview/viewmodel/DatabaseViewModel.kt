@@ -32,6 +32,8 @@ import android.util.Log
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 sealed class UiState {
     data object Idle : UiState()
@@ -129,6 +131,8 @@ private class ExportProgressTracker(
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 private const val PRODUCT_DETAILS_OVERRIDE_LIMIT = 100
+private val PRICE_HISTORY_MANUAL_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(
@@ -1081,6 +1085,43 @@ class DatabaseViewModel(
                 e.printStackTrace()
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_updated))
             }
+        }
+    }
+
+    suspend fun updateCurrentPriceFromHistory(
+        productId: Long,
+        type: String,
+        price: Double
+    ): Product? {
+        return try {
+            val timestamp = LocalDateTime.now().format(PRICE_HISTORY_MANUAL_FORMATTER)
+            val updatedProduct = productDetailsOverrideMutex.withLock {
+                repository.updateCurrentPriceFromHistory(
+                    productId = productId,
+                    type = type,
+                    price = price,
+                    at = timestamp,
+                    source = "MANUAL"
+                ).also { updated ->
+                    if (updated != null) {
+                        refreshProductDetailsOverridesLocked(listOf(productId))
+                    }
+                }
+            }
+            if (updatedProduct != null) {
+                _uiState.value = UiState.Success(
+                    appContext.getString(R.string.price_history_current_price_updated)
+                )
+            }
+            updatedProduct
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _uiState.value = UiState.Error(
+                appContext.getString(R.string.price_history_update_failed)
+            )
+            null
         }
     }
 

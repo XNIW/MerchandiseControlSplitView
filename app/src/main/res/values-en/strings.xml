@@ -404,6 +404,16 @@
     <string name="tab_purchase">Purchase</string>
     <string name="tab_retail">Retail</string>
     <string name="price_history">Price history</string>
+    <string name="price_history_current_purchase">Current purchase</string>
+    <string name="price_history_current_retail">Current retail</string>
+    <string name="price_history_no_current_price">No current price</string>
+    <string name="price_history_update_current">Update</string>
+    <string name="price_history_update_current_title">Update price</string>
+    <string name="price_history_update_current_body">Save a new current price and add it to price history.</string>
+    <string name="price_history_price_field">Price</string>
+    <string name="price_history_invalid_price">Enter a valid price.</string>
+    <string name="price_history_current_price_updated">Price updated</string>
+    <string name="price_history_update_failed">Unable to update price.</string>
     <string name="price_history_empty_for_tab">No price history for %1$s.</string>
     <string name="price_history_source_manual">Manual</string>
     <string name="price_history_source_import">Import</string>

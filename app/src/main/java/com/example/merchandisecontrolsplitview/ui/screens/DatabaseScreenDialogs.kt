@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
@@ -47,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -55,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -67,7 +70,9 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductPrice
 import com.example.merchandisecontrolsplitview.util.DatabaseExportSheet
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
+import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
+import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.delay
 import java.time.LocalDateTime
@@ -869,9 +874,11 @@ internal fun PriceHistoryBottomSheet(
     product: Product,
     purchase: List<ProductPrice>,
     retail: List<ProductPrice>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onUpdateCurrentPrice: ((String, Double) -> Unit)? = null
 ) {
     var tab by remember { mutableIntStateOf(0) }
+    var updateDialogType by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val locale = remember(configuration) {
         ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault()
@@ -888,6 +895,14 @@ internal fun PriceHistoryBottomSheet(
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(stringResource(R.string.tab_purchase)) })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(stringResource(R.string.tab_retail)) })
             }
+            val selectedType = if (tab == 0) "PURCHASE" else "RETAIL"
+            PriceHistoryCurrentPricePanel(
+                selectedType = selectedType,
+                currentPrice = if (tab == 0) product.purchasePrice else product.retailPrice,
+                onUpdateCurrentPrice = onUpdateCurrentPrice?.let {
+                    { updateDialogType = selectedType }
+                }
+            )
             val list = if (tab == 0) purchase else retail
             if (list.isEmpty()) {
                 Text(
@@ -913,6 +928,146 @@ internal fun PriceHistoryBottomSheet(
             }
         }
     }
+
+    updateDialogType?.let { type ->
+        PriceHistoryUpdateCurrentDialog(
+            initialType = type,
+            purchasePrice = product.purchasePrice,
+            retailPrice = product.retailPrice,
+            onDismiss = { updateDialogType = null },
+            onConfirm = { selectedType, price ->
+                onUpdateCurrentPrice?.invoke(selectedType, price)
+                updateDialogType = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun PriceHistoryCurrentPricePanel(
+    selectedType: String,
+    currentPrice: Double?,
+    onUpdateCurrentPrice: (() -> Unit)?
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp, bottom = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = stringResource(
+                        if (selectedType == "PURCHASE") {
+                            R.string.price_history_current_purchase
+                        } else {
+                            R.string.price_history_current_retail
+                        }
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = currentPrice?.let(::formatClPricePlainDisplay)
+                        ?: stringResource(R.string.price_history_no_current_price),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (onUpdateCurrentPrice != null) {
+                Button(onClick = onUpdateCurrentPrice) {
+                    Text(stringResource(R.string.price_history_update_current))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PriceHistoryUpdateCurrentDialog(
+    initialType: String,
+    purchasePrice: Double?,
+    retailPrice: Double?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, Double) -> Unit
+) {
+    var selectedType by remember(initialType) { mutableStateOf(initialType) }
+    val selectedTab = if (selectedType == "PURCHASE") 0 else 1
+    val currentPrice = if (selectedType == "PURCHASE") purchasePrice else retailPrice
+    var priceText by remember(selectedType, currentPrice) {
+        mutableStateOf(formatClPriceInput(currentPrice))
+    }
+    val parsedPrice = parseUserPriceInput(priceText)
+    val isInvalid = priceText.isNotBlank() && (parsedPrice == null || parsedPrice <= 0)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.price_history_update_current_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = stringResource(R.string.price_history_update_current_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SecondaryTabRow(selectedTabIndex = selectedTab) {
+                    Tab(
+                        selected = selectedType == "PURCHASE",
+                        onClick = { selectedType = "PURCHASE" },
+                        text = { Text(stringResource(R.string.tab_purchase)) }
+                    )
+                    Tab(
+                        selected = selectedType == "RETAIL",
+                        onClick = { selectedType = "RETAIL" },
+                        text = { Text(stringResource(R.string.tab_retail)) }
+                    )
+                }
+                OutlinedTextField(
+                    value = priceText,
+                    onValueChange = { priceText = it },
+                    label = { Text(stringResource(R.string.price_history_price_field)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    isError = isInvalid,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    supportingText = {
+                        if (isInvalid) {
+                            Text(stringResource(R.string.price_history_invalid_price))
+                        }
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = parsedPrice != null && parsedPrice > 0,
+                onClick = {
+                    parseUserPriceInput(priceText)
+                        ?.takeIf { it > 0 }
+                        ?.let { onConfirm(selectedType, it) }
+                }
+            ) {
+                Text(stringResource(R.string.save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        }
+    )
 }
 
 @Composable

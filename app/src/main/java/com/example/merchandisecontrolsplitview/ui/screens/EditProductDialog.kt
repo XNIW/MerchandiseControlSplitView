@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -42,6 +44,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,6 +84,7 @@ internal fun EditProductDialog(
     viewModel: DatabaseViewModel,
     onResolveSupplierId: suspend (String) -> Long? = { name -> viewModel.addSupplier(name)?.id },
     onResolveCategoryId: suspend (String) -> Long? = { name -> viewModel.addCategory(name)?.id },
+    enablePriceHistory: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (Product) -> Unit
 ) {
@@ -109,6 +113,7 @@ internal fun EditProductDialog(
     val prevPurchase = purchaseSeries.getOrNull(1)?.price
     val lastRetail = retailSeries.getOrNull(0)?.price
     val prevRetail = retailSeries.getOrNull(1)?.price
+    var showPriceHistorySheet by remember { mutableStateOf(false) }
     val retailFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var askedKeyboard by remember { mutableStateOf(false) }
@@ -215,6 +220,18 @@ internal fun EditProductDialog(
         }
     }
 
+    fun productForPriceHistory(): Product = product.copy(
+        barcode = barcode.trim().ifBlank { product.barcode },
+        productName = productName.trim().takeIf { it.isNotBlank() },
+        secondProductName = secondProductName.trim().takeIf { it.isNotBlank() },
+        itemNumber = itemNumber.trim().takeIf { it.isNotBlank() },
+        purchasePrice = parseUserPriceInput(purchasePrice),
+        retailPrice = parseUserPriceInput(retailPrice),
+        supplierId = supplierId,
+        categoryId = categoryId,
+        stockQuantity = parseUserQuantityInput(stockQuantity)
+    )
+
     if (showSupplierSelectionDialog) {
         SupplierSelectionDialog(
             viewModel = viewModel,
@@ -253,47 +270,52 @@ internal fun EditProductDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Card(
-            shape = RoundedCornerShape(28.dp),
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 24.dp)
-                .heightIn(max = 820.dp)
-                .imePadding()
+                .fillMaxSize()
+                .imePadding(),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
+            Card(
+                shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
-                    .padding(horizontal = 20.dp, vertical = 20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 24.dp)
+                    .heightIn(max = 820.dp)
             ) {
-                Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 20.dp, vertical = 20.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
-                OutlinedTextField(
-                    value = barcode,
-                    onValueChange = { barcode = it; validate() },
-                    label = { Text(stringResource(R.string.barcode_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    isError = barcodeError != null,
-                    supportingText = { barcodeError?.let { Text(it) } },
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            val options = ScanOptions().apply {
-                                setDesiredBarcodeFormats(ALL_CODE_TYPES)
-                                setPrompt(scanPromptText)
-                                setBeepEnabled(true)
-                                setBarcodeImageEnabled(false)
-                                setCaptureActivity(PortraitCaptureActivity::class.java)
+                    OutlinedTextField(
+                        value = barcode,
+                        onValueChange = { barcode = it; validate() },
+                        label = { Text(stringResource(R.string.barcode_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = barcodeError != null,
+                        supportingText = { barcodeError?.let { Text(it) } },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                val options = ScanOptions().apply {
+                                    setDesiredBarcodeFormats(ALL_CODE_TYPES)
+                                    setPrompt(scanPromptText)
+                                    setBeepEnabled(true)
+                                    setBarcodeImageEnabled(false)
+                                    setCaptureActivity(PortraitCaptureActivity::class.java)
+                                }
+                                fieldScanLauncher.launch(options)
+                            }) {
+                                Icon(
+                                    imageVector = Icons.Filled.CameraAlt,
+                                    contentDescription = stringResource(R.string.scan_barcode)
+                                )
                             }
-                            fieldScanLauncher.launch(options)
-                        }) {
-                            Icon(
-                                imageVector = Icons.Filled.CameraAlt,
-                                contentDescription = stringResource(R.string.scan_barcode)
-                            )
                         }
-                    }
-                )
+                    )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(value = productName, onValueChange = { productName = it; validate() }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
                     if (showSecondNameField) {
@@ -357,6 +379,20 @@ internal fun EditProductDialog(
                             )
                         }
                     )
+                }
+
+                if (enablePriceHistory && product.id != 0L) {
+                    TextButton(
+                        onClick = { showPriceHistorySheet = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.History,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.price_history))
+                    }
                 }
 
                 if (showItemNumberField) {
@@ -443,8 +479,39 @@ internal fun EditProductDialog(
                         }
                     }) { Text(stringResource(R.string.save)) }
                 }
+                }
             }
         }
+
+            if (showPriceHistorySheet) {
+                PriceHistoryBottomSheet(
+                    product = productForPriceHistory(),
+                    purchase = purchaseSeries,
+                    retail = retailSeries,
+                    onDismiss = { showPriceHistorySheet = false },
+                    onUpdateCurrentPrice = { type, price ->
+                        scope.launch {
+                            viewModel.updateCurrentPriceFromHistory(
+                                productId = product.id,
+                                type = type,
+                                price = price
+                            )?.let { updated ->
+                                if (type == "PURCHASE") {
+                                    purchasePrice = formatClPriceInput(updated.purchasePrice)
+                                } else if (type == "RETAIL") {
+                                    val formattedRetailPrice = formatClPriceInput(updated.retailPrice)
+                                    retailPrice = formattedRetailPrice
+                                    retailPriceTf = TextFieldValue(
+                                        formattedRetailPrice,
+                                        TextRange(formattedRetailPrice.length)
+                                    )
+                                    validate()
+                                }
+                            }
+                        }
+                    }
+                )
+            }
     }
 }
 

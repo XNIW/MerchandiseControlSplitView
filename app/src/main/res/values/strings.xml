@@ -422,6 +422,16 @@
     <string name="tab_purchase">Acquisto</string>
     <string name="tab_retail">Vendita</string>
     <string name="price_history">Storico prezzi</string>
+    <string name="price_history_current_purchase">Acquisto attuale</string>
+    <string name="price_history_current_retail">Vendita attuale</string>
+    <string name="price_history_no_current_price">Nessun prezzo attuale</string>
+    <string name="price_history_update_current">Aggiorna</string>
+    <string name="price_history_update_current_title">Aggiorna prezzo</string>
+    <string name="price_history_update_current_body">Salva un nuovo prezzo attuale e aggiungilo allo storico.</string>
+    <string name="price_history_price_field">Prezzo</string>
+    <string name="price_history_invalid_price">Inserisci un prezzo valido.</string>
+    <string name="price_history_current_price_updated">Prezzo aggiornato</string>
+    <string name="price_history_update_failed">Impossibile aggiornare il prezzo.</string>
     <string name="price_history_empty_for_tab">Nessuno storico prezzi per %1$s.</string>
     <string name="price_history_source_manual">Manuale</string>
     <string name="price_history_source_import">Importazione</string>

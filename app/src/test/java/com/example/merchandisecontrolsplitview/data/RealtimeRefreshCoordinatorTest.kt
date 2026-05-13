@@ -377,6 +377,15 @@ class RealtimeRefreshCoordinatorTest {
         override suspend fun recordPriceIfChanged(productId: Long, type: String, price: Double, at: String, source: String?): Unit =
             throw UnsupportedOperationException()
 
+        override suspend fun updateCurrentPriceFromHistory(
+            productId: Long,
+            type: String,
+            price: Double,
+            at: String,
+            source: String?
+        ): Product? =
+            throw UnsupportedOperationException()
+
         override suspend fun getLastPrice(productId: Long, type: String): Double? =
             throw UnsupportedOperationException()
 
