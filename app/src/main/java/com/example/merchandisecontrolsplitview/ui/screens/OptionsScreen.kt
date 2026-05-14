@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -60,6 +61,7 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncBadgeUiState
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncUiState
+import com.example.merchandisecontrolsplitview.viewmodel.LocalDatabaseStatusUiState
 import com.example.merchandisecontrolsplitview.util.setLocale
 
 @Composable
@@ -71,8 +73,8 @@ fun OptionsScreen(
     onSignOut: () -> Unit = {},
     onDismissError: () -> Unit = {},
     catalogSyncUi: CatalogSyncUiState? = null,
-    onCatalogRefresh: () -> Unit = {},
-    onCatalogQuickSync: () -> Unit = {}
+    localDatabaseStatusUi: LocalDatabaseStatusUiState? = null,
+    onCatalogRefresh: () -> Unit = {}
 ) {
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -174,19 +176,108 @@ fun OptionsScreen(
             catalogSyncUi?.let { sync ->
                 CatalogCloudSection(
                     state = sync,
-                    onRefresh = onCatalogRefresh,
-                    onQuickSync = onCatalogQuickSync
+                    onRefresh = onCatalogRefresh
                 )
             }
         }
+
+        localDatabaseStatusUi?.let { status ->
+            LocalDatabaseStatusSection(
+                state = status,
+                authState = authState
+            )
+        }
+    }
+}
+
+@Composable
+private fun LocalDatabaseStatusSection(
+    state: LocalDatabaseStatusUiState,
+    authState: AuthState
+) {
+    OptionsGroup(
+        title = stringResource(R.string.local_database_status_title),
+        subtitle = when {
+            state.isLoading -> stringResource(R.string.local_database_status_loading)
+            state.hasPendingLocalChanges -> stringResource(R.string.local_database_status_pending)
+            state.isEmpty -> stringResource(R.string.local_database_status_empty)
+            else -> stringResource(R.string.local_database_status_ready)
+        },
+        icon = Icons.Default.Storage
+    ) {
+        val dash = stringResource(R.string.local_database_status_unknown)
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_products),
+            value = state.productsCount?.toString() ?: dash
+        )
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_suppliers),
+            value = state.suppliersCount?.toString() ?: dash
+        )
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_categories),
+            value = state.categoriesCount?.toString() ?: dash
+        )
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_price_history),
+            value = state.priceHistoryCount?.toString() ?: dash
+        )
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_history_sessions),
+            value = state.historySessionsCount?.toString() ?: dash
+        )
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_pending_changes),
+            value = state.pendingLocalChangesCount?.toString() ?: dash
+        )
+        state.lastSyncText?.let { lastSync ->
+            LocalDatabaseStatusRow(
+                label = stringResource(R.string.local_database_status_last_sync),
+                value = lastSync
+            )
+        }
+        LocalDatabaseStatusRow(
+            label = stringResource(R.string.local_database_status_cloud_account),
+            value = when (authState) {
+                is AuthState.Checking -> stringResource(R.string.account_checking)
+                is AuthState.SignedIn -> stringResource(R.string.account_signed_in)
+                is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
+                is AuthState.ErrorRecoverable -> stringResource(R.string.catalog_cloud_state_session_required)
+            }
+        )
+    }
+}
+
+@Composable
+private fun LocalDatabaseStatusRow(
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
 @Composable
 private fun CatalogCloudSection(
     state: CatalogSyncUiState,
-    onRefresh: () -> Unit,
-    onQuickSync: () -> Unit
+    onRefresh: () -> Unit
 ) {
     OptionsGroup(
         title = stringResource(R.string.catalog_cloud_section_title),
@@ -234,32 +325,7 @@ private fun CatalogCloudSection(
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             CatalogCloudActionBlock(
-                title = stringResource(R.string.catalog_cloud_sync_quick),
-                body = stringResource(state.quickSyncBodyRes),
-                recommendation = if (state.quickSyncRecommended) {
-                    stringResource(R.string.catalog_cloud_quick_recommended_label)
-                } else {
-                    null
-                },
-                highlighted = state.quickSyncRecommended,
-                contentDescription = stringResource(R.string.catalog_cloud_sync_quick_cd),
-                button = {
-                    val actionContentDescription = contentDescription
-                    OutlinedButton(
-                        onClick = onQuickSync,
-                        enabled = state.canQuickSync && !state.isSyncing,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics {
-                                contentDescription = actionContentDescription
-                            }
-                    ) {
-                        Text(stringResource(R.string.catalog_cloud_sync_quick))
-                    }
-                }
-            )
-            CatalogCloudActionBlock(
-                title = stringResource(R.string.catalog_cloud_sync_full),
+                title = stringResource(R.string.catalog_cloud_sync_now),
                 body = stringResource(R.string.catalog_cloud_sync_full_body),
                 recommendation = if (state.fullSyncRecommended) {
                     stringResource(R.string.catalog_cloud_full_recommended_label)
@@ -267,7 +333,7 @@ private fun CatalogCloudSection(
                     null
                 },
                 highlighted = state.fullSyncRecommended,
-                contentDescription = stringResource(R.string.catalog_cloud_sync_full_cd),
+                contentDescription = stringResource(R.string.catalog_cloud_sync_now_cd),
                 button = {
                     val actionContentDescription = contentDescription
                     Button(
@@ -279,7 +345,7 @@ private fun CatalogCloudSection(
                                 contentDescription = actionContentDescription
                             }
                     ) {
-                        Text(stringResource(R.string.catalog_cloud_sync_full))
+                        Text(stringResource(R.string.catalog_cloud_sync_now))
                     }
                 }
             )

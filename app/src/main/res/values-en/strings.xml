@@ -567,9 +567,25 @@
     <string name="account_sign_in_google">Sign in with Google</string>
     <string name="account_sign_out">Sign out</string>
 
+    <string name="local_database_status_title">Local database status</string>
+    <string name="local_database_status_loading">Checking local data…</string>
+    <string name="local_database_status_empty">No local data yet</string>
+    <string name="local_database_status_ready">Local database ready</string>
+    <string name="local_database_status_pending">Local changes pending</string>
+    <string name="local_database_status_products">Products</string>
+    <string name="local_database_status_suppliers">Suppliers</string>
+    <string name="local_database_status_categories">Categories</string>
+    <string name="local_database_status_price_history">Price history</string>
+    <string name="local_database_status_history_sessions">History sessions</string>
+    <string name="local_database_status_pending_changes">Pending local changes</string>
+    <string name="local_database_status_last_sync">Last sync</string>
+    <string name="local_database_status_cloud_account">Cloud account</string>
+    <string name="local_database_status_unknown">—</string>
+
     <string name="catalog_cloud_section_title">Cloud catalog</string>
     <string name="catalog_cloud_refresh">Refresh from cloud</string>
     <string name="catalog_cloud_sync_full">Complete sync</string>
+    <string name="catalog_cloud_sync_now">Sync now</string>
     <string name="catalog_cloud_sync_quick">Quick sync</string>
     <string name="catalog_cloud_sync_quick_body">Sending changes: uploads pending local edits to the cloud. Use complete sync when you need a full check.</string>
     <string name="catalog_cloud_sync_quick_body_events">Sending and receiving: uploads local edits and downloads only recent verified updates.</string>
@@ -649,5 +665,6 @@
     <string name="catalog_cloud_full_recommended_label">Complete sync required</string>
     <string name="catalog_cloud_sync_quick_cd">Start quick sync: sends local edits and receives recent updates when available</string>
     <string name="catalog_cloud_sync_full_cd">Start complete sync: realigns catalog, prices, and sessions from the cloud</string>
+    <string name="catalog_cloud_sync_now_cd">Start sync: realigns catalog, prices, history, and local changes</string>
     <string name="catalog_cloud_section_cd">Cloud sync status: %1$s</string>
 </resources>

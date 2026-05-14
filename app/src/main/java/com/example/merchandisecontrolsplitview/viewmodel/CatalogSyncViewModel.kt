@@ -23,6 +23,7 @@ import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.HistorySessionBackupPushSummary
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
+import com.example.merchandisecontrolsplitview.data.LocalDatabaseStatusSnapshot
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionCloudFlightOwner
@@ -73,6 +74,25 @@ data class CatalogSyncStageUiState(
     val current: Int?,
     val total: Int?
 )
+
+data class LocalDatabaseStatusUiState(
+    val productsCount: Int? = null,
+    val suppliersCount: Int? = null,
+    val categoriesCount: Int? = null,
+    val priceHistoryCount: Int? = null,
+    val historySessionsCount: Int? = null,
+    val pendingLocalChangesCount: Int? = null,
+    val syncEventOutboxPendingCount: Int? = null,
+    val lastSyncText: String? = null,
+    val isLoading: Boolean = false
+) {
+    val isEmpty: Boolean
+        get() = listOf(productsCount, suppliersCount, categoriesCount, priceHistoryCount, historySessionsCount)
+            .all { it == null || it == 0 }
+
+    val hasPendingLocalChanges: Boolean
+        get() = (pendingLocalChangesCount ?: 0) > 0
+}
 
 class CatalogSyncViewModel(
     application: Application,
@@ -151,6 +171,8 @@ class CatalogSyncViewModel(
     private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
     private val incrementalDetailSurface = MutableStateFlow(CatalogIncrementalDetailSurface.OTHER)
     private val lastHistorySessionSyncSummary = MutableStateFlow<HistorySessionCloudUiSummary?>(null)
+    private val localDatabaseStatusSnapshot = MutableStateFlow<LocalDatabaseStatusSnapshot?>(null)
+    private val localDatabaseStatusLoading = MutableStateFlow(true)
     private var automaticSessionBootstrapUserId: String? = null
     private var lastLoggedStage: CatalogSyncStage? = null
 
@@ -204,15 +226,39 @@ class CatalogSyncViewModel(
         )
     )
 
+    val localDatabaseStatusUi: StateFlow<LocalDatabaseStatusUiState> = combine(
+        localDatabaseStatusSnapshot,
+        localDatabaseStatusLoading,
+        lastSuccessAt
+    ) { snapshot, loading, successAt ->
+        LocalDatabaseStatusUiState(
+            productsCount = snapshot?.products,
+            suppliersCount = snapshot?.suppliers,
+            categoriesCount = snapshot?.categories,
+            priceHistoryCount = snapshot?.priceHistoryRows,
+            historySessionsCount = snapshot?.historySessions,
+            pendingLocalChangesCount = snapshot?.pendingLocalChanges,
+            syncEventOutboxPendingCount = snapshot?.syncEventOutboxPending,
+            lastSyncText = successAt?.let(::formatTime),
+            isLoading = loading && snapshot == null
+        )
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        LocalDatabaseStatusUiState(isLoading = true)
+    )
+
     init {
         viewModelScope.launch {
             authFlow.collect { state ->
+                refreshLocalDatabaseStatus()
                 when (state) {
                     is AuthState.SignedIn -> runAutomaticSessionBootstrapIfNeeded(state.userId)
                     else -> automaticSessionBootstrapUserId = null
                 }
             }
         }
+        refreshLocalDatabaseStatus()
     }
 
     private fun str(@StringRes id: Int, vararg args: Any): String =
@@ -717,6 +763,7 @@ class CatalogSyncViewModel(
     }
 
     fun onOptionsScreenVisible() {
+        refreshLocalDatabaseStatus()
         viewModelScope.launch {
             pendingHint.value = repository.hasCatalogCloudPendingWorkInclusive()
             val auth = authFlow.value
@@ -728,6 +775,23 @@ class CatalogSyncViewModel(
                 lastHistorySessionSyncSummary.value =
                     lastHistorySessionSyncSummary.value?.copy(pendingCount = pendingSessionCount)
                         ?: pendingOnlySummary
+            }
+        }
+    }
+
+    private fun refreshLocalDatabaseStatus() {
+        viewModelScope.launch {
+            localDatabaseStatusLoading.value = true
+            val ownerUserId = (authFlow.value as? AuthState.SignedIn)?.userId
+            try {
+                localDatabaseStatusSnapshot.value =
+                    repository.getLocalDatabaseStatusSnapshot(ownerUserId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                Log.w(TAG, "local_database_status outcome=fail", t)
+            } finally {
+                localDatabaseStatusLoading.value = false
             }
         }
     }
@@ -763,6 +827,7 @@ class CatalogSyncViewModel(
         syncStateTracker?.update(finalProgress)
         Log.i(TAG, "sync_finish ok=$ok durationMs=$durationMs")
         lastLoggedStage = null
+        refreshLocalDatabaseStatus()
     }
 
     private suspend fun syncCatalogRepository(ownerUserId: String): Result<CatalogSyncSummary> {

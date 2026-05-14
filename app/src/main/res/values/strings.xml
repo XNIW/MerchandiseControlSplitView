@@ -585,10 +585,26 @@
     <string name="account_sign_in_google">Accedi con Google</string>
     <string name="account_sign_out">Esci dall\'account</string>
 
+    <string name="local_database_status_title">Stato database locale</string>
+    <string name="local_database_status_loading">Controllo dati locali…</string>
+    <string name="local_database_status_empty">Nessun dato locale</string>
+    <string name="local_database_status_ready">Database locale pronto</string>
+    <string name="local_database_status_pending">Modifiche locali in attesa</string>
+    <string name="local_database_status_products">Prodotti</string>
+    <string name="local_database_status_suppliers">Fornitori</string>
+    <string name="local_database_status_categories">Categorie</string>
+    <string name="local_database_status_price_history">Storico prezzi</string>
+    <string name="local_database_status_history_sessions">Sessioni cronologia</string>
+    <string name="local_database_status_pending_changes">Modifiche locali in attesa</string>
+    <string name="local_database_status_last_sync">Ultima sincronizzazione</string>
+    <string name="local_database_status_cloud_account">Account cloud</string>
+    <string name="local_database_status_unknown">—</string>
+
     <!-- Catalogo cloud (task 013) — messaggi non tecnici -->
     <string name="catalog_cloud_section_title">Catalogo sul cloud</string>
     <string name="catalog_cloud_refresh">Aggiorna dal cloud</string>
     <string name="catalog_cloud_sync_full">Sincronizzazione completa</string>
+    <string name="catalog_cloud_sync_now">Sincronizza ora</string>
     <string name="catalog_cloud_sync_quick">Sincronizzazione rapida</string>
     <string name="catalog_cloud_sync_quick_body">Invio modifiche: carica sul cloud le modifiche locali in sospeso. Se serve un controllo completo, usa la sincronizzazione completa.</string>
     <string name="catalog_cloud_sync_quick_body_events">Invio e ricezione: carica le modifiche locali e scarica solo gli aggiornamenti recenti verificabili.</string>
@@ -668,5 +684,6 @@
     <string name="catalog_cloud_full_recommended_label">Serve sincronizzazione completa</string>
     <string name="catalog_cloud_sync_quick_cd">Avvia sincronizzazione rapida: invia modifiche locali e riceve aggiornamenti recenti quando disponibili</string>
     <string name="catalog_cloud_sync_full_cd">Avvia sincronizzazione completa: riallinea catalogo, prezzi e sessioni dal cloud</string>
+    <string name="catalog_cloud_sync_now_cd">Avvia sincronizzazione: riallinea catalogo, prezzi, cronologia e modifiche locali</string>
     <string name="catalog_cloud_section_cd">Stato sincronizzazione cloud: %1$s</string>
 </resources>

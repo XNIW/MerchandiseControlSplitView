@@ -565,9 +565,25 @@
     <string name="account_sign_in_google">Iniciar sesion con Google</string>
     <string name="account_sign_out">Cerrar sesion</string>
 
+    <string name="local_database_status_title">Estado de la base local</string>
+    <string name="local_database_status_loading">Comprobando datos locales…</string>
+    <string name="local_database_status_empty">Sin datos locales todavia</string>
+    <string name="local_database_status_ready">Base local lista</string>
+    <string name="local_database_status_pending">Cambios locales pendientes</string>
+    <string name="local_database_status_products">Productos</string>
+    <string name="local_database_status_suppliers">Proveedores</string>
+    <string name="local_database_status_categories">Categorias</string>
+    <string name="local_database_status_price_history">Historial de precios</string>
+    <string name="local_database_status_history_sessions">Sesiones de historial</string>
+    <string name="local_database_status_pending_changes">Cambios locales pendientes</string>
+    <string name="local_database_status_last_sync">Ultima sincronizacion</string>
+    <string name="local_database_status_cloud_account">Cuenta cloud</string>
+    <string name="local_database_status_unknown">—</string>
+
     <string name="catalog_cloud_section_title">Catalogo en la nube</string>
     <string name="catalog_cloud_refresh">Actualizar desde la nube</string>
     <string name="catalog_cloud_sync_full">Sincronizacion completa</string>
+    <string name="catalog_cloud_sync_now">Sincronizar ahora</string>
     <string name="catalog_cloud_sync_quick">Sincronizacion rapida</string>
     <string name="catalog_cloud_sync_quick_body">Envío de cambios: sube a la nube los cambios locales pendientes. Si necesitas una revisión completa, usa la sincronización completa.</string>
     <string name="catalog_cloud_sync_quick_body_events">Envío y recepción: sube cambios locales y descarga solo actualizaciones recientes verificables.</string>
@@ -647,5 +663,6 @@
     <string name="catalog_cloud_full_recommended_label">Hace falta sincronización completa</string>
     <string name="catalog_cloud_sync_quick_cd">Iniciar sincronización rápida: envía cambios locales y recibe actualizaciones recientes cuando están disponibles</string>
     <string name="catalog_cloud_sync_full_cd">Iniciar sincronización completa: realinea catálogo, precios y sesiones desde la nube</string>
+    <string name="catalog_cloud_sync_now_cd">Iniciar sincronización: realinea catálogo, precios, historial y cambios locales</string>
     <string name="catalog_cloud_section_cd">Estado de sincronización en la nube: %1$s</string>
 </resources>

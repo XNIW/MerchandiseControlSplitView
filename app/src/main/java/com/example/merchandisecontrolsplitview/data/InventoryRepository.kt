@@ -81,6 +81,16 @@ data class HistorySessionBackupPushSummary(
     val attempted: Int = uploaded
 )
 
+data class LocalDatabaseStatusSnapshot(
+    val products: Int,
+    val suppliers: Int,
+    val categories: Int,
+    val priceHistoryRows: Int,
+    val historySessions: Int,
+    val pendingLocalChanges: Int,
+    val syncEventOutboxPending: Int
+)
+
 interface InventoryRepository {
     // Product methods
     fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
@@ -211,6 +221,9 @@ interface InventoryRepository {
 
     /** True se esiste lavoro pendente (revisioni bridge o righe senza bridge con catalogo non vuoto). */
     suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean
+
+    /** Snapshot compatto per Options: solo conteggi locali, senza rete e senza bloccare la UI. */
+    suspend fun getLocalDatabaseStatusSnapshot(ownerUserId: String?): LocalDatabaseStatusSnapshot
 
     /**
      * Breakdown sintetico tombstone + prezzi + bridge catalogo mancanti (task 030/032).
@@ -2108,6 +2121,32 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             categoryRemoteRefDao.countRows() < categoryDao.count() ||
             productRemoteRefDao.countRows() < productDao.count()
     }
+
+    override suspend fun getLocalDatabaseStatusSnapshot(ownerUserId: String?): LocalDatabaseStatusSnapshot =
+        withContext(Dispatchers.IO) {
+            val breakdown = getCatalogCloudPendingBreakdown()
+            val pendingHistorySessions = historyDao.getUserVisibleSessionPushCandidateUids().size
+            val outboxPending = ownerUserId?.let { syncEventOutboxDao.countPending(it) } ?: 0
+            val pendingTotal =
+                breakdown.pendingCatalogTombstones +
+                    breakdown.productPricesPendingPriceBridge +
+                    breakdown.productPricesBlockedWithoutProductRemote +
+                    breakdown.suppliersMissingRemoteRef +
+                    breakdown.categoriesMissingRemoteRef +
+                    breakdown.productsMissingRemoteRef +
+                    pendingHistorySessions +
+                    outboxPending
+
+            LocalDatabaseStatusSnapshot(
+                products = productDao.count(),
+                suppliers = supplierDao.count(),
+                categories = categoryDao.count(),
+                priceHistoryRows = priceDao.countAll(),
+                historySessions = historyDao.countUserVisible(),
+                pendingLocalChanges = pendingTotal,
+                syncEventOutboxPending = outboxPending
+            )
+        }
 
     override suspend fun pushHistorySessionsToRemote(
         remote: SessionBackupRemoteDataSource,

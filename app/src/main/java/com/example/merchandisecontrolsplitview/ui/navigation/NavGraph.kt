@@ -342,6 +342,7 @@ fun AppNavGraph() {
                     factory = CatalogSyncViewModel.factory(app)
                 )
                 val catalogSyncUi by catalogSyncViewModel.uiState.collectAsState()
+                val localDatabaseStatusUi by catalogSyncViewModel.localDatabaseStatusUi.collectAsState()
                 LaunchedEffect(Unit) {
                     catalogSyncViewModel.onOptionsScreenVisible()
                 }
@@ -357,8 +358,8 @@ fun AppNavGraph() {
                     },
                     onDismissError = { app.authManager.dismissError() },
                     catalogSyncUi = if (app.authManager.isEnabled) catalogSyncUi else null,
-                    onCatalogRefresh = { catalogSyncViewModel.refreshCatalog() },
-                    onCatalogQuickSync = { catalogSyncViewModel.syncCatalogQuick() }
+                    localDatabaseStatusUi = localDatabaseStatusUi,
+                    onCatalogRefresh = { catalogSyncViewModel.refreshCatalog() }
                 )
             }
 

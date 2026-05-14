@@ -566,9 +566,25 @@
     <string name="account_sign_in_google">使用 Google 登录</string>
     <string name="account_sign_out">退出登录</string>
 
+    <string name="local_database_status_title">本地数据库状态</string>
+    <string name="local_database_status_loading">正在检查本地数据…</string>
+    <string name="local_database_status_empty">尚无本地数据</string>
+    <string name="local_database_status_ready">本地数据库已就绪</string>
+    <string name="local_database_status_pending">本地更改待同步</string>
+    <string name="local_database_status_products">商品</string>
+    <string name="local_database_status_suppliers">供应商</string>
+    <string name="local_database_status_categories">分类</string>
+    <string name="local_database_status_price_history">价格历史</string>
+    <string name="local_database_status_history_sessions">历史会话</string>
+    <string name="local_database_status_pending_changes">待同步本地更改</string>
+    <string name="local_database_status_last_sync">上次同步</string>
+    <string name="local_database_status_cloud_account">云端账号</string>
+    <string name="local_database_status_unknown">—</string>
+
     <string name="catalog_cloud_section_title">云端目录</string>
     <string name="catalog_cloud_refresh">从云端更新</string>
     <string name="catalog_cloud_sync_full">完整同步</string>
+    <string name="catalog_cloud_sync_now">立即同步</string>
     <string name="catalog_cloud_sync_quick">快速同步</string>
     <string name="catalog_cloud_sync_quick_body">发送更改：将待处理的本地修改上传到云端。需要完整检查时，请使用完整同步。</string>
     <string name="catalog_cloud_sync_quick_body_events">发送与接收：上传本地修改，并只下载可验证的近期更新。</string>
@@ -648,5 +664,6 @@
     <string name="catalog_cloud_full_recommended_label">需要完整同步</string>
     <string name="catalog_cloud_sync_quick_cd">开始快速同步：发送本地修改，并在可用时接收近期更新</string>
     <string name="catalog_cloud_sync_full_cd">开始完整同步：从云端对齐目录、价格与会话</string>
+    <string name="catalog_cloud_sync_now_cd">开始同步：对齐目录、价格、历史和本地更改</string>
     <string name="catalog_cloud_section_cd">云同步状态：%1$s</string>
 </resources>
