@@ -1562,6 +1562,15 @@ private class ViewModelPriceRemote021(
     override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> =
         Result.success(fetchRows)
 
+    override suspend fun fetchProductPricesPage(afterId: String?, limit: Long): Result<List<InventoryProductPriceRow>> =
+        Result.success(
+            fetchRows.asSequence()
+                .sortedBy { it.id }
+                .filter { afterId == null || it.id > afterId }
+                .take(limit.coerceAtLeast(1L).toInt())
+                .toList()
+        )
+
     override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
         Result.success(fetchRows.filter { it.id in remoteIds })
 }

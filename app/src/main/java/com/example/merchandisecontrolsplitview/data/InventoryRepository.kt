@@ -298,6 +298,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val appliedProductIds: Set<Long> = emptySet()
     )
 
+    private data class ProductPriceBusinessKey(
+        val productId: Long,
+        val type: String,
+        val effectiveAt: String
+    )
+
+    private data class ProductPriceRemoteCandidate(
+        val row: InventoryProductPriceRow,
+        val localProductId: Long
+    )
+
     private data class CatalogEntityPushResult(
         val count: Int,
         val remoteIds: List<String>
@@ -3239,54 +3250,113 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     private suspend fun applyProductPriceRows(
         remotes: List<InventoryProductPriceRow>,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        stage: CatalogSyncStage = CatalogSyncStage.SYNC_EVENTS_DRAIN,
+        processedBefore: Int = 0,
+        totalRows: Int? = remotes.size
     ): PricePullApplyResult {
+        if (remotes.isEmpty()) {
+            return PricePullApplyResult(
+                pulled = 0,
+                skippedNoLocalProduct = 0,
+                remoteRowsEvaluated = 0
+            )
+        }
         var pulled = 0
         var skippedNoLocalProduct = 0
         val appliedProductIds = linkedSetOf<Long>()
         db.withTransaction {
-            for ((index, row) in remotes.withIndex()) {
-                progressReporter.onProgress(
-                    CatalogSyncProgressState.running(
-                        CatalogSyncStage.SYNC_EVENTS_DRAIN,
-                        current = index + 1,
-                        total = remotes.size
+            fun reportProgress(index: Int) {
+                if (index == 0 || index == remotes.lastIndex || (processedBefore + index + 1) % 100 == 0) {
+                    progressReporter.onProgress(
+                        CatalogSyncProgressState.running(
+                            stage,
+                            current = processedBefore + index + 1,
+                            total = totalRows
+                        )
                     )
-                )
-                if (productPriceRemoteRefDao.getByRemoteId(row.id) != null) continue
-                val pref = productRemoteRefDao.getByRemoteId(row.productId) ?: run {
+                }
+            }
+
+            val knownRemoteIds = productPriceRemoteRefDao
+                .getByRemoteIds(remotes.map { it.id }.distinct())
+                .mapTo(hashSetOf()) { it.remoteId }
+            val rowsWithoutRemoteRef = remotes.filterIndexed { index, row ->
+                reportProgress(index)
+                row.id !in knownRemoteIds
+            }
+            if (rowsWithoutRemoteRef.isEmpty()) {
+                return@withTransaction
+            }
+
+            val productRefsByRemoteId = productRemoteRefDao
+                .getByRemoteIds(rowsWithoutRemoteRef.map { it.productId }.distinct())
+                .associateBy { it.remoteId }
+            val candidates = ArrayList<ProductPriceRemoteCandidate>(rowsWithoutRemoteRef.size)
+            for (row in rowsWithoutRemoteRef) {
+                val pref = productRefsByRemoteId[row.productId] ?: run {
                     skippedNoLocalProduct++
                     continue
                 }
-                val localProductId = pref.productId
-                val existing = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
+                candidates += ProductPriceRemoteCandidate(row = row, localProductId = pref.productId)
+            }
+            if (candidates.isEmpty()) {
+                return@withTransaction
+            }
+
+            val existingPricesByKey = priceDao
+                .getForProducts(candidates.map { it.localProductId }.distinct())
+                .associateBy { ProductPriceBusinessKey(it.productId, it.type, it.effectiveAt) }
+            val existingPriceIds = existingPricesByKey.values.map { it.id }.distinct()
+            val existingPriceRefsByPriceId = if (existingPriceIds.isEmpty()) {
+                emptyMap()
+            } else {
+                existingPriceIds
+                    .chunked(ROOM_QUERY_BIND_CHUNK)
+                    .flatMap { productPriceRemoteRefDao.getByProductPriceIds(it) }
+                    .associateBy { it.productPriceId }
+            }
+
+            val refsToInsert = mutableListOf<ProductPriceRemoteRef>()
+            val newPriceRows = mutableListOf<ProductPrice>()
+            val newPriceRemoteIds = mutableListOf<String>()
+            for (candidate in candidates) {
+                val row = candidate.row
+                val key = ProductPriceBusinessKey(candidate.localProductId, row.type, row.effectiveAt)
+                val existing = existingPricesByKey[key]
                 if (existing != null) {
-                    if (productPriceRemoteRefDao.getByProductPriceId(existing.id) == null) {
-                        productPriceRemoteRefDao.insert(
-                            ProductPriceRemoteRef(productPriceId = existing.id, remoteId = row.id)
-                        )
-                        pulled++
+                    if (existingPriceRefsByPriceId[existing.id] == null) {
+                        refsToInsert += ProductPriceRemoteRef(productPriceId = existing.id, remoteId = row.id)
                     }
                     continue
                 }
-                priceDao.insert(
-                    ProductPrice(
-                        productId = localProductId,
-                        type = row.type,
-                        price = row.price,
-                        effectiveAt = row.effectiveAt,
-                        source = row.source,
-                        note = row.note,
-                        createdAt = row.createdAt
-                    )
+                newPriceRows += ProductPrice(
+                    productId = candidate.localProductId,
+                    type = row.type,
+                    price = row.price,
+                    effectiveAt = row.effectiveAt,
+                    source = row.source,
+                    note = row.note,
+                    createdAt = row.createdAt
                 )
-                val inserted = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
-                    ?: continue
-                productPriceRemoteRefDao.insert(
-                    ProductPriceRemoteRef(productPriceId = inserted.id, remoteId = row.id)
-                )
-                pulled++
-                appliedProductIds += localProductId
+                newPriceRemoteIds += row.id
+                appliedProductIds += candidate.localProductId
+            }
+
+            if (newPriceRows.isNotEmpty()) {
+                val insertedIds = priceDao.insertAllReturningIds(newPriceRows)
+                for ((index, insertedId) in insertedIds.withIndex()) {
+                    if (insertedId > 0L) {
+                        refsToInsert += ProductPriceRemoteRef(
+                            productPriceId = insertedId,
+                            remoteId = newPriceRemoteIds[index]
+                        )
+                    }
+                }
+            }
+
+            if (refsToInsert.isNotEmpty()) {
+                pulled += productPriceRemoteRefDao.insertAll(refsToInsert).count { it > 0L }
             }
         }
         return PricePullApplyResult(
@@ -3692,6 +3762,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val PRODUCT_BULK_PUSH_FALLBACK_50 = 50
         const val PRODUCT_BULK_PUSH_FALLBACK_25 = 25
         const val PRODUCT_PRICE_PUSH_CHUNK = 80
+        const val ROOM_QUERY_BIND_CHUNK = 900
         const val IMPORT_DIRTY_PRICE_TOLERANCE = 0.001
         const val SYNC_EVENT_FETCH_LIMIT = 100L
         const val SYNC_EVENT_DRAIN_MAX_ITERATIONS = 20
@@ -3957,65 +4028,44 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         priceRemote: ProductPriceRemoteDataSource,
         progressReporter: CatalogSyncProgressReporter
     ): PricePullApplyResult {
-        val remotes = priceRemote.fetchProductPrices().getOrThrow()
         var pulled = 0
         var skippedNoLocalProduct = 0
+        var remoteRowsEvaluated = 0
+        var pageCount = 0
+        var lastRemoteId: String? = null
         val appliedProductIds = linkedSetOf<Long>()
-        db.withTransaction {
-            for ((index, row) in remotes.withIndex()) {
-                progressReporter.onProgress(
-                    CatalogSyncProgressState.running(
-                        CatalogSyncStage.SYNC_PRICES_PULL,
-                        current = index + 1,
-                        total = remotes.size
-                    )
-                )
-                if (productPriceRemoteRefDao.getByRemoteId(row.id) != null) continue
-                val pref = productRemoteRefDao.getByRemoteId(row.productId) ?: run {
-                    skippedNoLocalProduct++
-                    continue
-                }
-                val localProductId = pref.productId
-                val existing = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
-                if (existing != null) {
-                    if (productPriceRemoteRefDao.getByProductPriceId(existing.id) == null) {
-                        productPriceRemoteRefDao.insert(
-                            ProductPriceRemoteRef(productPriceId = existing.id, remoteId = row.id)
-                        )
-                        pulled++
-                    }
-                    continue
-                }
-                priceDao.insert(
-                    ProductPrice(
-                        productId = localProductId,
-                        type = row.type,
-                        price = row.price,
-                        effectiveAt = row.effectiveAt,
-                        source = row.source,
-                        note = row.note,
-                        createdAt = row.createdAt
-                    )
-                )
-                val inserted = priceDao.findByBusinessKey(localProductId, row.type, row.effectiveAt)
-                    ?: continue
-                productPriceRemoteRefDao.insert(
-                    ProductPriceRemoteRef(productPriceId = inserted.id, remoteId = row.id)
-                )
-                pulled++
-                appliedProductIds += localProductId
-            }
+
+        while (true) {
+            val page = priceRemote.fetchProductPricesPage(lastRemoteId, INVENTORY_REMOTE_PAGE_SIZE).getOrThrow()
+            if (page.isEmpty()) break
+
+            pageCount++
+            val pageResult = applyProductPriceRows(
+                page,
+                progressReporter,
+                stage = CatalogSyncStage.SYNC_PRICES_PULL,
+                processedBefore = remoteRowsEvaluated,
+                totalRows = null
+            )
+            pulled += pageResult.pulled
+            skippedNoLocalProduct += pageResult.skippedNoLocalProduct
+            remoteRowsEvaluated += pageResult.remoteRowsEvaluated
+            appliedProductIds += pageResult.appliedProductIds
+            lastRemoteId = page.last().id
+
+            if (page.size.toLong() < INVENTORY_REMOTE_PAGE_SIZE) break
         }
         Log.i(
             TAG,
             "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL " +
-                "remotePricesEvaluated=${remotes.size} pricesPulled=$pulled " +
-                "pricesSkippedNoProductRef=$skippedNoLocalProduct"
+                "remotePricesEvaluated=$remoteRowsEvaluated pricesPulled=$pulled " +
+                "pricesSkippedNoProductRef=$skippedNoLocalProduct " +
+                "pageSize=$INVENTORY_REMOTE_PAGE_SIZE pageCount=$pageCount"
         )
         return PricePullApplyResult(
             pulled = pulled,
             skippedNoLocalProduct = skippedNoLocalProduct,
-            remoteRowsEvaluated = remotes.size,
+            remoteRowsEvaluated = remoteRowsEvaluated,
             appliedProductIds = appliedProductIds
         )
     }

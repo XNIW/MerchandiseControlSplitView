@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.data
 
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Order
 
 private const val PRICE_UPSERT_CHUNK = 80
 
@@ -32,6 +33,20 @@ class SupabaseProductPriceRemoteDataSource(
     override suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>> =
         runCatching {
             requireClient().postgrest.fetchInventoryTableAllPagesOrderedById("inventory_product_prices")
+        }
+
+    override suspend fun fetchProductPricesPage(afterId: String?, limit: Long): Result<List<InventoryProductPriceRow>> =
+        runCatching {
+            val pageLimit = limit.coerceIn(1L, INVENTORY_REMOTE_PAGE_SIZE)
+            requireClient().postgrest["inventory_product_prices"].select {
+                if (!afterId.isNullOrBlank()) {
+                    filter {
+                        gt("id", afterId)
+                    }
+                }
+                order("id", Order.ASCENDING)
+                range(0, pageLimit - 1)
+            }.decodeList()
         }
 
     override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =

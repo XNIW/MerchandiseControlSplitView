@@ -4716,6 +4716,50 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `product price full pull streams remote prices by page`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000460"
+        val productRemoteId = "00000000-0000-4000-8000-000000000461"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "price-page-stream",
+                        productName = "Price page stream",
+                        retailPrice = 1.0
+                    )
+                )
+            )
+        )
+        val priceRows = (0 until INVENTORY_REMOTE_PAGE_SIZE.toInt() + 5).map { index ->
+            InventoryProductPriceRow(
+                id = "00000000-0000-4000-8000-${"%012d".format(460_000 + index)}",
+                ownerUserId = owner,
+                productId = productRemoteId,
+                type = "RETAIL",
+                price = 2.0 + (index % 100) / 100.0,
+                effectiveAt = "2026-04-23 12:${"%02d".format(index / 60)}:${"%02d".format(index % 60)}",
+                source = "REMOTE",
+                createdAt = "2026-04-23 12:${"%02d".format(index / 60)}:${"%02d".format(index % 60)}"
+            )
+        }
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = priceRows
+        }
+
+        val summary = repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+
+        assertEquals(priceRows.size, summary.remotePricesFetched)
+        assertEquals(priceRows.size, summary.pulledProductPrices)
+        assertEquals(2, priceRemote.pageFetchCount)
+        assertEquals(listOf(null, priceRows[INVENTORY_REMOTE_PAGE_SIZE.toInt() - 1].id), priceRemote.pageAfterIds)
+        assertEquals(1, priceRemote.fetchCount)
+    }
+
+    @Test
     fun `044A manual sync with prices disabled marks full catalog only`() = runTest {
         val owner = "00000000-0000-4000-8000-00000000044d"
         val remote = FakeCatalogRemote016(
@@ -5444,6 +5488,8 @@ private class RecordingPriceRemote016(
     val upsertBatches = mutableListOf<List<InventoryProductPriceRow>>()
     var fetchRows: List<InventoryProductPriceRow> = emptyList()
     var fetchCount = 0
+    var pageFetchCount = 0
+    val pageAfterIds = mutableListOf<String?>()
     var targetedFetchCount = 0
     val targetedPriceIds = mutableListOf<Set<String>>()
     var failIfCalled = false
@@ -5467,6 +5513,23 @@ private class RecordingPriceRemote016(
             return Result.failure(t)
         }
         return Result.success(fetchRows)
+    }
+    override suspend fun fetchProductPricesPage(afterId: String?, limit: Long): Result<List<InventoryProductPriceRow>> {
+        if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
+        pageFetchCount++
+        pageAfterIds.add(afterId)
+        if (afterId == null) fetchCount++
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(
+            fetchRows.asSequence()
+                .sortedBy { it.id }
+                .filter { afterId == null || it.id > afterId }
+                .take(limit.coerceAtLeast(1L).toInt())
+                .toList()
+        )
     }
     override suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>> {
         if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")

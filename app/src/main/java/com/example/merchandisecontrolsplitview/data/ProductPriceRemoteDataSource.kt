@@ -11,5 +11,14 @@ interface ProductPriceRemoteDataSource {
 
     suspend fun fetchProductPrices(): Result<List<InventoryProductPriceRow>>
 
+    suspend fun fetchProductPricesPage(afterId: String?, limit: Long): Result<List<InventoryProductPriceRow>> =
+        fetchProductPrices().map { rows ->
+            rows.asSequence()
+                .sortedBy { it.id }
+                .filter { afterId == null || it.id > afterId }
+                .take(limit.coerceAtLeast(1L).toInt())
+                .toList()
+        }
+
     suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>>
 }
