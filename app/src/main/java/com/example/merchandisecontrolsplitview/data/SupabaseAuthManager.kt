@@ -102,7 +102,7 @@ class SupabaseAuthManager(
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
                     client.auth.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
-                Log.d(TAG, "restoreSession: got status=$status")
+                Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
                 when (status) {
                     is SessionStatus.Authenticated -> {
                         val user = client.auth.currentUserOrNull()
@@ -114,7 +114,7 @@ class SupabaseAuthManager(
                     }
                     else -> {
                         _state.value = AuthState.SignedOut
-                        Log.i(TAG, "Nessuna sessione valida al bootstrap (status=$status)")
+                        Log.i(TAG, "Nessuna sessione valida al bootstrap (status=${status.safeLogLabel()})")
                     }
                 }
             } catch (e: CancellationException) {
@@ -276,5 +276,13 @@ class SupabaseAuthManager(
                 }
             }
         }
+    }
+
+    private fun SessionStatus?.safeLogLabel(): String = when (this) {
+        null -> "Timeout"
+        is SessionStatus.Authenticated -> "Authenticated"
+        is SessionStatus.Initializing -> "Initializing"
+        is SessionStatus.NotAuthenticated -> "NotAuthenticated"
+        else -> this::class.java.simpleName
     }
 }

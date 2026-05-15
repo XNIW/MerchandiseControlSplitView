@@ -108,6 +108,9 @@ interface ProductPriceDao {
     )
     suspend fun findByBusinessKey(productId: Long, type: String, effectiveAt: String): ProductPrice?
 
+    @Query("SELECT * FROM product_prices WHERE productId IN (:productIds)")
+    suspend fun getForProducts(productIds: List<Long>): List<ProductPrice>
+
     @Query("""
     SELECT * FROM product_prices 
     WHERE productId = :productId AND type = :type

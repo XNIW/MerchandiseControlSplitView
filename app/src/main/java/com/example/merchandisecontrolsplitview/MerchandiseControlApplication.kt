@@ -133,6 +133,7 @@ class MerchandiseControlApplication : Application() {
                     supabaseUrl = BuildConfig.SUPABASE_URL,
                     supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
                 ) {
+                    requestTimeout = 90.seconds
                     install(Auth)
                     install(Postgrest)
                     install(Realtime) {
