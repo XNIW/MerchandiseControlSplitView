@@ -52,6 +52,60 @@ class HistorySessionPushCoordinatorTest {
     }
 
     @Test
+    fun `110 login fresh tick bootstraps then runs full reconciliation push`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000110"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returns Result.success(
+            RemoteSessionBatchResult(
+                inserted = 1,
+                updated = 0,
+                skipped = 0,
+                failed = 0,
+                unsupported = 0
+            )
+        )
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, null)
+        } returns Result.success(
+            HistorySessionBackupPushSummary(
+                uploaded = 2,
+                skippedAlreadySynced = 0,
+                attempted = 2
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("login_fresh_tick")
+
+        coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
+        coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), owner, null) }
+        coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=ok") &&
+                    it.contains("dirtySetMode=full_reconcile") &&
+                    it.contains("bootstrapInserted=1") &&
+                    it.contains("sessionsUploaded=2")
+            }
+        )
+    }
+
+    @Test
     fun `040 signed out push cycle skips without querying repository`() = runTest {
         val repository = mockk<InventoryRepository>()
         val logs = mutableListOf<String>()

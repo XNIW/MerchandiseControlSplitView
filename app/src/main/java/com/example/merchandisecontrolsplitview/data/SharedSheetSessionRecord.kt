@@ -30,7 +30,10 @@ data class SharedSheetSessionRecord(
     val ownerUserId: String? = null,
     /** Opzionale: column server-side (task 010/012). */
     @SerialName("updated_at")
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    /** Tombstone remoto per delete History cross-device. */
+    @SerialName("deleted_at")
+    val deletedAt: String? = null
 )
 
 /**
@@ -48,12 +51,13 @@ data class SharedSheetSessionUpsertRow(
     @SerialName("is_manual_entry") val isManualEntry: Boolean,
     val data: List<List<String>>,
     @SerialName("session_overlay") val sessionOverlay: SessionOverlay,
-    @SerialName("owner_user_id") val ownerUserId: String
+    @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("deleted_at") val deletedAt: String? = null
 )
 
 fun SessionRemotePayload.toSharedSheetSessionUpsertRow(ownerUserId: String): SharedSheetSessionUpsertRow =
     SharedSheetSessionUpsertRow(
-        remoteId = remoteId,
+        remoteId = canonicalSessionRemoteId(remoteId),
         payloadVersion = payloadVersion,
         displayName = displayName.orEmpty(),
         timestamp = timestamp,
@@ -64,12 +68,13 @@ fun SessionRemotePayload.toSharedSheetSessionUpsertRow(ownerUserId: String): Sha
         sessionOverlay = requireNotNull(sessionOverlay) {
             "payload v2 writer requires session_overlay"
         },
-        ownerUserId = ownerUserId
+        ownerUserId = ownerUserId,
+        deletedAt = deletedAt
     )
 
 fun SharedSheetSessionRecord.toSessionRemotePayload(): SessionRemotePayload =
     SessionRemotePayload(
-        remoteId = remoteId,
+        remoteId = canonicalSessionRemoteId(remoteId),
         payloadVersion = payloadVersion,
         displayName = displayName,
         timestamp = timestamp,
@@ -77,5 +82,6 @@ fun SharedSheetSessionRecord.toSessionRemotePayload(): SessionRemotePayload =
         category = category,
         isManualEntry = isManualEntry,
         data = data,
-        sessionOverlay = sessionOverlay
+        sessionOverlay = sessionOverlay,
+        deletedAt = deletedAt
     )

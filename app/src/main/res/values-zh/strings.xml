@@ -217,6 +217,7 @@
     <string name="date_label">日期：</string>
     <string name="sync_status">同步状态</string>
     <string name="export_status">导出状态</string>
+    <string name="history_deleted_pending_status">删除等待同步</string>
     <string name="generated_column_prefix">列</string>
     <string name="default_export_filename">products.xlsx</string>
     <string name="supplier_id_prefix">ID：</string>

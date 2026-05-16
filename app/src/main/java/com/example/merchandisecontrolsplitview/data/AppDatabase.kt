@@ -28,7 +28,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncEventOutboxEntry::class
     ],
     views = [ProductPriceSummary::class],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -350,6 +350,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 16 -> 17: tombstone locale History per propagare delete cloud.
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE history_entries ADD COLUMN deletedAt TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -372,7 +379,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_12_13,
                         MIGRATION_13_14,
                         MIGRATION_14_15,
-                        MIGRATION_15_16
+                        MIGRATION_15_16,
+                        MIGRATION_16_17
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

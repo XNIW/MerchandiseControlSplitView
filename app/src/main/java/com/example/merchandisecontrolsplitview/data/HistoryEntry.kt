@@ -22,7 +22,8 @@ data class HistoryEntry(
     val paymentTotal: Double = 0.0,
     val missingItems: Int = 0,
     val totalItems: Int = 0,
-    val isManualEntry: Boolean = false
+    val isManualEntry: Boolean = false,
+    val deletedAt: String? = null
 )
 
 data class HistoryEntryListItem(
@@ -38,5 +39,6 @@ data class HistoryEntryListItem(
     val paymentTotal: Double = 0.0,
     val missingItems: Int = 0,
     val totalItems: Int = 0,
-    val isManualEntry: Boolean = false
+    val isManualEntry: Boolean = false,
+    val deletedAt: String? = null
 )

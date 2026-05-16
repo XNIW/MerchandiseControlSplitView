@@ -34,8 +34,12 @@ data class SessionRemotePayload(
     val isManualEntry: Boolean,
     val data: List<List<String>>,
     val displayName: String? = null,
-    val sessionOverlay: SessionOverlay? = null
+    val sessionOverlay: SessionOverlay? = null,
+    val deletedAt: String? = null
 )
+
+internal fun canonicalSessionRemoteId(remoteId: String): String =
+    remoteId.trim().lowercase()
 
 @Serializable
 data class SessionOverlay(
@@ -87,6 +91,7 @@ internal fun SessionRemotePayload.canonicalSessionPayloadString(): String =
         append("|manual=").append(isManualEntry)
         append("|data=").append(canonicalNestedStrings(data))
         append("|overlay=").append(sessionOverlay?.canonicalString() ?: "null")
+        append("|deleted=").append(canonicalNullable(deletedAt))
     }
 
 internal fun SessionOverlay.canonicalString(): String =
@@ -116,7 +121,7 @@ private fun canonicalNestedStrings(rows: List<List<String>>): String =
  */
 fun HistoryEntry.toRemotePayload(remoteId: String): SessionRemotePayload =
     SessionRemotePayload(
-        remoteId = remoteId,
+        remoteId = canonicalSessionRemoteId(remoteId),
         payloadVersion = SESSION_PAYLOAD_VERSION,
         displayName = displayName,
         timestamp = timestamp,
@@ -128,5 +133,6 @@ fun HistoryEntry.toRemotePayload(remoteId: String): SessionRemotePayload =
             overlaySchema = SESSION_OVERLAY_SCHEMA,
             editable = editable,
             complete = complete
-        )
+        ),
+        deletedAt = deletedAt
     )

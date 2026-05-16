@@ -1789,17 +1789,26 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `deleteHistoryEntry also removes the bridge row`() = runTest {
+    fun `deleteHistoryEntry marks tombstone and keeps bridge row for cloud push`() = runTest {
         val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
         repository.getOrCreateRemoteId(uid) // crea il bridge
 
         val entry = repository.getHistoryEntryByUid(uid)!!
-        assertNotNull(repository.getRemoteRef(uid))
+        val refBefore = repository.getRemoteRef(uid)
+        assertNotNull(refBefore)
 
         repository.deleteHistoryEntry(entry)
 
-        assertNull(repository.getHistoryEntryByUid(uid))
-        assertNull(repository.getRemoteRef(uid))
+        val deleted = repository.getHistoryEntryByUid(uid)
+        assertNotNull(deleted)
+        assertNotNull(deleted!!.deletedAt)
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        assertTrue(repository.getPendingHistorySessionPushUids().contains(uid))
+
+        val refAfter = repository.getRemoteRef(uid)
+        assertNotNull(refAfter)
+        assertEquals(refBefore!!.remoteId, refAfter!!.remoteId)
+        assertTrue(refAfter.localChangeRevision > refBefore.localChangeRevision)
     }
 
     @Test
@@ -1841,8 +1850,9 @@ class DefaultInventoryRepositoryTest {
             editable = listOf(listOf("1", "")),
             complete = listOf(true)
         )
+        val remoteId = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAA0401"
         val row = entry
-            .toRemotePayload("00000000-0000-4000-8000-000000000401")
+            .toRemotePayload(remoteId)
             .toSharedSheetSessionUpsertRow("00000000-0000-4000-8000-000000000402")
 
         val encoded = Json.encodeToJsonElement(
@@ -1851,6 +1861,8 @@ class DefaultInventoryRepositoryTest {
         ).jsonObject
         val overlayElement = encoded["session_overlay"]
 
+        assertEquals(remoteId.lowercase(), row.remoteId)
+        assertEquals(remoteId.lowercase(), encoded["remote_id"]?.jsonPrimitive?.content)
         assertNotNull(overlayElement)
         val overlay = overlayElement!!.jsonObject
         assertEquals(SESSION_OVERLAY_SCHEMA, overlay["overlay_schema"]?.jsonPrimitive?.int)
@@ -1869,7 +1881,8 @@ class DefaultInventoryRepositoryTest {
         category: String = "RemoteCat",
         isManualEntry: Boolean = false,
         data: List<List<String>> = listOf(listOf("barcode", "qty"), listOf("111", "2")),
-        sessionOverlay: SessionOverlay? = null
+        sessionOverlay: SessionOverlay? = null,
+        deletedAt: String? = null
     ) = SessionRemotePayload(
         remoteId = remoteId,
         payloadVersion = payloadVersion,
@@ -1879,7 +1892,8 @@ class DefaultInventoryRepositoryTest {
         category = category,
         isManualEntry = isManualEntry,
         data = data,
-        sessionOverlay = sessionOverlay
+        sessionOverlay = sessionOverlay,
+        deletedAt = deletedAt
     )
 
     @Test
@@ -1957,6 +1971,90 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `110 applyRemoteSessionPayload treats remote_id case variants as the same session`() = runTest {
+        val remoteId = "2033b0a4-db39-46bc-a613-66d3b6ac31ea"
+        val original = remotePayload(remoteId = remoteId, displayName = "Initial")
+        repository.applyRemoteSessionPayload(original)
+
+        val outcome = repository.applyRemoteSessionPayload(
+            original.copy(
+                remoteId = remoteId.uppercase(),
+                displayName = "Updated from uppercase"
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val duplicateCount = db.openHelper.writableDatabase
+            .query("SELECT COUNT(*) FROM history_entry_remote_refs WHERE lower(remoteId) = lower('$remoteId')")
+            .use { cursor ->
+                cursor.moveToFirst()
+                cursor.getInt(0)
+            }
+        assertEquals(1, duplicateCount)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId.uppercase())!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals(remoteId, ref.remoteId)
+        assertEquals(remoteId, entry.id)
+        assertEquals("Updated from uppercase", entry.displayName)
+    }
+
+    @Test
+    fun `110 applyRemoteSessionPayload applies remote tombstone to existing entry`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        repository.applyRemoteSessionPayload(remotePayload(remoteId = remoteId, supplier = "Active"))
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                supplier = "DeletedRemote",
+                deletedAt = "2026-05-15 14:00:00"
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertEquals("2026-05-15 14:00:00", entry.deletedAt)
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        assertEquals(updatedRef.localChangeRevision, updatedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `110 applyRemoteSessionPayload skips remote tombstone when local entry is dirty active`() = runTest {
+        val remoteId = java.util.UUID.randomUUID().toString()
+        repository.applyRemoteSessionPayload(remotePayload(remoteId = remoteId, supplier = "Active"))
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        repository.updateHistoryEntry(entry.copy(supplier = "LocalDirty"))
+
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(
+                remoteId = remoteId,
+                supplier = "DeletedRemote",
+                deletedAt = "2026-05-15 14:05:00"
+            )
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Skipped, outcome)
+        val current = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
+        assertNull(current.deletedAt)
+        assertEquals("LocalDirty", current.supplier)
+        val updatedRef = db.historyEntryRemoteRefDao().getByRemoteId(remoteId)!!
+        assertTrue(updatedRef.localChangeRevision > updatedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun `110 applyRemoteSessionPayload skips unknown remote tombstone`() = runTest {
+        val outcome = repository.applyRemoteSessionPayload(
+            remotePayload(deletedAt = "2026-05-15 14:01:00")
+        )
+
+        assertEquals(RemoteSessionApplyOutcome.Skipped, outcome)
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+    }
+
+    @Test
     fun `applyRemoteSessionPayload returns UnsupportedVersion for unknown payloadVersion`() = runTest {
         val payload = remotePayload().copy(payloadVersion = 99)
         val outcome = repository.applyRemoteSessionPayload(payload)
@@ -2012,6 +2110,7 @@ class DefaultInventoryRepositoryTest {
         val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
         val entry = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
         assertEquals("Sessione condivisa", entry.displayName)
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, entry.syncStatus)
         assertEquals(overlay.editable, entry.editable)
         assertEquals(overlay.complete, entry.complete)
         assertEquals(20.0, entry.paymentTotal, 0.0001)
@@ -2057,6 +2156,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
         val after = repository.getHistoryEntryByUid(ref.historyEntryUid)!!
         assertEquals("Remote title", after.displayName)
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, after.syncStatus)
         assertEquals(changedData, after.data)
         assertEquals(before.editable, after.editable)
         assertEquals(before.complete, after.complete)
@@ -5086,6 +5186,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(listOf(listOf("", "")), row.sessionOverlay.editable)
         assertEquals(listOf(false), row.sessionOverlay.complete)
         assertEquals(owner, row.ownerUserId)
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, repository.getHistoryEntryByUid(uid)!!.syncStatus)
     }
 
     @Test
@@ -5101,7 +5202,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `023 push skips already synced sessions`() = runTest {
+    fun `023 precise push skips already synced sessions`() = runTest {
         val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry())
         repository.getOrCreateRemoteId(uid)
         val entry = repository.getHistoryEntryByUid(uid)!!
@@ -5109,9 +5210,52 @@ class DefaultInventoryRepositoryTest {
         val fake = FakeSessionBackupRemote023()
         val owner = "00000000-0000-4000-8000-0000000000cc"
         assertEquals(1, repository.pushHistorySessionsToRemote(fake, owner).getOrThrow().uploaded)
-        val second = repository.pushHistorySessionsToRemote(fake, owner).getOrThrow()
+        val second = repository.pushHistorySessionsToRemote(fake, owner, setOf(uid)).getOrThrow()
         assertEquals(0, second.uploaded)
         assertEquals(1, second.skippedAlreadySynced)
+    }
+
+    @Test
+    fun `110 full reconciliation reuploads clean session with stable remote id`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("stale_clean.xlsx"))
+        val remoteId = repository.getOrCreateRemoteId(uid)
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        repository.updateHistoryEntry(entry.copy(supplier = "CleanButRemoteMissing"))
+        val owner = "00000000-0000-4000-8000-000000000110"
+
+        val firstFake = FakeSessionBackupRemote023()
+        assertEquals(1, repository.pushHistorySessionsToRemote(firstFake, owner).getOrThrow().uploaded)
+        assertFalse(repository.getPendingHistorySessionPushUids().contains(uid))
+
+        val repairFake = FakeSessionBackupRemote023()
+        val repair = repository.pushHistorySessionsToRemote(repairFake, owner).getOrThrow()
+
+        assertEquals(1, repair.uploaded)
+        assertEquals(remoteId, repairFake.upsertedChunks.single().single().remoteId)
+        assertEquals("CleanButRemoteMissing", repairFake.upsertedChunks.single().single().supplier)
+    }
+
+    @Test
+    fun `110 push uploads deleted history session tombstone`() = runTest {
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("delete_me.xlsx"))
+        val remoteId = repository.getOrCreateRemoteId(uid)
+        val entry = repository.getHistoryEntryByUid(uid)!!
+        repository.pushHistorySessionsToRemote(FakeSessionBackupRemote023(), "00000000-0000-4000-8000-000000000110")
+
+        repository.deleteHistoryEntry(entry)
+        val fake = FakeSessionBackupRemote023()
+        val summary = repository.pushHistorySessionsToRemote(
+            fake,
+            "00000000-0000-4000-8000-000000000110",
+            setOf(uid)
+        ).getOrThrow()
+
+        assertEquals(1, summary.uploaded)
+        val row = fake.upsertedChunks.single().single()
+        assertEquals(remoteId, row.remoteId)
+        assertNotNull(row.deletedAt)
+        assertFalse(repository.getPendingHistorySessionPushUids().contains(uid))
+        assertEquals(0, db.historyEntryDao().countUserVisible())
     }
 
     @Test
@@ -5295,8 +5439,12 @@ class DefaultInventoryRepositoryTest {
         )
         val batch = repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
         assertEquals(2, batch.inserted)
-        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(rid1))
-        assertNotNull(db.historyEntryRemoteRefDao().getByRemoteId(rid2))
+        val ref1 = db.historyEntryRemoteRefDao().getByRemoteId(rid1)
+        val ref2 = db.historyEntryRemoteRefDao().getByRemoteId(rid2)
+        assertNotNull(ref1)
+        assertNotNull(ref2)
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, repository.getHistoryEntryByUid(ref1!!.historyEntryUid)!!.syncStatus)
+        assertEquals(SyncStatus.SYNCED_SUCCESSFULLY, repository.getHistoryEntryByUid(ref2!!.historyEntryUid)!!.syncStatus)
     }
 
     @Test

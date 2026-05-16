@@ -223,6 +223,7 @@
     <string name="date_label">Data:</string>
     <string name="sync_status">Stato Sincronizzazione</string>
     <string name="export_status">Stato Esportazione</string>
+    <string name="history_deleted_pending_status">Eliminazione in attesa di sincronizzazione</string>
 
     <string name="generated_column_prefix">Colonna</string>
 

@@ -25,6 +25,7 @@ class HistorySessionPushCoordinator(
     companion object {
         const val DEBOUNCE_MS = 10_000L
         private const val LOG_SAMPLE_LIMIT = 5
+        private const val REASON_LOGIN_FRESH_TICK = "login_fresh_tick"
     }
 
     private val dirtyHints = LinkedHashSet<Long>()
@@ -46,7 +47,7 @@ class HistorySessionPushCoordinator(
                     synchronized(dirtyLock) { dirtyHints.clear() }
                     logger("cycle=push outcome=skip reason=skipped_signed_out")
                 } else {
-                    schedule("login_fresh_tick")
+                    schedule(REASON_LOGIN_FRESH_TICK)
                 }
             }
         }
@@ -111,37 +112,57 @@ class HistorySessionPushCoordinator(
         var pendingSize = 0
         var pendingUidSample = ""
         var coalesced = hinted.size > 1
+        val fullReconciliation = reason == REASON_LOGIN_FRESH_TICK
+        val dirtySetMode = if (fullReconciliation) "full_reconcile" else "precise"
         try {
             var summary: HistorySessionBackupPushSummary? = null
+            var bootstrap: RemoteSessionBatchResult? = null
             var emptyPending = false
             var durationMs = 0L
             flightOwner.withSessionFlight(SessionCloudFlightOwner.AutoPush) {
-                val pending = repository.getPendingHistorySessionPushUids().toSet()
-                pendingSize = pending.size
-                pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
-                coalesced = coalesced || pending.size > 1
-                if (pending.isEmpty()) {
-                    emptyPending = true
-                    return@withSessionFlight
-                }
                 durationMs = measureTimeMillis {
-                    summary = repository
-                        .pushHistorySessionsToRemote(remote, auth.userId, pending)
-                        .getOrThrow()
+                    if (fullReconciliation) {
+                        bootstrap = repository.bootstrapHistorySessionsFromRemote(remote).getOrThrow()
+                        summary = repository
+                            .pushHistorySessionsToRemote(remote, auth.userId, candidateUids = null)
+                            .getOrThrow()
+                        pendingSize = summary?.attempted ?: 0
+                        coalesced = coalesced || pendingSize > 1
+                    } else {
+                        val pending = repository.getPendingHistorySessionPushUids().toSet()
+                        pendingSize = pending.size
+                        pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
+                        coalesced = coalesced || pending.size > 1
+                        if (pending.isEmpty()) {
+                            emptyPending = true
+                        } else {
+                            summary = repository
+                                .pushHistorySessionsToRemote(remote, auth.userId, pending)
+                                .getOrThrow()
+                        }
+                    }
                 }
             }
             if (emptyPending) {
                 logger(
                     "cycle=push outcome=ok reason=$reason sessionsAttempted=0 sessionsUploaded=0 " +
-                        "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=precise owner=auto_push"
+                        "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push"
                 )
                 return
             }
             val s = summary
+            val b = bootstrap
+            val bootstrapSummary = if (b != null) {
+                " bootstrapInserted=${b.inserted} bootstrapUpdated=${b.updated} " +
+                    "bootstrapSkipped=${b.skipped} bootstrapFailed=${b.failed} bootstrapUnsupported=${b.unsupported}"
+            } else {
+                ""
+            }
             logger(
                 "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
                     "sessionsAttempted=${s?.attempted ?: pendingSize} sessionsUploaded=${s?.uploaded ?: 0} " +
-                    "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=precise owner=auto_push"
+                    "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push" +
+                    bootstrapSummary
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -149,7 +170,7 @@ class HistorySessionPushCoordinator(
             val classification = SyncErrorClassifier.classify(t)
             logger(
                 "cycle=push outcome=fail reason=$reason durationMs=0 sessionsAttempted=$pendingSize " +
-                    "sessionsUploaded=0 skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=precise " +
+                    "sessionsUploaded=0 skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode " +
                     "owner=auto_push errKind=${classification.category} httpStatus=${classification.httpStatus} " +
                     "postgrestCode=${classification.postgrestCode} pendingUidSample=$pendingUidSample"
             )

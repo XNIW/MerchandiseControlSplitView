@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 internal const val USER_VISIBLE_HISTORY_WHERE_CLAUSE = """
     id NOT LIKE 'APPLY_IMPORT_%'
     AND id NOT LIKE 'FULL_IMPORT_%'
+    AND (deletedAt IS NULL OR syncStatus = 'NOT_ATTEMPTED')
 """
 
 @Dao
@@ -21,7 +22,7 @@ interface HistoryEntryDao {
     @Query(
         """
         SELECT uid, id, displayName, timestamp, supplier, category, wasExported, syncStatus,
-               orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+               orderTotal, paymentTotal, missingItems, totalItems, isManualEntry, deletedAt
         FROM history_entries
         WHERE """ +
             USER_VISIBLE_HISTORY_WHERE_CLAUSE +
@@ -44,7 +45,7 @@ interface HistoryEntryDao {
     @Query(
         """
         SELECT uid, id, displayName, timestamp, supplier, category, wasExported, syncStatus,
-               orderTotal, paymentTotal, missingItems, totalItems, isManualEntry
+               orderTotal, paymentTotal, missingItems, totalItems, isManualEntry, deletedAt
         FROM history_entries
         WHERE timestamp >= :startDate AND timestamp <= :endDate
           AND """ +
@@ -100,6 +101,39 @@ interface HistoryEntryDao {
             " ORDER BY timestamp DESC"
     )
     suspend fun getUserVisibleSnapshotByUids(uids: List<Long>): List<HistoryEntry>
+
+    @Query(
+        """
+        SELECT h.*
+        FROM history_entries h
+        LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE h.id NOT LIKE 'APPLY_IMPORT_%'
+          AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND (
+            h.deletedAt IS NULL
+            OR r.localChangeRevision > r.lastSyncedLocalRevision
+          )
+        ORDER BY h.timestamp DESC
+        """
+    )
+    suspend fun getHistorySessionPushSnapshot(): List<HistoryEntry>
+
+    @Query(
+        """
+        SELECT h.*
+        FROM history_entries h
+        LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE h.uid IN (:uids)
+          AND h.id NOT LIKE 'APPLY_IMPORT_%'
+          AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND (
+            h.deletedAt IS NULL
+            OR r.localChangeRevision > r.lastSyncedLocalRevision
+          )
+        ORDER BY h.timestamp DESC
+        """
+    )
+    suspend fun getHistorySessionPushSnapshotByUids(uids: List<Long>): List<HistoryEntry>
 
     @Query(
         """

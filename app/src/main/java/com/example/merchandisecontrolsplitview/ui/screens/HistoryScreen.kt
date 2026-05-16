@@ -973,15 +973,23 @@ private fun HistoryRow(
                         .padding(end = spacing.md, bottom = spacing.sm),
                     horizontalArrangement = Arrangement.spacedBy(spacing.sm)
                 ) {
-                    StatusIcon(
-                        baseIcon = Icons.Default.Sync,
-                        badgeType = when (entry.syncStatus) {
-                            SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
-                            SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
-                            SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
-                        },
-                        contentDescription = stringResource(R.string.sync_status)
-                    )
+                    if (entry.deletedAt != null) {
+                        StatusIcon(
+                            baseIcon = Icons.Default.Delete,
+                            badgeType = BadgeType.WARNING,
+                            contentDescription = stringResource(R.string.history_deleted_pending_status)
+                        )
+                    } else {
+                        StatusIcon(
+                            baseIcon = Icons.Default.Sync,
+                            badgeType = when (entry.syncStatus) {
+                                SyncStatus.SYNCED_SUCCESSFULLY -> BadgeType.SUCCESS
+                                SyncStatus.ATTEMPTED_WITH_ERRORS -> BadgeType.WARNING
+                                SyncStatus.NOT_ATTEMPTED -> BadgeType.NONE
+                            },
+                            contentDescription = stringResource(R.string.sync_status)
+                        )
+                    }
                     StatusIcon(
                         baseIcon = Icons.Default.FileDownload,
                         badgeType = if (entry.wasExported) BadgeType.SUCCESS else BadgeType.NONE,

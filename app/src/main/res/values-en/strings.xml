@@ -218,6 +218,7 @@
     <string name="date_label">Date:</string>
     <string name="sync_status">Sync Status</string>
     <string name="export_status">Export Status</string>
+    <string name="history_deleted_pending_status">Deleted pending sync</string>
     <string name="generated_column_prefix">Column</string>
     <string name="default_export_filename">products.xlsx</string>
     <string name="supplier_id_prefix">ID:</string>

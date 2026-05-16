@@ -19,7 +19,7 @@ interface HistoryEntryRemoteRefDao {
     suspend fun getByHistoryEntryUid(uid: Long): HistoryEntryRemoteRef?
 
     /** Cerca un ref per remoteId remoto. Usato per dedup pull (task 008). */
-    @Query("SELECT * FROM history_entry_remote_refs WHERE remoteId = :remoteId LIMIT 1")
+    @Query("SELECT * FROM history_entry_remote_refs WHERE lower(remoteId) = lower(:remoteId) LIMIT 1")
     suspend fun getByRemoteId(remoteId: String): HistoryEntryRemoteRef?
 
     @Query("DELETE FROM history_entry_remote_refs WHERE historyEntryUid = :uid")

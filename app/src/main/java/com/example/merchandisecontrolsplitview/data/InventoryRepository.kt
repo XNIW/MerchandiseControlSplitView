@@ -245,8 +245,11 @@ interface InventoryRepository {
     // --- Backup sessioni cloud (task 023/040): Room-first, payload v1 reader + v2 writer ---
 
     /**
-     * Upload conservativo delle sole entry user-visible con bridge in stato “da inviare”
-     * ([HistoryEntryRemoteRef.lastRemoteAppliedAt] assente o revisione locale avanti).
+     * Upload History verso cloud.
+     *
+     * - [candidateUids] non-null: push preciso delle sole entry dirty/pending indicate.
+     * - [candidateUids] null: full reconciliation user-visible, usata dopo bootstrap/manual sync
+     *   per riparare local-only/clean-stale già marcate synced ma assenti da Supabase.
      */
     suspend fun pushHistorySessionsToRemote(
         remote: SessionBackupRemoteDataSource,
@@ -472,6 +475,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
     private val _remoteAppliedProductIds = MutableSharedFlow<Set<Long>>(extraBufferCapacity = 64)
     override val remoteAppliedProductIds: Flow<Set<Long>> = _remoteAppliedProductIds.asSharedFlow()
+
+    private fun historyTombstoneTimestamp(): String =
+        LocalDateTime.now().format(tSFMT)
 
     @Volatile
     var onHistorySessionPayloadChanged: ((Long) -> Unit)? = null
@@ -1013,8 +1019,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
         db.withTransaction {
-            remoteRefDao.deleteByHistoryEntryUid(entry.uid)
-            historyDao.delete(entry)
+            val existingRemoteId = remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+            val remoteId = existingRemoteId ?: run {
+                historyDao.getByUid(entry.uid) ?: return@withTransaction
+                val inserted = remoteRefDao.insert(
+                    HistoryEntryRemoteRef(
+                        historyEntryUid = entry.uid,
+                        remoteId = java.util.UUID.randomUUID().toString()
+                    )
+                )
+                if (inserted > 0L) {
+                    remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+                } else {
+                    remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+                }
+            }
+            if (remoteId == null) {
+                historyDao.delete(entry)
+                return@withTransaction
+            }
+            val tombstone = historyTombstoneTimestamp()
+            historyDao.update(
+                entry.copy(
+                    deletedAt = tombstone,
+                    syncStatus = SyncStatus.NOT_ATTEMPTED
+                )
+            )
+            remoteRefDao.incrementLocalRevision(entry.uid)
         }
     }
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
@@ -1129,11 +1160,38 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
         }
 
-    private suspend fun applySingleRemotePayload(payload: SessionRemotePayload): RemoteSessionApplyOutcome {
+    private suspend fun applySingleRemotePayload(rawPayload: SessionRemotePayload): RemoteSessionApplyOutcome {
+        val payload = rawPayload.copy(remoteId = canonicalSessionRemoteId(rawPayload.remoteId))
         val fp = payload.payloadFingerprint()
         val overlayState = buildOverlayStateForPayload(payload)
         val existingRef = remoteRefDao.getByRemoteId(payload.remoteId)
         if (existingRef != null) {
+            if (payload.deletedAt != null) {
+                val existingEntry = historyDao.getByUid(existingRef.historyEntryUid)
+                    ?: return RemoteSessionApplyOutcome.Failed(
+                        IllegalStateException("Bridge esiste ma HistoryEntry uid=${existingRef.historyEntryUid} mancante")
+                    )
+                if (existingEntry.deletedAt.isNullOrBlank() &&
+                    existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision
+                ) {
+                    return RemoteSessionApplyOutcome.Skipped
+                }
+                if (existingEntry.deletedAt != payload.deletedAt) {
+                    historyDao.update(
+                        existingEntry.copy(
+                            deletedAt = payload.deletedAt,
+                            syncStatus = SyncStatus.SYNCED_SUCCESSFULLY
+                        )
+                    )
+                }
+                remoteRefDao.updateRemoteApplyState(
+                    uid = existingRef.historyEntryUid,
+                    rev = existingRef.localChangeRevision,
+                    appliedAt = System.currentTimeMillis(),
+                    fingerprint = fp
+                )
+                return RemoteSessionApplyOutcome.Updated
+            }
             // Policy anti-overwrite (task 023): mai applicare inbound se ci sono modifiche payload
             // non ancora sincronizzate verso remoto o consolidate via apply precedente.
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
@@ -1192,7 +1250,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     totalItems = refreshedLocalState?.totalItems ?: existingEntry.totalItems,
                     orderTotal = refreshedLocalState?.orderTotal ?: existingEntry.orderTotal,
                     paymentTotal = refreshedLocalState?.paymentTotal ?: existingEntry.paymentTotal,
-                    missingItems = refreshedLocalState?.missingItems ?: existingEntry.missingItems
+                    missingItems = refreshedLocalState?.missingItems ?: existingEntry.missingItems,
+                    syncStatus = SyncStatus.SYNCED_SUCCESSFULLY,
+                    deletedAt = null
                 )
             )
             // Allinea la revisione: dopo l'apply remoto l'entry è di nuovo allineata.
@@ -1203,6 +1263,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 fingerprint = fp
             )
             return RemoteSessionApplyOutcome.Updated
+        }
+        if (payload.deletedAt != null) {
+            return RemoteSessionApplyOutcome.Skipped
         }
         // Insert path: remoteId sconosciuto → nuova entry + bridge con sync state inizializzato.
         val localState = when (overlayState) {
@@ -1224,7 +1287,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             totalItems = localState.totalItems,
             orderTotal = localState.orderTotal,
             paymentTotal = localState.paymentTotal,
-            missingItems = localState.missingItems
+            missingItems = localState.missingItems,
+            syncStatus = SyncStatus.SYNCED_SUCCESSFULLY,
+            deletedAt = null
         )
         val newUid = historyDao.insert(newEntry)
         if (newUid <= 0L) {
@@ -2169,24 +2234,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         try {
             val candidates = mutableListOf<HistorySessionPushCandidate>()
-            val candidateUidList = candidateUids
-                ?.filter { it > 0L }
-                ?.distinct()
-                ?: historyDao.getUserVisibleSessionPushCandidateUids()
-            val entries = if (candidateUidList.isEmpty()) {
-                emptyList()
+            val fullReconciliation = candidateUids == null
+            val entries = if (fullReconciliation) {
+                historyDao.getHistorySessionPushSnapshot()
             } else {
-                historyDao.getUserVisibleSnapshotByUids(candidateUidList)
+                val candidateUidList = candidateUids
+                    .filter { it > 0L }
+                    .distinct()
+                if (candidateUidList.isEmpty()) {
+                    emptyList()
+                } else {
+                    historyDao.getHistorySessionPushSnapshotByUids(candidateUidList)
+                }
             }
-            val skippedAlreadySynced = if (candidateUids == null) {
-                (historyDao.countUserVisible() - entries.size).coerceAtLeast(0)
-            } else {
-                0
-            }
+            var skippedAlreadySynced = 0
             for (entry in entries) {
                 val remoteId = getOrCreateRemoteId(entry.uid) ?: continue
                 val ref = remoteRefDao.getByHistoryEntryUid(entry.uid) ?: continue
-                if (!historySessionNeedsPush(ref)) {
+                if (!fullReconciliation && !historySessionNeedsPush(ref)) {
+                    skippedAlreadySynced++
                     continue
                 }
                 val payload = entry.toRemotePayload(remoteId)
@@ -2212,7 +2278,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 }
                 db.withTransaction {
                     for (c in chunk) {
-                        remoteRefDao.getByHistoryEntryUid(c.entry.uid) ?: continue
                         val fp = c.payload.payloadFingerprint()
                         remoteRefDao.updateRemoteApplyState(
                             uid = c.entry.uid,
@@ -2223,6 +2288,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                             appliedAt = System.currentTimeMillis(),
                             fingerprint = fp
                         )
+                        val latestRef = remoteRefDao.getByHistoryEntryUid(c.entry.uid) ?: continue
+                        val latestEntry = historyDao.getByUid(c.entry.uid) ?: continue
+                        if (latestRef.localChangeRevision == c.ref.localChangeRevision) {
+                            historyDao.update(latestEntry.copy(syncStatus = SyncStatus.SYNCED_SUCCESSFULLY))
+                        }
                     }
                 }
                 uploaded += chunk.size
