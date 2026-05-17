@@ -30,6 +30,7 @@ import com.example.merchandisecontrolsplitview.util.ExcelFileUserError
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
+import com.example.merchandisecontrolsplitview.util.canonicalExcelHeaderKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -92,6 +93,24 @@ class ExcelViewModel(
     private val repository: InventoryRepository
 ) : AndroidViewModel(application) {
     private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
+    private val defaultIncludedColumnKeys = setOf(
+        "barcode",
+        "productName",
+        "purchasePrice",
+        "quantity",
+        "retailPrice",
+        "totalPrice",
+        "secondProductName",
+        "itemNumber",
+        "supplier",
+        "rowNumber",
+        "discount",
+        "discountedPrice",
+        "category",
+        "realQuantity",
+        "oldPurchasePrice",
+        "oldRetailPrice"
+    )
     // Stato griglia
     val excelData = mutableStateListOf<List<String>>()
     val originalHeaders = mutableStateListOf<String>()
@@ -302,6 +321,9 @@ class ExcelViewModel(
     // Funzione per gestire la selezione di una colonna, bloccando quelle essenziali
     fun toggleColumnSelection(colIdx: Int) {
         if (isColumnEssential(colIdx)) {
+            if (colIdx in selectedColumns.indices) {
+                selectedColumns[colIdx] = true
+            }
             return
         }
         if (colIdx in selectedColumns.indices) {
@@ -597,12 +619,36 @@ class ExcelViewModel(
     private fun initPreGenerateState() {
         selectedColumns.clear()
         excelData.firstOrNull()?.size?.let { cols ->
-            repeat(cols) { selectedColumns.add(true) }
+            repeat(cols) { colIdx ->
+                selectedColumns.add(defaultIsColumnSelected(colIdx))
+            }
         }
         editableValues.clear()
         repeat(excelData.size) { editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
         completeStates.clear()
         repeat(excelData.size) { completeStates.add(false) }
+    }
+
+    fun defaultIsColumnIncluded(headerKey: String?, headerType: String?): Boolean {
+        val canonicalKey = headerKey
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { canonicalExcelHeaderKey(it) ?: it }
+            ?: return false
+
+        if (canonicalKey in defaultIncludedColumnKeys) return true
+
+        return when (headerType?.trim()) {
+            "alias", "pattern" -> true
+            null, "", "unknown", "generated" -> false
+            else -> true
+        }
+    }
+
+    private fun defaultIsColumnSelected(colIdx: Int): Boolean {
+        val headerKey = excelData.firstOrNull()?.getOrNull(colIdx)
+        val headerType = headerTypes.getOrNull(colIdx)
+        return defaultIsColumnIncluded(headerKey, headerType)
     }
 
     fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
@@ -963,6 +1009,9 @@ class ExcelViewModel(
                 excelData[0] = headerRow
             }
         }
+        if (colIdx in selectedColumns.indices) {
+            selectedColumns[colIdx] = isColumnEssential(colIdx) || defaultIsColumnSelected(colIdx)
+        }
     }
 
     fun restoreOriginalHeader(colIdx: Int) {
@@ -974,6 +1023,9 @@ class ExcelViewModel(
         if (colIdx in headerRow.indices) {
             headerRow[colIdx] = originalHeader
             excelData[0] = headerRow
+        }
+        if (colIdx in selectedColumns.indices) {
+            selectedColumns[colIdx] = isColumnEssential(colIdx) || defaultIsColumnSelected(colIdx)
         }
     }
 

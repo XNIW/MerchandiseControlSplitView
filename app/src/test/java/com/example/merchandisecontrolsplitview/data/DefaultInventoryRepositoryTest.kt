@@ -1210,9 +1210,11 @@ class DefaultInventoryRepositoryTest {
 
         val first = repository.addSupplier("My Supplier")
         val second = repository.addSupplier("My Supplier")
+        val third = repository.addSupplier("  MY SUPPLIER  ")
 
         assertNotNull(first)
         assertEquals(first?.id, second?.id)
+        assertEquals(first?.id, third?.id)
         assertEquals(1, repository.getAllSuppliers().size)
         assertEquals(1, catalogChangeCount)
     }
@@ -1226,9 +1228,11 @@ class DefaultInventoryRepositoryTest {
 
         val first = repository.addCategory("My Category")
         val second = repository.addCategory("My Category")
+        val third = repository.addCategory("  MY CATEGORY  ")
 
         assertNotNull(first)
         assertEquals(first?.id, second?.id)
+        assertEquals(first?.id, third?.id)
         assertEquals(1, repository.getAllCategories().size)
         assertEquals(1, catalogChangeCount)
     }

@@ -370,6 +370,10 @@
     <string name="pre_generate_show_all_options">Mostrar todo...</string>
     <string name="pre_generate_selection_pending">Selecciona un resultado o crea uno nuevo para continuar.</string>
     <string name="pre_generate_selection_ready">Seleccionado: %1$s</string>
+    <string name="pre_generate_new_supplier_status">Nuevo proveedor: %1$s</string>
+    <string name="pre_generate_new_category_status">Nueva categoría: %1$s</string>
+    <string name="pre_generate_supplier_summary_new">Nuevo: %1$s</string>
+    <string name="pre_generate_category_summary_new">Nueva: %1$s</string>
     <string name="pre_generate_generate_section_title">Generar inventario</string>
     <string name="pre_generate_generate_section_supporting">Revisa el resumen final antes de abrir la siguiente pantalla.</string>
     <string name="pre_generate_generate_ready">Filas cargadas: %1$d. Abriremos la siguiente pantalla con todo el conjunto de datos.</string>

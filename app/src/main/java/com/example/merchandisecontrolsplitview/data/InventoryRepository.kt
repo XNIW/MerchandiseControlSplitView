@@ -640,14 +640,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val (supplier, didCreate) = withContext(Dispatchers.IO) {
             val normalizedName = name.trim()
             if (normalizedName.isBlank()) return@withContext null to false
+            val lookupKey = normalizedName.lowercase(Locale.ROOT)
             supplierMutex.withLock {
-                supplierDao.findByNameIgnoreCase(normalizedName)?.let { return@withLock it to false }
+                supplierDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
                 val newSupplier = Supplier(name = normalizedName)
                 val insertedId = supplierDao.insert(newSupplier)
                 val created = if (insertedId > 0L) {
                     supplierDao.getById(insertedId)
                 } else {
-                    supplierDao.findByNameIgnoreCase(normalizedName)
+                    supplierDao.findByNormalizedName(lookupKey)
                 }
                 Pair(
                     created?.also { touchSupplierDirty(it.id) },
@@ -881,14 +882,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val (category, didCreate) = withContext(Dispatchers.IO) {
             val normalizedName = name.trim()
             if (normalizedName.isBlank()) return@withContext null to false
+            val lookupKey = normalizedName.lowercase(Locale.ROOT)
             categoryMutex.withLock {
-                categoryDao.findByName(normalizedName)?.let { return@withLock it to false }
+                categoryDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
                 val newCategory = Category(name = normalizedName)
                 val insertedId = categoryDao.insert(newCategory)
                 val created = if (insertedId > 0L) {
                     categoryDao.getById(insertedId)
                 } else {
-                    categoryDao.findByName(normalizedName)
+                    categoryDao.findByNormalizedName(lookupKey)
                 }
                 Pair(
                     created?.also { touchCategoryDirty(it.id) },

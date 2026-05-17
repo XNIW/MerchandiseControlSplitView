@@ -71,13 +71,13 @@ class ExcelViewModelTest {
     }
 
     @Test
-    fun `toggleColumnSelection does not change essential column`() = runTest {
+    fun `toggleColumnSelection keeps essential column selected`() = runTest {
         seedColumnSelectionState()
 
         viewModel.toggleColumnSelection(0)
 
         assertTrue(viewModel.isColumnEssential(0))
-        assertFalse(viewModel.selectedColumns[0])
+        assertTrue(viewModel.selectedColumns[0])
     }
 
     @Test
@@ -801,6 +801,75 @@ class ExcelViewModelTest {
             viewModel.excelData.first()
         )
         assertEquals(listOf("12345678", "Strict Item", "4", "2", "8"), viewModel.excelData[1])
+    }
+
+    @Test
+    fun `loadFromMultipleUris defaults unrecognized columns off while keeping recognized columns on`() =
+        runTest {
+            val insertedEntry = slot<HistoryEntry>()
+            coEvery { repository.insertHistoryEntry(capture(insertedEntry)) } returns 88L
+            coEvery { repository.getPreviousPricesForBarcodes(any(), any()) } returns emptyMap()
+            val workbook = createWorkbook(
+                name = "load-column-defaults",
+                rows = listOf(
+                    listOf("Barcode", "Product name", "Purchase Price", "Quantity", "Internal note"),
+                    listOf("TASK111_ANDROID_DEFAULTS", "Defaults", 10.0, 2.0, "Do not import by default")
+                )
+            )
+
+            viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(workbook)))
+            advanceUntilIdle()
+            waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
+
+            val header = viewModel.excelData.first()
+            val barcodeIndex = header.indexOf("barcode")
+            val productNameIndex = header.indexOf("productName")
+            val purchasePriceIndex = header.indexOf("purchasePrice")
+            val quantityIndex = header.indexOf("quantity")
+            val unknownIndex = header.indexOfFirst { it == "Internal note" || it == "internalnote" }
+
+            assertTrue(barcodeIndex >= 0)
+            assertTrue(productNameIndex >= 0)
+            assertTrue(purchasePriceIndex >= 0)
+            assertTrue(quantityIndex >= 0)
+            assertTrue(unknownIndex >= 0)
+            assertTrue(viewModel.selectedColumns[barcodeIndex])
+            assertTrue(viewModel.selectedColumns[productNameIndex])
+            assertTrue(viewModel.selectedColumns[purchasePriceIndex])
+            assertTrue(viewModel.selectedColumns[quantityIndex])
+            assertFalse(viewModel.selectedColumns[unknownIndex])
+
+            viewModel.toggleColumnSelection(unknownIndex)
+            assertTrue(viewModel.selectedColumns[unknownIndex])
+
+            viewModel.setHeaderType(unknownIndex, "retailPrice")
+            assertTrue(viewModel.selectedColumns[unknownIndex])
+
+            viewModel.restoreOriginalHeader(unknownIndex)
+            assertFalse(viewModel.selectedColumns[unknownIndex])
+
+            viewModel.generateFilteredWithOldPrices("Supplier A", "Category A") {}
+            advanceUntilIdle()
+
+            val generatedHeader = insertedEntry.captured.data.first()
+            assertTrue(generatedHeader.contains("barcode"))
+            assertTrue(generatedHeader.contains("productName"))
+            assertTrue(generatedHeader.contains("purchasePrice"))
+            assertFalse(generatedHeader.contains("Internal note"))
+            assertFalse(generatedHeader.contains("internalnote"))
+        }
+
+    @Test
+    fun `defaultIsColumnIncluded keeps all recognized import columns on and unknown columns off`() {
+        assertTrue(viewModel.defaultIsColumnIncluded("discount", "unknown"))
+        assertTrue(viewModel.defaultIsColumnIncluded("realQuantity", "unknown"))
+        assertTrue(viewModel.defaultIsColumnIncluded("oldPurchasePrice", "unknown"))
+        assertTrue(viewModel.defaultIsColumnIncluded("oldRetailPrice", "unknown"))
+        assertTrue(viewModel.defaultIsColumnIncluded("Internal note", "alias"))
+        assertTrue(viewModel.defaultIsColumnIncluded("Internal note", "pattern"))
+        assertTrue(viewModel.defaultIsColumnIncluded("Internal note", "inferred"))
+        assertFalse(viewModel.defaultIsColumnIncluded("Internal note", "unknown"))
+        assertFalse(viewModel.defaultIsColumnIncluded("Internal note", "generated"))
     }
 
     @Test

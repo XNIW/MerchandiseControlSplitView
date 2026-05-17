@@ -371,6 +371,10 @@
     <string name="pre_generate_show_all_options">Show all...</string>
     <string name="pre_generate_selection_pending">Select a result or create a new one to continue.</string>
     <string name="pre_generate_selection_ready">Selected: %1$s</string>
+    <string name="pre_generate_new_supplier_status">New supplier: %1$s</string>
+    <string name="pre_generate_new_category_status">New category: %1$s</string>
+    <string name="pre_generate_supplier_summary_new">New: %1$s</string>
+    <string name="pre_generate_category_summary_new">New: %1$s</string>
     <string name="pre_generate_generate_section_title">Generate inventory</string>
     <string name="pre_generate_generate_section_supporting">Review the final summary before opening the next screen.</string>
     <string name="pre_generate_generate_ready">Loaded rows: %1$d. We will open the next screen with the whole dataset.</string>

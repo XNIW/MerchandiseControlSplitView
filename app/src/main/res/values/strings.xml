@@ -388,6 +388,10 @@
     <string name="pre_generate_show_all_options">Mostra tutto...</string>
     <string name="pre_generate_selection_pending">Seleziona un risultato o creane uno nuovo per continuare.</string>
     <string name="pre_generate_selection_ready">Selezionato: %1$s</string>
+    <string name="pre_generate_new_supplier_status">Nuovo fornitore: %1$s</string>
+    <string name="pre_generate_new_category_status">Nuova categoria: %1$s</string>
+    <string name="pre_generate_supplier_summary_new">Nuovo: %1$s</string>
+    <string name="pre_generate_category_summary_new">Nuova: %1$s</string>
     <string name="pre_generate_generate_section_title">Genera inventario</string>
     <string name="pre_generate_generate_section_supporting">Controlla l\'ultima sintesi prima di aprire la schermata finale.</string>
     <string name="pre_generate_generate_ready">Righe caricate: %1$d. Apriremo la schermata finale con tutto il dataset.</string>

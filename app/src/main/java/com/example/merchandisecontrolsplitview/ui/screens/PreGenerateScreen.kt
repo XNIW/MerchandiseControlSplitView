@@ -102,8 +102,9 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.launch
-import kotlin.math.min
+import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.min
 
 private val preGenerateMimeTypes = arrayOf(
     "application/vnd.ms-excel",
@@ -136,6 +137,8 @@ private val preGeneratePreviewRegularColumnWidth = 104.dp
 private val preGeneratePreviewWideColumnWidth = 136.dp
 private val preGeneratePreviewExtraWideColumnWidth = 176.dp
 private val preGeneratePreviewTableMaxHeight = 304.dp
+private val preGenerateWhitespaceRegex = "\\s+".toRegex()
+private val preGenerateCombiningMarkRegex = "\\p{Mn}+".toRegex()
 private val preGenerateKnownHeaderKeys = preGeneratePossibleKeys.toSet() + setOf(
     "oldPurchasePrice",
     "oldRetailPrice",
@@ -158,6 +161,26 @@ private enum class PreGenerateColumnFilter {
     ALL,
     NEEDS_REVIEW,
     IDENTIFIED
+}
+
+internal enum class PreGenerateEntityResolutionKind {
+    EMPTY,
+    EXISTING,
+    PENDING_CREATE
+}
+
+internal data class PreGenerateEntityResolution(
+    val kind: PreGenerateEntityResolutionKind,
+    val displayName: String?
+) {
+    val isValid: Boolean
+        get() = kind != PreGenerateEntityResolutionKind.EMPTY
+
+    val isExisting: Boolean
+        get() = kind == PreGenerateEntityResolutionKind.EXISTING
+
+    val isPendingCreate: Boolean
+        get() = kind == PreGenerateEntityResolutionKind.PENDING_CREATE
 }
 
 private data class PreGenerateColumnUiModel(
@@ -188,6 +211,7 @@ fun PreGenerateScreen(
     val context = LocalContext.current
     val density = LocalDensity.current
     val spacing = MaterialTheme.appSpacing
+    val screenScope = rememberCoroutineScope()
 
     var headerDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showCustomHeaderDialog by remember { mutableStateOf(false) }
@@ -198,11 +222,13 @@ fun PreGenerateScreen(
 
     val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
     var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
+    var acceptedPendingSupplierKey by remember { mutableStateOf<String?>(null) }
     var isSupplierDropdownExpanded by remember { mutableStateOf(false) }
     val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
 
     val categoryInputText by databaseViewModel.categoryInputText.collectAsState()
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
+    var acceptedPendingCategoryKey by remember { mutableStateOf<String?>(null) }
     var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
     val categorySuggestions by databaseViewModel.categories.collectAsState()
 
@@ -211,6 +237,8 @@ fun PreGenerateScreen(
         databaseViewModel.onCategorySearchQueryChanged("")
         selectedSupplier = null
         selectedCategory = null
+        acceptedPendingSupplierKey = null
+        acceptedPendingCategoryKey = null
         isSupplierDropdownExpanded = false
         isCategoryDropdownExpanded = false
     }
@@ -314,28 +342,61 @@ fun PreGenerateScreen(
 
     val missingEssentialColumns = setOf("barcode", "productName", "purchasePrice")
         .filterNot { headers.contains(it) }
-    val isSupplierSelectionValid =
-        selectedSupplier != null && selectedSupplier?.name == supplierInputText
-    val isCategorySelectionValid =
-        selectedCategory != null && selectedCategory?.name == categoryInputText
+    val supplierResolution = resolvePreGenerateEntityResolution(
+        inputText = supplierInputText,
+        selectedName = selectedSupplier?.name,
+        existingNames = supplierSuggestions.map { it.name }
+    )
+    val categoryResolution = resolvePreGenerateEntityResolution(
+        inputText = categoryInputText,
+        selectedName = selectedCategory?.name,
+        existingNames = categorySuggestions.map { it.name }
+    )
     val isGenerateEnabled =
-        isSupplierSelectionValid &&
-            isCategorySelectionValid &&
+        supplierResolution.isValid &&
+            categoryResolution.isValid &&
             missingEssentialColumns.isEmpty()
+    val isSupplierPendingAccepted = supplierResolution.isPendingCreate &&
+        supplierResolution.displayName?.let { normalizedPreGenerateRelationKey(it) } == acceptedPendingSupplierKey
+    val isCategoryPendingAccepted = categoryResolution.isPendingCreate &&
+        categoryResolution.displayName?.let { normalizedPreGenerateRelationKey(it) } == acceptedPendingCategoryKey
 
     val generateDisabledReason = when {
         missingEssentialColumns.isNotEmpty() -> stringResource(
             R.string.error_missing_essential_columns_prompt,
             missingEssentialColumns.joinToString { getLocalizedHeader(context, it) }
         )
-        !isSupplierSelectionValid && !isCategorySelectionValid ->
+        !supplierResolution.isValid && !categoryResolution.isValid ->
             stringResource(R.string.pre_generate_generate_requirements)
-        !isSupplierSelectionValid ->
+        !supplierResolution.isValid ->
             stringResource(R.string.pre_generate_supplier_required)
-        !isCategorySelectionValid ->
+        !categoryResolution.isValid ->
             stringResource(R.string.pre_generate_category_required)
         else -> null
     }
+
+    val supplierStatusMessage = preGenerateEntityStatusMessage(
+        resolution = supplierResolution,
+        notSelected = stringResource(R.string.pre_generate_not_selected),
+        existingTemplate = stringResource(R.string.pre_generate_selection_ready),
+        pendingTemplate = stringResource(R.string.pre_generate_new_supplier_status)
+    )
+    val categoryStatusMessage = preGenerateEntityStatusMessage(
+        resolution = categoryResolution,
+        notSelected = stringResource(R.string.pre_generate_not_selected),
+        existingTemplate = stringResource(R.string.pre_generate_selection_ready),
+        pendingTemplate = stringResource(R.string.pre_generate_new_category_status)
+    )
+    val supplierSummaryValue = preGenerateEntitySummaryValue(
+        resolution = supplierResolution,
+        notSelected = stringResource(R.string.pre_generate_not_selected),
+        pendingTemplate = stringResource(R.string.pre_generate_supplier_summary_new)
+    )
+    val categorySummaryValue = preGenerateEntitySummaryValue(
+        resolution = categoryResolution,
+        notSelected = stringResource(R.string.pre_generate_not_selected),
+        pendingTemplate = stringResource(R.string.pre_generate_category_summary_new)
+    )
 
     val duplicateWarningMessage =
         if (dataQualitySummary.duplicateBarcodeCount > 0) {
@@ -521,31 +582,35 @@ fun PreGenerateScreen(
                                 inputText = supplierInputText,
                                 expanded = isSupplierDropdownExpanded,
                                 suggestions = supplierSuggestions,
-                                selectedName = selectedSupplier?.name,
-                                isSelectionValid = isSupplierSelectionValid,
-                                pendingSelectionMessage = stringResource(R.string.pre_generate_selection_pending),
-                                createPrompt = if (
-                                    supplierSuggestions.none { it.name.equals(supplierInputText, ignoreCase = true) } &&
-                                    supplierInputText.isNotBlank()
-                                ) {
+                                isExistingSelection = supplierResolution.isExisting,
+                                isValidForGenerate = supplierResolution.isValid,
+                                isPendingCreate = supplierResolution.isPendingCreate,
+                                isPendingCreateAccepted = isSupplierPendingAccepted,
+                                statusMessage = supplierStatusMessage,
+                                createPrompt = if (supplierResolution.isPendingCreate) {
                                     stringResource(
                                         R.string.add_new_supplier_prompt,
-                                        supplierInputText
+                                        supplierResolution.displayName.orEmpty()
                                     )
                                 } else {
                                     null
                                 },
                                 onExpandedChange = { isSupplierDropdownExpanded = it },
                                 onInputChange = {
+                                    selectedSupplier = null
+                                    acceptedPendingSupplierKey = null
                                     databaseViewModel.onSupplierSearchQueryChanged(it)
                                 },
                                 onSuggestionSelected = { suggestion ->
+                                    acceptedPendingSupplierKey = null
                                     databaseViewModel.onSupplierSearchQueryChanged(suggestion.name)
                                     selectedSupplier = suggestion
                                     isSupplierDropdownExpanded = false
                                 },
                                 onCreateRequested = {
-                                    databaseViewModel.addSupplier(supplierInputText)
+                                    acceptedPendingSupplierKey = supplierResolution.displayName
+                                        ?.let { normalizedPreGenerateRelationKey(it) }
+                                    isSupplierDropdownExpanded = false
                                 },
                                 itemLabel = { it.name }
                             )
@@ -559,31 +624,35 @@ fun PreGenerateScreen(
                                 inputText = categoryInputText,
                                 expanded = isCategoryDropdownExpanded,
                                 suggestions = categorySuggestions,
-                                selectedName = selectedCategory?.name,
-                                isSelectionValid = isCategorySelectionValid,
-                                pendingSelectionMessage = stringResource(R.string.pre_generate_selection_pending),
-                                createPrompt = if (
-                                    categorySuggestions.none { it.name.equals(categoryInputText, ignoreCase = true) } &&
-                                    categoryInputText.isNotBlank()
-                                ) {
+                                isExistingSelection = categoryResolution.isExisting,
+                                isValidForGenerate = categoryResolution.isValid,
+                                isPendingCreate = categoryResolution.isPendingCreate,
+                                isPendingCreateAccepted = isCategoryPendingAccepted,
+                                statusMessage = categoryStatusMessage,
+                                createPrompt = if (categoryResolution.isPendingCreate) {
                                     stringResource(
                                         R.string.add_new_category_prompt,
-                                        categoryInputText
+                                        categoryResolution.displayName.orEmpty()
                                     )
                                 } else {
                                     null
                                 },
                                 onExpandedChange = { isCategoryDropdownExpanded = it },
                                 onInputChange = {
+                                    selectedCategory = null
+                                    acceptedPendingCategoryKey = null
                                     databaseViewModel.onCategorySearchQueryChanged(it)
                                 },
                                 onSuggestionSelected = { suggestion ->
+                                    acceptedPendingCategoryKey = null
                                     databaseViewModel.onCategorySearchQueryChanged(suggestion.name)
                                     selectedCategory = suggestion
                                     isCategoryDropdownExpanded = false
                                 },
                                 onCreateRequested = {
-                                    databaseViewModel.addCategory(categoryInputText)
+                                    acceptedPendingCategoryKey = categoryResolution.displayName
+                                        ?.let { normalizedPreGenerateRelationKey(it) }
+                                    isCategoryDropdownExpanded = false
                                 },
                                 itemLabel = { it.name }
                             )
@@ -591,18 +660,36 @@ fun PreGenerateScreen(
 
                         item(key = "generate") {
                             PreGenerateGenerateSection(
-                                selectedSupplierName = selectedSupplier?.name,
-                                selectedCategoryName = selectedCategory?.name,
+                                supplierSummaryValue = supplierSummaryValue,
+                                categorySummaryValue = categorySummaryValue,
+                                isSupplierPendingCreate = supplierResolution.isPendingCreate,
+                                isCategoryPendingCreate = categoryResolution.isPendingCreate,
                                 selectedColumnCount = selectedColumnCount,
                                 totalColumnCount = columnUiModels.size,
                                 totalRows = totalDataRows,
                                 isGenerateEnabled = isGenerateEnabled,
                                 generateDisabledReason = generateDisabledReason,
                                 onGenerate = {
-                                    val supplier = selectedSupplier
-                                    val category = selectedCategory
-                                    if (isGenerateEnabled && supplier != null && category != null) {
-                                        onGenerate(supplier.name, category.name)
+                                    if (isGenerateEnabled) {
+                                        val supplierName = supplierResolution.displayName
+                                        val categoryName = categoryResolution.displayName
+                                        if (!supplierName.isNullOrBlank() && !categoryName.isNullOrBlank()) {
+                                            screenScope.launch {
+                                                val resolvedSupplierName = if (supplierResolution.isPendingCreate) {
+                                                    databaseViewModel.addSupplier(supplierName)?.name ?: supplierName
+                                                } else {
+                                                    supplierName
+                                                }
+                                                val resolvedCategoryName = if (categoryResolution.isPendingCreate) {
+                                                    databaseViewModel.addCategory(categoryName)?.name ?: categoryName
+                                                } else {
+                                                    categoryName
+                                                }
+                                                databaseViewModel.onSupplierSearchQueryChanged(resolvedSupplierName)
+                                                databaseViewModel.onCategorySearchQueryChanged(resolvedCategoryName)
+                                                onGenerate(resolvedSupplierName, resolvedCategoryName)
+                                            }
+                                        }
                                     }
                                 }
                             )
@@ -1189,24 +1276,25 @@ private fun <T> PreGenerateEntitySection(
     inputText: String,
     expanded: Boolean,
     suggestions: List<T>,
-    selectedName: String?,
-    isSelectionValid: Boolean,
-    pendingSelectionMessage: String,
+    isExistingSelection: Boolean,
+    isValidForGenerate: Boolean,
+    isPendingCreate: Boolean,
+    isPendingCreateAccepted: Boolean,
+    statusMessage: String,
     createPrompt: String?,
     onExpandedChange: (Boolean) -> Unit,
     onInputChange: (String) -> Unit,
     onSuggestionSelected: (T) -> Unit,
-    onCreateRequested: suspend () -> T?,
+    onCreateRequested: () -> Unit,
     itemLabel: (T) -> String
 ) {
-    val scope = rememberCoroutineScope()
     val spacing = MaterialTheme.appSpacing
 
-    // Show inline list when:
-    // - user is typing and no valid selection yet  →  !isSelectionValid && inputText.isNotBlank()
-    // - or "show all" was requested               →  expanded
-    // and there is something to show
-    val showList = !isSelectionValid &&
+    // Show inline list while the value is not an existing confirmed item.
+    // Pending-create text remains valid for generation but still lets the user pick
+    // an existing suggestion or use the explicit create affordance.
+    val showList = !isExistingSelection &&
+        !isPendingCreateAccepted &&
         (inputText.isNotBlank() || expanded) &&
         (suggestions.isNotEmpty() || createPrompt != null)
 
@@ -1269,12 +1357,8 @@ private fun <T> PreGenerateEntitySection(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    scope.launch {
-                                        onCreateRequested()?.let { created ->
-                                            onSuggestionSelected(created)
-                                            onExpandedChange(false)
-                                        }
-                                    }
+                                    onCreateRequested()
+                                    onExpandedChange(false)
                                 }
                                 .padding(horizontal = spacing.lg, vertical = spacing.md),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1300,10 +1384,10 @@ private fun <T> PreGenerateEntitySection(
             }
         }
 
-        // Hide "show all" browse affordance once a valid selection has been confirmed:
+        // Hide "show all" browse affordance once an existing selection has been confirmed:
         // tapping it would clear the input text and invalidate the current selection.
         // The user can still change their choice by typing directly in the field above.
-        if (!isSelectionValid) {
+        if (!isExistingSelection) {
             HorizontalDivider()
 
             TextButton(
@@ -1326,25 +1410,24 @@ private fun <T> PreGenerateEntitySection(
         }
 
         Text(
-            text = if (isSelectionValid && !selectedName.isNullOrBlank()) {
-                stringResource(R.string.pre_generate_selection_ready, selectedName)
-            } else {
-                pendingSelectionMessage
-            },
+            text = statusMessage,
             style = MaterialTheme.typography.bodySmall,
-            color = if (isSelectionValid) {
+            color = if (isValidForGenerate) {
                 MaterialTheme.colorScheme.primary
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
-            }
+            },
+            fontWeight = if (isPendingCreate) FontWeight.SemiBold else FontWeight.Normal
         )
     }
 }
 
 @Composable
 private fun PreGenerateGenerateSection(
-    selectedSupplierName: String?,
-    selectedCategoryName: String?,
+    supplierSummaryValue: String,
+    categorySummaryValue: String,
+    isSupplierPendingCreate: Boolean,
+    isCategoryPendingCreate: Boolean,
     selectedColumnCount: Int,
     totalColumnCount: Int,
     totalRows: Int,
@@ -1389,11 +1472,13 @@ private fun PreGenerateGenerateSection(
                 Column(verticalArrangement = Arrangement.spacedBy(spacing.sm)) {
                     PreGenerateSummaryRow(
                         label = stringResource(R.string.supplier_label),
-                        value = selectedSupplierName ?: stringResource(R.string.pre_generate_not_selected)
+                        value = supplierSummaryValue,
+                        emphasize = isSupplierPendingCreate
                     )
                     PreGenerateSummaryRow(
                         label = stringResource(R.string.category_label),
-                        value = selectedCategoryName ?: stringResource(R.string.pre_generate_not_selected)
+                        value = categorySummaryValue,
+                        emphasize = isCategoryPendingCreate
                     )
                     PreGenerateSummaryRow(
                         label = stringResource(R.string.pre_generate_summary_columns_label),
@@ -1450,7 +1535,8 @@ private fun PreGenerateGenerateSection(
 @Composable
 private fun PreGenerateSummaryRow(
     label: String,
-    value: String
+    value: String,
+    emphasize: Boolean = false
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1467,7 +1553,12 @@ private fun PreGenerateSummaryRow(
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
+            fontWeight = if (emphasize) FontWeight.SemiBold else FontWeight.Medium,
+            color = if (emphasize) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
             textAlign = TextAlign.End,
             modifier = Modifier.weight(1f)
         )
@@ -1948,6 +2039,68 @@ private fun buildColumnExamples(
     .distinct()
     .take(PRE_GENERATE_COLUMN_EXAMPLE_LIMIT)
     .toList()
+
+internal fun resolvePreGenerateEntityResolution(
+    inputText: String,
+    selectedName: String?,
+    existingNames: List<String>
+): PreGenerateEntityResolution {
+    val displayName = normalizedPreGenerateRelationDisplayName(inputText)
+        ?: return PreGenerateEntityResolution(PreGenerateEntityResolutionKind.EMPTY, null)
+    val inputKey = normalizedPreGenerateRelationKey(displayName)
+
+    selectedName
+        ?.takeIf { normalizedPreGenerateRelationKey(it) == inputKey }
+        ?.let { return PreGenerateEntityResolution(PreGenerateEntityResolutionKind.EXISTING, it) }
+
+    existingNames
+        .firstOrNull { normalizedPreGenerateRelationKey(it) == inputKey }
+        ?.let { return PreGenerateEntityResolution(PreGenerateEntityResolutionKind.EXISTING, it) }
+
+    return PreGenerateEntityResolution(PreGenerateEntityResolutionKind.PENDING_CREATE, displayName)
+}
+
+private fun normalizedPreGenerateRelationDisplayName(value: String): String? {
+    val displayName = value.trim().replace(preGenerateWhitespaceRegex, " ")
+    return displayName.takeIf { it.isNotBlank() }
+}
+
+private fun normalizedPreGenerateRelationKey(value: String): String {
+    val displayName = normalizedPreGenerateRelationDisplayName(value).orEmpty()
+    return Normalizer.normalize(displayName, Normalizer.Form.NFD)
+        .replace(preGenerateCombiningMarkRegex, "")
+        .lowercase(Locale.ROOT)
+}
+
+private fun preGenerateEntityStatusMessage(
+    resolution: PreGenerateEntityResolution,
+    notSelected: String,
+    existingTemplate: String,
+    pendingTemplate: String
+): String {
+    val displayName = resolution.displayName.orEmpty()
+    return when (resolution.kind) {
+        PreGenerateEntityResolutionKind.EMPTY -> notSelected
+        PreGenerateEntityResolutionKind.EXISTING ->
+            String.format(Locale.getDefault(), existingTemplate, displayName)
+        PreGenerateEntityResolutionKind.PENDING_CREATE ->
+            String.format(Locale.getDefault(), pendingTemplate, displayName)
+    }
+}
+
+private fun preGenerateEntitySummaryValue(
+    resolution: PreGenerateEntityResolution,
+    notSelected: String,
+    pendingTemplate: String
+): String {
+    val displayName = resolution.displayName.orEmpty()
+    return when (resolution.kind) {
+        PreGenerateEntityResolutionKind.EMPTY -> notSelected
+        PreGenerateEntityResolutionKind.EXISTING -> displayName
+        PreGenerateEntityResolutionKind.PENDING_CREATE ->
+            String.format(Locale.getDefault(), pendingTemplate, displayName)
+    }
+}
 
 private fun buildHighlightedSuggestion(
     text: String,

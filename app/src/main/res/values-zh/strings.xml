@@ -370,6 +370,10 @@
     <string name="pre_generate_show_all_options">显示全部...</string>
     <string name="pre_generate_selection_pending">请选择一个结果，或新建一个后继续。</string>
     <string name="pre_generate_selection_ready">已选择：%1$s</string>
+    <string name="pre_generate_new_supplier_status">新供应商：%1$s</string>
+    <string name="pre_generate_new_category_status">新类别：%1$s</string>
+    <string name="pre_generate_supplier_summary_new">新建：%1$s</string>
+    <string name="pre_generate_category_summary_new">新建：%1$s</string>
     <string name="pre_generate_generate_section_title">生成库存</string>
     <string name="pre_generate_generate_section_supporting">打开下一屏之前，请先检查最终摘要。</string>
     <string name="pre_generate_generate_ready">已加载行数：%1$d。我们将使用整个数据集打开下一屏。</string>
