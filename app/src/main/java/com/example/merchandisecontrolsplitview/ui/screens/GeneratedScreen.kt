@@ -225,6 +225,15 @@ fun GeneratedScreen(
             )
         }
     }
+    val initialOrderTotalText by remember {
+        derivedStateOf { formatClSummaryMoney(excelViewModel.initialOrderTotal) }
+    }
+    val initialTotalQuantityText by remember {
+        derivedStateOf { formatClQuantityDisplayReadOnly(excelViewModel.initialTotalQuantity) }
+    }
+    val currentEffectiveTotalText by remember {
+        derivedStateOf { formatClSummaryMoney(currentEffectivePaymentTotal) }
+    }
 
     // Dialog & search state
     var showSearchDialog by remember { mutableStateOf(false) }
@@ -812,9 +821,15 @@ fun GeneratedScreen(
     }
 
     // Derived state used by progress card and summary footer
-    val totalDataRows = (excelData.size - 1).coerceAtLeast(0)
-    val completedCount = (1 until excelData.size).count { row ->
-        completeStates.getOrNull(row) == true
+    val totalDataRows by remember {
+        derivedStateOf { (excelData.size - 1).coerceAtLeast(0) }
+    }
+    val completedCount by remember {
+        derivedStateOf {
+            (1 until excelData.size).count { row ->
+                completeStates.getOrNull(row) == true
+            }
+        }
     }
     val showProgressCard = generated && excelData.size > 1 && !isManualDraftEmpty
 
@@ -882,8 +897,9 @@ fun GeneratedScreen(
                     errorCount = validErrorIndexes.size,
                     showOnlyErrors = showOnlyErrorRows,
                     onToggleErrors = { showOnlyErrorRows = !showOnlyErrorRows },
-                    initialOrderTotal = formatClSummaryMoney(excelViewModel.initialOrderTotal),
-                    currentEffectiveTotal = formatClSummaryMoney(currentEffectivePaymentTotal),
+                    initialOrderTotal = initialOrderTotalText,
+                    initialTotalQuantity = initialTotalQuantityText,
+                    currentEffectiveTotal = currentEffectiveTotalText,
                     isExpanded = progressCardExpanded,
                     onExpandedChange = { progressCardExpanded = it },
                     modifier = Modifier
@@ -1732,6 +1748,7 @@ private fun GeneratedScreenProgressCard(
     showOnlyErrors: Boolean,
     onToggleErrors: () -> Unit,
     initialOrderTotal: String,
+    initialTotalQuantity: String,
     currentEffectiveTotal: String,
     isExpanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -1760,10 +1777,15 @@ private fun GeneratedScreenProgressCard(
         completedText,
         totalText
     )
+    val quantitySummaryText = stringResource(
+        R.string.label_value_format,
+        stringResource(R.string.total_quantity_label),
+        initialTotalQuantity
+    )
     val supportText = if (pending > 0) {
-        stringResource(R.string.generated_progress_pending_compact, formatClCount(pending))
+        "${stringResource(R.string.generated_progress_pending_compact, formatClCount(pending))} · $quantitySummaryText"
     } else {
-        stringResource(R.string.generated_progress_all_complete)
+        "${stringResource(R.string.generated_progress_all_complete)} · $quantitySummaryText"
     }
 
     Surface(
@@ -1855,9 +1877,9 @@ private fun GeneratedScreenProgressCard(
                     verticalArrangement = Arrangement.spacedBy(spacing.xs)
                 ) {
                     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                        val stackedDetailsLayout = maxWidth < 352.dp
-                        val narrowDetailsLayout = maxWidth < 316.dp
-                        if (stackedDetailsLayout) {
+                        val singleColumnDetailsLayout = maxWidth < 292.dp
+                        val pendingValue = formatClCount(pending)
+                        if (singleColumnDetailsLayout) {
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(spacing.xs)
@@ -1868,82 +1890,76 @@ private fun GeneratedScreenProgressCard(
                                     valueColor = MaterialTheme.colorScheme.primary,
                                     emphasize = true,
                                     prominent = true,
+                                    compact = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
-                                if (narrowDetailsLayout) {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(spacing.xs)
-                                    ) {
-                                        GeneratedScreenProgressDetailTile(
-                                            label = stringResource(R.string.summary_pending_label),
-                                            value = formatClCount(pending),
-                                            valueColor = MaterialTheme.colorScheme.onSurface,
-                                            compact = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                        GeneratedScreenProgressDetailTile(
-                                            label = stringResource(R.string.initial_order_total_label),
-                                            value = initialOrderTotal,
-                                            valueColor = MaterialTheme.colorScheme.onSurface,
-                                            compact = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
-                                } else {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                                        verticalAlignment = Alignment.Top
-                                    ) {
-                                        GeneratedScreenProgressDetailTile(
-                                            label = stringResource(R.string.summary_pending_label),
-                                            value = formatClCount(pending),
-                                            valueColor = MaterialTheme.colorScheme.onSurface,
-                                            compact = true,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        GeneratedScreenProgressDetailTile(
-                                            label = stringResource(R.string.initial_order_total_label),
-                                            value = initialOrderTotal,
-                                            valueColor = MaterialTheme.colorScheme.onSurface,
-                                            compact = true,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                    }
-                                }
+                                GeneratedScreenProgressDetailTile(
+                                    label = stringResource(R.string.initial_order_total_label),
+                                    value = initialOrderTotal,
+                                    valueColor = MaterialTheme.colorScheme.onSurface,
+                                    compact = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                GeneratedScreenProgressDetailTile(
+                                    label = stringResource(R.string.summary_pending_label),
+                                    value = pendingValue,
+                                    valueColor = MaterialTheme.colorScheme.onSurface,
+                                    compact = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                GeneratedScreenProgressDetailTile(
+                                    label = stringResource(R.string.total_quantity_label),
+                                    value = initialTotalQuantity,
+                                    valueColor = MaterialTheme.colorScheme.onSurface,
+                                    compact = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
                         } else {
-                            Row(
+                            Column(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-                                verticalAlignment = Alignment.Top
+                                verticalArrangement = Arrangement.spacedBy(spacing.xs)
                             ) {
-                                GeneratedScreenProgressDetailTile(
-                                    label = stringResource(R.string.payment_total_label),
-                                    value = currentEffectiveTotal,
-                                    valueColor = MaterialTheme.colorScheme.primary,
-                                    emphasize = true,
-                                    prominent = true,
-                                    modifier = Modifier.weight(1.1f),
-                                )
-                                Column(
-                                    modifier = Modifier.weight(0.9f),
-                                    verticalArrangement = Arrangement.spacedBy(spacing.xs)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                                    verticalAlignment = Alignment.Top
                                 ) {
                                     GeneratedScreenProgressDetailTile(
-                                        label = stringResource(R.string.summary_pending_label),
-                                        value = formatClCount(pending),
-                                        valueColor = MaterialTheme.colorScheme.onSurface,
+                                        label = stringResource(R.string.payment_total_label),
+                                        value = currentEffectiveTotal,
+                                        valueColor = MaterialTheme.colorScheme.primary,
+                                        emphasize = true,
+                                        prominent = true,
                                         compact = true,
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier.weight(1f),
                                     )
                                     GeneratedScreenProgressDetailTile(
                                         label = stringResource(R.string.initial_order_total_label),
                                         value = initialOrderTotal,
                                         valueColor = MaterialTheme.colorScheme.onSurface,
                                         compact = true,
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    GeneratedScreenProgressDetailTile(
+                                        label = stringResource(R.string.summary_pending_label),
+                                        value = pendingValue,
+                                        valueColor = MaterialTheme.colorScheme.onSurface,
+                                        compact = true,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    GeneratedScreenProgressDetailTile(
+                                        label = stringResource(R.string.total_quantity_label),
+                                        value = initialTotalQuantity,
+                                        valueColor = MaterialTheme.colorScheme.onSurface,
+                                        compact = true,
+                                        modifier = Modifier.weight(1f),
                                     )
                                 }
                             }
@@ -2015,11 +2031,14 @@ private fun GeneratedScreenProgressDetailTile(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = value,
                 style = when {
+                    prominent && compact -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                     prominent -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
                     compact -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
                     else -> MaterialTheme.typography.titleMedium.copy(

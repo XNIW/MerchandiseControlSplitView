@@ -283,6 +283,7 @@
     <string name="not_found_short">未找到</string>
     <string name="summary_label">汇总</string>
     <string name="products_label">产品</string>
+    <string name="total_quantity_label">总数量</string>
     <string name="order_value_label">订单金额</string>
     <string name="payment_total_label">支付总额</string>
     <string name="label_value_format">%1$s: %2$s</string>

@@ -494,6 +494,42 @@ class ExcelUtilsTest {
     }
 
     @Test
+    fun `analyzePoiSheet filters qiao xiang total footer with aggregate in product name column`() {
+        withSheet(
+            listOf("货号", "品名", "数量", "单价", "金额", "条码"),
+            listOf("075607", "Caja organizadora", "12", "1000", "12000", "6988888075607"),
+            listOf("总数", "316.000", "总价", "365300.000", "", "")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val itemCol = header.indexOf("itemNumber")
+            val barcodeCol = header.indexOf("barcode")
+
+            assertEquals(1, rows.size)
+            assertEquals("075607", rows.single()[itemCol])
+            assertEquals("6988888075607", rows.single()[barcodeCol])
+            assertFalse(rows.any { row -> row.contains("总数") || row.contains("总价") })
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet filters heji footer with sparse aggregate numbers`() {
+        withSheet(
+            listOf("条码", "货号", "品名", "数量", "单价", "金额"),
+            listOf("7888889601630", "960163", "Caja Buenafamilia", "1", "1211", "1211"),
+            listOf("合计", "", "", "103", "1211", "1252780")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val barcodeCol = header.indexOf("barcode")
+            val itemCol = header.indexOf("itemNumber")
+
+            assertEquals(1, rows.size)
+            assertEquals("7888889601630", rows.single()[barcodeCol])
+            assertEquals("960163", rows.single()[itemCol])
+            assertFalse(rows.any { row -> row.contains("合计") })
+        }
+    }
+
+    @Test
     fun `analyzePoiSheet keeps real products whose names start with total`() {
         withSheet(
             listOf("rowNumber", "barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
@@ -505,6 +541,98 @@ class ExcelUtilsTest {
             assertEquals(1, rows.size)
             assertEquals("Total Care Shampoo", rows.single()[nameCol])
         }
+    }
+
+    @Test
+    fun `analyzePoiSheet keeps real products with summary tokens in product names`() {
+        withSheet(
+            listOf("barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("6988235529791", "529791-红木色", "总数 organizer total look", "8", "1200", "9600"),
+            listOf("6988888075607", "075607", "Caja 合计 grande", "4", "1000", "4000")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            val nameCol = header.indexOf("productName")
+
+            assertEquals(2, rows.size)
+            assertEquals(
+                listOf("总数 organizer total look", "Caja 合计 grande"),
+                rows.map { row -> row[nameCol] }
+            )
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet keeps workbook without footer unchanged`() {
+        withSheet(
+            listOf("barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("6988888075607", "075607", "Caja organizadora", "12", "1000", "12000"),
+            listOf("6988235529791", "529791", "Repisa madera", "6", "1500", "9000")
+        ) { sheet ->
+            val (_, rows) = analyzePoiSheet(context, sheet)
+
+            assertEquals(
+                listOf(
+                    listOf("6988888075607", "075607", "Caja organizadora", "12", "1000", "12000"),
+                    listOf("6988235529791", "529791", "Repisa madera", "6", "1500", "9000")
+                ),
+                rows
+            )
+        }
+    }
+
+    @Test
+    fun `analyzePoiSheet keeps compatible headers stable when one file has footer`() {
+        var firstHeader: List<String>? = null
+        var firstRows: List<List<String>>? = null
+        withSheet(
+            listOf("barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("6988888075607", "075607", "Caja organizadora", "12", "1000", "12000"),
+            listOf("总数", "316.000", "总价", "365300.000", "", "")
+        ) { sheet ->
+            val (header, rows) = analyzePoiSheet(context, sheet)
+            firstHeader = header
+            firstRows = rows
+        }
+
+        withSheet(
+            listOf("barcode", "itemNumber", "productName", "quantity", "purchasePrice", "totalPrice"),
+            listOf("6988235529791", "529791", "Repisa madera", "6", "1500", "9000")
+        ) { sheet ->
+            val (secondHeader, secondRows) = analyzePoiSheet(context, sheet)
+
+            assertEquals(firstHeader, secondHeader)
+            assertEquals(1, firstRows?.size)
+            assertEquals(1, secondRows.size)
+            assertEquals(
+                listOf("6988888075607", "075607", "Caja organizadora", "12", "1000", "12000"),
+                firstRows?.single()
+            )
+            assertEquals(
+                listOf("6988235529791", "529791", "Repisa madera", "6", "1500", "9000"),
+                secondRows.single()
+            )
+        }
+    }
+
+    @Test
+    fun `readAndAnalyzeExcel html path filters summary footer through shared parser`() {
+        val htmlFile = File.createTempFile("excel-html-summary-footer", ".xls", context.cacheDir).apply {
+            writeText(
+                """
+                <html><body><table>
+                    <tr><td>barcode</td><td>itemNumber</td><td>productName</td><td>quantity</td><td>purchasePrice</td><td>totalPrice</td></tr>
+                    <tr><td>6988888075607</td><td>075607</td><td>Caja organizadora</td><td>12</td><td>1000</td><td>12000</td></tr>
+                    <tr><td>总数</td><td>316.000</td><td>总价</td><td>365300.000</td><td></td><td></td></tr>
+                </table></body></html>
+                """.trimIndent()
+            )
+        }
+
+        val (_, rows) = readAndAnalyzeExcel(context, Uri.fromFile(htmlFile))
+
+        assertEquals(1, rows.size)
+        assertEquals("6988888075607", rows.single().first())
+        assertFalse(rows.any { row -> row.contains("总数") || row.contains("总价") })
     }
 
     @Test

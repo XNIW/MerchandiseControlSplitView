@@ -283,6 +283,7 @@
     <string name="not_found_short">No encontrado</string>
     <string name="summary_label">Resumen</string>
     <string name="products_label">Productos</string>
+    <string name="total_quantity_label">Cantidad total</string>
     <string name="order_value_label">Valor del pedido</string>
     <string name="payment_total_label">Pago total</string>
     <string name="label_value_format">%1$s: %2$s</string>

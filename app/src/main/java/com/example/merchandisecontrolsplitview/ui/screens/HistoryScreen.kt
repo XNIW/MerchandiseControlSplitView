@@ -32,11 +32,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
-import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
+import com.example.merchandisecontrolsplitview.data.HistoryDisplayEntry
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import com.example.merchandisecontrolsplitview.viewmodel.HistoryFilter
@@ -56,7 +57,7 @@ private sealed interface HistoryListRow {
     ) : HistoryListRow
 
     data class EntryItem(
-        val entry: HistoryEntryListItem
+        val entry: HistoryDisplayEntry
     ) : HistoryListRow
 }
 
@@ -64,15 +65,15 @@ private sealed interface HistoryListRow {
 @Composable
 fun HistoryScreen(
     contentPadding: PaddingValues = PaddingValues(),
-    historyList: List<HistoryEntryListItem>,
+    historyList: List<HistoryDisplayEntry>,
     currentFilter: HistoryFilter,
     hasAnyHistoryEntries: Boolean,
     historyActionMessage: String?,
     availableSuppliers: List<String> = emptyList(),
     availableCategories: List<String> = emptyList(),
-    onSelect: (HistoryEntryListItem) -> Unit,
-    onRename: (HistoryEntryListItem, String) -> Unit,
-    onDelete: (HistoryEntryListItem) -> Unit,
+    onSelect: (HistoryDisplayEntry) -> Unit,
+    onRename: (HistoryDisplayEntry, String) -> Unit,
+    onDelete: (HistoryDisplayEntry) -> Unit,
     onHistoryActionMessageConsumed: () -> Unit,
     onSetFilter: (HistoryFilter) -> Unit
 ) {
@@ -85,10 +86,10 @@ fun HistoryScreen(
     val snackbarBottomOffset = (contentPadding.calculateBottomPadding() - navigationBarInset)
         .coerceAtLeast(0.dp) + spacing.xxl
     var showRenameDialog by remember { mutableStateOf(false) }
-    var entryToRename by remember { mutableStateOf<HistoryEntryListItem?>(null) }
+    var entryToRename by remember { mutableStateOf<HistoryDisplayEntry?>(null) }
     var renameText by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var entryToDelete by remember { mutableStateOf<HistoryEntryListItem?>(null) }
+    var entryToDelete by remember { mutableStateOf<HistoryDisplayEntry?>(null) }
 
     var showFilterSheet by remember { mutableStateOf(false) }
     var draftFilter by remember(currentFilter) { mutableStateOf(currentFilter) }
@@ -770,7 +771,7 @@ private fun HistoryMonthDivider(label: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryRow(
-    entry: HistoryEntryListItem,
+    entry: HistoryDisplayEntry,
     onClick: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
@@ -947,6 +948,17 @@ private fun HistoryRow(
                                 ),
                                 style = MaterialTheme.typography.bodyMedium
                             )
+                            entry.totalQuantity?.let { totalQuantity ->
+                                Text(
+                                    text = stringResource(
+                                        R.string.label_value_format,
+                                        stringResource(R.string.total_quantity_label),
+                                        formatClQuantityDisplayReadOnly(totalQuantity)
+                                    ),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
                                 text = stringResource(R.string.label_value_format, stringResource(R.string.order_value_label), formatClSummaryMoney(entry.orderTotal)),
                                 style = MaterialTheme.typography.bodyMedium

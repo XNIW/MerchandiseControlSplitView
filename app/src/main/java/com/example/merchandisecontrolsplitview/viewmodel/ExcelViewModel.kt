@@ -12,9 +12,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.data.HistoryDisplayEntry
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.util.calculateTotalQuantityFromRows
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
@@ -183,13 +185,33 @@ class ExcelViewModel(
             initialValue = emptyList()
         )
 
+    // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry
+    // visibile all'utente.
+    val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
+        .flatMapLatest { filter ->
+            repository.getFilteredHistoryFlow(filter)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Lazily,
+            initialValue = emptyList()
+        )
+
     // Lista per la visualizzazione nella HistoryScreen: filtrata anche per supplier e category.
-    val historyDisplayEntries: StateFlow<List<HistoryEntryListItem>> = combine(
-        historyListEntries, _supplierFilter, _categoryFilter
-    ) { entries, supplier, category ->
+    val historyDisplayEntries: StateFlow<List<HistoryDisplayEntry>> = combine(
+        historyListEntries, historyEntries, _supplierFilter, _categoryFilter
+    ) { entries, fullEntries, supplier, category ->
+        val totalQuantityByUid = fullEntries.associate { entry ->
+            entry.uid to calculateTotalQuantityFromRows(entry.data)
+        }
         entries.filter { entry ->
             (supplier.isBlank() || entry.supplier.equals(supplier, ignoreCase = true)) &&
                 (category.isBlank() || entry.category.equals(category, ignoreCase = true))
+        }.map { entry ->
+            HistoryDisplayEntry(
+                listItem = entry,
+                totalQuantity = totalQuantityByUid[entry.uid]
+            )
         }
     }.stateIn(
         scope = viewModelScope,
@@ -228,18 +250,6 @@ class ExcelViewModel(
             scope = viewModelScope,
             started = SharingStarted.Lazily,
             initialValue = false
-        )
-
-    // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry
-    // visibile all'utente.
-    val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
-        .flatMapLatest { filter ->
-            repository.getFilteredHistoryFlow(filter)
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Lazily,
-            initialValue = emptyList()
         )
 
     val currentEntryStatus = mutableStateOf(Triple(SyncStatus.NOT_ATTEMPTED, false, 0L))
@@ -1010,6 +1020,9 @@ class ExcelViewModel(
      */
     val initialOrderTotal: Double
         get() = if (excelData.size > 1) calculateInitialSummary(excelData).second else 0.0
+
+    val initialTotalQuantity: Double?
+        get() = calculateTotalQuantityFromRows(excelData)
 
     private fun calculateInitialSummary(
         data: List<List<String>>

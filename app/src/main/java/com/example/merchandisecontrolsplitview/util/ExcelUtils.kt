@@ -213,10 +213,10 @@ internal fun normalizeExcelHeader(s: String) = Normalizer
 internal val KNOWN_EXCEL_HEADER_ALIASES: Map<String, List<String>> = mapOf(
     "barcode" to listOf("barcode", "条码", "ean", "bar code", "codice a barre", "código de barras", "codigo de barras", "código barras", "codigo barras", "co.barra", "条形码", "Código de barras", "cod.barra", "cod barra", "codbarra", "cod.barras", "codbarras"),
     "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量", "stock", "stockquantity", "giacenza", "scorte", "库存", "库存数量", "Existencias", "Stock Quantity", "cantid"),
-    "purchasePrice" to listOf("purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格", "原价", "售价", "新进价", "Nuovo prezzo acquisto", "Nuevo Precio de Compra", "New Purchase Price", "折前单价(含税)", "pre/u"),
+    "purchasePrice" to listOf("销售单价","purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格", "原价", "售价", "新进价", "Nuovo prezzo acquisto", "Nuevo Precio de Compra", "New Purchase Price", "折前单价(含税)", "pre/u"),
     "totalPrice" to listOf("totalprice", "total_price", "总价", "totale", "importo", "price total", "precio total", "importe", "total", "importe total", "importe final", "subtotal", "subtotal bruto", "合计", "金额", "总计", "importe"),
-    "productName" to listOf("productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre", "产品名1", "产品品名", "商品名1", "Nome prodotto", "Nombre del producto", "Product name", "商品名称", "外文描述", "articulo", "artículo"),
-    "secondProductName" to listOf("productname2", "product_name2", "品名2", "descrizione2", "name2", "nome2", "description2", "nombre del producto2", "nombre producto2", "producto2", "descripción2", "descripcion2", "nombre2", "产品名2", "产品品名2", "商品名2", "Secondo nome prodotto", "Segundo nombre del producto", "Second Product Name", "西语名称", "物料描述", "second name", "secondname", "nombre 2", "nombre2", "nome 2", "nome2", "product name 2", "productname2"),
+    "productName" to listOf("中文名","商品信息","productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre", "产品名1", "产品品名", "商品名1", "Nome prodotto", "Nombre del producto", "Product name", "商品名称", "外文描述", "articulo", "artículo"),
+    "secondProductName" to listOf("外文名","零售名称","productname2", "product_name2", "品名2", "descrizione2", "name2", "nome2", "description2", "nombre del producto2", "nombre producto2", "producto2", "descripción2", "descripcion2", "nombre2", "产品名2", "产品品名2", "商品名2", "Secondo nome prodotto", "Segundo nombre del producto", "Second Product Name", "西语名称", "物料描述", "second name", "secondname", "nombre 2", "nombre2", "nome 2", "nome2", "product name 2", "productname2"),
     "itemNumber" to listOf("itemnumber", "item_number", "货号", "codice", "code", "articolo", "número de artículo", "numero de artículo", "número de producto", "numero de producto", "código", "referencia", "产品货号", "编号","codice articolo","Código del artículo","Item code", "编码", "短码", "ref.cajas","codice prodotto", "codiceprodotto", "product code", "productcode", "código de producto", "codigodeproducto"),
     "supplier" to listOf("supplier", "供应商", "fornitore", "vendor", "provider", "fornitore/azienda", "proveedor", "empresa proveedora", "vendedor", "distribuidor", "fabricante", "Proveedor"),
     "rowNumber" to listOf("no", "n.", "№", "row", "rowno", "rownumber", "serial", "serialnumber", "progressivo", "numeroriga", "num. riga", "número de fila", "número", "numero", "序号", "编号", "编号序号", "序列号", "行号", "#"),
@@ -1424,6 +1424,9 @@ internal fun analyzeRowsDetailed(
     fun hasPlausibleItemIdentity(item: String): Boolean {
         val trimmedItem = item.trim()
         if (trimmedItem.isBlank() || isSummaryLabel(trimmedItem)) return false
+        val numericItem = parseAnalysisNumber(trimmedItem) != null
+        val digitsOnlyItem = trimmedItem.all(Char::isDigit)
+        if (numericItem && !digitsOnlyItem) return false
         val digitCount = trimmedItem.count(Char::isDigit)
         val letterCount = trimmedItem.count(Char::isLetter)
         val separatorCount = trimmedItem.count { it == '-' || it == '/' || it == '_' }
@@ -1437,13 +1440,19 @@ internal fun analyzeRowsDetailed(
     }
 
     fun hasPlausibleProductIdentity(code: String, item: String, name: String, secondName: String): Boolean {
+        val trimmedCode = code.trim()
         val barcodeDigits = code.filter(Char::isDigit)
         val trimmedName = name.trim()
         val trimmedSecondName = secondName.trim()
-        val barcodeLooksPlausible = barcodeDigits.length >= 8
+        val barcodeLooksPlausible = barcodeDigits.length >= 8 &&
+            (trimmedCode.all(Char::isDigit) || parseAnalysisNumber(trimmedCode) == null)
         val itemLooksPlausible = hasPlausibleItemIdentity(item)
-        val nameLooksPlausible = trimmedName.length >= 3 && !isSummaryLabel(trimmedName)
-        val secondNameLooksPlausible = trimmedSecondName.length >= 3 && !isSummaryLabel(trimmedSecondName)
+        val nameLooksPlausible = trimmedName.length >= 3 &&
+            parseAnalysisNumber(trimmedName) == null &&
+            !isSummaryLabel(trimmedName)
+        val secondNameLooksPlausible = trimmedSecondName.length >= 3 &&
+            parseAnalysisNumber(trimmedSecondName) == null &&
+            !isSummaryLabel(trimmedSecondName)
         return barcodeLooksPlausible || itemLooksPlausible || nameLooksPlausible || secondNameLooksPlausible
     }
 

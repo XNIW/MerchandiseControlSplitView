@@ -6,6 +6,7 @@ import android.os.Looper
 import androidx.compose.runtime.mutableStateOf
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
@@ -23,6 +24,7 @@ import io.mockk.verify
 import java.io.File
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -31,6 +33,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -469,6 +472,72 @@ class ExcelViewModelTest {
         assertEquals(2469.0, insertedEntry.captured.paymentTotal, 0.0001)
         assertEquals(1, insertedEntry.captured.totalItems)
         assertEquals(1, insertedEntry.captured.missingItems)
+    }
+
+    @Test
+    fun `initialTotalQuantity sums quantity while progress row count remains separate`() {
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice", "quantity"),
+                listOf("10000001", "Product A", "100", "2"),
+                listOf("10000002", "Product B", "200", "3,5")
+            )
+        )
+
+        assertEquals(5.5, viewModel.initialTotalQuantity!!, 0.0001)
+        assertEquals(2, viewModel.excelData.drop(1).size)
+    }
+
+    @Test
+    fun `initialTotalQuantity returns null for old history shape without quantity header`() {
+        viewModel.excelData.addAll(
+            listOf(
+                listOf("barcode", "productName", "purchasePrice"),
+                listOf("10000001", "Product A", "100")
+            )
+        )
+
+        assertNull(viewModel.initialTotalQuantity)
+    }
+
+    @Test
+    fun `historyDisplayEntries attaches derived totalQuantity without changing totalItems`() = runTest {
+        val listItem = HistoryEntryListItem(
+            uid = 42L,
+            id = "history-42",
+            displayName = "history-42",
+            timestamp = "2026-03-28 10:00:00",
+            supplier = "Supplier A",
+            category = "Category A",
+            totalItems = 2,
+            orderTotal = 700.0,
+            paymentTotal = 0.0,
+            missingItems = 2,
+            syncStatus = SyncStatus.NOT_ATTEMPTED,
+            wasExported = false,
+            isManualEntry = false
+        )
+        every { repository.getFilteredHistoryListFlow(any()) } returns flowOf(listOf(listItem))
+        every { repository.getFilteredHistoryFlow(any()) } returns flowOf(
+            listOf(
+                historyEntry(
+                    uid = 42L,
+                    data = listOf(
+                        listOf("barcode", "productName", "purchasePrice", "quantity"),
+                        listOf("10000001", "Product A", "100", "2"),
+                        listOf("10000002", "Product B", "200", "3")
+                    ),
+                    supplier = "Supplier A",
+                    category = "Category A"
+                )
+            )
+        )
+        viewModel = ExcelViewModel(app, repository)
+
+        val entry = viewModel.historyDisplayEntries.first { it.isNotEmpty() }.single()
+
+        assertEquals(2, entry.totalItems)
+        assertEquals(5.0, entry.totalQuantity!!, 0.0001)
     }
 
     @Test

@@ -42,3 +42,23 @@ data class HistoryEntryListItem(
     val isManualEntry: Boolean = false,
     val deletedAt: String? = null
 )
+
+data class HistoryDisplayEntry(
+    val listItem: HistoryEntryListItem,
+    val totalQuantity: Double? = null
+) {
+    val uid: Long get() = listItem.uid
+    val id: String get() = listItem.id
+    val displayName: String get() = listItem.displayName
+    val timestamp: String get() = listItem.timestamp
+    val supplier: String get() = listItem.supplier
+    val category: String get() = listItem.category
+    val wasExported: Boolean get() = listItem.wasExported
+    val syncStatus: SyncStatus get() = listItem.syncStatus
+    val orderTotal: Double get() = listItem.orderTotal
+    val paymentTotal: Double get() = listItem.paymentTotal
+    val missingItems: Int get() = listItem.missingItems
+    val totalItems: Int get() = listItem.totalItems
+    val isManualEntry: Boolean get() = listItem.isManualEntry
+    val deletedAt: String? get() = listItem.deletedAt
+}

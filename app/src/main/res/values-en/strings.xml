@@ -284,6 +284,7 @@
     <string name="not_found_short">Not Found</string>
     <string name="summary_label">Summary</string>
     <string name="products_label">Products</string>
+    <string name="total_quantity_label">Total quantity</string>
     <string name="order_value_label">Order Value</string>
     <string name="payment_total_label">Total Payment</string>
     <string name="label_value_format">%1$s: %2$s</string>
