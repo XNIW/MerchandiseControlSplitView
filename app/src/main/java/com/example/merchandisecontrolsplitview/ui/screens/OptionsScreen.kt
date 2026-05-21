@@ -73,8 +73,7 @@ fun OptionsScreen(
     onSignOut: () -> Unit = {},
     onDismissError: () -> Unit = {},
     catalogSyncUi: CatalogSyncUiState? = null,
-    localDatabaseStatusUi: LocalDatabaseStatusUiState? = null,
-    onCatalogRefresh: () -> Unit = {}
+    localDatabaseStatusUi: LocalDatabaseStatusUiState? = null
 ) {
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -174,10 +173,7 @@ fun OptionsScreen(
                 onDismissError = onDismissError
             )
             catalogSyncUi?.let { sync ->
-                CatalogCloudSection(
-                    state = sync,
-                    onRefresh = onCatalogRefresh
-                )
+                CatalogCloudSection(state = sync)
             }
         }
 
@@ -276,8 +272,7 @@ private fun LocalDatabaseStatusRow(
 
 @Composable
 private fun CatalogCloudSection(
-    state: CatalogSyncUiState,
-    onRefresh: () -> Unit
+    state: CatalogSyncUiState
 ) {
     OptionsGroup(
         title = stringResource(R.string.catalog_cloud_section_title),
@@ -323,30 +318,16 @@ private fun CatalogCloudSection(
                     )
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            CatalogCloudActionBlock(
-                title = stringResource(R.string.catalog_cloud_sync_now),
-                body = stringResource(R.string.catalog_cloud_sync_full_body),
-                recommendation = if (state.fullSyncRecommended) {
-                    stringResource(R.string.catalog_cloud_full_recommended_label)
+            CatalogCloudDetailBlock(
+                title = if (state.fullSyncRecommended) {
+                    stringResource(R.string.catalog_cloud_auto_reconcile_title)
                 } else {
-                    null
+                    stringResource(R.string.catalog_cloud_auto_status_title)
                 },
-                highlighted = state.fullSyncRecommended,
-                contentDescription = stringResource(R.string.catalog_cloud_sync_now_cd),
-                button = {
-                    val actionContentDescription = contentDescription
-                    Button(
-                        onClick = onRefresh,
-                        enabled = state.canRefresh && !state.isSyncing,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics {
-                                contentDescription = actionContentDescription
-                            }
-                    ) {
-                        Text(stringResource(R.string.catalog_cloud_sync_now))
-                    }
+                body = if (state.fullSyncRecommended) {
+                    stringResource(R.string.catalog_cloud_auto_reconcile_body)
+                } else {
+                    stringResource(R.string.catalog_cloud_auto_status_body)
                 }
             )
         }
@@ -430,76 +411,6 @@ private fun CatalogCloudDetailBlock(
         )
     }
 }
-
-@Composable
-private fun CatalogCloudActionBlock(
-    title: String,
-    body: String,
-    recommendation: String?,
-    highlighted: Boolean,
-    contentDescription: String,
-    button: @Composable CatalogCloudActionBlockScope.() -> Unit
-) {
-    val spacing = MaterialTheme.appSpacing
-    val scope = remember(contentDescription) {
-        CatalogCloudActionBlockScope(contentDescription)
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (highlighted) {
-                    Modifier
-                        .background(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = MaterialTheme.shapes.medium
-                        )
-                        .padding(spacing.md)
-                } else {
-                    Modifier.padding(vertical = spacing.xs)
-                }
-            ),
-        verticalArrangement = Arrangement.spacedBy(spacing.xs)
-    ) {
-        recommendation?.let {
-            Text(
-                text = it,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = if (highlighted) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.primary
-                }
-            )
-        }
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = if (highlighted) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface
-            }
-        )
-        Text(
-            text = body,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (highlighted) {
-                MaterialTheme.colorScheme.onPrimaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        )
-        Spacer(Modifier.height(spacing.xs))
-        scope.button()
-    }
-}
-
-private class CatalogCloudActionBlockScope(
-    val contentDescription: String
-)
 
 @Composable
 private fun OptionsGroup(

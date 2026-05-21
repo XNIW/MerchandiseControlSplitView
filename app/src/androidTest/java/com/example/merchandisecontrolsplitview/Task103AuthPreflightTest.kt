@@ -20,9 +20,10 @@ class Task103AuthPreflightTest {
         val args = InstrumentationRegistry.getArguments()
         val task103Enabled = args.getString("task103AuthPreflight")?.lowercase()
         val task104Enabled = args.getString("task104Pass2AuthPreflight")?.lowercase()
+        val task112Enabled = args.getString("task112AuthPreflight")?.lowercase()
         assumeTrue(
-            "Live auth preflight is gated. Pass -e task103AuthPreflight true or -e task104Pass2AuthPreflight true.",
-            isEnabled(task103Enabled) || isEnabled(task104Enabled)
+            "Live auth preflight is gated. Pass -e task103AuthPreflight true, -e task104Pass2AuthPreflight true or -e task112AuthPreflight true.",
+            isEnabled(task103Enabled) || isEnabled(task104Enabled) || isEnabled(task112Enabled)
         )
 
         assertFalse(BuildConfig.SUPABASE_PUBLISHABLE_KEY.lowercase().contains("service_role"))
@@ -44,10 +45,10 @@ class Task103AuthPreflightTest {
         assertTrue(app.catalogRemoteDataSource.isConfigured)
         assertTrue(app.productPriceRemoteDataSource.isConfigured)
 
-        val label = if (isEnabled(task104Enabled)) {
-            "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
-        } else {
-            "TASK103_ANDROID_AUTH_PREFLIGHT"
+        val label = when {
+            isEnabled(task112Enabled) -> "TASK112_ANDROID_AUTH_PREFLIGHT"
+            isEnabled(task104Enabled) -> "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
+            else -> "TASK103_ANDROID_AUTH_PREFLIGHT"
         }
         println(
             "$label " +

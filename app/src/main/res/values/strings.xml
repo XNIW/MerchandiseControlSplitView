@@ -607,20 +607,24 @@
     <string name="local_database_status_unknown">—</string>
 
     <!-- Catalogo cloud (task 013) — messaggi non tecnici -->
-    <string name="catalog_cloud_section_title">Catalogo sul cloud</string>
-    <string name="catalog_cloud_refresh">Aggiorna dal cloud</string>
-    <string name="catalog_cloud_sync_full">Sincronizzazione completa</string>
-    <string name="catalog_cloud_sync_now">Sincronizza ora</string>
-    <string name="catalog_cloud_sync_quick">Sincronizzazione rapida</string>
-    <string name="catalog_cloud_sync_quick_body">Invio modifiche: carica sul cloud le modifiche locali in sospeso. Se serve un controllo completo, usa la sincronizzazione completa.</string>
-    <string name="catalog_cloud_sync_quick_body_events">Invio e ricezione: carica le modifiche locali e scarica solo gli aggiornamenti recenti verificabili.</string>
-    <string name="catalog_cloud_sync_full_body">Ricezione completa: controlla e riallinea catalogo, prezzi e sessioni dal cloud. Può richiedere più tempo.</string>
-    <string name="catalog_cloud_sync_quick_hint">La rapida invia le modifiche recenti; la completa riallinea catalogo, prezzi e sessioni.</string>
+    <string name="catalog_cloud_section_title">Sincronizzazione automatica</string>
+    <string name="catalog_cloud_refresh">Aggiornamento automatico dal cloud</string>
+    <string name="catalog_cloud_sync_full">Riallineamento automatico</string>
+    <string name="catalog_cloud_sync_now">Sincronizzazione automatica attiva</string>
+    <string name="catalog_cloud_sync_quick">Aggiornamento automatico</string>
+    <string name="catalog_cloud_sync_quick_body">Le modifiche locali vengono inviate automaticamente quando account e rete sono pronti.</string>
+    <string name="catalog_cloud_sync_quick_body_events">La app invia le modifiche locali e riceve automaticamente gli aggiornamenti recenti verificabili.</string>
+    <string name="catalog_cloud_sync_full_body">La app riallinea automaticamente catalogo, prezzi e sessioni quando serve un controllo completo.</string>
+    <string name="catalog_cloud_sync_quick_hint">La app gestisce invio e ricezione senza una sincronizzazione manuale pubblica.</string>
+    <string name="catalog_cloud_auto_status_title">Sincronizzazione automatica attiva</string>
+    <string name="catalog_cloud_auto_status_body">Modifiche e aggiornamenti vengono gestiti automaticamente in background quando account e rete sono pronti.</string>
+    <string name="catalog_cloud_auto_reconcile_title">Riallineamento automatico richiesto</string>
+    <string name="catalog_cloud_auto_reconcile_body">Alcuni dati richiedono un controllo completo. La app lo pianifica automaticamente quando il contesto risulta sicuro.</string>
     <string name="catalog_cloud_quick_sync_locals_sent">Invio modifiche: inviate %1$d modifiche locali (fornitori, categorie, prodotti e prezzi).</string>
     <string name="catalog_cloud_quick_sync_recent_updates">Ricezione aggiornamenti: %2$d applicati; notifiche recenti controllate: %1$d.</string>
     <string name="catalog_cloud_sync_event_outbox_hint">Invio modifiche: %1$d notifiche di sincronizzazione verranno ritentate più tardi.</string>
-    <string name="catalog_cloud_manual_full_sync_required_hint">Serve sincronizzazione completa: alcune modifiche cloud richiedono un riallineamento manuale.</string>
-    <string name="catalog_cloud_state_syncing">Sincronizzazione in corso\u2026</string>
+    <string name="catalog_cloud_manual_full_sync_required_hint">Serve riallineamento automatico: alcune modifiche cloud richiedono un controllo completo.</string>
+    <string name="catalog_cloud_state_syncing">Aggiornamento automatico in corso\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparazione del database locale\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Invio modifiche fornitori\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers_count">Invio modifiche fornitori %1$d / %2$d</string>
@@ -663,11 +667,11 @@
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
     <string name="catalog_cloud_state_forbidden">Permessi cloud da verificare</string>
     <string name="catalog_cloud_state_config_problem">Configurazione cloud da verificare</string>
-    <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; prezzi non completati. Usa la sincronizzazione completa per riprovare.</string>
-    <string name="catalog_cloud_state_sessions_incomplete">Catalogo aggiornato; sessioni non completate. Usa la sincronizzazione completa per riprovare.</string>
+    <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; i prezzi verranno ritentati automaticamente.</string>
+    <string name="catalog_cloud_state_sessions_incomplete">Catalogo aggiornato; le sessioni verranno ritentate automaticamente.</string>
     <string name="catalog_cloud_state_offline">Connessione assente o instabile</string>
-    <string name="catalog_cloud_state_sign_in_required">Accedi per sincronizzare il catalogo</string>
-    <string name="catalog_cloud_state_session_required">Serve accedere di nuovo per sincronizzare</string>
+    <string name="catalog_cloud_state_sign_in_required">Accedi per attivare la sincronizzazione automatica</string>
+    <string name="catalog_cloud_state_session_required">Accedi di nuovo per continuare la sincronizzazione</string>
     <string name="catalog_cloud_not_configured">Sincronizzazione cloud non disponibile su questo dispositivo</string>
     <string name="catalog_cloud_last_ok">Ultimo aggiornamento riuscito: %1$s</string>
     <string name="catalog_cloud_prices_sync_hint">Prezzi: inviati %1$d, ricevuti %2$d · in sospeso (catalogo): %3$d</string>
@@ -677,7 +681,7 @@
     <string name="catalog_cloud_sessions_pending_hint">Sessioni ancora in attesa: %1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">Invio modifiche: catalogo, prezzi o eliminazioni in attesa di cloud.</string>
     <string name="catalog_cloud_prices_skipped_hint">Ricezione prezzi: righe cloud non importate perché manca il prodotto locale collegato: %1$d</string>
-    <string name="catalog_cloud_remote_incremental_not_verifiable_hint">Serve sincronizzazione completa: la rapida non può verificare tutti gli aggiornamenti cloud.</string>
+    <string name="catalog_cloud_remote_incremental_not_verifiable_hint">Serve riallineamento automatico: gli aggiornamenti cloud non sono tutti verificabili in modo incrementale.</string>
     <string name="catalog_cloud_detail_catalog_title">Catalogo e prezzi</string>
     <string name="catalog_cloud_detail_sessions_title">Sessioni e cronologia</string>
     <string name="catalog_cloud_badge_complete">Completa</string>
@@ -687,9 +691,9 @@
     <string name="catalog_cloud_badge_sessions">Sessioni</string>
     <string name="catalog_cloud_badge_full_required">Serve completa</string>
     <string name="catalog_cloud_quick_recommended_label">Consigliata per inviare modifiche locali</string>
-    <string name="catalog_cloud_full_recommended_label">Serve sincronizzazione completa</string>
-    <string name="catalog_cloud_sync_quick_cd">Avvia sincronizzazione rapida: invia modifiche locali e riceve aggiornamenti recenti quando disponibili</string>
-    <string name="catalog_cloud_sync_full_cd">Avvia sincronizzazione completa: riallinea catalogo, prezzi e sessioni dal cloud</string>
-    <string name="catalog_cloud_sync_now_cd">Avvia sincronizzazione: riallinea catalogo, prezzi, cronologia e modifiche locali</string>
+    <string name="catalog_cloud_full_recommended_label">Serve riallineamento automatico</string>
+    <string name="catalog_cloud_sync_quick_cd">Stato aggiornamento automatico: invio modifiche locali e ricezione aggiornamenti recenti</string>
+    <string name="catalog_cloud_sync_full_cd">Stato riallineamento automatico: catalogo, prezzi e sessioni dal cloud</string>
+    <string name="catalog_cloud_sync_now_cd">Stato sincronizzazione automatica: catalogo, prezzi, cronologia e modifiche locali</string>
     <string name="catalog_cloud_section_cd">Stato sincronizzazione cloud: %1$s</string>
 </resources>

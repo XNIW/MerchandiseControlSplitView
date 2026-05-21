@@ -221,9 +221,14 @@ class Task103CrossPlatformAcceptanceTest {
         val task104Value = args
             .getString("task104Pass2LiveAcceptance")
             ?.lowercase()
+        val task112Value = args
+            .getString("task112LiveAcceptance")
+            ?.lowercase()
         assumeTrue(
-            "Live acceptance is gated. Pass -e task103LiveAcceptance true or -e task104Pass2LiveAcceptance true.",
-            task103Value == "1" || task103Value == "true" || task104Value == "1" || task104Value == "true"
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true or -e task112LiveAcceptance true.",
+            task103Value == "1" || task103Value == "true" ||
+                task104Value == "1" || task104Value == "true" ||
+                task112Value == "1" || task112Value == "true"
         )
     }
 
@@ -233,8 +238,14 @@ class Task103CrossPlatformAcceptanceTest {
             .getString("task104Pass2RunPrefix")
             ?: args
             .getString("task103RunPrefix")
-            ?: throw AssertionError("task104Pass2RunPrefix or task103RunPrefix must be explicitly set for live acceptance.")
-        assertTrue(prefix.startsWith("TASK103_REAL_R") || prefix.startsWith("TASK104_PASS2_"))
+            ?: args
+            .getString("task112RunPrefix")
+            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix or task112RunPrefix must be explicitly set for live acceptance.")
+        assertTrue(
+            prefix.startsWith("TASK103_REAL_R") ||
+                prefix.startsWith("TASK104_PASS2_") ||
+                prefix.startsWith("TASK112_")
+        )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
     }
@@ -317,7 +328,11 @@ class Task103CrossPlatformAcceptanceTest {
     )
 
     private data class Fixture(val prefix: String) {
-        val logPrefix: String = if (prefix.startsWith("TASK104_PASS2_")) "TASK104_PASS2" else "TASK103"
+        val logPrefix: String = when {
+            prefix.startsWith("TASK112_") -> "TASK112"
+            prefix.startsWith("TASK104_PASS2_") -> "TASK104_PASS2"
+            else -> "TASK103"
+        }
         val supplierIOS: String = "${prefix}SUP_IOS_01"
         val categoryIOS: String = "${prefix}CAT_IOS_01"
         val productIOS: String = "${prefix}CANARY_IOS_01"
