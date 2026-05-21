@@ -291,6 +291,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val remoteSupplierRows: Int,
         val remoteCategoryRows: Int,
         val remoteProductRows: Int,
+        val remoteActiveSuppliers: Int,
+        val remoteActiveCategories: Int,
+        val remoteActiveProducts: Int,
+        val prunedSuppliers: Int = 0,
+        val prunedCategories: Int = 0,
+        val prunedProducts: Int = 0,
+        val completeSnapshot: Boolean = true,
         val appliedProductIds: Set<Long> = emptySet()
     )
 
@@ -2436,6 +2443,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             var pulledCategories = 0
             var pulledProducts = 0
             var remoteProductRowsInBundle = 0
+            var remoteActiveSuppliers = 0
+            var remoteActiveCategories = 0
+            var remoteActiveProducts = 0
+            var prunedSuppliers = 0
+            var prunedCategories = 0
+            var prunedProducts = 0
+            var completeCatalogSnapshot = true
             val remoteAppliedProductIds = linkedSetOf<Long>()
             measureCatalogSyncPhase(CatalogSyncStage.PULL_CATALOG, phaseDurationsMs) {
                 val counts = pullCatalogFromRemote(remote, progressReporter)
@@ -2443,6 +2457,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 pulledCategories = counts.categories
                 pulledProducts = counts.products
                 remoteProductRowsInBundle = counts.remoteProductRows
+                remoteActiveSuppliers = counts.remoteActiveSuppliers
+                remoteActiveCategories = counts.remoteActiveCategories
+                remoteActiveProducts = counts.remoteActiveProducts
+                prunedSuppliers = counts.prunedSuppliers
+                prunedCategories = counts.prunedCategories
+                prunedProducts = counts.prunedProducts
+                completeCatalogSnapshot = counts.completeSnapshot
                 remoteAppliedProductIds += counts.appliedProductIds
             }
             var pushedPrices = 0
@@ -2454,7 +2475,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
                         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PULL))
-                        val pullOutcome = pullProductPricesFromRemote(priceRemote, progressReporter)
+                        val pullOutcome = pullProductPricesFromRemote(
+                            priceRemote = priceRemote,
+                            progressReporter = progressReporter,
+                            useFullRemoteFetch = true
+                        )
                         pulledPrices = pullOutcome.pulled
                         skippedPullPrices = pullOutcome.skippedNoLocalProduct
                         remotePriceRowsEvaluated = pullOutcome.remoteRowsEvaluated
@@ -2487,14 +2512,20 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     deferredProductPricesNoProductRef = deferredPrices,
                     skippedProductPricesPullNoProductRef = skippedPullPrices,
                     priceSyncFailed = priceSyncFailed,
-                    fullCatalogFetch = true,
+                    fullCatalogFetch = completeCatalogSnapshot,
                     fullPriceFetch = priceRemote.isConfigured,
                     remoteProductIdsRequested = remoteProductRowsInBundle,
                     remoteProductsFetched = remoteProductRowsInBundle,
                     remotePriceIdsRequested = remotePriceRowsEvaluated,
                     remotePricesFetched = remotePriceRowsEvaluated,
-                    incrementalRemoteSubsetVerifiable = true,
-                    incrementalRemoteNotVerifiableReason = null
+                    incrementalRemoteSubsetVerifiable = completeCatalogSnapshot,
+                    incrementalRemoteNotVerifiableReason = if (completeCatalogSnapshot) null else "scoped_catalog_snapshot",
+                    remoteActiveSuppliers = remoteActiveSuppliers,
+                    remoteActiveCategories = remoteActiveCategories,
+                    remoteActiveProducts = remoteActiveProducts,
+                    prunedSuppliers = prunedSuppliers,
+                    prunedCategories = prunedCategories,
+                    prunedProducts = prunedProducts
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -2939,14 +2970,20 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     deferredProductPricesNoProductRef = 0,
                     skippedProductPricesPullNoProductRef = skippedPullPrices,
                     priceSyncFailed = priceSyncFailed,
-                    fullCatalogFetch = true,
+                    fullCatalogFetch = pullCounts.completeSnapshot,
                     fullPriceFetch = priceRemote.isConfigured,
                     remoteProductIdsRequested = pullCounts.remoteProductRows,
                     remoteProductsFetched = pullCounts.remoteProductRows,
                     remotePriceIdsRequested = remotePriceRowsEvaluated,
                     remotePricesFetched = remotePriceRowsEvaluated,
-                    incrementalRemoteSubsetVerifiable = true,
-                    incrementalRemoteNotVerifiableReason = null
+                    incrementalRemoteSubsetVerifiable = pullCounts.completeSnapshot,
+                    incrementalRemoteNotVerifiableReason = if (pullCounts.completeSnapshot) null else "scoped_catalog_snapshot",
+                    remoteActiveSuppliers = pullCounts.remoteActiveSuppliers,
+                    remoteActiveCategories = pullCounts.remoteActiveCategories,
+                    remoteActiveProducts = pullCounts.remoteActiveProducts,
+                    prunedSuppliers = pullCounts.prunedSuppliers,
+                    prunedCategories = pullCounts.prunedCategories,
+                    prunedProducts = pullCounts.prunedProducts
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -3004,13 +3041,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val fetchMs = System.currentTimeMillis() - fetchStartedAt
         val applyStartedAt = System.currentTimeMillis()
         val applyCounts = applyCatalogBundleInbound(bundle)
+        val pruneCounts = if (bundle.isCompleteSnapshot) {
+            reconcileLocalCatalogAfterInboundPull(bundle)
+        } else {
+            Log.i(TAG, "catalog_prune skipped reason=scoped_catalog_snapshot")
+            CatalogPruneCounts()
+        }
         val applyMs = System.currentTimeMillis() - applyStartedAt
+        val remoteActiveSuppliers = bundle.suppliers.count { it.deletedAt.isNullOrBlank() }
+        val remoteActiveCategories = bundle.categories.count { it.deletedAt.isNullOrBlank() }
+        val remoteActiveProducts = bundle.products.count { it.deletedAt.isNullOrBlank() }
         Log.i(
             TAG,
             "phase_metrics syncDomain=CATALOG phase=PULL_CATALOG " +
                 "remoteSuppliers=${bundle.suppliers.size} remoteCategories=${bundle.categories.size} " +
-                "remoteProducts=${bundle.products.size} pulledSuppliers=${applyCounts.suppliers} " +
-                "pulledCategories=${applyCounts.categories} pulledProducts=${applyCounts.products} " +
+                "remoteProducts=${bundle.products.size} remoteActiveProducts=$remoteActiveProducts " +
+                "pulledSuppliers=${applyCounts.suppliers} pulledCategories=${applyCounts.categories} " +
+                "pulledProducts=${applyCounts.products} prunedProducts=${pruneCounts.products} " +
+                "prunedSuppliers=${pruneCounts.suppliers} prunedCategories=${pruneCounts.categories} " +
                 "fetchMs=$fetchMs applyMs=$applyMs"
         )
         return CatalogPullApplyCounts(
@@ -3020,7 +3068,115 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             remoteSupplierRows = bundle.suppliers.size,
             remoteCategoryRows = bundle.categories.size,
             remoteProductRows = bundle.products.size,
+            remoteActiveSuppliers = remoteActiveSuppliers,
+            remoteActiveCategories = remoteActiveCategories,
+            remoteActiveProducts = remoteActiveProducts,
+            prunedSuppliers = pruneCounts.suppliers,
+            prunedCategories = pruneCounts.categories,
+            prunedProducts = pruneCounts.products,
+            completeSnapshot = bundle.isCompleteSnapshot,
             appliedProductIds = applyCounts.appliedProductIds
+        )
+    }
+
+    /**
+     * TASK-114: dopo un pull catalogo completo, elimina righe locali «clean» il cui bridge punta a
+     * remote assenti o tombstonati nel bundle (zombie accumulati quando il remoto si restringe).
+     */
+    private suspend fun reconcileLocalCatalogAfterInboundPull(
+        bundle: InventoryCatalogFetchBundle
+    ): CatalogPruneCounts {
+        val allSupplierIds = bundle.suppliers.map { it.id }.toSet()
+        val allCategoryIds = bundle.categories.map { it.id }.toSet()
+        val allProductIds = bundle.products.map { it.id }.toSet()
+        val tombstonedSupplierIds = bundle.suppliers
+            .filter { !it.deletedAt.isNullOrBlank() }
+            .map { it.id }
+            .toSet()
+        val tombstonedCategoryIds = bundle.categories
+            .filter { !it.deletedAt.isNullOrBlank() }
+            .map { it.id }
+            .toSet()
+        val tombstonedProductIds = bundle.products
+            .filter { !it.deletedAt.isNullOrBlank() }
+            .map { it.id }
+            .toSet()
+
+        var prunedSuppliers = 0
+        var prunedCategories = 0
+        var prunedProducts = 0
+
+        db.withTransaction {
+            val pendingTombstones = pendingCatalogTombstoneDao.listPendingOrdered()
+            val pendingSupplierTombstones = pendingTombstones
+                .filter { it.entityType == PendingCatalogTombstoneEntityTypes.SUPPLIER }
+                .map { it.remoteId }
+                .toSet()
+            val pendingCategoryTombstones = pendingTombstones
+                .filter { it.entityType == PendingCatalogTombstoneEntityTypes.CATEGORY }
+                .map { it.remoteId }
+                .toSet()
+            val pendingProductTombstones = pendingTombstones
+                .filter { it.entityType == PendingCatalogTombstoneEntityTypes.PRODUCT }
+                .map { it.remoteId }
+                .toSet()
+
+            for (ref in supplierRemoteRefDao.getCleanRefs()) {
+                if (ref.remoteId in pendingSupplierTombstones) continue
+                val stale = ref.remoteId !in allSupplierIds || ref.remoteId in tombstonedSupplierIds
+                if (!stale) continue
+                if (try {
+                        deleteCatalogEntity(
+                            CatalogEntityKind.SUPPLIER,
+                            ref.supplierId,
+                            enqueueCloudTombstone = false
+                        )
+                        true
+                    } catch (_: CatalogNotFoundException) {
+                        false
+                    }
+                ) {
+                    prunedSuppliers++
+                }
+            }
+            for (ref in categoryRemoteRefDao.getCleanRefs()) {
+                if (ref.remoteId in pendingCategoryTombstones) continue
+                val stale = ref.remoteId !in allCategoryIds || ref.remoteId in tombstonedCategoryIds
+                if (!stale) continue
+                if (try {
+                        deleteCatalogEntity(
+                            CatalogEntityKind.CATEGORY,
+                            ref.categoryId,
+                            enqueueCloudTombstone = false
+                        )
+                        true
+                    } catch (_: CatalogNotFoundException) {
+                        false
+                    }
+                ) {
+                    prunedCategories++
+                }
+            }
+            for (ref in productRemoteRefDao.getCleanRefs()) {
+                if (ref.remoteId in pendingProductTombstones) continue
+                val stale = ref.remoteId !in allProductIds || ref.remoteId in tombstonedProductIds
+                if (!stale) continue
+                val product = productDao.getById(ref.productId) ?: continue
+                productDao.delete(product)
+                prunedProducts++
+            }
+        }
+
+        if (prunedSuppliers + prunedCategories + prunedProducts > 0) {
+            Log.i(
+                TAG,
+                "catalog_prune suppliers=$prunedSuppliers categories=$prunedCategories products=$prunedProducts"
+            )
+        }
+        return CatalogPruneCounts(
+            suppliers = prunedSuppliers,
+            categories = prunedCategories,
+            products = prunedProducts
         )
     }
 
@@ -3096,6 +3252,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             remoteSupplierRows = bundle.suppliers.size,
             remoteCategoryRows = bundle.categories.size,
             remoteProductRows = bundle.products.size,
+            remoteActiveSuppliers = bundle.suppliers.count { it.deletedAt.isNullOrBlank() },
+            remoteActiveCategories = bundle.categories.count { it.deletedAt.isNullOrBlank() },
+            remoteActiveProducts = bundle.products.count { it.deletedAt.isNullOrBlank() },
             appliedProductIds = appliedProductIds
         )
     }
@@ -4098,8 +4257,27 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
      */
     private suspend fun pullProductPricesFromRemote(
         priceRemote: ProductPriceRemoteDataSource,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        useFullRemoteFetch: Boolean = false
     ): PricePullApplyResult {
+        if (useFullRemoteFetch) {
+            val allRows = priceRemote.fetchProductPrices().getOrThrow()
+            val pageResult = applyProductPriceRows(
+                allRows,
+                progressReporter,
+                stage = CatalogSyncStage.SYNC_PRICES_PULL,
+                processedBefore = 0,
+                totalRows = allRows.size
+            )
+            Log.i(
+                TAG,
+                "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL mode=full_fetch " +
+                    "remotePricesEvaluated=${pageResult.remoteRowsEvaluated} pricesPulled=${pageResult.pulled} " +
+                    "pricesSkippedNoProductRef=${pageResult.skippedNoLocalProduct}"
+            )
+            return pageResult
+        }
+
         var pulled = 0
         var skippedNoLocalProduct = 0
         var remoteRowsEvaluated = 0
@@ -4129,7 +4307,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         Log.i(
             TAG,
-            "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL " +
+            "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL mode=paged " +
                 "remotePricesEvaluated=$remoteRowsEvaluated pricesPulled=$pulled " +
                 "pricesSkippedNoProductRef=$skippedNoLocalProduct " +
                 "pageSize=$INVENTORY_REMOTE_PAGE_SIZE pageCount=$pageCount"

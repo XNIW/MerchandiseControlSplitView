@@ -577,6 +577,7 @@
     <string name="local_database_status_loading">Checking local data…</string>
     <string name="local_database_status_empty">No local data yet</string>
     <string name="local_database_status_ready">Local database ready</string>
+    <string name="local_database_status_reconcile">Needs cloud reconciliation</string>
     <string name="local_database_status_pending">Local changes pending</string>
     <string name="local_database_status_products">Products</string>
     <string name="local_database_status_suppliers">Suppliers</string>

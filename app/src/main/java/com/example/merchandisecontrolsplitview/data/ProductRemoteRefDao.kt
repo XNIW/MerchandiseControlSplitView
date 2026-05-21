@@ -79,4 +79,13 @@ interface ProductRemoteRefDao {
         """
     )
     suspend fun countLocalRowsMissingRemoteRef(): Int
+
+    /** TASK-114: refs senza modifiche locali pendenti, idonee a prune post-pull. */
+    @Query(
+        """
+        SELECT * FROM product_remote_refs
+        WHERE localChangeRevision <= lastSyncedLocalRevision
+        """
+    )
+    suspend fun getCleanRefs(): List<ProductRemoteRef>
 }

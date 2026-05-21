@@ -196,6 +196,7 @@ private fun LocalDatabaseStatusSection(
         subtitle = when {
             state.isLoading -> stringResource(R.string.local_database_status_loading)
             state.hasPendingLocalChanges -> stringResource(R.string.local_database_status_pending)
+            state.needsReconciliation -> stringResource(R.string.local_database_status_reconcile)
             state.isEmpty -> stringResource(R.string.local_database_status_empty)
             else -> stringResource(R.string.local_database_status_ready)
         },

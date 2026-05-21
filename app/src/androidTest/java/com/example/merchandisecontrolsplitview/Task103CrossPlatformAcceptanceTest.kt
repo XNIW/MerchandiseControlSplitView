@@ -6,7 +6,10 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
+import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntryRemoteRef
 import com.example.merchandisecontrolsplitview.data.InventoryCatalogFetchBundle
 import com.example.merchandisecontrolsplitview.data.InventoryCategoryRow
 import com.example.merchandisecontrolsplitview.data.InventoryProductPriceRow
@@ -14,7 +17,11 @@ import com.example.merchandisecontrolsplitview.data.InventoryProductRow
 import com.example.merchandisecontrolsplitview.data.InventorySupplierRow
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
+import com.example.merchandisecontrolsplitview.data.ProductRemoteRef
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
+import com.example.merchandisecontrolsplitview.data.SyncStatus
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import java.security.MessageDigest
@@ -24,6 +31,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -156,6 +164,203 @@ class Task103CrossPlatformAcceptanceTest {
     }
 
     @Test
+    fun test114AndroidWriteProductHistoryMatrix() = runBlocking {
+        requireLiveAcceptanceEnabled()
+        val fixture = fixture()
+        val runtime = runtime(fixture)
+        val supplier = runtime.repository.addSupplier(fixture.matrixSupplierAndroid)
+            ?: runtime.repository.findSupplierByName(fixture.matrixSupplierAndroid)
+            ?: throw AssertionError("TASK-114 Android matrix supplier unavailable")
+        val category = runtime.repository.addCategory(fixture.matrixCategoryAndroid)
+            ?: runtime.repository.findCategoryByName(fixture.matrixCategoryAndroid)
+            ?: throw AssertionError("TASK-114 Android matrix category unavailable")
+
+        val createProduct = Product(
+            barcode = fixture.matrixBarcodeAndroidCreate,
+            itemNumber = "${fixture.prefix}MATRIX_ANDROID_CREATE_ITEM",
+            productName = fixture.matrixProductAndroidCreate,
+            supplierId = supplier.id,
+            categoryId = category.id,
+            purchasePrice = 44.10,
+            retailPrice = 55.20,
+            stockQuantity = 6.0
+        )
+        val updateProduct = Product(
+            barcode = fixture.matrixBarcodeAndroidUpdate,
+            itemNumber = "${fixture.prefix}MATRIX_ANDROID_UPDATE_ITEM",
+            productName = "${fixture.prefix}MATRIX_ANDROID_PRODUCT_UPDATE_INITIAL",
+            supplierId = supplier.id,
+            categoryId = category.id,
+            purchasePrice = 45.10,
+            retailPrice = 56.20,
+            stockQuantity = 7.0
+        )
+        val tombstoneProduct = Product(
+            barcode = fixture.matrixBarcodeAndroidTombstone,
+            itemNumber = "${fixture.prefix}MATRIX_ANDROID_TOMBSTONE_ITEM",
+            productName = fixture.matrixProductAndroidTombstone,
+            supplierId = supplier.id,
+            categoryId = category.id,
+            purchasePrice = 46.10,
+            retailPrice = 57.20,
+            stockQuantity = 8.0
+        )
+        for (product in listOf(createProduct, updateProduct, tombstoneProduct)) {
+            runtime.repository.findProductByBarcode(product.barcode)?.let { runtime.repository.deleteProduct(it) }
+            runtime.repository.addProduct(product)
+        }
+        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+
+        val updateLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidUpdate)
+            ?: throw AssertionError("TASK-114 Android update product missing locally")
+        runtime.repository.updateProduct(updateLocal.copy(productName = fixture.matrixProductAndroidUpdateFinal))
+        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+
+        val tombstoneLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidTombstone)
+            ?: throw AssertionError("TASK-114 Android tombstone product missing locally")
+        runtime.repository.deleteProduct(tombstoneLocal)
+        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+
+        val createHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry(fixture.matrixHistoryAndroidCreate, fixture))
+        val updateHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry("${fixture.prefix}MATRIX_ANDROID_HISTORY_UPDATE_INITIAL", fixture))
+        val tombstoneHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry(fixture.matrixHistoryAndroidTombstone, fixture))
+        runtime.repository.pushHistorySessionsToRemote(
+            runtime.sessionRemote,
+            runtime.ownerUserId,
+            setOf(createHistoryUid, updateHistoryUid, tombstoneHistoryUid)
+        ).getOrThrow()
+
+        val updateHistory = runtime.app.database.historyEntryDao().getByUid(updateHistoryUid)
+            ?: throw AssertionError("TASK-114 Android update history missing locally")
+        runtime.repository.updateHistoryEntry(updateHistory.copy(displayName = fixture.matrixHistoryAndroidUpdateFinal))
+        runtime.repository.pushHistorySessionsToRemote(runtime.sessionRemote, runtime.ownerUserId, setOf(updateHistoryUid)).getOrThrow()
+
+        val tombstoneHistory = runtime.app.database.historyEntryDao().getByUid(tombstoneHistoryUid)
+            ?: throw AssertionError("TASK-114 Android tombstone history missing locally")
+        runtime.repository.deleteHistoryEntry(tombstoneHistory)
+        runtime.repository.pushHistorySessionsToRemote(runtime.sessionRemote, runtime.ownerUserId, setOf(tombstoneHistoryUid)).getOrThrow()
+
+        val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+        assertEquals(fixture.matrixProductAndroidCreate, singleActiveProduct(catalog, fixture.matrixBarcodeAndroidCreate)?.productName)
+        assertEquals(fixture.matrixProductAndroidUpdateFinal, singleActiveProduct(catalog, fixture.matrixBarcodeAndroidUpdate)?.productName)
+        assertNotNull(productByBarcode(catalog, fixture.matrixBarcodeAndroidTombstone)?.deletedAt)
+
+        val sessions = matrixSessions(runtime, fixture)
+        assertNotNull(sessionByDisplayName(sessions, fixture.matrixHistoryAndroidCreate))
+        assertNotNull(sessionByDisplayName(sessions, fixture.matrixHistoryAndroidUpdateFinal))
+        assertNotNull(sessionByDisplayName(sessions, fixture.matrixHistoryAndroidTombstone)?.deletedAt)
+
+        println(
+            "${fixture.logPrefix}_ANDROID_WRITE_MATRIX owner_hash=${hash(runtime.ownerUserId)} " +
+                "product_create=pass product_update=pass product_tombstone=pass " +
+                "history_create=pass history_update=pass history_tombstone=pass"
+        )
+    }
+
+    @Test
+    fun test114AndroidPullIOSProductHistoryMatrix() = runBlocking {
+        requireLiveAcceptanceEnabled()
+        val fixture = fixture()
+        val runtime = runtime(fixture)
+        val catalogBefore = runtime.catalogRemote.fetchCatalog().getOrThrow()
+        val iosTombstone = productByBarcode(catalogBefore, fixture.matrixBarcodeIOSTombstone)
+            ?: throw AssertionError("TASK-114 iOS tombstone product missing remotely")
+        seedLocalProductTombstoneTarget(runtime, iosTombstone)
+
+        val sessionsBefore = matrixSessions(runtime, fixture)
+        val iosHistoryTombstone = sessionByDisplayName(sessionsBefore, fixture.matrixHistoryIOSTombstone)
+            ?: throw AssertionError("TASK-114 iOS tombstone history missing remotely")
+        seedLocalHistoryTombstoneTarget(runtime, iosHistoryTombstone)
+
+        runtime.repository.pullCatalogBootstrapFromRemote(
+            remote = runtime.catalogRemote,
+            priceRemote = runtime.priceRemote,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+        runtime.repository.bootstrapHistorySessionsFromRemote(runtime.sessionRemote).getOrThrow()
+
+        assertEquals(
+            fixture.matrixProductIOSCreate,
+            runtime.repository.findProductByBarcode(fixture.matrixBarcodeIOSCreate)?.productName
+        )
+        assertEquals(
+            fixture.matrixProductIOSUpdateFinal,
+            runtime.repository.findProductByBarcode(fixture.matrixBarcodeIOSUpdate)?.productName
+        )
+        assertNull(runtime.repository.findProductByBarcode(fixture.matrixBarcodeIOSTombstone))
+
+        val historyCreate = localHistoryByRemote(runtime, sessionByDisplayName(sessionsBefore, fixture.matrixHistoryIOSCreate)!!)
+        val historyUpdate = localHistoryByRemote(runtime, sessionByDisplayName(sessionsBefore, fixture.matrixHistoryIOSUpdateFinal)!!)
+        val historyDeleted = localHistoryByRemote(runtime, iosHistoryTombstone)
+        assertEquals(fixture.matrixHistoryIOSCreate, historyCreate?.displayName)
+        assertEquals(fixture.matrixHistoryIOSUpdateFinal, historyUpdate?.displayName)
+        assertNotNull(historyDeleted?.deletedAt)
+
+        println(
+            "${fixture.logPrefix}_ANDROID_PULL_IOS_MATRIX owner_hash=${hash(runtime.ownerUserId)} " +
+                "product_create=pass product_update=pass product_tombstone=pass " +
+            "history_create=pass history_update=pass history_tombstone=pass"
+        )
+    }
+
+    @Test
+    fun test114AndroidCleanupLocalHistoryResidue() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue(
+            "TASK-114 local cleanup is gated. Pass -e task114LocalCleanup true.",
+            isEnabled(args.getString("task114LocalCleanup")?.lowercase())
+        )
+        val prefix = args.getString("task114CleanupPrefix")
+            ?: throw AssertionError("task114CleanupPrefix is required")
+        require(prefix.startsWith("TASK114_") && prefix.endsWith("_") && !prefix.contains("%")) {
+            "TASK-114 cleanup prefix must be explicit, task-scoped and suffix '_'"
+        }
+        val execute = isEnabled(args.getString("task114CleanupExecute")?.lowercase())
+        val likePrefix = "$prefix%"
+        val app = InstrumentationRegistry.getInstrumentation()
+            .targetContext
+            .applicationContext as MerchandiseControlApplication
+        val db = app.database.openHelper.writableDatabase
+        val beforeHistory = countTask114LocalHistory(db, likePrefix)
+        val beforeRefs = countTask114LocalHistoryRefs(db, likePrefix)
+
+        if (execute && beforeHistory > 0) {
+            db.beginTransaction()
+            try {
+                db.execSQL(
+                    """
+                    DELETE FROM history_entry_remote_refs
+                    WHERE historyEntryUid IN (
+                        SELECT uid FROM history_entries
+                        WHERE displayName LIKE ? OR id LIKE ?
+                    )
+                    """.trimIndent(),
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.execSQL(
+                    "DELETE FROM history_entries WHERE displayName LIKE ? OR id LIKE ?",
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+        }
+
+        val afterHistory = countTask114LocalHistory(db, likePrefix)
+        val afterRefs = countTask114LocalHistoryRefs(db, likePrefix)
+        if (execute) {
+            assertEquals(0, afterHistory)
+            assertEquals(0, afterRefs)
+        }
+        println(
+            "TASK114_ANDROID_LOCAL_CLEANUP prefix_hash=${hash(prefix)} execute=$execute " +
+                "history_before=$beforeHistory refs_before=$beforeRefs " +
+                "history_after=$afterHistory refs_after=$afterRefs"
+        )
+    }
+
+    @Test
     fun test04AndroidPullMediumReadBack() = runBlocking {
         requireLiveAcceptanceEnabled()
         val fixture = fixture()
@@ -209,7 +414,8 @@ class Task103CrossPlatformAcceptanceTest {
             repository = app.repository,
             ownerUserId = signedIn.userId,
             catalogRemote = Task103ScopedCatalogRemoteDataSource(app.catalogRemoteDataSource, client, fixture),
-            priceRemote = Task103ScopedProductPriceRemoteDataSource(app.productPriceRemoteDataSource, client, fixture)
+            priceRemote = Task103ScopedProductPriceRemoteDataSource(app.productPriceRemoteDataSource, client, fixture),
+            sessionRemote = app.sessionBackupRemoteDataSource
         )
     }
 
@@ -224,13 +430,20 @@ class Task103CrossPlatformAcceptanceTest {
         val task112Value = args
             .getString("task112LiveAcceptance")
             ?.lowercase()
+        val task114Value = args
+            .getString("task114LiveAcceptance")
+            ?.lowercase()
         assumeTrue(
-            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true or -e task112LiveAcceptance true.",
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true or -e task114LiveAcceptance true.",
             task103Value == "1" || task103Value == "true" ||
                 task104Value == "1" || task104Value == "true" ||
-                task112Value == "1" || task112Value == "true"
+                task112Value == "1" || task112Value == "true" ||
+                task114Value == "1" || task114Value == "true"
         )
     }
+
+    private fun isEnabled(value: String?): Boolean =
+        value == "1" || value == "true"
 
     private fun fixture(): Fixture {
         val args = InstrumentationRegistry.getArguments()
@@ -240,11 +453,14 @@ class Task103CrossPlatformAcceptanceTest {
             .getString("task103RunPrefix")
             ?: args
             .getString("task112RunPrefix")
-            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix or task112RunPrefix must be explicitly set for live acceptance.")
+            ?: args
+            .getString("task114RunPrefix")
+            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix or task114RunPrefix must be explicitly set for live acceptance.")
         assertTrue(
             prefix.startsWith("TASK103_REAL_R") ||
                 prefix.startsWith("TASK104_PASS2_") ||
-                prefix.startsWith("TASK112_")
+                prefix.startsWith("TASK112_") ||
+                prefix.startsWith("TASK114_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -293,6 +509,142 @@ class Task103CrossPlatformAcceptanceTest {
         return if (matches.size == 1) matches.single() else null
     }
 
+    private fun productByBarcode(catalog: InventoryCatalogFetchBundle, barcode: String): InventoryProductRow? {
+        val matches = catalog.products.filter { it.barcode == barcode }
+        return if (matches.size == 1) matches.single() else null
+    }
+
+    private suspend fun matrixSessions(runtime: Runtime, fixture: Fixture): List<SharedSheetSessionRecord> =
+        runtime.sessionRemote.fetchAllSessionsForOwner().getOrThrow()
+            .filter { it.displayName?.startsWith("${fixture.prefix}MATRIX_") == true }
+
+    private fun sessionByDisplayName(
+        sessions: List<SharedSheetSessionRecord>,
+        displayName: String
+    ): SharedSheetSessionRecord? {
+        val matches = sessions.filter { it.displayName == displayName }
+        return if (matches.size == 1) matches.single() else null
+    }
+
+    private fun matrixHistoryEntry(title: String, fixture: Fixture): HistoryEntry =
+        HistoryEntry(
+            id = title,
+            displayName = title,
+            timestamp = "2026-05-21 18:00:00",
+            data = listOf(listOf("barcode", "count"), listOf(title, "2")),
+            editable = listOf(listOf("", ""), listOf("", "2")),
+            complete = listOf(false, true),
+            supplier = fixture.matrixSupplierAndroid,
+            category = fixture.matrixCategoryAndroid,
+            syncStatus = SyncStatus.NOT_ATTEMPTED,
+            totalItems = 1,
+            paymentTotal = 2.0,
+            missingItems = 0,
+            isManualEntry = true
+        )
+
+    private suspend fun seedLocalProductTombstoneTarget(
+        runtime: Runtime,
+        remote: InventoryProductRow
+    ) {
+        runtime.repository.findProductByBarcode(remote.barcode)?.let { return }
+        runtime.app.database.productDao().insert(
+            Product(
+                barcode = remote.barcode,
+                itemNumber = remote.itemNumber,
+                productName = remote.productName,
+                secondProductName = remote.secondProductName,
+                purchasePrice = remote.purchasePrice,
+                retailPrice = remote.retailPrice,
+                stockQuantity = remote.stockQuantity
+            )
+        )
+        val local = runtime.repository.findProductByBarcode(remote.barcode)
+            ?: throw AssertionError("TASK-114 local product tombstone seed failed")
+        runtime.app.database.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = local.id,
+                remoteId = remote.id,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = System.currentTimeMillis(),
+                remoteUpdatedAt = remote.updatedAt
+            )
+        )
+    }
+
+    private suspend fun seedLocalHistoryTombstoneTarget(
+        runtime: Runtime,
+        remote: SharedSheetSessionRecord
+    ) {
+        if (runtime.app.database.historyEntryRemoteRefDao().getByRemoteId(remote.remoteId) != null) return
+        val uid = runtime.app.database.historyEntryDao().insert(
+            HistoryEntry(
+                id = remote.remoteId,
+                displayName = remote.displayName.orEmpty(),
+                timestamp = remote.timestamp,
+                data = remote.data,
+                editable = remote.sessionOverlay?.editable.orEmpty(),
+                complete = remote.sessionOverlay?.complete.orEmpty(),
+                supplier = remote.supplier,
+                category = remote.category,
+                syncStatus = SyncStatus.SYNCED_SUCCESSFULLY,
+                totalItems = 1,
+                isManualEntry = remote.isManualEntry
+            )
+        )
+        runtime.app.database.historyEntryRemoteRefDao().insert(
+            HistoryEntryRemoteRef(
+                historyEntryUid = uid,
+                remoteId = remote.remoteId,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private suspend fun localHistoryByRemote(
+        runtime: Runtime,
+        remote: SharedSheetSessionRecord
+    ): HistoryEntry? {
+        val ref = runtime.app.database.historyEntryRemoteRefDao().getByRemoteId(remote.remoteId) ?: return null
+        return runtime.app.database.historyEntryDao().getByUid(ref.historyEntryUid)
+    }
+
+    private fun countTask114LocalHistory(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int {
+        val cursor = db.query(
+            "SELECT COUNT(*) FROM history_entries WHERE displayName LIKE ? OR id LIKE ?",
+            arrayOf(likePrefix, likePrefix)
+        )
+        cursor.use {
+            return if (it.moveToFirst()) it.getInt(0) else 0
+        }
+    }
+
+    private fun countTask114LocalHistoryRefs(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int {
+        val cursor = db.query(
+            """
+            SELECT COUNT(*)
+            FROM history_entry_remote_refs
+            WHERE historyEntryUid IN (
+                SELECT uid FROM history_entries
+                WHERE displayName LIKE ? OR id LIKE ?
+            )
+            """.trimIndent(),
+            arrayOf(likePrefix, likePrefix)
+        )
+        cursor.use {
+            return if (it.moveToFirst()) it.getInt(0) else 0
+        }
+    }
+
     private fun expectedIOS() = listOf(
         ExpectedPoint("PURCHASE", 11.10, "2026-05-12 13:00:00"),
         ExpectedPoint("PURCHASE", 12.35, "2026-05-12 13:15:00"),
@@ -324,11 +676,13 @@ class Task103CrossPlatformAcceptanceTest {
         val repository: DefaultInventoryRepository,
         val ownerUserId: String,
         val catalogRemote: CatalogRemoteDataSource,
-        val priceRemote: ProductPriceRemoteDataSource
+        val priceRemote: ProductPriceRemoteDataSource,
+        val sessionRemote: SessionBackupRemoteDataSource
     )
 
     private data class Fixture(val prefix: String) {
         val logPrefix: String = when {
+            prefix.startsWith("TASK114_") -> "TASK114"
             prefix.startsWith("TASK112_") -> "TASK112"
             prefix.startsWith("TASK104_PASS2_") -> "TASK104_PASS2"
             else -> "TASK103"
@@ -341,15 +695,55 @@ class Task103CrossPlatformAcceptanceTest {
         val categoryAndroid: String = "${prefix}CAT_ANDROID_01"
         val productAndroid: String = "${prefix}CANARY_ANDROID_01"
         val barcodeAndroid: String = "${prefix}ANDROID_0001"
+        val matrixSupplierIOS: String = "${prefix}MATRIX_SUP_IOS"
+        val matrixCategoryIOS: String = "${prefix}MATRIX_CAT_IOS"
+        val matrixBarcodeIOSCreate: String = "${prefix}MATRIX_IOS_CREATE"
+        val matrixBarcodeIOSUpdate: String = "${prefix}MATRIX_IOS_UPDATE"
+        val matrixBarcodeIOSTombstone: String = "${prefix}MATRIX_IOS_TOMBSTONE"
+        val matrixProductIOSCreate: String = "${prefix}MATRIX_IOS_PRODUCT_CREATE"
+        val matrixProductIOSUpdateFinal: String = "${prefix}MATRIX_IOS_PRODUCT_UPDATE_FINAL"
+        val matrixHistoryIOSCreate: String = "${prefix}MATRIX_IOS_HISTORY_CREATE"
+        val matrixHistoryIOSUpdateFinal: String = "${prefix}MATRIX_IOS_HISTORY_UPDATE_FINAL"
+        val matrixHistoryIOSTombstone: String = "${prefix}MATRIX_IOS_HISTORY_TOMBSTONE"
+        val matrixSupplierAndroid: String = "${prefix}MATRIX_SUP_ANDROID"
+        val matrixCategoryAndroid: String = "${prefix}MATRIX_CAT_ANDROID"
+        val matrixBarcodeAndroidCreate: String = "${prefix}MATRIX_ANDROID_CREATE"
+        val matrixBarcodeAndroidUpdate: String = "${prefix}MATRIX_ANDROID_UPDATE"
+        val matrixBarcodeAndroidTombstone: String = "${prefix}MATRIX_ANDROID_TOMBSTONE"
+        val matrixProductAndroidCreate: String = "${prefix}MATRIX_ANDROID_PRODUCT_CREATE"
+        val matrixProductAndroidUpdateFinal: String = "${prefix}MATRIX_ANDROID_PRODUCT_UPDATE_FINAL"
+        val matrixProductAndroidTombstone: String = "${prefix}MATRIX_ANDROID_PRODUCT_TOMBSTONE"
+        val matrixHistoryAndroidCreate: String = "${prefix}MATRIX_ANDROID_HISTORY_CREATE"
+        val matrixHistoryAndroidUpdateFinal: String = "${prefix}MATRIX_ANDROID_HISTORY_UPDATE_FINAL"
+        val matrixHistoryAndroidTombstone: String = "${prefix}MATRIX_ANDROID_HISTORY_TOMBSTONE"
 
         val mediumSuppliers: List<String> = (1..5).map { "${prefix}SUP_MEDIUM_${it.padded3()}" }
         val mediumCategories: List<String> = (1..5).map { "${prefix}CAT_MEDIUM_${it.padded3()}" }
         val mediumBarcodes: List<String> = (1..50).map { mediumBarcode(it) }
         val mediumCanaryBarcode: String = mediumBarcode(1)
         val mediumCanaryProduct: String = "${prefix}MEDIUM_PRODUCT_001"
-        val allSupplierNames: List<String> = listOf(supplierIOS, supplierAndroid) + mediumSuppliers
-        val allCategoryNames: List<String> = listOf(categoryIOS, categoryAndroid) + mediumCategories
-        val allBarcodes: List<String> = listOf(barcodeIOS, barcodeAndroid) + mediumBarcodes
+        val allSupplierNames: List<String> = listOf(
+            supplierIOS,
+            supplierAndroid,
+            matrixSupplierIOS,
+            matrixSupplierAndroid
+        ) + mediumSuppliers
+        val allCategoryNames: List<String> = listOf(
+            categoryIOS,
+            categoryAndroid,
+            matrixCategoryIOS,
+            matrixCategoryAndroid
+        ) + mediumCategories
+        val allBarcodes: List<String> = listOf(
+            barcodeIOS,
+            barcodeAndroid,
+            matrixBarcodeIOSCreate,
+            matrixBarcodeIOSUpdate,
+            matrixBarcodeIOSTombstone,
+            matrixBarcodeAndroidCreate,
+            matrixBarcodeAndroidUpdate,
+            matrixBarcodeAndroidTombstone
+        ) + mediumBarcodes
 
         private fun mediumBarcode(index: Int): String =
             "${prefix}MEDIUM_${index.padded3()}"
@@ -395,7 +789,8 @@ class Task103CrossPlatformAcceptanceTest {
                     parents.categories +
                         fetchCategoriesByNames(fixture.allCategoryNames)
                     ).distinctBy { it.id },
-                products = products
+                products = products,
+                isCompleteSnapshot = false
             )
         }
 

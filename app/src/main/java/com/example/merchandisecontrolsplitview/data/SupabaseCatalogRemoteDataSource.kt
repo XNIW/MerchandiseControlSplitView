@@ -61,7 +61,8 @@ class SupabaseCatalogRemoteDataSource(
             InventoryCatalogFetchBundle(
                 suppliers = pg.fetchInventoryRowsByIds("inventory_suppliers", supplierIds),
                 categories = pg.fetchInventoryRowsByIds("inventory_categories", categoryIds),
-                products = pg.fetchInventoryRowsByIds("inventory_products", productIds)
+                products = pg.fetchInventoryRowsByIds("inventory_products", productIds),
+                isCompleteSnapshot = false
             )
         }
 
@@ -119,7 +120,7 @@ class SupabaseCatalogRemoteDataSource(
                 "TASK087 category scope rejected"
             }
 
-            InventoryCatalogFetchBundle(suppliers, categories, products)
+            InventoryCatalogFetchBundle(suppliers, categories, products, isCompleteSnapshot = false)
         }
 
     override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> =

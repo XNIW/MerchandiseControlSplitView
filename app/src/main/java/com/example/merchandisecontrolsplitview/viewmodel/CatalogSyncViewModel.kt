@@ -84,7 +84,9 @@ data class LocalDatabaseStatusUiState(
     val pendingLocalChangesCount: Int? = null,
     val syncEventOutboxPendingCount: Int? = null,
     val lastSyncText: String? = null,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    /** TASK-114: ultimo full sync ha rilevato drift locale vs bundle remoto. */
+    val needsReconciliation: Boolean = false
 ) {
     val isEmpty: Boolean
         get() = listOf(productsCount, suppliersCount, categoriesCount, priceHistoryCount, historySessionsCount)
@@ -229,8 +231,14 @@ class CatalogSyncViewModel(
     val localDatabaseStatusUi: StateFlow<LocalDatabaseStatusUiState> = combine(
         localDatabaseStatusSnapshot,
         localDatabaseStatusLoading,
-        lastSuccessAt
-    ) { snapshot, loading, successAt ->
+        lastSuccessAt,
+        lastCatalogSyncSummary
+    ) { snapshot, loading, successAt, summary ->
+        val needsReconciliation = snapshot != null && summary != null &&
+            (
+                summary.hasCatalogCountDrift(snapshot) ||
+                    summary.hasPriceCountDrift(snapshot.priceHistoryRows)
+                )
         LocalDatabaseStatusUiState(
             productsCount = snapshot?.products,
             suppliersCount = snapshot?.suppliers,
@@ -240,7 +248,8 @@ class CatalogSyncViewModel(
             pendingLocalChangesCount = snapshot?.pendingLocalChanges,
             syncEventOutboxPendingCount = snapshot?.syncEventOutboxPending,
             lastSyncText = successAt?.let(::formatTime),
-            isLoading = loading && snapshot == null
+            isLoading = loading && snapshot == null,
+            needsReconciliation = needsReconciliation
         )
     }.stateIn(
         viewModelScope,

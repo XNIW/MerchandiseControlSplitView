@@ -312,7 +312,8 @@ class Task098CrossPlatformSmokeTest {
             InventoryCatalogFetchBundle(
                 suppliers = (parents.suppliers + fetchSuppliersByName(SUPPLIER)).distinctBy { it.id },
                 categories = (parents.categories + fetchCategoriesByName(CATEGORY)).distinctBy { it.id },
-                products = products
+                products = products,
+                isCompleteSnapshot = false
             )
         }
 

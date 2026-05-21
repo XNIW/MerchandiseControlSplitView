@@ -595,6 +595,7 @@
     <string name="local_database_status_loading">Controllo dati locali…</string>
     <string name="local_database_status_empty">Nessun dato locale</string>
     <string name="local_database_status_ready">Database locale pronto</string>
+    <string name="local_database_status_reconcile">Da riconciliare con il cloud</string>
     <string name="local_database_status_pending">Modifiche locali in attesa</string>
     <string name="local_database_status_products">Prodotti</string>
     <string name="local_database_status_suppliers">Fornitori</string>

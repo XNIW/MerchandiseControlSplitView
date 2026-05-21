@@ -57,7 +57,8 @@ data class CatalogTombstonePatch(
 data class InventoryCatalogFetchBundle(
     val suppliers: List<InventorySupplierRow>,
     val categories: List<InventoryCategoryRow>,
-    val products: List<InventoryProductRow>
+    val products: List<InventoryProductRow>,
+    val isCompleteSnapshot: Boolean = true
 )
 
 @Serializable
@@ -113,6 +114,21 @@ data class CatalogCloudPendingBreakdown(
 
     val hasAnyPendingBreakdown: Boolean
         get() = hasTombstoneOrPriceRelatedPending || hasCatalogBridgeGaps
+}
+
+/** Conteggi attivi osservati nell'ultimo bundle catalogo (TASK-114 reconciliation). */
+data class RemoteInventoryActiveCounts(
+    val suppliers: Int,
+    val categories: Int,
+    val products: Int
+)
+
+data class CatalogPruneCounts(
+    val suppliers: Int = 0,
+    val categories: Int = 0,
+    val products: Int = 0
+) {
+    val total: Int get() = suppliers + categories + products
 }
 
 data class CatalogSyncSummary(
@@ -176,8 +192,27 @@ data class CatalogSyncSummary(
     val targetedProductsFetched: Int = 0,
     val targetedPricesFetched: Int = 0,
     val remoteUpdatesApplied: Int = 0,
-    val manualFullSyncRequired: Boolean = false
-)
+    val manualFullSyncRequired: Boolean = false,
+    /** TASK-114: righe attive nel bundle remoto dell'ultimo full catalog pull. */
+    val remoteActiveSuppliers: Int = 0,
+    val remoteActiveCategories: Int = 0,
+    val remoteActiveProducts: Int = 0,
+    val prunedSuppliers: Int = 0,
+    val prunedCategories: Int = 0,
+    val prunedProducts: Int = 0
+) {
+    fun hasCatalogCountDrift(local: LocalDatabaseStatusSnapshot): Boolean {
+        if (!fullCatalogFetch) return false
+        return local.suppliers != remoteActiveSuppliers ||
+            local.categories != remoteActiveCategories ||
+            local.products != remoteActiveProducts
+    }
+
+    fun hasPriceCountDrift(localPriceHistoryRows: Int): Boolean {
+        if (!fullPriceFetch || priceSyncFailed) return false
+        return remotePricesFetched > 0 && localPriceHistoryRows != remotePricesFetched
+    }
+}
 
 /**
  * Audit 044A: motivi sintetici quando non si implementa pull incrementale (contratto non verificabile).

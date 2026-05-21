@@ -3247,6 +3247,127 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `114 prune removes clean local product when remote id missing from fetched bundle`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001140"
+        val vanishedRemoteId = "00000000-0000-4000-8000-000000001141"
+        db.productDao().insert(
+            Product(
+                barcode = "prune-114",
+                productName = "Prune Product 114",
+                stockQuantity = 1.0
+            )
+        )
+        val productId = repository.findProductByBarcode("prune-114")!!.id
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = productId,
+                remoteId = vanishedRemoteId,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0
+            )
+        )
+
+        val remote = FakeCatalogRemote016()
+        val result = repository.syncCatalogWithRemote(remote, RecordingPriceRemote016(), owner)
+
+        assertTrue(result.isSuccess)
+        assertNull(db.productDao().getById(productId))
+        val summary = result.getOrThrow()
+        assertEquals(1, summary.prunedProducts)
+        assertEquals(0, summary.remoteActiveProducts)
+    }
+
+    @Test
+    fun `114 prune skips scoped remote snapshots`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001142"
+        val existingRemoteId = "00000000-0000-4000-8000-000000001143"
+        db.productDao().insert(
+            Product(
+                barcode = "prune-114-scoped",
+                productName = "Prune Product 114 Scoped",
+                stockQuantity = 1.0
+            )
+        )
+        val productId = repository.findProductByBarcode("prune-114-scoped")!!.id
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = productId,
+                remoteId = existingRemoteId,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0
+            )
+        )
+
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = emptyList(),
+                isCompleteSnapshot = false
+            )
+        )
+        val result = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            owner
+        )
+
+        assertTrue(result.isSuccess)
+        assertNotNull(db.productDao().getById(productId))
+        val summary = result.getOrThrow()
+        assertFalse(summary.fullCatalogFetch)
+        assertEquals("scoped_catalog_snapshot", summary.incrementalRemoteNotVerifiableReason)
+        assertEquals(0, summary.prunedProducts)
+    }
+
+    @Test
+    fun `114 prune skips clean product with pending tombstone`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001144"
+        val existingRemoteId = "00000000-0000-4000-8000-000000001145"
+        db.productDao().insert(
+            Product(
+                barcode = "prune-114-pending",
+                productName = "Prune Product 114 Pending",
+                stockQuantity = 1.0
+            )
+        )
+        val productId = repository.findProductByBarcode("prune-114-pending")!!.id
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = productId,
+                remoteId = existingRemoteId,
+                localChangeRevision = 0,
+                lastSyncedLocalRevision = 0
+            )
+        )
+        db.pendingCatalogTombstoneDao().insert(
+            PendingCatalogTombstone(
+                entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                remoteId = existingRemoteId,
+                enqueuedAtMs = 1_777_777_777_000
+            )
+        )
+
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = emptyList(),
+                isCompleteSnapshot = true
+            )
+        )
+        val result = repository.pullCatalogBootstrapFromRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(result.isSuccess)
+        assertNotNull(db.productDao().getById(productId))
+        assertEquals(0, result.getOrThrow().prunedProducts)
+    }
+
+    @Test
     fun `041 realign links local rows to existing remote ids before push when bridge missing`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000410"
         val remoteSupplierId = "00000000-0000-4000-8000-000000000411"
@@ -5203,6 +5324,21 @@ class DefaultInventoryRepositoryTest {
         assertTrue(result.isSuccess)
         assertEquals(0, result.getOrThrow().uploaded)
         assertTrue(fake.upsertedChunks.isEmpty())
+    }
+
+    @Test
+    fun `114 technical import history without remote ref is not user-visible pending work`() = runTest {
+        repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("APPLY_IMPORT_1774572.xlsx")
+        )
+
+        assertTrue(repository.getPendingHistorySessionPushUids().isEmpty())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+
+        val status = repository.getLocalDatabaseStatusSnapshot(ownerUserId = null)
+
+        assertEquals(0, status.historySessions)
+        assertEquals(0, status.pendingLocalChanges)
     }
 
     @Test
