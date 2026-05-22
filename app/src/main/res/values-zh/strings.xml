@@ -576,6 +576,7 @@
     <string name="local_database_status_loading">正在检查本地数据…</string>
     <string name="local_database_status_empty">尚无本地数据</string>
     <string name="local_database_status_ready">本地数据库已就绪</string>
+    <string name="local_database_status_reconcile">需要与云端重新核对</string>
     <string name="local_database_status_pending">本地更改待同步</string>
     <string name="local_database_status_products">商品</string>
     <string name="local_database_status_suppliers">供应商</string>
