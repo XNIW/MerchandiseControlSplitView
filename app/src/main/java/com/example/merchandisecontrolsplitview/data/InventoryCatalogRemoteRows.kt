@@ -191,7 +191,9 @@ data class CatalogSyncSummary(
     val syncEventsGapDetected: Boolean = false,
     val targetedProductsFetched: Int = 0,
     val targetedPricesFetched: Int = 0,
+    val targetedHistoryFetched: Int = 0,
     val remoteUpdatesApplied: Int = 0,
+    val remoteHistoryUpdatesApplied: Int = 0,
     val manualFullSyncRequired: Boolean = false,
     /** TASK-114: righe attive nel bundle remoto dell'ultimo full catalog pull. */
     val remoteActiveSuppliers: Int = 0,

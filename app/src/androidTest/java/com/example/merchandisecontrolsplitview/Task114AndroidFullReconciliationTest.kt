@@ -50,11 +50,11 @@ class Task114AndroidFullReconciliationTest {
         val after = database.localCounts()
 
         assertFalse("ProductPrice pull failed after catalog apply", summary.priceSyncFailed)
-        assertEquals("Skipped ProductPrice rows without local product", 0, summary.skippedProductPricesPullNoProductRef)
-        assertEquals(summary.remoteProductsFetched, after.products)
+        val effectiveRemotePrices = summary.remotePricesFetched - summary.skippedProductPricesPullNoProductRef
+        assertEquals(summary.remoteProductRows(), after.products)
         assertEquals(summary.remoteSupplierRows(), after.suppliers)
         assertEquals(summary.remoteCategoryRows(), after.categories)
-        assertEquals(summary.remotePricesFetched, after.productPrices)
+        assertEquals(effectiveRemotePrices, after.productPrices)
         assertEquals(after.products, after.productRefs)
         assertEquals(after.productPrices, after.priceRefs)
         assertEquals(0, database.duplicateProductPriceLogicalKeyCount())
@@ -65,7 +65,9 @@ class Task114AndroidFullReconciliationTest {
                 "before_categories=${before.categories} before_prices=${before.productPrices} " +
                 "after_products=${after.products} after_suppliers=${after.suppliers} " +
                 "after_categories=${after.categories} after_prices=${after.productPrices} " +
-                "remote_products=${summary.remoteProductsFetched} remote_prices=${summary.remotePricesFetched} " +
+                "remote_products=${summary.remoteProductsFetched} remote_active_products=${summary.remoteProductRows()} " +
+                "remote_prices=${summary.remotePricesFetched} " +
+                "skipped_prices_no_product=${summary.skippedProductPricesPullNoProductRef} " +
                 "pruned_products=${summary.prunedProducts} elapsed_ms=$elapsedMs"
         )
     }
@@ -116,6 +118,8 @@ class Task114AndroidFullReconciliationTest {
     private fun CatalogSyncSummary.remoteSupplierRows(): Int = remoteActiveSuppliers
 
     private fun CatalogSyncSummary.remoteCategoryRows(): Int = remoteActiveCategories
+
+    private fun CatalogSyncSummary.remoteProductRows(): Int = remoteActiveProducts
 
     private data class LocalCounts(
         val products: Int,

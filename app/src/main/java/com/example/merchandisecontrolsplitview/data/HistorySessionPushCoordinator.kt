@@ -16,6 +16,7 @@ import kotlin.system.measureTimeMillis
 class HistorySessionPushCoordinator(
     private val repository: InventoryRepository,
     private val remote: SessionBackupRemoteDataSource,
+    private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
     private val authFlow: StateFlow<AuthState>,
     private val flightOwner: SessionCloudSessionFlightOwner,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
@@ -23,7 +24,7 @@ class HistorySessionPushCoordinator(
     private val logger: (String) -> Unit = {}
 ) {
     companion object {
-        const val DEBOUNCE_MS = 10_000L
+        const val DEBOUNCE_MS = 2_000L
         private const val LOG_SAMPLE_LIMIT = 5
         private const val REASON_LOGIN_FRESH_TICK = "login_fresh_tick"
     }
@@ -151,6 +152,7 @@ class HistorySessionPushCoordinator(
                 return
             }
             val s = summary
+            recordHistorySyncEventIfNeeded(auth.userId, s)
             val b = bootstrap
             val bootstrapSummary = if (b != null) {
                 " bootstrapInserted=${b.inserted} bootstrapUpdated=${b.updated} " +
@@ -175,5 +177,35 @@ class HistorySessionPushCoordinator(
                     "postgrestCode=${classification.postgrestCode} pendingUidSample=$pendingUidSample"
             )
         }
+    }
+
+    private suspend fun recordHistorySyncEventIfNeeded(
+        ownerUserId: String,
+        summary: HistorySessionBackupPushSummary?
+    ) {
+        val remoteIds = summary?.remoteIds.orEmpty()
+            .map(::canonicalSessionRemoteId)
+            .distinct()
+            .sorted()
+        if (remoteIds.isEmpty() || !syncEventRemote.isConfigured) return
+        val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrNull() ?: return
+        if (!capabilities.recordSyncEventAvailable) return
+        val batchId = java.util.UUID.randomUUID().toString()
+        val params = SyncEventRecordRpcParams(
+            domain = SyncEventDomains.HISTORY,
+            eventType = SyncEventTypes.HISTORY_CHANGED,
+            changedCount = remoteIds.size,
+            entityIds = SyncEventEntityIds(sessionIds = remoteIds),
+            storeId = null,
+            source = "android_history_session_push",
+            sourceDeviceId = null,
+            batchId = batchId,
+            clientEventId = "android-$batchId-history-${remoteIds.joinToString(",").hashCode().toUInt().toString(16)}"
+        )
+        val recorded = syncEventRemote.recordSyncEvent(params)
+        logger(
+            "cycle=push syncEvent=history outcome=${if (recorded.isSuccess) "ok" else "fail"} " +
+                "sessions=${remoteIds.size} syncType=EVENT_INCREMENTAL fullPull=false"
+        )
     }
 }

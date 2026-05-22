@@ -1,9 +1,12 @@
 package com.example.merchandisecontrolsplitview
 
+import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncFlightOwner
+import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
 import com.example.merchandisecontrolsplitview.data.Category
@@ -21,11 +24,14 @@ import com.example.merchandisecontrolsplitview.data.ProductRemoteRef
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
+import com.example.merchandisecontrolsplitview.data.SyncEventDomains
+import com.example.merchandisecontrolsplitview.data.SyncEventRemoteRow
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import java.security.MessageDigest
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -166,8 +172,10 @@ class Task103CrossPlatformAcceptanceTest {
     @Test
     fun test114AndroidWriteProductHistoryMatrix() = runBlocking {
         requireLiveAcceptanceEnabled()
+        val matrixStartedMs = System.currentTimeMillis()
         val fixture = fixture()
-        val runtime = runtime(fixture)
+        val runtime = runtime(fixture, foregroundAutoSync = true)
+        val localCatalogSaveStartedMs = System.currentTimeMillis()
         val supplier = runtime.repository.addSupplier(fixture.matrixSupplierAndroid)
             ?: runtime.repository.findSupplierByName(fixture.matrixSupplierAndroid)
             ?: throw AssertionError("TASK-114 Android matrix supplier unavailable")
@@ -209,41 +217,111 @@ class Task103CrossPlatformAcceptanceTest {
             runtime.repository.findProductByBarcode(product.barcode)?.let { runtime.repository.deleteProduct(it) }
             runtime.repository.addProduct(product)
         }
-        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+        val localCatalogSaveFinishedMs = System.currentTimeMillis()
+        val catalogPushStartedMs = System.currentTimeMillis()
+        val createSummary = waitForCatalogAutoPush(runtime, "android matrix create") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            activeProducts(
+                catalog,
+                setOf(
+                    fixture.matrixBarcodeAndroidCreate,
+                    fixture.matrixBarcodeAndroidUpdate,
+                    fixture.matrixBarcodeAndroidTombstone
+                )
+            ).size == 3
+        }
 
         val updateLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidUpdate)
             ?: throw AssertionError("TASK-114 Android update product missing locally")
-        runtime.repository.updateProduct(updateLocal.copy(productName = fixture.matrixProductAndroidUpdateFinal))
-        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+        runtime.repository.updateProduct(
+            updateLocal.copy(
+                productName = fixture.matrixProductAndroidUpdateFinal,
+                purchasePrice = 47.15
+            )
+        )
+        val updateSummary = waitForCatalogAutoPush(runtime, "android matrix update") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            singleActiveProduct(catalog, fixture.matrixBarcodeAndroidUpdate)?.productName ==
+                fixture.matrixProductAndroidUpdateFinal
+        }
 
         val tombstoneLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidTombstone)
             ?: throw AssertionError("TASK-114 Android tombstone product missing locally")
         runtime.repository.deleteProduct(tombstoneLocal)
-        runtime.repository.syncCatalogWithRemote(runtime.catalogRemote, runtime.priceRemote, runtime.ownerUserId).getOrThrow()
+        val tombstoneSummary = waitForCatalogAutoPush(runtime, "android matrix tombstone") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            productByBarcode(catalog, fixture.matrixBarcodeAndroidTombstone)?.deletedAt != null
+        }
+        val catalogPushFinishedMs = System.currentTimeMillis()
 
+        val localHistorySaveStartedMs = System.currentTimeMillis()
         val createHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry(fixture.matrixHistoryAndroidCreate, fixture))
         val updateHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry("${fixture.prefix}MATRIX_ANDROID_HISTORY_UPDATE_INITIAL", fixture))
         val tombstoneHistoryUid = runtime.repository.insertHistoryEntry(matrixHistoryEntry(fixture.matrixHistoryAndroidTombstone, fixture))
-        runtime.repository.pushHistorySessionsToRemote(
-            runtime.sessionRemote,
-            runtime.ownerUserId,
-            setOf(createHistoryUid, updateHistoryUid, tombstoneHistoryUid)
-        ).getOrThrow()
+        val localHistorySaveFinishedMs = System.currentTimeMillis()
+        val historyPushStartedMs = System.currentTimeMillis()
+        var historyWatermark = waitForHistoryAutoPush(
+            runtime = runtime,
+            label = "android history create",
+            watermarkBefore = maxOf(
+                createSummary.syncEventsWatermarkAfter,
+                updateSummary.syncEventsWatermarkAfter,
+                tombstoneSummary.syncEventsWatermarkAfter
+            )
+        ) {
+            val sessions = matrixSessions(runtime, fixture)
+            sessionByDisplayName(sessions, fixture.matrixHistoryAndroidCreate) != null &&
+                sessionByDisplayName(sessions, "${fixture.prefix}MATRIX_ANDROID_HISTORY_UPDATE_INITIAL") != null &&
+                sessionByDisplayName(sessions, fixture.matrixHistoryAndroidTombstone) != null
+        }
 
         val updateHistory = runtime.app.database.historyEntryDao().getByUid(updateHistoryUid)
             ?: throw AssertionError("TASK-114 Android update history missing locally")
         runtime.repository.updateHistoryEntry(updateHistory.copy(displayName = fixture.matrixHistoryAndroidUpdateFinal))
-        runtime.repository.pushHistorySessionsToRemote(runtime.sessionRemote, runtime.ownerUserId, setOf(updateHistoryUid)).getOrThrow()
+        historyWatermark = waitForHistoryAutoPush(
+            runtime = runtime,
+            label = "android history update",
+            watermarkBefore = historyWatermark
+        ) {
+            val sessions = matrixSessions(runtime, fixture)
+            sessionByDisplayName(sessions, fixture.matrixHistoryAndroidUpdateFinal) != null
+        }
 
         val tombstoneHistory = runtime.app.database.historyEntryDao().getByUid(tombstoneHistoryUid)
             ?: throw AssertionError("TASK-114 Android tombstone history missing locally")
         runtime.repository.deleteHistoryEntry(tombstoneHistory)
-        runtime.repository.pushHistorySessionsToRemote(runtime.sessionRemote, runtime.ownerUserId, setOf(tombstoneHistoryUid)).getOrThrow()
+        waitForHistoryAutoPush(
+            runtime = runtime,
+            label = "android history tombstone",
+            watermarkBefore = historyWatermark
+        ) {
+            val sessions = matrixSessions(runtime, fixture)
+            sessionByDisplayName(sessions, fixture.matrixHistoryAndroidTombstone)?.deletedAt != null
+        }
+        val historyPushFinishedMs = System.currentTimeMillis()
 
         val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
         assertEquals(fixture.matrixProductAndroidCreate, singleActiveProduct(catalog, fixture.matrixBarcodeAndroidCreate)?.productName)
         assertEquals(fixture.matrixProductAndroidUpdateFinal, singleActiveProduct(catalog, fixture.matrixBarcodeAndroidUpdate)?.productName)
         assertNotNull(productByBarcode(catalog, fixture.matrixBarcodeAndroidTombstone)?.deletedAt)
+        assertCatalogSyncEventTargets(
+            runtime = runtime,
+            watermarkBefore = minOf(
+                createSummary.syncEventsWatermarkBefore,
+                updateSummary.syncEventsWatermarkBefore,
+                tombstoneSummary.syncEventsWatermarkBefore
+            ),
+            catalog = catalog,
+            fixture = fixture
+        )
+        assertPriceSyncEventTargets(
+            runtime = runtime,
+            watermarkBefore = minOf(
+                createSummary.syncEventsWatermarkBefore,
+                updateSummary.syncEventsWatermarkBefore,
+                tombstoneSummary.syncEventsWatermarkBefore
+            )
+        )
 
         val sessions = matrixSessions(runtime, fixture)
         assertNotNull(sessionByDisplayName(sessions, fixture.matrixHistoryAndroidCreate))
@@ -253,7 +331,213 @@ class Task103CrossPlatformAcceptanceTest {
         println(
             "${fixture.logPrefix}_ANDROID_WRITE_MATRIX owner_hash=${hash(runtime.ownerUserId)} " +
                 "product_create=pass product_update=pass product_tombstone=pass " +
+                "product_price_create=pass product_price_correction=pass product_price_tombstone=not_supported_append_only " +
                 "history_create=pass history_update=pass history_tombstone=pass"
+        )
+        val timingLine =
+            "TASK114_ANDROID_WRITE_TIMINGS " +
+                "localCatalogSaveMs=${localCatalogSaveFinishedMs - localCatalogSaveStartedMs} " +
+                "catalogPushAndEventsMs=${catalogPushFinishedMs - catalogPushStartedMs} " +
+                "localHistorySaveMs=${localHistorySaveFinishedMs - localHistorySaveStartedMs} " +
+                "historyPushAndEventsMs=${historyPushFinishedMs - historyPushStartedMs} " +
+                "totalMatrixMs=${System.currentTimeMillis() - matrixStartedMs} " +
+                "syncType=EVENT_INCREMENTAL fullPull=false"
+        println(timingLine)
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            0,
+            Bundle().apply {
+                putString("TASK114_ANDROID_WRITE_TIMINGS", timingLine)
+            }
+        )
+    }
+
+    @Test
+    fun test114AndroidOfflineReconnectProductHistoryMatrix() = runBlocking {
+        requireLiveAcceptanceEnabled()
+        val matrixStartedMs = System.currentTimeMillis()
+        val fixture = fixture()
+        val runtime = runtime(fixture, foregroundAutoSync = true)
+        val supplier = runtime.repository.addSupplier("${fixture.prefix}OFFLINE_ANDROID_SUPPLIER")
+            ?: runtime.repository.findSupplierByName("${fixture.prefix}OFFLINE_ANDROID_SUPPLIER")
+            ?: throw AssertionError("TASK-114 Android offline supplier unavailable")
+        val category = runtime.repository.addCategory("${fixture.prefix}OFFLINE_ANDROID_CATEGORY")
+            ?: runtime.repository.findCategoryByName("${fixture.prefix}OFFLINE_ANDROID_CATEGORY")
+            ?: throw AssertionError("TASK-114 Android offline category unavailable")
+
+        val seedUpdate = Product(
+            barcode = "${fixture.prefix}OFFLINE_ANDROID_UPDATE",
+            itemNumber = "${fixture.prefix}OFFLINE_ANDROID_UPDATE_ITEM",
+            productName = "${fixture.prefix}OFFLINE_ANDROID_UPDATE_INITIAL",
+            supplierId = supplier.id,
+            categoryId = category.id,
+            purchasePrice = 61.10,
+            retailPrice = 71.20,
+            stockQuantity = 7.0
+        )
+        val seedTombstone = Product(
+            barcode = "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE",
+            itemNumber = "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE_ITEM",
+            productName = "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE_PRODUCT",
+            supplierId = supplier.id,
+            categoryId = category.id,
+            purchasePrice = 62.10,
+            retailPrice = 72.20,
+            stockQuantity = 8.0
+        )
+        for (product in listOf(seedUpdate, seedTombstone)) {
+            runtime.repository.findProductByBarcode(product.barcode)?.let { runtime.repository.deleteProduct(it) }
+            runtime.repository.addProduct(product)
+        }
+        val seedSummary = waitForCatalogAutoPush(runtime, "android offline seed") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            activeProducts(
+                catalog,
+                setOf("${fixture.prefix}OFFLINE_ANDROID_UPDATE", "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE")
+            ).size == 2
+        }
+
+        val seededHistoryUpdateUid = runtime.repository.insertHistoryEntry(
+            matrixHistoryEntry("${fixture.prefix}OFFLINE_ANDROID_HISTORY_UPDATE_INITIAL", fixture)
+        )
+        val seededHistoryTombstoneUid = runtime.repository.insertHistoryEntry(
+            matrixHistoryEntry("${fixture.prefix}OFFLINE_ANDROID_HISTORY_TOMBSTONE", fixture)
+        )
+        var historyWatermark = waitForHistoryAutoPush(
+            runtime = runtime,
+            label = "android offline history seed",
+            watermarkBefore = seedSummary.syncEventsWatermarkAfter
+        ) {
+            val sessions = matrixSessions(runtime, fixture)
+            sessionByDisplayName(sessions, "${fixture.prefix}OFFLINE_ANDROID_HISTORY_UPDATE_INITIAL") != null &&
+                sessionByDisplayName(sessions, "${fixture.prefix}OFFLINE_ANDROID_HISTORY_TOMBSTONE") != null
+        }
+
+        runtime.app.catalogAutoSyncCoordinator.onAppBackground()
+        runtime.app.historySessionPushCoordinator.onAppBackground()
+        val localSaveStartedMs = System.currentTimeMillis()
+        runtime.repository.addProduct(
+            Product(
+                barcode = "${fixture.prefix}OFFLINE_ANDROID_CREATE",
+                itemNumber = "${fixture.prefix}OFFLINE_ANDROID_CREATE_ITEM",
+                productName = "${fixture.prefix}OFFLINE_ANDROID_CREATE_PRODUCT",
+                supplierId = supplier.id,
+                categoryId = category.id,
+                purchasePrice = 63.10,
+                retailPrice = 73.20,
+                stockQuantity = 9.0
+            )
+        )
+        val updateLocal = runtime.repository.findProductByBarcode("${fixture.prefix}OFFLINE_ANDROID_UPDATE")
+            ?: throw AssertionError("TASK-114 Android offline update product missing locally")
+        runtime.repository.updateProduct(
+            updateLocal.copy(
+                productName = "${fixture.prefix}OFFLINE_ANDROID_UPDATE_FINAL",
+                purchasePrice = 64.15
+            )
+        )
+        val tombstoneLocal = runtime.repository.findProductByBarcode("${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE")
+            ?: throw AssertionError("TASK-114 Android offline tombstone product missing locally")
+        runtime.repository.deleteProduct(tombstoneLocal)
+
+        val historyCreateUid = runtime.repository.insertHistoryEntry(
+            matrixHistoryEntry("${fixture.prefix}OFFLINE_ANDROID_HISTORY_CREATE", fixture)
+        )
+        val historyUpdate = runtime.app.database.historyEntryDao().getByUid(seededHistoryUpdateUid)
+            ?: throw AssertionError("TASK-114 Android offline history update missing locally")
+        runtime.repository.updateHistoryEntry(historyUpdate.copy(displayName = "${fixture.prefix}OFFLINE_ANDROID_HISTORY_UPDATE_FINAL"))
+        val historyTombstone = runtime.app.database.historyEntryDao().getByUid(seededHistoryTombstoneUid)
+            ?: throw AssertionError("TASK-114 Android offline history tombstone missing locally")
+        runtime.repository.deleteHistoryEntry(historyTombstone)
+        val localSaveMs = System.currentTimeMillis() - localSaveStartedMs
+
+        val pendingCatalogBefore =
+            runtime.app.database.supplierDao().getCatalogPushCandidates().size +
+                runtime.app.database.categoryDao().getCatalogPushCandidates().size +
+                runtime.app.database.productDao().getCatalogPushCandidates().size
+        val pendingPricesBefore = runtime.app.database.productPriceDao().getAllForCloudPush().size
+        val pendingHistoryBefore = runtime.app.database.historyEntryDao().getUserVisibleSessionPushCandidateUids().size
+        assertTrue("Expected offline catalog pending", pendingCatalogBefore >= 1)
+        assertTrue("Expected offline price pending", pendingPricesBefore >= 1)
+        assertTrue("Expected offline history pending", pendingHistoryBefore >= 1)
+
+        val reconnectStartedMs = System.currentTimeMillis()
+        runtime.app.catalogAutoSyncCoordinator.onNetworkAvailable()
+        runtime.app.catalogAutoSyncCoordinator.onAppForeground()
+        runtime.app.historySessionPushCoordinator.onNetworkAvailable()
+        runtime.app.historySessionPushCoordinator.onAppForeground()
+        val reconnectDetectedMs = System.currentTimeMillis() - reconnectStartedMs
+        val reconnectSummary = waitForCatalogAutoPush(runtime, "android offline reconnect") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            singleActiveProduct(catalog, "${fixture.prefix}OFFLINE_ANDROID_CREATE")?.productName ==
+                "${fixture.prefix}OFFLINE_ANDROID_CREATE_PRODUCT" &&
+                singleActiveProduct(catalog, "${fixture.prefix}OFFLINE_ANDROID_UPDATE")?.productName ==
+                "${fixture.prefix}OFFLINE_ANDROID_UPDATE_FINAL" &&
+                productByBarcode(catalog, "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE")?.deletedAt != null
+        }
+        val historyWatermarkBeforeReconnect = historyWatermark
+        historyWatermark = waitForHistoryAutoPush(
+            runtime = runtime,
+            label = "android offline reconnect history",
+            watermarkBefore = historyWatermarkBeforeReconnect
+        ) {
+            val sessions = matrixSessions(runtime, fixture)
+            sessionByDisplayName(sessions, "${fixture.prefix}OFFLINE_ANDROID_HISTORY_CREATE") != null &&
+                sessionByDisplayName(sessions, "${fixture.prefix}OFFLINE_ANDROID_HISTORY_UPDATE_FINAL") != null &&
+                sessionByDisplayName(sessions, "${fixture.prefix}OFFLINE_ANDROID_HISTORY_TOMBSTONE")?.deletedAt != null
+        }
+        val remotePushMs = System.currentTimeMillis() - reconnectStartedMs
+
+        assertEquals(0, runtime.app.database.supplierDao().getCatalogPushCandidates().size)
+        assertEquals(0, runtime.app.database.categoryDao().getCatalogPushCandidates().size)
+        assertEquals(0, runtime.app.database.productDao().getCatalogPushCandidates().size)
+        assertEquals(0, runtime.app.database.productPriceDao().getAllForCloudPush().size)
+
+        val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+        assertEquals(
+            "${fixture.prefix}OFFLINE_ANDROID_CREATE_PRODUCT",
+            singleActiveProduct(catalog, "${fixture.prefix}OFFLINE_ANDROID_CREATE")?.productName
+        )
+        assertEquals(
+            "${fixture.prefix}OFFLINE_ANDROID_UPDATE_FINAL",
+            singleActiveProduct(catalog, "${fixture.prefix}OFFLINE_ANDROID_UPDATE")?.productName
+        )
+        assertNotNull(productByBarcode(catalog, "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE")?.deletedAt)
+        assertCatalogSyncEventTargets(
+            runtime = runtime,
+            watermarkBefore = reconnectSummary.syncEventsWatermarkBefore,
+            catalog = catalog,
+            fixture = fixture,
+            productBarcodes = listOf(
+                "${fixture.prefix}OFFLINE_ANDROID_CREATE",
+                "${fixture.prefix}OFFLINE_ANDROID_UPDATE",
+                "${fixture.prefix}OFFLINE_ANDROID_TOMBSTONE"
+            )
+        )
+        assertPriceSyncEventTargets(
+            runtime = runtime,
+            watermarkBefore = reconnectSummary.syncEventsWatermarkBefore
+        )
+        assertTrue("Expected history create uid", historyCreateUid > 0L)
+        assertTrue("Expected history reconnect watermark", historyWatermark > historyWatermarkBeforeReconnect)
+
+        println(
+            "${fixture.logPrefix}_ANDROID_OFFLINE_RECONNECT owner_hash=${hash(runtime.ownerUserId)} " +
+                "localSaveMs=$localSaveMs pendingCatalog=$pendingCatalogBefore pendingPrices=$pendingPricesBefore pendingHistory=$pendingHistoryBefore " +
+                "reconnectDetectedMs=$reconnectDetectedMs remotePushMs=$remotePushMs product_create=pass product_update=pass product_tombstone=pass " +
+                "product_price_create=pass product_price_correction=pass history_create=pass history_update=pass history_tombstone=pass " +
+                "coalescing=last_write_wins conflictPolicy=fail_closed syncType=EVENT_INCREMENTAL fullPull=false"
+        )
+        val timingLine =
+            "TASK114_ANDROID_OFFLINE_TIMINGS " +
+                "localSaveMs=$localSaveMs pendingCatalog=$pendingCatalogBefore pendingPrices=$pendingPricesBefore pendingHistory=$pendingHistoryBefore " +
+                "reconnectDetectedMs=$reconnectDetectedMs remotePushMs=$remotePushMs totalOfflineMs=${System.currentTimeMillis() - matrixStartedMs} " +
+                "syncType=EVENT_INCREMENTAL fullPull=false"
+        println(timingLine)
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            0,
+            Bundle().apply {
+                putString("TASK114_ANDROID_OFFLINE_TIMINGS", timingLine)
+            }
         )
     }
 
@@ -323,10 +607,26 @@ class Task103CrossPlatformAcceptanceTest {
         val db = app.database.openHelper.writableDatabase
         val beforeHistory = countTask114LocalHistory(db, likePrefix)
         val beforeRefs = countTask114LocalHistoryRefs(db, likePrefix)
+        val beforeProducts = countTask114LocalProducts(db, likePrefix)
+        val beforeProductPrices = countTask114LocalProductPrices(db, likePrefix)
+        val beforeCatalogRefs = countTask114LocalCatalogRefs(db, likePrefix)
+        val beforePriceRefs = countTask114LocalPriceRefs(db, likePrefix)
+        val beforeLookups = countTask114LocalLookups(db, likePrefix)
+        val beforeOutbox = countTask114LocalSyncEventOutbox(db, likePrefix)
 
-        if (execute && beforeHistory > 0) {
+        if (execute && (
+                beforeHistory > 0 ||
+                    beforeProducts > 0 ||
+                    beforeProductPrices > 0 ||
+                    beforeCatalogRefs > 0 ||
+                    beforePriceRefs > 0 ||
+                    beforeLookups > 0 ||
+                    beforeOutbox > 0
+                )
+        ) {
             db.beginTransaction()
             try {
+                deleteTask114LocalSyncEventOutbox(db, likePrefix)
                 db.execSQL(
                     """
                     DELETE FROM history_entry_remote_refs
@@ -341,6 +641,58 @@ class Task103CrossPlatformAcceptanceTest {
                     "DELETE FROM history_entries WHERE displayName LIKE ? OR id LIKE ?",
                     arrayOf(likePrefix, likePrefix)
                 )
+                db.execSQL(
+                    """
+                    DELETE FROM product_price_remote_refs
+                    WHERE productPriceId IN (
+                        SELECT pp.id
+                        FROM product_prices pp
+                        JOIN products p ON p.id = pp.productId
+                        WHERE p.barcode LIKE ? OR p.productName LIKE ?
+                    )
+                    """.trimIndent(),
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM product_prices
+                    WHERE productId IN (
+                        SELECT id FROM products
+                        WHERE barcode LIKE ? OR productName LIKE ?
+                    )
+                    """.trimIndent(),
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM product_remote_refs
+                    WHERE productId IN (
+                        SELECT id FROM products
+                        WHERE barcode LIKE ? OR productName LIKE ?
+                    )
+                    """.trimIndent(),
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.execSQL(
+                    "DELETE FROM products WHERE barcode LIKE ? OR productName LIKE ?",
+                    arrayOf(likePrefix, likePrefix)
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM supplier_remote_refs
+                    WHERE supplierId IN (SELECT id FROM suppliers WHERE name LIKE ?)
+                    """.trimIndent(),
+                    arrayOf(likePrefix)
+                )
+                db.execSQL(
+                    """
+                    DELETE FROM category_remote_refs
+                    WHERE categoryId IN (SELECT id FROM categories WHERE name LIKE ?)
+                    """.trimIndent(),
+                    arrayOf(likePrefix)
+                )
+                db.execSQL("DELETE FROM suppliers WHERE name LIKE ?", arrayOf(likePrefix))
+                db.execSQL("DELETE FROM categories WHERE name LIKE ?", arrayOf(likePrefix))
                 db.setTransactionSuccessful()
             } finally {
                 db.endTransaction()
@@ -349,14 +701,32 @@ class Task103CrossPlatformAcceptanceTest {
 
         val afterHistory = countTask114LocalHistory(db, likePrefix)
         val afterRefs = countTask114LocalHistoryRefs(db, likePrefix)
+        val afterProducts = countTask114LocalProducts(db, likePrefix)
+        val afterProductPrices = countTask114LocalProductPrices(db, likePrefix)
+        val afterCatalogRefs = countTask114LocalCatalogRefs(db, likePrefix)
+        val afterPriceRefs = countTask114LocalPriceRefs(db, likePrefix)
+        val afterLookups = countTask114LocalLookups(db, likePrefix)
+        val afterOutbox = countTask114LocalSyncEventOutbox(db, likePrefix)
         if (execute) {
             assertEquals(0, afterHistory)
             assertEquals(0, afterRefs)
+            assertEquals(0, afterProducts)
+            assertEquals(0, afterProductPrices)
+            assertEquals(0, afterCatalogRefs)
+            assertEquals(0, afterPriceRefs)
+            assertEquals(0, afterLookups)
+            assertEquals(0, afterOutbox)
         }
         println(
             "TASK114_ANDROID_LOCAL_CLEANUP prefix_hash=${hash(prefix)} execute=$execute " +
                 "history_before=$beforeHistory refs_before=$beforeRefs " +
-                "history_after=$afterHistory refs_after=$afterRefs"
+                "products_before=$beforeProducts product_prices_before=$beforeProductPrices " +
+                "catalog_refs_before=$beforeCatalogRefs price_refs_before=$beforePriceRefs " +
+                "lookups_before=$beforeLookups outbox_before=$beforeOutbox " +
+                "history_after=$afterHistory refs_after=$afterRefs " +
+                "products_after=$afterProducts product_prices_after=$afterProductPrices " +
+                "catalog_refs_after=$afterCatalogRefs price_refs_after=$afterPriceRefs " +
+                "lookups_after=$afterLookups outbox_after=$afterOutbox"
         )
     }
 
@@ -392,11 +762,16 @@ class Task103CrossPlatformAcceptanceTest {
         )
     }
 
-    private suspend fun runtime(fixture: Fixture): Runtime {
+    private suspend fun runtime(fixture: Fixture, foregroundAutoSync: Boolean = false): Runtime {
         val app = InstrumentationRegistry.getInstrumentation()
             .targetContext
             .applicationContext as MerchandiseControlApplication
-        app.catalogAutoSyncCoordinator.onAppBackground()
+        if (foregroundAutoSync) {
+            app.catalogAutoSyncCoordinator.onAppForeground()
+            app.historySessionPushCoordinator.onAppForeground()
+        } else {
+            app.catalogAutoSyncCoordinator.onAppBackground()
+        }
         app.authManager.restoreSession()
 
         val authState = withTimeoutOrNull(15_000) {
@@ -416,6 +791,153 @@ class Task103CrossPlatformAcceptanceTest {
             catalogRemote = Task103ScopedCatalogRemoteDataSource(app.catalogRemoteDataSource, client, fixture),
             priceRemote = Task103ScopedProductPriceRemoteDataSource(app.productPriceRemoteDataSource, client, fixture),
             sessionRemote = app.sessionBackupRemoteDataSource
+        )
+    }
+
+    private suspend fun waitForCatalogAutoPush(
+        runtime: Runtime,
+        label: String,
+        remoteCondition: suspend () -> Boolean
+    ): CatalogSyncSummary {
+        val previous = runtime.app.catalogSyncStateTracker.lastOutcome.value
+        val outcome = withTimeoutOrNull(35_000) {
+            runtime.app.catalogSyncStateTracker.lastOutcome.first { next ->
+                next != null &&
+                    next !== previous &&
+                    next.source == CatalogSyncFlightOwner.AUTO_PUSH &&
+                    next.ownerUserId == runtime.ownerUserId &&
+                    next.summary.recordSyncEventAvailable &&
+                    !next.summary.syncEventsDisabled &&
+                    !next.summary.syncEventsFallback044 &&
+                    !next.summary.fullCatalogFetch &&
+                    !next.summary.fullPriceFetch &&
+                    !next.summary.manualFullSyncRequired
+            }
+        } ?: throw AssertionError("TASK-114 $label auto push did not complete through EVENT_INCREMENTAL within 35s")
+        if (outcome.summary.syncEventOutboxPending != 0) {
+            throw AssertionError("TASK-114 $label left sync_event outbox pending=${outcome.summary.syncEventOutboxPending}")
+        }
+        val remoteOk = withTimeoutOrNull(15_000) {
+            while (!remoteCondition()) {
+                delay(500)
+            }
+            true
+        } ?: false
+        if (!remoteOk) {
+            throw AssertionError("TASK-114 $label remote read-back did not match after auto push")
+        }
+        println(
+            "TASK114_ANDROID_AUTOPUSH label=${label.replace(' ', '_')} " +
+                "syncType=EVENT_INCREMENTAL fullPull=false " +
+                "pushedCatalog=${outcome.summary.pushedSuppliers + outcome.summary.pushedCategories + outcome.summary.pushedProducts} " +
+                "watermarkBefore=${outcome.summary.syncEventsWatermarkBefore} " +
+                "watermarkAfter=${outcome.summary.syncEventsWatermarkAfter}"
+        )
+        return outcome.summary
+    }
+
+    private suspend fun waitForHistoryAutoPush(
+        runtime: Runtime,
+        label: String,
+        watermarkBefore: Long,
+        remoteCondition: suspend () -> Boolean
+    ): Long {
+        var lastHistoryEvents: List<SyncEventRemoteRow> = emptyList()
+        var completed = false
+        withTimeoutOrNull(35_000) {
+            while (!completed) {
+                val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
+                    ownerUserId = runtime.ownerUserId,
+                    storeId = null,
+                    afterId = watermarkBefore,
+                    limit = 100
+                ).getOrThrow()
+                lastHistoryEvents = rows.filter { it.domain == SyncEventDomains.HISTORY }
+                if (lastHistoryEvents.isNotEmpty() && remoteCondition()) {
+                    completed = true
+                } else {
+                    delay(500)
+                }
+            }
+        }
+        if (!completed) {
+            throw AssertionError("TASK-114 $label auto push did not create/apply history sync_event within 35s")
+        }
+        if (lastHistoryEvents.any { it.changedCount > 0 && it.entityIds?.sessionIds.orEmpty().isEmpty() }) {
+            throw AssertionError("TASK-114 $label history sync_event used changed_count without targeted session_ids")
+        }
+        val targetedSessions = lastHistoryEvents.flatMap { it.entityIds?.sessionIds.orEmpty() }.toSet()
+        println(
+            "TASK114_ANDROID_HISTORY_AUTOPUSH label=${label.replace(' ', '_')} " +
+                "syncType=EVENT_INCREMENTAL fullPull=false " +
+                "historyEvents=${lastHistoryEvents.size} targetedSessions=${targetedSessions.size}"
+        )
+        return lastHistoryEvents.maxOf { it.id }
+    }
+
+    private suspend fun assertCatalogSyncEventTargets(
+        runtime: Runtime,
+        watermarkBefore: Long,
+        catalog: InventoryCatalogFetchBundle,
+        fixture: Fixture,
+        productBarcodes: List<String> = listOf(
+            fixture.matrixBarcodeAndroidCreate,
+            fixture.matrixBarcodeAndroidUpdate,
+            fixture.matrixBarcodeAndroidTombstone
+        )
+    ) {
+        val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
+            ownerUserId = runtime.ownerUserId,
+            storeId = null,
+            afterId = watermarkBefore,
+            limit = 50
+        ).getOrThrow()
+        val catalogEvents = rows.filter { it.domain == SyncEventDomains.CATALOG && it.source == "android" }
+        if (catalogEvents.isEmpty()) {
+            throw AssertionError("TASK-114 Android auto push did not create catalog sync_events")
+        }
+        val eventProductIds = catalogEvents.flatMap { it.entityIds?.productIds.orEmpty() }.toSet()
+        val expectedProductIds = productBarcodes.map { barcode ->
+            productByBarcode(catalog, barcode)?.id
+                ?: throw AssertionError("TASK-114 remote product missing for sync_event target barcode=$barcode")
+        }.toSet()
+        val missing = expectedProductIds - eventProductIds
+        if (missing.isNotEmpty()) {
+            throw AssertionError("TASK-114 Android catalog sync_events missing targeted product ids count=${missing.size}")
+        }
+        if (catalogEvents.any { it.changedCount > 0 && it.entityIds == null }) {
+            throw AssertionError("TASK-114 Android catalog sync_event used changed_count without targeted entity_ids")
+        }
+        println(
+            "TASK114_ANDROID_SYNC_EVENTS syncType=EVENT_INCREMENTAL " +
+            "catalogEvents=${catalogEvents.size} targetedProducts=${eventProductIds.size} fullPull=false"
+        )
+    }
+
+    private suspend fun assertPriceSyncEventTargets(
+        runtime: Runtime,
+        watermarkBefore: Long
+    ) {
+        val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
+            ownerUserId = runtime.ownerUserId,
+            storeId = null,
+            afterId = watermarkBefore,
+            limit = 100
+        ).getOrThrow()
+        val priceEvents = rows.filter { it.domain == SyncEventDomains.PRICES && it.source == "android" }
+        if (priceEvents.isEmpty()) {
+            throw AssertionError("TASK-114 Android auto push did not create price sync_events")
+        }
+        val eventPriceIds = priceEvents.flatMap { it.entityIds?.priceIds.orEmpty() }.toSet()
+        if (eventPriceIds.isEmpty()) {
+            throw AssertionError("TASK-114 Android price sync_events missing targeted price_ids")
+        }
+        if (priceEvents.any { it.changedCount > 0 && it.entityIds?.priceIds.orEmpty().isEmpty() }) {
+            throw AssertionError("TASK-114 Android price sync_event used changed_count without targeted price_ids")
+        }
+        println(
+            "TASK114_ANDROID_PRICE_SYNC_EVENTS syncType=EVENT_INCREMENTAL " +
+                "priceEvents=${priceEvents.size} targetedPrices=${eventPriceIds.size} fullPull=false"
         )
     }
 
@@ -516,7 +1038,7 @@ class Task103CrossPlatformAcceptanceTest {
 
     private suspend fun matrixSessions(runtime: Runtime, fixture: Fixture): List<SharedSheetSessionRecord> =
         runtime.sessionRemote.fetchAllSessionsForOwner().getOrThrow()
-            .filter { it.displayName?.startsWith("${fixture.prefix}MATRIX_") == true }
+            .filter { it.displayName?.startsWith(fixture.prefix) == true }
 
     private fun sessionByDisplayName(
         sessions: List<SharedSheetSessionRecord>,
@@ -629,7 +1151,8 @@ class Task103CrossPlatformAcceptanceTest {
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         likePrefix: String
     ): Int {
-        val cursor = db.query(
+        return countTask114Rows(
+            db,
             """
             SELECT COUNT(*)
             FROM history_entry_remote_refs
@@ -640,6 +1163,144 @@ class Task103CrossPlatformAcceptanceTest {
             """.trimIndent(),
             arrayOf(likePrefix, likePrefix)
         )
+    }
+
+    private fun countTask114LocalProducts(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        "SELECT COUNT(*) FROM products WHERE barcode LIKE ? OR productName LIKE ?",
+        arrayOf(likePrefix, likePrefix)
+    )
+
+    private fun countTask114LocalProductPrices(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        """
+        SELECT COUNT(*)
+        FROM product_prices pp
+        JOIN products p ON p.id = pp.productId
+        WHERE p.barcode LIKE ? OR p.productName LIKE ?
+        """.trimIndent(),
+        arrayOf(likePrefix, likePrefix)
+    )
+
+    private fun countTask114LocalCatalogRefs(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        """
+        SELECT
+            (SELECT COUNT(*)
+             FROM product_remote_refs r
+             JOIN products p ON p.id = r.productId
+             WHERE p.barcode LIKE ? OR p.productName LIKE ?) +
+            (SELECT COUNT(*)
+             FROM supplier_remote_refs r
+             JOIN suppliers s ON s.id = r.supplierId
+             WHERE s.name LIKE ?) +
+            (SELECT COUNT(*)
+             FROM category_remote_refs r
+             JOIN categories c ON c.id = r.categoryId
+             WHERE c.name LIKE ?)
+        """.trimIndent(),
+        arrayOf(likePrefix, likePrefix, likePrefix, likePrefix)
+    )
+
+    private fun countTask114LocalPriceRefs(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        """
+        SELECT COUNT(*)
+        FROM product_price_remote_refs r
+        JOIN product_prices pp ON pp.id = r.productPriceId
+        JOIN products p ON p.id = pp.productId
+        WHERE p.barcode LIKE ? OR p.productName LIKE ?
+        """.trimIndent(),
+        arrayOf(likePrefix, likePrefix)
+    )
+
+    private fun countTask114LocalLookups(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        """
+        SELECT
+            (SELECT COUNT(*) FROM suppliers WHERE name LIKE ?) +
+            (SELECT COUNT(*) FROM categories WHERE name LIKE ?)
+        """.trimIndent(),
+        arrayOf(likePrefix, likePrefix)
+    )
+
+    private fun countTask114LocalSyncEventOutbox(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ): Int = countTask114Rows(
+        db,
+        task114LocalSyncEventOutboxPredicateSql(select = "SELECT COUNT(*)"),
+        task114LocalSyncEventOutboxArgs(likePrefix)
+    )
+
+    private fun deleteTask114LocalSyncEventOutbox(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        likePrefix: String
+    ) {
+        db.execSQL(
+            task114LocalSyncEventOutboxPredicateSql(select = "DELETE"),
+            task114LocalSyncEventOutboxArgs(likePrefix)
+        )
+    }
+
+    private fun task114LocalSyncEventOutboxPredicateSql(select: String): String =
+        """
+        $select FROM sync_event_outbox
+        WHERE EXISTS (
+            SELECT 1
+            FROM product_remote_refs r
+            JOIN products p ON p.id = r.productId
+            WHERE (p.barcode LIKE ? OR p.productName LIKE ?)
+              AND sync_event_outbox.entityIdsJson LIKE '%' || r.remoteId || '%'
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM product_price_remote_refs r
+            JOIN product_prices pp ON pp.id = r.productPriceId
+            JOIN products p ON p.id = pp.productId
+            WHERE (p.barcode LIKE ? OR p.productName LIKE ?)
+              AND sync_event_outbox.entityIdsJson LIKE '%' || r.remoteId || '%'
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM supplier_remote_refs r
+            JOIN suppliers s ON s.id = r.supplierId
+            WHERE s.name LIKE ?
+              AND sync_event_outbox.entityIdsJson LIKE '%' || r.remoteId || '%'
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM category_remote_refs r
+            JOIN categories c ON c.id = r.categoryId
+            WHERE c.name LIKE ?
+              AND sync_event_outbox.entityIdsJson LIKE '%' || r.remoteId || '%'
+        )
+        """.trimIndent()
+
+    private fun task114LocalSyncEventOutboxArgs(likePrefix: String): Array<Any> =
+        arrayOf(likePrefix, likePrefix, likePrefix, likePrefix, likePrefix, likePrefix)
+
+    private fun countTask114Rows(
+        db: androidx.sqlite.db.SupportSQLiteDatabase,
+        sql: String,
+        bindArgs: Array<Any>
+    ): Int {
+        val cursor = db.query(sql, bindArgs)
         cursor.use {
             return if (it.moveToFirst()) it.getInt(0) else 0
         }
@@ -716,6 +1377,11 @@ class Task103CrossPlatformAcceptanceTest {
         val matrixHistoryAndroidCreate: String = "${prefix}MATRIX_ANDROID_HISTORY_CREATE"
         val matrixHistoryAndroidUpdateFinal: String = "${prefix}MATRIX_ANDROID_HISTORY_UPDATE_FINAL"
         val matrixHistoryAndroidTombstone: String = "${prefix}MATRIX_ANDROID_HISTORY_TOMBSTONE"
+        val supplierOfflineAndroid: String = "${prefix}OFFLINE_ANDROID_SUPPLIER"
+        val categoryOfflineAndroid: String = "${prefix}OFFLINE_ANDROID_CATEGORY"
+        val barcodeOfflineAndroidCreate: String = "${prefix}OFFLINE_ANDROID_CREATE"
+        val barcodeOfflineAndroidUpdate: String = "${prefix}OFFLINE_ANDROID_UPDATE"
+        val barcodeOfflineAndroidTombstone: String = "${prefix}OFFLINE_ANDROID_TOMBSTONE"
 
         val mediumSuppliers: List<String> = (1..5).map { "${prefix}SUP_MEDIUM_${it.padded3()}" }
         val mediumCategories: List<String> = (1..5).map { "${prefix}CAT_MEDIUM_${it.padded3()}" }
@@ -726,13 +1392,15 @@ class Task103CrossPlatformAcceptanceTest {
             supplierIOS,
             supplierAndroid,
             matrixSupplierIOS,
-            matrixSupplierAndroid
+            matrixSupplierAndroid,
+            supplierOfflineAndroid
         ) + mediumSuppliers
         val allCategoryNames: List<String> = listOf(
             categoryIOS,
             categoryAndroid,
             matrixCategoryIOS,
-            matrixCategoryAndroid
+            matrixCategoryAndroid,
+            categoryOfflineAndroid
         ) + mediumCategories
         val allBarcodes: List<String> = listOf(
             barcodeIOS,
@@ -742,7 +1410,10 @@ class Task103CrossPlatformAcceptanceTest {
             matrixBarcodeIOSTombstone,
             matrixBarcodeAndroidCreate,
             matrixBarcodeAndroidUpdate,
-            matrixBarcodeAndroidTombstone
+            matrixBarcodeAndroidTombstone,
+            barcodeOfflineAndroidCreate,
+            barcodeOfflineAndroidUpdate,
+            barcodeOfflineAndroidTombstone
         ) + mediumBarcodes
 
         private fun mediumBarcode(index: Int): String =

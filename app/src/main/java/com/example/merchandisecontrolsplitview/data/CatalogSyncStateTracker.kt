@@ -128,6 +128,8 @@ interface CatalogSyncProgressRepository {
 }
 
 interface CatalogAutoSyncRepository {
+    suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = true
+
     suspend fun pushDirtyCatalogDeltaToRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
@@ -140,7 +142,8 @@ interface CatalogAutoSyncRepository {
         priceRemote: ProductPriceRemoteDataSource,
         syncEventRemote: SyncEventRemoteDataSource,
         ownerUserId: String,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource? = null
     ): Result<CatalogSyncSummary> =
         pushDirtyCatalogDeltaToRemote(remote, priceRemote, ownerUserId, progressReporter).map {
             it.copy(syncEventsDisabled = true, syncEventsFallback044 = true)
@@ -151,7 +154,8 @@ interface CatalogAutoSyncRepository {
         priceRemote: ProductPriceRemoteDataSource,
         syncEventRemote: SyncEventRemoteDataSource,
         ownerUserId: String,
-        progressReporter: CatalogSyncProgressReporter
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource? = null
     ): Result<CatalogSyncSummary> =
         Result.success(
             CatalogSyncSummary(

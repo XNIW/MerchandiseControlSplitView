@@ -6,11 +6,17 @@ import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistorySessionPushCoordinatorTest {
+
+    @Test
+    fun `114 default history auto push debounce stays within near realtime budget`() {
+        assertEquals(2_000L, HistorySessionPushCoordinator.DEBOUNCE_MS)
+    }
 
     @Test
     fun `040 runPushCycle uses precise pending uid set`() = runTest {
@@ -165,6 +171,9 @@ private class FakeConfiguredSessionRemote040 : SessionBackupRemoteDataSource {
     override val isConfigured: Boolean = true
 
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
+        Result.success(emptyList())
+
+    override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> =
         Result.success(emptyList())
 
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =

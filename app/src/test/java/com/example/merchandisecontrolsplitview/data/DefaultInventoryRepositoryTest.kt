@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
@@ -1872,6 +1873,34 @@ class DefaultInventoryRepositoryTest {
         assertEquals(SESSION_OVERLAY_SCHEMA, overlay["overlay_schema"]?.jsonPrimitive?.int)
         assertTrue(overlay["editable"] is JsonArray)
         assertTrue(overlay["complete"] is JsonArray)
+    }
+
+    @Test
+    fun `114 sync event RPC params serialize confirmed snake case source`() {
+        val params = SyncEventRecordRpcParams(
+            domain = "catalog",
+            eventType = "catalog_changed",
+            changedCount = 1,
+            entityIds = SyncEventEntityIds(productIds = listOf("00000000-0000-4000-8000-000000000114")),
+            source = "android",
+            sourceDeviceId = "00000000-0000-4000-8000-000000000115",
+            batchId = "00000000-0000-4000-8000-000000000116",
+            clientEventId = "android-00000000-0000-4000-8000-000000000116-catalog-catalog_changed-0-test"
+        )
+
+        val encoded = Json.encodeToJsonElement(
+            SyncEventRecordRpcParams.serializer(),
+            params
+        ).jsonObject
+        val entityIds = encoded["p_entity_ids"]!!.jsonObject
+
+        assertEquals("catalog", encoded["p_domain"]?.jsonPrimitive?.content)
+        assertEquals("catalog_changed", encoded["p_event_type"]?.jsonPrimitive?.content)
+        assertEquals("android", encoded["p_source"]?.jsonPrimitive?.content)
+        assertEquals("00000000-0000-4000-8000-000000000114", entityIds["product_ids"]!!.jsonArray.first().jsonPrimitive.content)
+        assertFalse(encoded.containsKey("domain"))
+        assertFalse(encoded.containsKey("eventType"))
+        assertFalse(encoded.containsKey("sourceDeviceId"))
     }
 
     // --- Test pull remoto controllato (task 008) ---
@@ -5648,6 +5677,8 @@ private class FakeSessionBackupRemote023(
     var failNextUpsert: Throwable? = null
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
         Result.success(records)
+    override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> =
+        Result.success(records.filter { it.remoteId in remoteIds })
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> {
         upsertedChunks.add(rows)
         onUpsert?.invoke(rows)

@@ -4,9 +4,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
@@ -18,21 +20,36 @@ class CatalogAutoSyncCoordinator(
     private val remote: CatalogRemoteDataSource,
     private val priceRemote: ProductPriceRemoteDataSource,
     private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
+    private val sessionRemote: SessionBackupRemoteDataSource? = null,
     private val authFlow: StateFlow<AuthState>,
     private val syncStateTracker: CatalogSyncStateTracker,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val debounceMs: Long = DEBOUNCE_MS,
-    private val bootstrapStalenessMs: Long = BOOTSTRAP_STALENESS_MS,
+    private val bootstrapRetryGuardMs: Long = BOOTSTRAP_RETRY_GUARD_MS,
+    private val foregroundSyncEventIntervalMs: Long = FOREGROUND_SYNC_EVENT_INTERVAL_MS,
     private val logger: (String) -> Unit = {}
 ) {
     companion object {
         const val DEBOUNCE_MS = 2_000L
-        const val BOOTSTRAP_STALENESS_MS = 30L * 60L * 1_000L
+        const val BOOTSTRAP_RETRY_GUARD_MS = 5L * 60L * 1_000L
+        const val FOREGROUND_SYNC_EVENT_INTERVAL_MS = 15_000L
+        const val RETRY_AFTER_BUSY_MS = 250L
         private const val LOG_SAMPLE_LIMIT = 8
+        private const val BOOTSTRAP_REASON_SYNC_EVENT_GAP = "sync_event_gap"
     }
 
     private val dirtyHints = LinkedHashSet<Long>()
     private val dirtyLock = Any()
+    private val retryLock = Any()
+
+    @Volatile
+    private var pushRetryAfterBusyScheduled = false
+
+    @Volatile
+    private var bootstrapRetryAfterBusyScheduled = false
+
+    @Volatile
+    private var syncEventRetryAfterBusyScheduled = false
 
     @Volatile
     private var isForeground = true
@@ -42,6 +59,8 @@ class CatalogAutoSyncCoordinator(
 
     @Volatile
     private var lastBootstrapOkAtMs: Long = 0L
+
+    private var foregroundSyncEventJob: Job? = null
 
     private val pushTickle = MutableSharedFlow<String>(
         extraBufferCapacity = 1,
@@ -87,10 +106,13 @@ class CatalogAutoSyncCoordinator(
         scheduleBootstrap("foreground")
         schedulePush("foreground")
         scheduleSyncEventDrain("foreground")
+        startForegroundSyncEventLoop()
     }
 
     fun onAppBackground() {
         isForeground = false
+        foregroundSyncEventJob?.cancel()
+        foregroundSyncEventJob = null
     }
 
     fun onNetworkAvailable() {
@@ -117,6 +139,70 @@ class CatalogAutoSyncCoordinator(
 
     private fun scheduleSyncEventDrain(reason: String) {
         syncEventTickle.tryEmit(reason)
+    }
+
+    private fun schedulePushAfterBusy(reason: String) {
+        val shouldSchedule = synchronized(retryLock) {
+            if (pushRetryAfterBusyScheduled) {
+                false
+            } else {
+                pushRetryAfterBusyScheduled = true
+                true
+            }
+        }
+        if (!shouldSchedule) return
+        scope.launch {
+            delay(RETRY_AFTER_BUSY_MS)
+            synchronized(retryLock) { pushRetryAfterBusyScheduled = false }
+            schedulePush("${reason}_retry_after_busy")
+        }
+    }
+
+    private fun scheduleBootstrapAfterBusy(reason: String) {
+        val shouldSchedule = synchronized(retryLock) {
+            if (bootstrapRetryAfterBusyScheduled) {
+                false
+            } else {
+                bootstrapRetryAfterBusyScheduled = true
+                true
+            }
+        }
+        if (!shouldSchedule) return
+        scope.launch {
+            delay(RETRY_AFTER_BUSY_MS)
+            synchronized(retryLock) { bootstrapRetryAfterBusyScheduled = false }
+            scheduleBootstrap("${reason}_retry_after_busy")
+        }
+    }
+
+    private fun scheduleSyncEventDrainAfterBusy(reason: String) {
+        val shouldSchedule = synchronized(retryLock) {
+            if (syncEventRetryAfterBusyScheduled) {
+                false
+            } else {
+                syncEventRetryAfterBusyScheduled = true
+                true
+            }
+        }
+        if (!shouldSchedule) return
+        scope.launch {
+            delay(RETRY_AFTER_BUSY_MS)
+            synchronized(retryLock) { syncEventRetryAfterBusyScheduled = false }
+            scheduleSyncEventDrain("${reason}_retry_after_busy")
+        }
+    }
+
+    private fun startForegroundSyncEventLoop() {
+        if (foregroundSyncEventIntervalMs <= 0L) return
+        if (foregroundSyncEventJob?.isActive == true) return
+        foregroundSyncEventJob = scope.launch {
+            while (true) {
+                delay(foregroundSyncEventIntervalMs)
+                if (isForeground) {
+                    scheduleSyncEventDrain("foreground_interval")
+                }
+            }
+        }
     }
 
     @OptIn(FlowPreview::class)
@@ -160,6 +246,7 @@ class CatalogAutoSyncCoordinator(
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH)) {
             synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
             logger("cycle=catalog_push outcome=skip reason=sync_busy dirtyHints=${hinted.size}")
+            schedulePushAfterBusy(reason)
             return
         }
         var ok = false
@@ -173,6 +260,7 @@ class CatalogAutoSyncCoordinator(
                         remote = remote,
                         priceRemote = priceRemote,
                         syncEventRemote = syncEventRemote,
+                        sessionRemote = sessionRemote,
                         ownerUserId = auth.userId,
                         progressReporter = CatalogSyncProgressReporter { progress ->
                             syncStateTracker.update(progress)
@@ -239,15 +327,21 @@ class CatalogAutoSyncCoordinator(
             return
         }
         val now = System.currentTimeMillis()
-        val freshForUser = lastBootstrapUserId == auth.userId &&
+        val forcedByRemoteGap = reason == BOOTSTRAP_REASON_SYNC_EVENT_GAP
+        if (!forcedByRemoteGap && !repository.shouldRunCatalogBootstrap(auth.userId)) {
+            logger("cycle=catalog_bootstrap outcome=skip reason=not_needed")
+            return
+        }
+        val recentlyBootstrappedForUser = lastBootstrapUserId == auth.userId &&
             lastBootstrapOkAtMs > 0L &&
-            now - lastBootstrapOkAtMs < bootstrapStalenessMs
-        if (freshForUser) {
-            logger("cycle=catalog_bootstrap outcome=skip reason=staleness_guard")
+            now - lastBootstrapOkAtMs < bootstrapRetryGuardMs
+        if (!forcedByRemoteGap && recentlyBootstrappedForUser) {
+            logger("cycle=catalog_bootstrap outcome=skip reason=bootstrap_retry_guard")
             return
         }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
             logger("cycle=catalog_bootstrap outcome=skip reason=sync_busy")
+            scheduleBootstrapAfterBusy(reason)
             return
         }
         var ok = false
@@ -307,6 +401,7 @@ class CatalogAutoSyncCoordinator(
         }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
             logger("cycle=sync_events_drain outcome=skip reason=sync_busy")
+            scheduleSyncEventDrainAfterBusy(reason)
             return
         }
         var ok = false
@@ -319,6 +414,7 @@ class CatalogAutoSyncCoordinator(
                     remote = remote,
                     priceRemote = priceRemote,
                     syncEventRemote = syncEventRemote,
+                    sessionRemote = sessionRemote,
                     ownerUserId = auth.userId,
                     progressReporter = CatalogSyncProgressReporter { progress ->
                         syncStateTracker.update(progress)
@@ -340,8 +436,13 @@ class CatalogAutoSyncCoordinator(
                     "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
                     "targetedProductsFetched=${s?.targetedProductsFetched ?: 0} " +
                     "targetedPricesFetched=${s?.targetedPricesFetched ?: 0} " +
+                    "targetedHistoryFetched=${s?.targetedHistoryFetched ?: 0} " +
+                    "remoteHistoryUpdatesApplied=${s?.remoteHistoryUpdatesApplied ?: 0} " +
                     "fullCatalogFetch=${s?.fullCatalogFetch ?: false} fullPriceFetch=${s?.fullPriceFetch ?: false}"
             )
+            if (s?.manualFullSyncRequired == true) {
+                scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {

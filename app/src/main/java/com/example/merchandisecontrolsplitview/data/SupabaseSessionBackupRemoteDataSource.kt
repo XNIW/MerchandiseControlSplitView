@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.postgrest
 
 /**
@@ -18,6 +19,17 @@ class SupabaseSessionBackupRemoteDataSource(
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
         runCatching {
             requireClient().postgrest.fetchSharedSheetSessionsAllPagesOrderedByRemoteId()
+        }
+
+    override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> =
+        runCatching {
+            if (remoteIds.isEmpty()) return@runCatching emptyList()
+            requireClient().postgrest["shared_sheet_sessions"].select {
+                filter {
+                    isIn("remote_id", remoteIds.map(::canonicalSessionRemoteId).sorted())
+                }
+                order("remote_id", Order.ASCENDING)
+            }.decodeList()
         }
 
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =

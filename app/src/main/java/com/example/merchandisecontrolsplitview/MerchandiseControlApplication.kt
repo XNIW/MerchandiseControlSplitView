@@ -192,6 +192,7 @@ class MerchandiseControlApplication : Application() {
         HistorySessionPushCoordinator(
             repository = repository,
             remote = sessionBackupRemoteDataSource,
+            syncEventRemote = syncEventRemoteDataSource,
             authFlow = authManager.state,
             flightOwner = sessionCloudSessionFlightOwner,
             logger = { message -> Log.i("HistorySessionSyncV2", message) }
@@ -208,6 +209,7 @@ class MerchandiseControlApplication : Application() {
             remote = catalogRemoteDataSource,
             priceRemote = productPriceRemoteDataSource,
             syncEventRemote = syncEventRemoteDataSource,
+            sessionRemote = sessionBackupRemoteDataSource,
             authFlow = authManager.state,
             syncStateTracker = catalogSyncStateTracker,
             logger = { message -> Log.i("CatalogCloudSync", message) }

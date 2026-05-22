@@ -78,7 +78,8 @@ data class RemoteSessionBatchResult(
 data class HistorySessionBackupPushSummary(
     val uploaded: Int,
     val skippedAlreadySynced: Int,
-    val attempted: Int = uploaded
+    val attempted: Int = uploaded,
+    val remoteIds: List<String> = emptyList()
 )
 
 data class LocalDatabaseStatusSnapshot(
@@ -361,7 +362,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val watermarkAfter: Long,
         val targetedProductsFetched: Int,
         val targetedPricesFetched: Int,
+        val targetedHistoryFetched: Int,
         val remoteUpdatesApplied: Int,
+        val remoteHistoryUpdatesApplied: Int,
         val tooLarge: Boolean,
         val gapDetected: Boolean,
         val manualFullSyncRequired: Boolean,
@@ -1027,6 +1030,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
+        var changedUid: Long? = null
         db.withTransaction {
             val existingRemoteId = remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
             val remoteId = existingRemoteId ?: run {
@@ -1055,6 +1059,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 )
             )
             remoteRefDao.incrementLocalRevision(entry.uid)
+            changedUid = entry.uid
+        }
+        val uidToNotify = changedUid
+        if (uidToNotify != null) {
+            notifyHistorySessionPayloadChanged(uidToNotify)
         }
     }
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
@@ -2207,6 +2216,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             productRemoteRefDao.countRows() < productDao.count()
     }
 
+    override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = withContext(Dispatchers.IO) {
+        supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0
+    }
+
     override suspend fun getLocalDatabaseStatusSnapshot(ownerUserId: String?): LocalDatabaseStatusSnapshot =
         withContext(Dispatchers.IO) {
             val breakdown = getCatalogCloudPendingBreakdown()
@@ -2279,6 +2292,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 )
             }
             var uploaded = 0
+            val uploadedRemoteIds = mutableListOf<String>()
             for (chunk in candidates.chunked(SESSION_BACKUP_PUSH_CHUNK)) {
                 val rows = chunk.map { it.payload.toSharedSheetSessionUpsertRow(ownerUserId) }
                 remote.upsertSessions(rows).getOrElse { error ->
@@ -2305,12 +2319,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     }
                 }
                 uploaded += chunk.size
+                uploadedRemoteIds += chunk.map { it.payload.remoteId }
             }
             Result.success(
                 HistorySessionBackupPushSummary(
                     uploaded = uploaded,
                     skippedAlreadySynced = skippedAlreadySynced,
-                    attempted = candidates.size
+                    attempted = candidates.size,
+                    remoteIds = uploadedRemoteIds.distinct()
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -2621,12 +2637,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
     }
 
-    override suspend fun syncCatalogQuickWithEvents(
+    suspend fun syncCatalogQuickWithEvents(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         syncEventRemote: SyncEventRemoteDataSource,
         ownerUserId: String,
         progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> =
+        syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEventRemote,
+            ownerUserId = ownerUserId,
+            progressReporter = progressReporter,
+            sessionRemote = null
+        )
+
+    override suspend fun syncCatalogQuickWithEvents(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource?
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrElse {
             SyncEventRemoteCapabilities.disabled("sync_events_capability_error")
@@ -2746,6 +2779,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 remote = remote,
                 priceRemote = priceRemote,
                 syncEventRemote = syncEventRemote,
+                sessionRemote = sessionRemote,
                 ownerUserId = ownerUserId,
                 deviceId = deviceId,
                 progressReporter = progressReporter,
@@ -2809,7 +2843,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     syncEventsGapDetected = drain.gapDetected,
                     targetedProductsFetched = drain.targetedProductsFetched,
                     targetedPricesFetched = drain.targetedPricesFetched,
+                    targetedHistoryFetched = drain.targetedHistoryFetched,
                     remoteUpdatesApplied = drain.remoteUpdatesApplied,
+                    remoteHistoryUpdatesApplied = drain.remoteHistoryUpdatesApplied,
                     manualFullSyncRequired = drain.manualFullSyncRequired
                 )
             )
@@ -2825,12 +2861,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
     }
 
-    override suspend fun drainSyncEventsFromRemote(
+    suspend fun drainSyncEventsFromRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         syncEventRemote: SyncEventRemoteDataSource,
         ownerUserId: String,
         progressReporter: CatalogSyncProgressReporter
+    ): Result<CatalogSyncSummary> =
+        drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEventRemote,
+            ownerUserId = ownerUserId,
+            progressReporter = progressReporter,
+            sessionRemote = null
+        )
+
+    override suspend fun drainSyncEventsFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource?
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrElse {
             SyncEventRemoteCapabilities.disabled("sync_events_capability_error")
@@ -2860,6 +2913,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 remote = remote,
                 priceRemote = priceRemote,
                 syncEventRemote = syncEventRemote,
+                sessionRemote = sessionRemote,
                 ownerUserId = ownerUserId,
                 deviceId = deviceId,
                 progressReporter = progressReporter
@@ -2907,7 +2961,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     syncEventsGapDetected = drain.gapDetected,
                     targetedProductsFetched = drain.targetedProductsFetched,
                     targetedPricesFetched = drain.targetedPricesFetched,
+                    targetedHistoryFetched = drain.targetedHistoryFetched,
                     remoteUpdatesApplied = drain.remoteUpdatesApplied,
+                    remoteHistoryUpdatesApplied = drain.remoteHistoryUpdatesApplied,
                     manualFullSyncRequired = drain.manualFullSyncRequired
                 )
             )
@@ -3263,6 +3319,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         syncEventRemote: SyncEventRemoteDataSource,
+        sessionRemote: SessionBackupRemoteDataSource?,
         ownerUserId: String,
         deviceId: String,
         progressReporter: CatalogSyncProgressReporter,
@@ -3277,7 +3334,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var skippedDirty = 0
         var targetedProductsFetched = 0
         var targetedPricesFetched = 0
+        var targetedHistoryFetched = 0
         var remoteUpdatesApplied = 0
+        var remoteHistoryUpdatesApplied = 0
         var tooLarge = false
         var gapDetected = false
         var manualFullSyncRequired = false
@@ -3340,6 +3399,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         remoteAppliedProductIds += outcome.second.appliedProductIds
                         outcome.second.pulled
                     }
+                    SyncEventDomains.HISTORY -> {
+                        val outcome = applyHistoryEventByIds(sessionRemote, idsForApply)
+                        targetedHistoryFetched += outcome.first
+                        remoteHistoryUpdatesApplied += outcome.second
+                        outcome.second
+                    }
                     else -> 0
                 }
                 remoteUpdatesApplied += applied
@@ -3362,7 +3427,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             watermarkAfter = watermark,
             targetedProductsFetched = targetedProductsFetched,
             targetedPricesFetched = targetedPricesFetched,
+            targetedHistoryFetched = targetedHistoryFetched,
             remoteUpdatesApplied = remoteUpdatesApplied,
+            remoteHistoryUpdatesApplied = remoteHistoryUpdatesApplied,
             tooLarge = tooLarge,
             gapDetected = gapDetected,
             manualFullSyncRequired = manualFullSyncRequired,
@@ -3377,11 +3444,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val protectedCategoryIds = protected.categoryIds.toSet()
         val protectedProductIds = protected.productIds.toSet()
         val protectedPriceIds = protected.priceIds.toSet()
+        val protectedSessionIds = protected.sessionIds.toSet()
         return SyncEventEntityIds(
             supplierIds = supplierIds.filterNot { it in protectedSupplierIds },
             categoryIds = categoryIds.filterNot { it in protectedCategoryIds },
             productIds = productIds.filterNot { it in protectedProductIds },
-            priceIds = priceIds.filterNot { it in protectedPriceIds }
+            priceIds = priceIds.filterNot { it in protectedPriceIds },
+            sessionIds = sessionIds.filterNot { it in protectedSessionIds }
         )
     }
 
@@ -3477,6 +3546,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         return targetedProductsFetched to result.copy(
             appliedProductIds = parentAppliedProductIds + result.appliedProductIds
         )
+    }
+
+    private suspend fun applyHistoryEventByIds(
+        sessionRemote: SessionBackupRemoteDataSource?,
+        ids: SyncEventEntityIds
+    ): Pair<Int, Int> {
+        if (ids.sessionIds.isEmpty() || sessionRemote == null || !sessionRemote.isConfigured) {
+            return 0 to 0
+        }
+        val records = sessionRemote.fetchSessionsByRemoteIds(ids.sessionIds.toSet()).getOrThrow()
+        val result = applyRemoteSessionPayloadBatch(records.map { it.toSessionRemotePayload() })
+        val applied = result.inserted + result.updated
+        Log.i(
+            TAG,
+            "sync_events_apply domain=history remoteSessions=${records.size} applied=$applied " +
+                "skipped=${result.skipped} failed=${result.failed} unsupported=${result.unsupported}"
+        )
+        return records.size to applied
     }
 
     private suspend fun applyProductPriceRows(
@@ -3858,7 +3945,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             ids.supplierIds.sorted().joinToString(","),
             ids.categoryIds.sorted().joinToString(","),
             ids.productIds.sorted().joinToString(","),
-            ids.priceIds.sorted().joinToString(",")
+            ids.priceIds.sorted().joinToString(","),
+            ids.sessionIds.sorted().joinToString(",")
         ).joinToString("|").hashCode().toUInt().toString(16)
         return "android-$batchId-$domain-$eventType-$chunkIndex-$fingerprint"
     }
@@ -3869,6 +3957,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             ids.categoryIds.forEach { add("category" to it) }
             ids.productIds.forEach { add("product" to it) }
             ids.priceIds.forEach { add("price" to it) }
+            ids.sessionIds.forEach { add("session" to it) }
         }
         if (entries.isEmpty()) return emptyList()
         return entries.chunked(SYNC_EVENT_ENTITY_ID_BUDGET).map { chunk ->
@@ -3876,7 +3965,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 supplierIds = chunk.filter { it.first == "supplier" }.map { it.second },
                 categoryIds = chunk.filter { it.first == "category" }.map { it.second },
                 productIds = chunk.filter { it.first == "product" }.map { it.second },
-                priceIds = chunk.filter { it.first == "price" }.map { it.second }
+                priceIds = chunk.filter { it.first == "price" }.map { it.second },
+                sessionIds = chunk.filter { it.first == "session" }.map { it.second }
             )
         }
     }
@@ -3893,6 +3983,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         for (id in ids.productIds) {
             val ref = productRemoteRefDao.getByRemoteId(id)
+            if (ref != null && ref.localChangeRevision > ref.lastSyncedLocalRevision) dirty++
+        }
+        for (id in ids.sessionIds) {
+            val ref = remoteRefDao.getByRemoteId(canonicalSessionRemoteId(id))
             if (ref != null && ref.localChangeRevision > ref.lastSyncedLocalRevision) dirty++
         }
         return dirty

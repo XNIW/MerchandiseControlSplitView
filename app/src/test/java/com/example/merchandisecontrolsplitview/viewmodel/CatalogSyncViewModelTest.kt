@@ -1583,6 +1583,9 @@ private class ViewModelSessionRemote024(
     override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> =
         Result.success(emptyList())
 
+    override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> =
+        Result.success(emptyList())
+
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =
         Result.success(Unit)
 }

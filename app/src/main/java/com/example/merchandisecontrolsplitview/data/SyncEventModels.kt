@@ -17,6 +17,7 @@ import kotlinx.serialization.json.buildJsonObject
 object SyncEventDomains {
     const val CATALOG = "catalog"
     const val PRICES = "prices"
+    const val HISTORY = "history"
 }
 
 object SyncEventTypes {
@@ -24,6 +25,8 @@ object SyncEventTypes {
     const val PRICES_CHANGED = "prices_changed"
     const val CATALOG_TOMBSTONE = "catalog_tombstone"
     const val PRICES_TOMBSTONE = "prices_tombstone"
+    const val HISTORY_CHANGED = "history_changed"
+    const val HISTORY_TOMBSTONE = "history_tombstone"
 }
 
 @Serializable
@@ -39,10 +42,13 @@ data class SyncEventEntityIds(
     val productIds: List<String> = emptyList(),
     @SerialName("price_ids")
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
-    val priceIds: List<String> = emptyList()
+    val priceIds: List<String> = emptyList(),
+    @SerialName("session_ids")
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS)
+    val sessionIds: List<String> = emptyList()
 ) {
     val totalIds: Int
-        get() = supplierIds.size + categoryIds.size + productIds.size + priceIds.size
+        get() = supplierIds.size + categoryIds.size + productIds.size + priceIds.size + sessionIds.size
 
     val isEmpty: Boolean
         get() = totalIds == 0
@@ -72,7 +78,7 @@ data class SyncEventRecordRpcParams(
     @SerialName("p_changed_count") val changedCount: Int,
     @SerialName("p_entity_ids") val entityIds: SyncEventEntityIds?,
     @SerialName("p_store_id") val storeId: String? = null,
-    @SerialName("p_source") val source: String? = "android",
+    @SerialName("p_source") val source: String?,
     @SerialName("p_source_device_id") val sourceDeviceId: String? = null,
     @SerialName("p_batch_id") val batchId: String? = null,
     @SerialName("p_client_event_id") val clientEventId: String? = null,

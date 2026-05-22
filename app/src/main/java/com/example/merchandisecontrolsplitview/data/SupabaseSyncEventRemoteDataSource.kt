@@ -1,12 +1,15 @@
 package com.example.merchandisecontrolsplitview.data
 
+import android.util.Log
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.postgrest.rpc
 
 private const val SYNC_EVENTS_TABLE = "sync_events"
+private const val TAG = "CatalogCloudSync"
 
 class SupabaseSyncEventRemoteDataSource(
     private val client: SupabaseClient?
@@ -38,13 +41,26 @@ class SupabaseSyncEventRemoteDataSource(
             SyncEventRemoteCapabilities.disabled("sync_events_schema_or_rls_unavailable")
         }
 
-    override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> =
-        runCatching {
+    override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+        val result = runCatching {
             requireClient()
                 .postgrest
                 .rpc("record_sync_event", params)
-                .decodeSingle()
+                .decodeAs<SyncEventRemoteRow>()
         }
+        result.exceptionOrNull()?.let { error ->
+            val classification = SyncErrorClassifier.classify(error)
+            Log.w(
+                TAG,
+                "sync_event_record_failure domain=${params.domain} eventType=${params.eventType} " +
+                    "changedCount=${params.changedCount} errClass=${error::class.java.simpleName} " +
+                    "errCategory=${classification.category} httpStatus=${classification.httpStatus} " +
+                    "postgrestCode=${classification.postgrestCode ?: (error as? PostgrestRestException)?.code ?: "none"} " +
+                    "message=${redactRpcError(error.message)}"
+            )
+        }
+        return result
+    }
 
     override suspend fun fetchSyncEventsAfter(
         ownerUserId: String,
@@ -68,4 +84,12 @@ class SupabaseSyncEventRemoteDataSource(
                 range(0, limit - 1)
             }.decodeList()
         }
+
+    private fun redactRpcError(message: String?): String {
+        if (message.isNullOrBlank()) return "none"
+        return message
+            .replace(Regex("Bearer\\s+[A-Za-z0-9._~+/-]+=*"), "Bearer <redacted>")
+            .replace(Regex("https?://\\S+"), "<url-redacted>")
+            .take(240)
+    }
 }

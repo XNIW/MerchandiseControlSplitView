@@ -13,5 +13,7 @@ interface SessionBackupRemoteDataSource {
      */
     suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>>
 
+    suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>>
+
     suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit>
 }

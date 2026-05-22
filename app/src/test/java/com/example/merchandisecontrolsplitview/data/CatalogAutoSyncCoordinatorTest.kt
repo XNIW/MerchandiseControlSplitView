@@ -64,6 +64,38 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `114 local push retries after sync event drain releases single flight`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043()
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS))
+        coordinator.runPushCycle("local_commit")
+
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("cycle=catalog_push outcome=skip reason=sync_busy") })
+
+        tracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
+        advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(CatalogSyncFlightOwner.AUTO_PUSH, tracker.lastOutcome.value?.source)
+        coordinator.shutdown()
+    }
+
+    @Test
     fun `061 auto push with sync events publishes summary outcome`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             nextQuickSummary = emptySummary(pushedProducts = 1).copy(
@@ -143,6 +175,89 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `114 foreground does not run bootstrap when local baseline is already usable`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = { logs += it }
+        )
+
+        coordinator.runBootstrapCycle("foreground")
+
+        assertEquals(0, repository.bootstrapCalls)
+        assertTrue(logs.any { it.contains("reason=not_needed") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `114 sync event gap can force bootstrap even when normal foreground bootstrap is not needed`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            nextDrainSummary = emptySummary().copy(manualFullSyncRequired = true)
+        }
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L
+        )
+
+        runCurrent()
+        coordinator.runSyncEventDrainCycle("test")
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.drainCalls)
+        assertEquals(1, repository.bootstrapCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `114 foreground sync event fallback keeps draining while app stays active`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043()
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            foregroundSyncEventIntervalMs = 10L
+        )
+
+        runCurrent()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+        repository.drainCalls = 0
+
+        coordinator.onAppForeground()
+        advanceTimeBy(12L)
+        advanceUntilIdle()
+
+        assertTrue(repository.drainCalls >= 1)
+        coordinator.shutdown()
+    }
+
+    @Test
     fun `061 auto push failure does not publish summary outcome`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             failQuick = IllegalStateException("quick failed")
@@ -168,7 +283,7 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
-    fun `043 bootstrap pull is process scoped by user and staleness guard`() = runTest {
+    fun `043 bootstrap pull is process scoped by user and retry guard`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043()
         val tracker = CatalogSyncStateTracker()
         val coordinator = CatalogAutoSyncCoordinator(
@@ -179,7 +294,7 @@ class CatalogAutoSyncCoordinatorTest {
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = Long.MAX_VALUE,
-            bootstrapStalenessMs = Long.MAX_VALUE
+            bootstrapRetryGuardMs = Long.MAX_VALUE
         )
 
         coordinator.runBootstrapCycle("first")
@@ -202,7 +317,7 @@ class CatalogAutoSyncCoordinatorTest {
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L,
-            bootstrapStalenessMs = Long.MAX_VALUE
+            bootstrapRetryGuardMs = Long.MAX_VALUE
         )
         runCurrent()
         advanceTimeBy(2L)
@@ -252,9 +367,12 @@ class CatalogAutoSyncCoordinatorTest {
         var quickWithEventsCalls = 0
         var drainCalls = 0
         var bootstrapCalls = 0
+        var shouldBootstrap = true
         var nextQuickSummary: CatalogSyncSummary = emptySummary(pushedProducts = 1, pushedProductPrices = 1)
         var nextDrainSummary: CatalogSyncSummary = emptySummary(pulledProducts = 1)
         var failQuick: Throwable? = null
+
+        override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = shouldBootstrap
 
         override suspend fun pushDirtyCatalogDeltaToRemote(
             remote: CatalogRemoteDataSource,
@@ -272,7 +390,8 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote: ProductPriceRemoteDataSource,
             syncEventRemote: SyncEventRemoteDataSource,
             ownerUserId: String,
-            progressReporter: CatalogSyncProgressReporter
+            progressReporter: CatalogSyncProgressReporter,
+            sessionRemote: SessionBackupRemoteDataSource?
         ): Result<CatalogSyncSummary> {
             quickWithEventsCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
@@ -285,7 +404,8 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote: ProductPriceRemoteDataSource,
             syncEventRemote: SyncEventRemoteDataSource,
             ownerUserId: String,
-            progressReporter: CatalogSyncProgressReporter
+            progressReporter: CatalogSyncProgressReporter,
+            sessionRemote: SessionBackupRemoteDataSource?
         ): Result<CatalogSyncSummary> {
             drainCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
