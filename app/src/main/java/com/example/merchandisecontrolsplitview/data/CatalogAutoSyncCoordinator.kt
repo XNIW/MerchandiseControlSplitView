@@ -30,7 +30,7 @@ class CatalogAutoSyncCoordinator(
     private val logger: (String) -> Unit = {}
 ) {
     companion object {
-        const val DEBOUNCE_MS = 2_000L
+        const val DEBOUNCE_MS = 500L
         const val BOOTSTRAP_RETRY_GUARD_MS = 5L * 60L * 1_000L
         const val FOREGROUND_SYNC_EVENT_INTERVAL_MS = 15_000L
         const val RETRY_AFTER_BUSY_MS = 250L

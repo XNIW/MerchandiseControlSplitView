@@ -596,8 +596,9 @@ class Task103CrossPlatformAcceptanceTest {
         )
         val prefix = args.getString("task114CleanupPrefix")
             ?: throw AssertionError("task114CleanupPrefix is required")
-        require(prefix.startsWith("TASK114_") && prefix.endsWith("_") && !prefix.contains("%")) {
-            "TASK-114 cleanup prefix must be explicit, task-scoped and suffix '_'"
+        val allowedCleanupPrefix = prefix.startsWith("TASK114_") || prefix.startsWith("TASK123_")
+        require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
+            "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
         }
         val execute = isEnabled(args.getString("task114CleanupExecute")?.lowercase())
         val likePrefix = "$prefix%"
@@ -717,7 +718,7 @@ class Task103CrossPlatformAcceptanceTest {
             assertEquals(0, afterLookups)
             assertEquals(0, afterOutbox)
         }
-        println(
+        val cleanupLine =
             "TASK114_ANDROID_LOCAL_CLEANUP prefix_hash=${hash(prefix)} execute=$execute " +
                 "history_before=$beforeHistory refs_before=$beforeRefs " +
                 "products_before=$beforeProducts product_prices_before=$beforeProductPrices " +
@@ -727,6 +728,12 @@ class Task103CrossPlatformAcceptanceTest {
                 "products_after=$afterProducts product_prices_after=$afterProductPrices " +
                 "catalog_refs_after=$afterCatalogRefs price_refs_after=$afterPriceRefs " +
                 "lookups_after=$afterLookups outbox_after=$afterOutbox"
+        println(cleanupLine)
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            0,
+            Bundle().apply {
+                putString("TASK114_ANDROID_LOCAL_CLEANUP", cleanupLine)
+            }
         )
     }
 
@@ -955,12 +962,16 @@ class Task103CrossPlatformAcceptanceTest {
         val task114Value = args
             .getString("task114LiveAcceptance")
             ?.lowercase()
+        val task115Value = args
+            .getString("task115LiveAcceptance")
+            ?.lowercase()
         assumeTrue(
-            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true or -e task114LiveAcceptance true.",
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true, -e task114LiveAcceptance true or -e task115LiveAcceptance true.",
             task103Value == "1" || task103Value == "true" ||
                 task104Value == "1" || task104Value == "true" ||
                 task112Value == "1" || task112Value == "true" ||
-                task114Value == "1" || task114Value == "true"
+                task114Value == "1" || task114Value == "true" ||
+                task115Value == "1" || task115Value == "true"
         )
     }
 
@@ -976,13 +987,17 @@ class Task103CrossPlatformAcceptanceTest {
             ?: args
             .getString("task112RunPrefix")
             ?: args
+            .getString("task115RunPrefix")
+            ?: args
             .getString("task114RunPrefix")
-            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix or task114RunPrefix must be explicitly set for live acceptance.")
+            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix, task114RunPrefix or task115RunPrefix must be explicitly set for live acceptance.")
         assertTrue(
             prefix.startsWith("TASK103_REAL_R") ||
                 prefix.startsWith("TASK104_PASS2_") ||
                 prefix.startsWith("TASK112_") ||
-                prefix.startsWith("TASK114_")
+                prefix.startsWith("TASK114_") ||
+                prefix.startsWith("TASK115_") ||
+                prefix.startsWith("TASK123_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -1343,6 +1358,8 @@ class Task103CrossPlatformAcceptanceTest {
 
     private data class Fixture(val prefix: String) {
         val logPrefix: String = when {
+            prefix.startsWith("TASK123_") -> "TASK123"
+            prefix.startsWith("TASK115_") -> "TASK115"
             prefix.startsWith("TASK114_") -> "TASK114"
             prefix.startsWith("TASK112_") -> "TASK112"
             prefix.startsWith("TASK104_PASS2_") -> "TASK104_PASS2"

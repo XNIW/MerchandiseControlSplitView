@@ -15,7 +15,7 @@ class HistorySessionPushCoordinatorTest {
 
     @Test
     fun `114 default history auto push debounce stays within near realtime budget`() {
-        assertEquals(2_000L, HistorySessionPushCoordinator.DEBOUNCE_MS)
+        assertEquals(500L, HistorySessionPushCoordinator.DEBOUNCE_MS)
     }
 
     @Test

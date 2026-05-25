@@ -24,7 +24,7 @@ class HistorySessionPushCoordinator(
     private val logger: (String) -> Unit = {}
 ) {
     companion object {
-        const val DEBOUNCE_MS = 2_000L
+        const val DEBOUNCE_MS = 500L
         private const val LOG_SAMPLE_LIMIT = 5
         private const val REASON_LOGIN_FRESH_TICK = "login_fresh_tick"
     }

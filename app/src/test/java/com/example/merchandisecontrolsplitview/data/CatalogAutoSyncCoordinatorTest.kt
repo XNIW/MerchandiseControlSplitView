@@ -19,6 +19,11 @@ import org.robolectric.annotation.Config
 class CatalogAutoSyncCoordinatorTest {
 
     @Test
+    fun `123 default catalog auto push debounce stays within warm autosync budget`() {
+        assertEquals(500L, CatalogAutoSyncCoordinator.DEBOUNCE_MS)
+    }
+
+    @Test
     fun `043 auto push runs targeted repository lane when signed in and foreground`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043()
         val tracker = CatalogSyncStateTracker()
