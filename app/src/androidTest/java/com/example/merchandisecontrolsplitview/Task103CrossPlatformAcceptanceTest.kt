@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinator
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncFlightOwner
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
@@ -347,6 +348,60 @@ class Task103CrossPlatformAcceptanceTest {
             0,
             Bundle().apply {
                 putString("TASK114_ANDROID_WRITE_TIMINGS", timingLine)
+            }
+        )
+    }
+
+    @Test
+    fun test123AndroidSingleCatalogCreatePropagation() = runBlocking {
+        requireLiveAcceptanceEnabled()
+        val startedMs = System.currentTimeMillis()
+        val fixture = fixture()
+        val runtime = runtime(fixture, foregroundAutoSync = true)
+        val localSaveStartedMs = System.currentTimeMillis()
+        val supplier = runtime.repository.addSupplier("${fixture.prefix}SINGLE_SUP_ANDROID")
+            ?: runtime.repository.findSupplierByName("${fixture.prefix}SINGLE_SUP_ANDROID")
+            ?: throw AssertionError("TASK-123 Android single supplier unavailable")
+        val category = runtime.repository.addCategory("${fixture.prefix}SINGLE_CAT_ANDROID")
+            ?: runtime.repository.findCategoryByName("${fixture.prefix}SINGLE_CAT_ANDROID")
+            ?: throw AssertionError("TASK-123 Android single category unavailable")
+        runtime.repository.findProductByBarcode("${fixture.prefix}SINGLE_ANDROID_CREATE")
+            ?.let { runtime.repository.deleteProduct(it) }
+        runtime.repository.addProduct(
+            Product(
+                barcode = "${fixture.prefix}SINGLE_ANDROID_CREATE",
+                itemNumber = "${fixture.prefix}SINGLE_ANDROID_CREATE_ITEM",
+                productName = "${fixture.prefix}SINGLE_ANDROID_PRODUCT_CREATE",
+                supplierId = supplier.id,
+                categoryId = category.id,
+                purchasePrice = 44.10,
+                retailPrice = 55.20,
+                stockQuantity = 6.0
+            )
+        )
+        val localSaveMs = System.currentTimeMillis() - localSaveStartedMs
+        val pushStartedMs = System.currentTimeMillis()
+        val summary = waitForCatalogAutoPush(runtime, "task123 android single catalog create") {
+            val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
+            singleActiveProduct(catalog, "${fixture.prefix}SINGLE_ANDROID_CREATE")?.productName ==
+                "${fixture.prefix}SINGLE_ANDROID_PRODUCT_CREATE"
+        }
+        val remotePushMs = System.currentTimeMillis() - pushStartedMs
+
+        val timingLine =
+            "TASK123_ANDROID_SINGLE_PROPAGATION " +
+                "kind=catalog_product_create owner_hash=${hash(runtime.ownerUserId)} " +
+                "localSaveMs=$localSaveMs localOutboxEnqueueMs=$localSaveMs " +
+                "sourceAutoPushStartDelayMs=${CatalogAutoSyncCoordinator.DEBOUNCE_MS} " +
+                "remotePushMs=$remotePushMs syncEventAvailableMs=$remotePushMs " +
+                "watermarkAfter=${summary.syncEventsWatermarkAfter} " +
+                "totalSourceMs=${System.currentTimeMillis() - startedMs} " +
+                "syncType=EVENT_INCREMENTAL fullPull=false"
+        println(timingLine)
+        InstrumentationRegistry.getInstrumentation().sendStatus(
+            0,
+            Bundle().apply {
+                putString("TASK123_ANDROID_SINGLE_PROPAGATION", timingLine)
             }
         )
     }
@@ -1394,6 +1449,12 @@ class Task103CrossPlatformAcceptanceTest {
         val matrixHistoryAndroidCreate: String = "${prefix}MATRIX_ANDROID_HISTORY_CREATE"
         val matrixHistoryAndroidUpdateFinal: String = "${prefix}MATRIX_ANDROID_HISTORY_UPDATE_FINAL"
         val matrixHistoryAndroidTombstone: String = "${prefix}MATRIX_ANDROID_HISTORY_TOMBSTONE"
+        val singleSupplierIOS: String = "${prefix}SINGLE_SUP_IOS"
+        val singleCategoryIOS: String = "${prefix}SINGLE_CAT_IOS"
+        val singleBarcodeIOSCreate: String = "${prefix}SINGLE_IOS_CREATE"
+        val singleSupplierAndroid: String = "${prefix}SINGLE_SUP_ANDROID"
+        val singleCategoryAndroid: String = "${prefix}SINGLE_CAT_ANDROID"
+        val singleBarcodeAndroidCreate: String = "${prefix}SINGLE_ANDROID_CREATE"
         val supplierOfflineAndroid: String = "${prefix}OFFLINE_ANDROID_SUPPLIER"
         val categoryOfflineAndroid: String = "${prefix}OFFLINE_ANDROID_CATEGORY"
         val barcodeOfflineAndroidCreate: String = "${prefix}OFFLINE_ANDROID_CREATE"
@@ -1410,6 +1471,8 @@ class Task103CrossPlatformAcceptanceTest {
             supplierAndroid,
             matrixSupplierIOS,
             matrixSupplierAndroid,
+            singleSupplierIOS,
+            singleSupplierAndroid,
             supplierOfflineAndroid
         ) + mediumSuppliers
         val allCategoryNames: List<String> = listOf(
@@ -1417,6 +1480,8 @@ class Task103CrossPlatformAcceptanceTest {
             categoryAndroid,
             matrixCategoryIOS,
             matrixCategoryAndroid,
+            singleCategoryIOS,
+            singleCategoryAndroid,
             categoryOfflineAndroid
         ) + mediumCategories
         val allBarcodes: List<String> = listOf(
@@ -1428,6 +1493,8 @@ class Task103CrossPlatformAcceptanceTest {
             matrixBarcodeAndroidCreate,
             matrixBarcodeAndroidUpdate,
             matrixBarcodeAndroidTombstone,
+            singleBarcodeIOSCreate,
+            singleBarcodeAndroidCreate,
             barcodeOfflineAndroidCreate,
             barcodeOfflineAndroidUpdate,
             barcodeOfflineAndroidTombstone
