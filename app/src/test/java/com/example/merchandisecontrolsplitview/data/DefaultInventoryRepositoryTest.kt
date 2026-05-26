@@ -4296,6 +4296,82 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `125 catalog sync event pulls prices for affected products without full price pull`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001250"
+        val productRemoteId = "00000000-0000-4000-8000-000000001251"
+        val purchasePriceRemoteId = "00000000-0000-4000-8000-000000001252"
+        val retailPriceRemoteId = "00000000-0000-4000-8000-000000001253"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = "task125-catalog-price-target",
+                        productName = "Task125 price target",
+                        purchasePrice = 12.0,
+                        retailPrice = 18.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016().apply {
+            fetchRows = listOf(
+                InventoryProductPriceRow(
+                    id = purchasePriceRemoteId,
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "PURCHASE",
+                    price = 12.0,
+                    effectiveAt = "2026-05-26 00:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-05-26 00:00:00"
+                ),
+                InventoryProductPriceRow(
+                    id = retailPriceRemoteId,
+                    ownerUserId = owner,
+                    productId = productRemoteId,
+                    type = "RETAIL",
+                    price = 18.0,
+                    effectiveAt = "2026-05-26 00:00:00",
+                    source = "REMOTE",
+                    createdAt = "2026-05-26 00:00:00"
+                )
+            )
+        }
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1250,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "ios-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+                createdAt = "2026-05-26T00:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(0, priceRemote.fetchCount)
+        assertEquals(1, priceRemote.targetedFetchByProductCount)
+        assertEquals(setOf(productRemoteId), priceRemote.targetedProductIds.single())
+        assertEquals(2, summary.pulledProductPrices)
+        val product = repository.findProductByBarcode("task125-catalog-price-target")!!
+        assertEquals(1, repository.getPriceSeries(product.id, "PURCHASE").first().size)
+        assertEquals(1, repository.getPriceSeries(product.id, "RETAIL").first().size)
+    }
+
+    @Test
     fun `045 emit failure stores outbox and retry records only pending event`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000457"
         repository.addProduct(
@@ -5811,6 +5887,8 @@ private class RecordingPriceRemote016(
     val pageAfterIds = mutableListOf<String?>()
     var targetedFetchCount = 0
     val targetedPriceIds = mutableListOf<Set<String>>()
+    var targetedFetchByProductCount = 0
+    val targetedProductIds = mutableListOf<Set<String>>()
     var failIfCalled = false
     var failNextFetch: Throwable? = null
     var failNextUpsert: Throwable? = null
@@ -5859,6 +5937,16 @@ private class RecordingPriceRemote016(
             return Result.failure(t)
         }
         return Result.success(fetchRows.filter { it.id in remoteIds })
+    }
+    override suspend fun fetchProductPricesByProductIds(productRemoteIds: Set<String>): Result<List<InventoryProductPriceRow>> {
+        if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
+        targetedFetchByProductCount++
+        targetedProductIds.add(productRemoteIds)
+        failNextFetch?.let { t ->
+            failNextFetch = null
+            return Result.failure(t)
+        }
+        return Result.success(fetchRows.filter { it.productId in productRemoteIds })
     }
 }
 

@@ -63,4 +63,20 @@ class SupabaseProductPriceRemoteDataSource(
             }
             rows
         }
+
+    override suspend fun fetchProductPricesByProductIds(productRemoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+        runCatching {
+            if (productRemoteIds.isEmpty()) return@runCatching emptyList()
+            val supabase = requireClient()
+            val rows = mutableListOf<InventoryProductPriceRow>()
+            for (chunk in productRemoteIds.chunked(PRICE_UPSERT_CHUNK)) {
+                rows += supabase.postgrest["inventory_product_prices"].select {
+                    filter {
+                        isIn("product_id", chunk)
+                    }
+                    order("id", Order.ASCENDING)
+                }.decodeList()
+            }
+            rows
+        }
 }

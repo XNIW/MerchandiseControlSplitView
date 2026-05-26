@@ -21,4 +21,7 @@ interface ProductPriceRemoteDataSource {
         }
 
     suspend fun fetchProductPricesByIds(remoteIds: Set<String>): Result<List<InventoryProductPriceRow>>
+
+    suspend fun fetchProductPricesByProductIds(productRemoteIds: Set<String>): Result<List<InventoryProductPriceRow>> =
+        Result.success(emptyList())
 }

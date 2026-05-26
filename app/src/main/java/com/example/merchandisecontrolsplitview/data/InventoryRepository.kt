@@ -3390,7 +3390,18 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         val counts = applyCatalogEventByIds(remote, idsForApply, progressReporter)
                         targetedProductsFetched += counts.remoteProductRows
                         remoteAppliedProductIds += counts.appliedProductIds
-                        counts.suppliers + counts.categories + counts.products
+                        var applied = counts.suppliers + counts.categories + counts.products
+                        if (idsForApply.productIds.isNotEmpty() && priceRemote.isConfigured) {
+                            val priceOutcome = applyPriceRowsForProductIds(
+                                priceRemote = priceRemote,
+                                productRemoteIds = idsForApply.productIds.toSet(),
+                                progressReporter = progressReporter
+                            )
+                            targetedPricesFetched += priceOutcome.remoteRowsEvaluated
+                            remoteAppliedProductIds += priceOutcome.appliedProductIds
+                            applied += priceOutcome.pulled
+                        }
+                        applied
                     }
                     SyncEventDomains.PRICES -> {
                         val outcome = applyPriceEventByIds(remote, priceRemote, idsForApply, progressReporter)
@@ -3546,6 +3557,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         return targetedProductsFetched to result.copy(
             appliedProductIds = parentAppliedProductIds + result.appliedProductIds
         )
+    }
+
+    private suspend fun applyPriceRowsForProductIds(
+        priceRemote: ProductPriceRemoteDataSource,
+        productRemoteIds: Set<String>,
+        progressReporter: CatalogSyncProgressReporter
+    ): PricePullApplyResult {
+        if (productRemoteIds.isEmpty() || !priceRemote.isConfigured) {
+            return PricePullApplyResult(0, 0, 0)
+        }
+        val rows = priceRemote.fetchProductPricesByProductIds(productRemoteIds).getOrThrow()
+        val result = applyProductPriceRows(rows, progressReporter)
+        Log.i(
+            TAG,
+            "sync_events_apply domain=catalog_prices remoteProductIds=${productRemoteIds.size} " +
+                "remotePrices=${rows.size} pricesPulled=${result.pulled} " +
+                "pricesSkippedNoProductRef=${result.skippedNoLocalProduct}"
+        )
+        return result
     }
 
     private suspend fun applyHistoryEventByIds(
