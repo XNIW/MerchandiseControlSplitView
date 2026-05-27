@@ -676,4 +676,26 @@
     <string name="catalog_cloud_sync_full_cd">Estado de realineación automática: catálogo, precios y sesiones desde cloud</string>
     <string name="catalog_cloud_sync_now_cd">Estado de sincronización automática: catálogo, precios, historial y cambios locales</string>
     <string name="catalog_cloud_section_cd">Estado de sincronización en la nube: %1$s</string>
+    <string name="task126_review_cancel">Cancelar</string>
+    <string name="task126_account_keep_current">Mantener cuenta actual</string>
+    <string name="task126_account_export_backup">Exportar copia</string>
+    <string name="task126_account_discard_and_switch">Descartar pendientes y cambiar</string>
+    <string name="task126_account_switch">Cambiar cuenta</string>
+    <string name="task126_account_clean_populated_title">Cuenta cloud con datos</string>
+    <string name="task126_account_clean_populated_message">La base local esta limpia. Confirma el cambio para reseed y verificacion de cache.</string>
+    <string name="task126_account_dirty_title">Cambios locales en review</string>
+    <string name="task126_account_dirty_message">Los pendientes siguen ligados a la cuenta actual y no se enviaran a la nueva cuenta.</string>
+    <string name="task126_conflict_use_local">Usar local</string>
+    <string name="task126_conflict_use_remote">Usar cloud</string>
+    <string name="task126_conflict_edit_manually">Editar manualmente</string>
+    <string name="task126_conflict_apply_to_similar">Aplicar a similares</string>
+    <string name="task126_conflict_postpone">Posponer review</string>
+    <string name="task126_conflict_auto_merge_title">Merge automatico</string>
+    <string name="task126_conflict_auto_merge_message">Los campos no entran en conflicto y se unen sin popup.</string>
+    <string name="task126_conflict_same_field_title">Conflicto del mismo campo</string>
+    <string name="task126_conflict_same_field_message">Local y cloud cambiaron el mismo campo. Elige el resultado a conservar.</string>
+    <string name="task126_conflict_delete_edit_title">Eliminacion contra edicion</string>
+    <string name="task126_conflict_delete_edit_message">Un lado elimino el registro mientras el otro lo edito. Hace falta review explicita.</string>
+    <string name="task126_conflict_price_stale_title">Precio en el mismo slot</string>
+    <string name="task126_conflict_price_stale_message">El mismo slot de precio tiene valores distintos. Aplica la policy stale/review antes del sync.</string>
 </resources>

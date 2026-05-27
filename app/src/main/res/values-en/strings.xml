@@ -678,4 +678,26 @@
     <string name="catalog_cloud_sync_full_cd">Automatic reconciliation status: catalog, prices, and sessions from the cloud</string>
     <string name="catalog_cloud_sync_now_cd">Automatic sync status: catalog, prices, history, and local changes</string>
     <string name="catalog_cloud_section_cd">Cloud sync status: %1$s</string>
+    <string name="task126_review_cancel">Cancel</string>
+    <string name="task126_account_keep_current">Stay on current account</string>
+    <string name="task126_account_export_backup">Export backup</string>
+    <string name="task126_account_discard_and_switch">Discard pending and switch</string>
+    <string name="task126_account_switch">Switch account</string>
+    <string name="task126_account_clean_populated_title">Cloud account already has data</string>
+    <string name="task126_account_clean_populated_message">The local database is clean. Confirm the account switch to reseed and verify the cache.</string>
+    <string name="task126_account_dirty_title">Local changes need review</string>
+    <string name="task126_account_dirty_message">Pending changes stay bound to the current account and will not be sent to the new account.</string>
+    <string name="task126_conflict_use_local">Use local</string>
+    <string name="task126_conflict_use_remote">Use cloud</string>
+    <string name="task126_conflict_edit_manually">Edit manually</string>
+    <string name="task126_conflict_apply_to_similar">Apply to similar</string>
+    <string name="task126_conflict_postpone">Postpone review</string>
+    <string name="task126_conflict_auto_merge_title">Automatic merge</string>
+    <string name="task126_conflict_auto_merge_message">The fields do not conflict and are merged without a popup.</string>
+    <string name="task126_conflict_same_field_title">Same-field conflict</string>
+    <string name="task126_conflict_same_field_message">Local and cloud changed the same field. Choose the result to keep.</string>
+    <string name="task126_conflict_delete_edit_title">Delete versus edit</string>
+    <string name="task126_conflict_delete_edit_message">One side deleted the record while the other edited it. Explicit review is required.</string>
+    <string name="task126_conflict_price_stale_title">Price in the same slot</string>
+    <string name="task126_conflict_price_stale_message">The same price slot has different values. Apply the stale/review policy before sync.</string>
 </resources>

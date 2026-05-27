@@ -677,4 +677,26 @@
     <string name="catalog_cloud_sync_full_cd">自动重新对齐状态：云端目录、价格与会话</string>
     <string name="catalog_cloud_sync_now_cd">自动同步状态：目录、价格、历史和本地更改</string>
     <string name="catalog_cloud_section_cd">云同步状态：%1$s</string>
+    <string name="task126_review_cancel">取消</string>
+    <string name="task126_account_keep_current">保留当前账号</string>
+    <string name="task126_account_export_backup">导出备份</string>
+    <string name="task126_account_discard_and_switch">丢弃待处理并切换</string>
+    <string name="task126_account_switch">切换账号</string>
+    <string name="task126_account_clean_populated_title">云端账号已有数据</string>
+    <string name="task126_account_clean_populated_message">本地数据库是干净的。确认切换账号以重新种子化并验证缓存。</string>
+    <string name="task126_account_dirty_title">本地更改需要审核</string>
+    <string name="task126_account_dirty_message">待处理更改仍绑定到当前账号，不会发送到新账号。</string>
+    <string name="task126_conflict_use_local">使用本地</string>
+    <string name="task126_conflict_use_remote">使用云端</string>
+    <string name="task126_conflict_edit_manually">手动编辑</string>
+    <string name="task126_conflict_apply_to_similar">应用到类似冲突</string>
+    <string name="task126_conflict_postpone">稍后审核</string>
+    <string name="task126_conflict_auto_merge_title">自动合并</string>
+    <string name="task126_conflict_auto_merge_message">字段没有冲突，将在不弹窗的情况下合并。</string>
+    <string name="task126_conflict_same_field_title">同字段冲突</string>
+    <string name="task126_conflict_same_field_message">本地和云端修改了同一字段。请选择要保留的结果。</string>
+    <string name="task126_conflict_delete_edit_title">删除与编辑冲突</string>
+    <string name="task126_conflict_delete_edit_message">一端删除了记录，另一端编辑了记录。必须显式审核。</string>
+    <string name="task126_conflict_price_stale_title">同一价格槽位</string>
+    <string name="task126_conflict_price_stale_message">同一价格槽位有不同值。同步前应用 stale/review policy。</string>
 </resources>

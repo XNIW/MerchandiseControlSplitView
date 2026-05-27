@@ -32,6 +32,7 @@ import java.io.File
 import androidx.core.net.toUri
 import androidx.core.content.edit
 import androidx.appcompat.app.AppCompatDelegate
+import com.example.merchandisecontrolsplitview.ui.screens.Task126ReviewInteractionSmokeScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -185,7 +186,16 @@ class MainActivity : ComponentActivity() {
             }
 
             MerchandiseControlTheme(darkTheme = darkTheme) {
-                AppNavGraph()
+                val task126SmokeKind = if (BuildConfig.DEBUG) {
+                    intent?.getStringExtra("task126_ui_smoke_kind")
+                } else {
+                    null
+                }
+                if (!task126SmokeKind.isNullOrBlank()) {
+                    Task126ReviewInteractionSmokeScreen(kind = task126SmokeKind)
+                } else {
+                    AppNavGraph()
+                }
             }
         }
     }
