@@ -222,7 +222,7 @@ class DatabaseExportWriterTest {
     }
 
     @Test
-    fun `writeDatabaseExport writes products sheet current prices from price summary`() {
+    fun `writeDatabaseExport writes products sheet current prices from product fields`() {
         val output = ByteArrayOutputStream()
 
         writeDatabaseExport(
@@ -251,8 +251,8 @@ class DatabaseExportWriterTest {
 
         XSSFWorkbook(ByteArrayInputStream(output.toByteArray())).use { workbook ->
             val row = workbook.getSheet(DatabaseExportConstants.SHEET_PRODUCTS).getRow(1)
-            assertEquals(11.0, row.getCell(4).numericCellValue, 0.0001)
-            assertEquals(1101.0, row.getCell(5).numericCellValue, 0.0001)
+            assertEquals(10.0, row.getCell(4).numericCellValue, 0.0001)
+            assertEquals(1100.0, row.getCell(5).numericCellValue, 0.0001)
             assertEquals(10.0, row.getCell(6).numericCellValue, 0.0001)
             assertEquals(1100.0, row.getCell(7).numericCellValue, 0.0001)
         }

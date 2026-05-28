@@ -1724,13 +1724,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             return importedPriceRowsInserted - insertedBefore
         }
 
-        resolvedNewProducts.forEach { product ->
-            productIdsByBarcode[normalizedImportKey(product.barcode)]?.let { productId ->
-                recordImportedCurrentAndPreviousPrices(
-                    productId = productId,
-                    product = product,
-                    priceChanges = ImportPriceChangeSet(purchase = true, retail = true)
-                )
+        val shouldRecordSyntheticImportPrices = !request.priceHistoryRepresentsFullDatabase
+
+        if (shouldRecordSyntheticImportPrices) {
+            resolvedNewProducts.forEach { product ->
+                productIdsByBarcode[normalizedImportKey(product.barcode)]?.let { productId ->
+                    recordImportedCurrentAndPreviousPrices(
+                        productId = productId,
+                        product = product,
+                        priceChanges = ImportPriceChangeSet(purchase = true, retail = true)
+                    )
+                }
             }
         }
         actuallyChangedUpdates.forEach { (oldProduct, product) ->
@@ -1739,7 +1743,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 new = product,
                 includePreviousPriceFields = request.pendingPriceHistory.isEmpty()
             )
-            if (priceChanges.hasAny) {
+            if (priceChanges.hasAny && shouldRecordSyntheticImportPrices) {
                 priceDirtyFromPriceFieldChange += recordImportedCurrentAndPreviousPrices(
                     productId = product.id,
                     product = product,
@@ -4384,24 +4388,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         progressReporter: CatalogSyncProgressReporter,
         useFullRemoteFetch: Boolean = false
     ): PricePullApplyResult {
-        if (useFullRemoteFetch) {
-            val allRows = priceRemote.fetchProductPrices().getOrThrow()
-            val pageResult = applyProductPriceRows(
-                allRows,
-                progressReporter,
-                stage = CatalogSyncStage.SYNC_PRICES_PULL,
-                processedBefore = 0,
-                totalRows = allRows.size
-            )
-            Log.i(
-                TAG,
-                "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL mode=full_fetch " +
-                    "remotePricesEvaluated=${pageResult.remoteRowsEvaluated} pricesPulled=${pageResult.pulled} " +
-                    "pricesSkippedNoProductRef=${pageResult.skippedNoLocalProduct}"
-            )
-            return pageResult
-        }
-
         var pulled = 0
         var skippedNoLocalProduct = 0
         var remoteRowsEvaluated = 0
@@ -4431,7 +4417,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
         Log.i(
             TAG,
-            "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL mode=paged " +
+            "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PULL " +
+                "mode=${if (useFullRemoteFetch) "full_fetch_paged" else "paged"} " +
                 "remotePricesEvaluated=$remoteRowsEvaluated pricesPulled=$pulled " +
                 "pricesSkippedNoProductRef=$skippedNoLocalProduct " +
                 "pageSize=$INVENTORY_REMOTE_PAGE_SIZE pageCount=$pageCount"

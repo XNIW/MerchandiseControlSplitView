@@ -132,7 +132,8 @@ class FullDbExportImportRoundTripTest {
                     pendingCategoryNames = second.pendingCategoryNames,
                     pendingTempSuppliers = second.analysis.pendingSuppliers,
                     pendingTempCategories = second.analysis.pendingCategories,
-                    pendingPriceHistory = second.pendingPriceHistory
+                    pendingPriceHistory = second.pendingPriceHistory,
+                    priceHistoryRepresentsFullDatabase = second.hasPriceHistorySheet
                 )
             )
 
@@ -422,7 +423,8 @@ class FullDbExportImportRoundTripTest {
                 pendingCategoryNames = importResult.pendingCategoryNames,
                 pendingTempSuppliers = importResult.analysis.pendingSuppliers,
                 pendingTempCategories = importResult.analysis.pendingCategories,
-                pendingPriceHistory = importResult.pendingPriceHistory
+                pendingPriceHistory = importResult.pendingPriceHistory,
+                priceHistoryRepresentsFullDatabase = importResult.hasPriceHistorySheet
             )
         )
         assertEquals(ImportApplyResult.Success, applyResult)

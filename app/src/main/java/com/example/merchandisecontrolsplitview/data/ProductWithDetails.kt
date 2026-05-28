@@ -13,10 +13,10 @@ data class ProductWithDetails(
     val prevRetail: Double?
 ) {
     val currentPurchasePrice: Double?
-        get() = lastPurchase ?: product.purchasePrice
+        get() = product.purchasePrice
 
     val currentRetailPrice: Double?
-        get() = lastRetail ?: product.retailPrice
+        get() = product.retailPrice
 
     fun productWithCurrentPrices(): Product =
         product.copy(

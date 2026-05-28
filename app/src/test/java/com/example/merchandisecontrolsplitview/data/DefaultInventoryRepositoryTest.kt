@@ -1499,7 +1499,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `getCurrentPricesForBarcodes returns current prices for requested barcodes`() = runTest {
+    fun `getCurrentPricesForBarcodes returns product current prices for requested barcodes`() = runTest {
         repository.addProduct(
             Product(
                 barcode = "99990000",
@@ -1513,7 +1513,7 @@ class DefaultInventoryRepositoryTest {
 
         val currentPrices = repository.getCurrentPricesForBarcodes(listOf("99990000", "missing"))
 
-        assertEquals(10.0, currentPrices["99990000"]?.first)
+        assertEquals(9.0, currentPrices["99990000"]?.first)
         assertEquals(12.0, currentPrices["99990000"]?.second)
         assertEquals(null to null, currentPrices["missing"])
     }
@@ -1539,7 +1539,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `recordPriceIfChanged ignores unchanged value and getLastPrice returns latest`() = runTest {
+    fun `recordPriceIfChanged ignores unchanged value and keeps current product snapshot`() = runTest {
         val changedProductIds = mutableListOf<Long>()
         repository.onProductCatalogChanged = { productId ->
             changedProductIds += productId
@@ -1564,7 +1564,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(2, purchaseHistory.size)
         assertEquals(1.5, repository.getLastPrice(saved.id, "PURCHASE"))
         assertEquals(listOf(saved.id, saved.id), changedProductIds)
-        assertEquals(1.5, snapshotRow.purchasePrice)
+        assertEquals(1.0, snapshotRow.purchasePrice)
         assertEquals(2.0, snapshotRow.retailPrice)
     }
 
@@ -3292,7 +3292,9 @@ class DefaultInventoryRepositoryTest {
                 productId = productId,
                 remoteId = vanishedRemoteId,
                 localChangeRevision = 0,
-                lastSyncedLocalRevision = 0
+                lastSyncedLocalRevision = 0,
+                lastRemoteAppliedAt = 1L,
+                lastRemotePayloadFingerprint = "test-clean-prune-114"
             )
         )
 
@@ -3783,7 +3785,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `043 current product lookup and details prefer latest price summary over product cache`() = runTest {
+    fun `043 current product lookup keeps product cache while summary exposes latest history`() = runTest {
         repository.addProduct(
             Product(
                 barcode = "dm04-043",
@@ -3807,9 +3809,10 @@ class DefaultInventoryRepositoryTest {
         val details = repository.getAllProductsWithDetails().single()
         val hydratedProduct = repository.findProductByBarcode("dm04-043")!!
 
-        assertEquals(1101.0, details.currentRetailPrice!!, 0.0001)
-        assertEquals(1101.0, details.productWithCurrentPrices().retailPrice!!, 0.0001)
-        assertEquals(1101.0, hydratedProduct.retailPrice!!, 0.0001)
+        assertEquals(1100.0, details.currentRetailPrice!!, 0.0001)
+        assertEquals(1101.0, details.lastRetail!!, 0.0001)
+        assertEquals(1100.0, details.productWithCurrentPrices().retailPrice!!, 0.0001)
+        assertEquals(1100.0, hydratedProduct.retailPrice!!, 0.0001)
     }
 
     @Test
@@ -5388,7 +5391,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, priceRemote.fetchCount)
         assertEquals(1, summary.pulledProducts)
         assertEquals(1, summary.pulledProductPrices)
-        assertEquals(101.0, product.retailPrice!!, 0.0001)
+        assertEquals(100.0, product.retailPrice!!, 0.0001)
         assertEquals(101.0, priceSeries.single().price, 0.0001)
         assertEquals(setOf(product.id), remoteAppliedIds.await())
     }
@@ -5795,6 +5798,56 @@ private class FakeCatalogRemote016(
     var failNextProductUpsert: Throwable? = null
     var productUpsertFailure: ((rows: List<InventoryProductRow>, call: Int) -> Throwable?)? = null
     var failNextSupplierTombstone: Throwable? = null
+    private fun currentBundle(): InventoryCatalogFetchBundle {
+        val suppliers = bundle.suppliers.associateBy { it.id }.toMutableMap()
+        val categories = bundle.categories.associateBy { it.id }.toMutableMap()
+        val products = bundle.products.associateBy { it.id }.toMutableMap()
+        upsertedSuppliers.flatten().forEach { suppliers[it.id] = it }
+        upsertedCategories.flatten().forEach { categories[it.id] = it }
+        upsertedProducts.flatten().forEach { products[it.id] = it }
+        supplierTombstones.forEach { patch ->
+            suppliers[patch.id] = suppliers[patch.id]?.copy(
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            ) ?: InventorySupplierRow(
+                id = patch.id,
+                ownerUserId = patch.ownerUserId,
+                name = "<deleted>",
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            )
+        }
+        categoryTombstones.forEach { patch ->
+            categories[patch.id] = categories[patch.id]?.copy(
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            ) ?: InventoryCategoryRow(
+                id = patch.id,
+                ownerUserId = patch.ownerUserId,
+                name = "<deleted>",
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            )
+        }
+        productTombstones.forEach { patch ->
+            products[patch.id] = products[patch.id]?.copy(
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            ) ?: InventoryProductRow(
+                id = patch.id,
+                ownerUserId = patch.ownerUserId,
+                barcode = "<deleted>",
+                updatedAt = patch.updatedAt,
+                deletedAt = patch.deletedAt
+            )
+        }
+        return InventoryCatalogFetchBundle(
+            suppliers = suppliers.values.toList(),
+            categories = categories.values.toList(),
+            products = products.values.toList(),
+            isCompleteSnapshot = bundle.isCompleteSnapshot
+        )
+    }
     override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
         supplierUpsertCallCount++
         failNextSupplierUpsert?.let { t ->
@@ -5832,7 +5885,7 @@ private class FakeCatalogRemote016(
             failNextFetch = null
             return Result.failure(t)
         }
-        return Result.success(bundle)
+        return Result.success(currentBundle())
     }
     override suspend fun fetchCatalogByIds(
         supplierIds: Set<String>,
@@ -5847,11 +5900,13 @@ private class FakeCatalogRemote016(
             failNextFetch = null
             return Result.failure(t)
         }
+        val current = currentBundle()
         return Result.success(
             InventoryCatalogFetchBundle(
-                suppliers = bundle.suppliers.filter { it.id in supplierIds },
-                categories = bundle.categories.filter { it.id in categoryIds },
-                products = bundle.products.filter { it.id in productIds }
+                suppliers = current.suppliers.filter { it.id in supplierIds },
+                categories = current.categories.filter { it.id in categoryIds },
+                products = current.products.filter { it.id in productIds },
+                isCompleteSnapshot = false
             )
         )
     }

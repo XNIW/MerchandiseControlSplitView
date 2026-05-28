@@ -220,6 +220,7 @@ class DatabaseViewModel(
     private var pendingCategoryNames: Set<String> = emptySet()
     private var pendingTempSuppliers: Map<Long, String> = emptyMap()
     private var pendingTempCategories: Map<Long, String> = emptyMap()
+    private var pendingPriceHistoryRepresentsFullDatabase: Boolean = false
     private var pendingImportDiagnostics: ImportApplyDiagnostics? = null
     private var pendingDbSnapshotFingerprint: ImportDatasetFingerprint? = null
     private var activePreviewId: Long? = null
@@ -293,6 +294,7 @@ class DatabaseViewModel(
         pendingCategoryNames: Set<String> = emptySet(),
         pendingTempSuppliers: Map<Long, String> = emptyMap(),
         pendingTempCategories: Map<Long, String> = emptyMap(),
+        priceHistoryRepresentsFullDatabase: Boolean = false,
         diagnostics: ImportApplyDiagnostics? = null,
         navigationOrigin: ImportNavOrigin = ImportNavOrigin.HOME
     ) {
@@ -303,6 +305,7 @@ class DatabaseViewModel(
         this.pendingCategoryNames = pendingCategoryNames
         this.pendingTempSuppliers = pendingTempSuppliers
         this.pendingTempCategories = pendingTempCategories
+        this.pendingPriceHistoryRepresentsFullDatabase = priceHistoryRepresentsFullDatabase
         this.pendingImportDiagnostics = diagnostics
         updatePendingTempCounters()
         val previewId = allocatePreviewId()
@@ -320,6 +323,7 @@ class DatabaseViewModel(
         pendingCategoryNames = emptySet()
         pendingTempSuppliers = emptyMap()
         pendingTempCategories = emptyMap()
+        pendingPriceHistoryRepresentsFullDatabase = false
         pendingImportDiagnostics = null
         pendingDbSnapshotFingerprint = null
         activePreviewId = null
@@ -896,6 +900,7 @@ class DatabaseViewModel(
             pendingTempSuppliers = pendingTempSuppliers.toMap(),
             pendingTempCategories = pendingTempCategories.toMap(),
             pendingPriceHistory = pendingPriceHistory.toList(),
+            priceHistoryRepresentsFullDatabase = pendingPriceHistoryRepresentsFullDatabase,
             diagnostics = pendingImportDiagnostics
         )
         _importFlowState.value = ImportFlowState.Applying(previewId)
@@ -1338,6 +1343,7 @@ class DatabaseViewModel(
                     pendingCategoryNames = importResult.pendingCategoryNames,
                     pendingTempSuppliers = importResult.analysis.pendingSuppliers,
                     pendingTempCategories = importResult.analysis.pendingCategories,
+                    priceHistoryRepresentsFullDatabase = importResult.hasPriceHistorySheet,
                     diagnostics = buildImportApplyDiagnostics(importResult),
                     navigationOrigin = navigationOrigin
                 )

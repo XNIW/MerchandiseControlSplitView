@@ -16,6 +16,7 @@ data class ImportApplyRequest(
     val pendingTempSuppliers: Map<Long, String> = emptyMap(),
     val pendingTempCategories: Map<Long, String> = emptyMap(),
     val pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList(),
+    val priceHistoryRepresentsFullDatabase: Boolean = false,
     val diagnostics: ImportApplyDiagnostics? = null
 )
 
