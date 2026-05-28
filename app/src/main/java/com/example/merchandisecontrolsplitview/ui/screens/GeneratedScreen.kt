@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -2104,7 +2105,7 @@ private fun GeneratedScreenProgressErrorToggle(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
-                        text = stringResource(R.string.n_error_rows, errorCount),
+                        text = pluralStringResource(R.plurals.n_error_rows, errorCount, errorCount),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )

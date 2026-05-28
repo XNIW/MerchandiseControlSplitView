@@ -838,6 +838,7 @@ private fun HistoryRow(
                 ?.let(::add)
         }
     }
+    @Suppress("DEPRECATION")
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             when (value) {

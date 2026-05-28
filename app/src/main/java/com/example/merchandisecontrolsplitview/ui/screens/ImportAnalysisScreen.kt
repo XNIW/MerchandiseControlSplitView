@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -378,8 +379,9 @@ private fun WarningRow(warning: DuplicateWarning) {
             )
             if (warning.totalOccurrences > warning.rowNumbers.size) {
                 Text(
-                    text = stringResource(
-                        R.string.warning_duplicate_rows_truncated,
+                    text = pluralStringResource(
+                        R.plurals.warning_duplicate_rows_truncated,
+                        warning.totalOccurrences - warning.rowNumbers.size,
                         warning.totalOccurrences - warning.rowNumbers.size,
                         warning.totalOccurrences
                     ),

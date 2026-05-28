@@ -22,7 +22,7 @@
             android:name=".PortraitCaptureActivity"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.NoActionBar"
-            tools:ignore="LockedOrientationActivity" />
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
 
         <activity
             android:name=".MainActivity"

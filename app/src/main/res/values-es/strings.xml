@@ -8,15 +8,10 @@
     <string name="confirm">Confirmar</string>
     <string name="delete">Eliminar</string>
     <string name="clear">Borrar</string>
-    <string name="save_file">Guardar archivo</string>
 
     <!-- Pantalla de Opciones -->
     <string name="options">Opciones</string>
     <string name="select_language">Seleccionar idioma</string>
-    <string name="chinese">Chino</string>
-    <string name="italian">Italiano</string>
-    <string name="spanish">Español</string>
-    <string name="english">Inglés</string>
     <string name="select_theme">Tema</string>
     <string name="theme_auto">Automático (sistema)</string>
     <string name="theme_light">Claro</string>
@@ -25,7 +20,6 @@
     <!-- Pantalla FilePickerScreen -->
     <string name="inventory_title">Inventario</string>
     <string name="history_root_title">Historial</string>
-    <string name="file_history">Historial de archivos</string>
     <string name="file_picker_home_title">Empieza con un archivo</string>
     <string name="load_excel_file">Seleccionar archivos Excel o HTML</string>
     <string name="file_picker_primary_supporting">Elige uno o varios archivos Excel o HTML para empezar.</string>
@@ -33,21 +27,14 @@
     <string name="database">Base de datos</string>
 
     <!-- Pantalla HistoryScreen -->
-    <string name="history_title">Historial de archivos</string>
     <string name="rename_file">Renombrar archivo</string>
     <string name="new_name">Nuevo nombre</string>
     <string name="delete_confirm">¿Seguro que deseas eliminar este archivo?</string>
 
     <!-- Pantalla PreGenerateScreen -->
     <string name="select_all">Seleccionar todo</string>
-    <string name="generate_action">Generar</string>
     <string name="choose_again">Elegir de nuevo</string>
     <string name="pre_generate_error_title">No se pudo abrir el archivo</string>
-    <string name="edit">Editar</string>
-    <string name="exit_edit">Salir de edición</string>
-    <string name="generate_filtered_sheet">Generar hoja filtrada</string>
-    <string name="exit_confirm_title">¿Seguro que deseas salir? Los datos cargados se perderán.</string>
-    <string name="supplier_dialog_title">Escribe el nombre del proveedor</string>
     <string name="supplier_label">Proveedor</string>
     <string name="custom_header_dialog_title">Ingrese el nombre de la columna</string>
     <string name="custom_header_label">Nombre personalizado</string>
@@ -90,33 +77,20 @@
     <string name="header_complete">Completo</string>
     <string name="header_old_purchase_price">Precio de compra anterior</string>
     <string name="header_old_retail_price">Precio de venta anterior</string>
-    <string name="header_new_retail_price">Nuevo precio de venta</string>
     <string name="header_real_quantity">Cantidad contada</string>
     <string name="header_row_number">No</string>
     <string name="header_discount">Descuento</string>
     <string name="header_discounted_price">Precio con descuento</string>
 
     <!-- Pantalla de Base de Datos -->
-    <string name="database_screen_title">Gestión de Productos</string>
     <string name="import_file">Importar</string>
     <string name="export_file">Exportar</string>
-    <string name="barcode_filter_label">código de barras, nombre, número de artículo, proveedor</string>
     <string name="retry">Reintentar</string>
     <string name="scan_barcode">Escanear código de barras</string>
-    <string name="barcode">Código de barras</string>
-    <string name="item_number">Número de artículo</string>
-    <string name="product_name">Nombre del producto</string>
-    <string name="new_purchase_price">Nuevo precio de compra</string>
-    <string name="new_retail_price">Nuevo precio de venta</string>
-    <string name="old_purchase_price">Precio de compra anterior</string>
-    <string name="old_retail_price">Precio de venta anterior</string>
-    <string name="supplier">Proveedor</string>
 
     <!-- viewmodel DatabaseViewModel -->
     <string name="import_success">Importación completada</string>
     <string name="export_success">Exportación completada</string>
-    <string name="import_error">Error de importación: %1$s</string>
-    <string name="export_error">Error de exportación: %1$s</string>
     <string name="sync_with_database">Sincronizar con la base de datos</string>
 
     <!-- Genéricos / Mensajes de estado -->
@@ -157,15 +131,10 @@
     <string name="item_code_label">Código del artículo</string>
     <string name="purchase_price_label">Precio de compra</string>
     <string name="retail_price_label">Precio de venta</string>
-    <string name="old_purchase_price_label">Precio de compra anterior</string>
-    <string name="old_retail_price_label">Precio de venta anterior</string>
-    <string name="add_previous_prices">Agregar precios anteriores</string>
     <string name="select_supplier_title">Seleccionar proveedor</string>
     <string name="search_or_add_supplier">Buscar o agregar proveedor</string>
     <string name="add_new_supplier_prompt">Agregar "%1$s" como nuevo proveedor</string>
     <string name="save">Guardar</string>
-    <string name="import_analysis_in_progress">Análisis del archivo en curso…</string>
-    <string name="action_completed">Acción completada</string>
     <string name="file_exported_successfully">Archivo exportado correctamente</string>
 
     <string name="import_analysis_title">Revisión de Importación</string>
@@ -180,7 +149,6 @@
     <string name="errors_found">Errores encontrados: %1$d</string>
     <string name="no_critical_errors_found">No se encontraron errores críticos.</string>
     <string name="export_errors">Exportar Errores</string>
-    <string name="correct_errors">Corregir</string>
     <string name="import_correct_data">Corregir datos</string>
     <string name="import_edit_rows">Editar filas</string>
     <string name="edit_update">Editar Actualización</string>
@@ -192,34 +160,24 @@
     <string name="row_prefix">Fila</string>
     <string name="counted_quantity_label">Cantidad contada</string>
     <string name="new_retail_price_short_label">Nuevo precio v.</string>
-    <string name="error_unexpected_parsing">Error de análisis inesperado: %1$s</string>
     <string name="error_import_row_processing_failed">No se pudo procesar esta fila.</string>
     <string name="error_invalid_retail_price">El precio de venta no es un número válido.</string>
     <string name="error_negative_prices">Los precios no pueden ser negativos.</string>
     <string name="error_invalid_quantity">La cantidad no es un número válido.</string>
     <string name="field_product_name">Nombre del Producto</string>
-    <string name="field_item_number">Código del Artículo</string>
-    <string name="field_purchase_price">Precio de Compra</string>
-    <string name="field_retail_price">Precio de Venta</string>
     <string name="field_supplier">Proveedor</string>
-    <string name="invalid_data_for_analysis">Datos no válidos para el análisis.</string>
     <string name="sync_analysis_started">Análisis de sincronización iniciado.</string>
-    <string name="exit_confirmation_message">¿Estás seguro de que deseas salir? El progreso se ha guardado en el historial.</string>
     <string name="calculate_new_value">Calcular nuevo valor</string>
     <string name="status_completed">Completado</string>
     <string name="status_incomplete">Incompleto</string>
     <string name="status_warning">Aviso</string>
     <string name="preview_file_title">Vista Previa del Archivo</string>
-    <string name="analysis_in_progress">Análisis en curso…</string>
     <string name="loading_file">Cargando archivo…</string>
     <string name="unknown_error">Error desconocido</string>
-    <string name="no_supplier_found">No se encontró proveedor</string>
-    <string name="date_label">Fecha:</string>
     <string name="sync_status">Estado de Sincronización</string>
     <string name="export_status">Estado de Exportación</string>
     <string name="history_deleted_pending_status">Eliminación pendiente de sincronización</string>
     <string name="generated_column_prefix">Columna</string>
-    <string name="default_export_filename">productos.xlsx</string>
     <string name="supplier_id_prefix">ID:</string>
     <string name="edit_product">Editar Producto</string>
     <string name="barcode_prefix">Código de barras:</string>
@@ -229,11 +187,7 @@
     <string name="compare_field">Campo</string>
     <string name="compare_previous">Anterior</string>
     <string name="compare_new">Nuevo</string>
-    <string name="unidentified_product">Producto no identificado</string>
-    <string name="unknown">desconocido</string>
     <string name="error_file_empty_or_invalid">El archivo Excel está vacío o no tiene un encabezado válido.</string>
-    <string name="error_no_products_to_export">No hay productos para exportar.</string>
-    <string name="error_data_analysis">Error durante el análisis de datos: %1$s</string>
     <string name="error_data_analysis_generic">No se pudo analizar el archivo seleccionado.</string>
     <string name="error_import_generic">No se pudo completar la importación.</string>
     <string name="import_preview_invalidated">La vista previa ya no es válida. Vuelve a ejecutar el análisis antes de confirmar.</string>
@@ -257,9 +211,7 @@
     <string name="error_first_file_empty_or_invalid">El primer archivo seleccionado está vacío o tiene un formato no válido.</string>
     <string name="error_different_columns">Los archivos seleccionados tienen columnas diferentes. Operación cancelada.</string>
     <string name="error_unknown_file_analysis">Error desconocido al analizar los archivos.</string>
-    <string name="sheet_name_products">Productos</string>
     <string name="sheet_name_export">Exportación</string>
-    <string name="header_new_purchase_price">Nuevo Precio de Compra</string>
     <string name="header_supplier_id">ID del Proveedor</string>
     <string name="default_error_export_filename">errores_importación.xlsx</string>
     <string name="header_category">Categoría</string>
@@ -278,7 +230,6 @@
     <string name="add_new_category_prompt">Agregar nueva categoría: %1$s</string>
     <string name="header_category_id">ID de categoría</string>
     <string name="add_item_code">Agregar código de artículo</string>
-    <string name="supplier_and_category_dialog_title">Selecciona proveedor y categoría</string>
     <string name="loading_ellipsis">Cargando…</string>
     <string name="not_found_short">No encontrado</string>
     <string name="summary_label">Resumen</string>
@@ -296,7 +247,6 @@
     <string name="filter_custom_range">Rango personalizado…</string>
     <string name="filter_current_month">Mes actual</string>
     <string name="filter_previous_month">Mes anterior</string>
-    <string name="history_filter_active">Filtro activo: %1$s</string>
     <string name="history_entry_created_at">Creado el %1$s</string>
     <string name="history_filter_custom_range_value">%1$s - %2$s</string>
     <string name="history_empty_title">Aún no hay historial</string>
@@ -325,7 +275,11 @@
     <string name="warning_duplicate_barcode">Código de barras: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Encontrado en las filas: %1$s</string>
     <string name="warning_duplicate_resolution">Se utilizarán los datos de la última fila y las cantidades se sumarán.</string>
-    <string name="warning_duplicate_rows_truncated">Lista de filas truncada: %1$d filas más no mostradas (total %2$d).</string>
+    <plurals name="warning_duplicate_rows_truncated">
+        <item quantity="one">Lista de filas truncada: 1 fila más no mostrada (total %2$d).</item>
+        <item quantity="other">Lista de filas truncada: %1$d filas más no mostradas (total %2$d).</item>
+        <item quantity="many">Lista de filas truncada: %1$d filas más no mostradas (total %2$d).</item>
+    </plurals>
     <string name="missing_items_label">Productos faltantes</string>
 
     <string name="discard_and_exit_title">Descartar y Volver Atrás</string>
@@ -367,8 +321,7 @@
     <string name="pre_generate_required_columns_hint">Las columnas obligatorias no se pueden desactivar.</string>
     <string name="pre_generate_supplier_section_supporting">Busca, selecciona o crea el proveedor que se aplicará a los productos generados.</string>
     <string name="pre_generate_category_section_supporting">Busca, selecciona o crea la categoría que se aplicará a los productos generados.</string>
-    <string name="pre_generate_show_all_options">Mostrar todo...</string>
-    <string name="pre_generate_selection_pending">Selecciona un resultado o crea uno nuevo para continuar.</string>
+    <string name="pre_generate_show_all_options">Mostrar todo…</string>
     <string name="pre_generate_selection_ready">Seleccionado: %1$s</string>
     <string name="pre_generate_new_supplier_status">Nuevo proveedor: %1$s</string>
     <string name="pre_generate_new_category_status">Nueva categoría: %1$s</string>
@@ -400,9 +353,6 @@
     <string name="database_lookup_price_summary">%1$s - Precio de venta: %2$s</string>
     <string name="add_and_next">Agregar y continuar</string>
     <string name="product_found_in_db">El producto ya existe en la base de datos</string>
-
-    <string name="mark_as_complete">Marcar completo</string>
-    <string name="mark_as_incomplete">Marcar incompleto</string>
     <string name="error_negative_quantity">La cantidad no puede ser negativa.</string>
     <string name="error_invalid_discount">El descuento debe ser un valor entre 0 y 100.</string>
     <string name="tab_purchase">Compra</string>
@@ -444,11 +394,6 @@
     <string name="share_export_message">Archivo Excel generado por %1$s.</string>
     <string name="more_actions">Más acciones</string>
     <string name="untitled">Sin título</string>
-    <string name="exported_short">Exportado</string>
-    <string name="all_complete_banner_title">Todo listo</string>
-    <string name="all_complete_banner_subtitle">Puedes exportar el archivo Excel ahora.</string>
-    <string name="all_complete_banner_title_exported">Exportación disponible</string>
-    <string name="all_complete_banner_subtitle_exported">Puedes guardar una nueva copia del archivo Excel.</string>
     <string name="export_now">Exportar ahora</string>
     <string name="generated_complete_card_title">Todo listo</string>
     <string name="generated_complete_card_message_sync_pending">Puedes sincronizar la base de datos ahora o exportar el archivo Excel.</string>
@@ -466,10 +411,6 @@
     <string name="error_history_entry_delete">No se pudo eliminar el archivo.</string>
 
     <!-- Menú / acciones -->
-    <string name="import_products_single_sheet">Importar productos (hoja única)</string>
-    <string name="import_database_full">Importar base de datos (completa)</string>
-    <string name="export_products">Exportar productos</string>
-    <string name="export_database_full">Exportar base de datos (completa)</string>
     <string name="export_database_dialog_title">Exportar base de datos</string>
     <string name="export_database_dialog_subtitle">Elige las hojas que quieres incluir en el archivo Excel.</string>
     <string name="export_database_dialog_presets_label">Presets rápidos</string>
@@ -495,9 +436,11 @@
     <string name="finish">Listo</string>
     <string name="show_only_errors">Solo errores</string>
     <string name="errors_filter_active">Filtro: solo errores</string>
-    <string name="n_error_rows">%d con errores</string>
-    <string name="no_errors_found">Sin errores</string>
-    <string name="summary_completed_label">Completadas</string>
+    <plurals name="n_error_rows">
+        <item quantity="one">1 con error</item>
+        <item quantity="other">%d con errores</item>
+        <item quantity="many">%d con errores</item>
+    </plurals>
     <string name="summary_pending_label">Pendientes</string>
     <string name="generated_progress_pending_compact">Quedan %1$s</string>
     <string name="generated_progress_all_complete">Todo completo</string>
@@ -509,118 +452,148 @@
     <string name="add">Agregar</string>
     <string name="database_tab_products">Productos</string>
     <string name="database_tab_suppliers">Proveedores</string>
-    <string name="database_tab_categories">Categorias</string>
+    <string name="database_tab_categories">Categorías</string>
     <string name="database_products_search_hint">Buscar producto</string>
     <string name="database_suppliers_search_hint">Buscar proveedor</string>
-    <string name="database_categories_search_hint">Buscar categoria</string>
+    <string name="database_categories_search_hint">Buscar categoría</string>
     <string name="database_catalog_entity_supplier">proveedor</string>
-    <string name="database_catalog_entity_category">categoria</string>
+    <string name="database_catalog_entity_category">categoría</string>
     <string name="database_catalog_add_fab">Agregar %1$s</string>
-    <string name="database_catalog_linked_products">%1$d productos vinculados</string>
+    <plurals name="database_catalog_linked_products">
+        <item quantity="one">1 producto vinculado</item>
+        <item quantity="other">%1$d productos vinculados</item>
+        <item quantity="many">%1$d productos vinculados</item>
+    </plurals>
     <string name="database_catalog_manage_actions">Renombrar o eliminar</string>
-    <string name="database_catalog_retry_body">Vuelve a cargar esta seccion. Si el problema sigue, cierra y abre otra vez el hub de base de datos.</string>
-    <string name="database_catalog_empty_title">Sin %1$s todavia</string>
+    <string name="database_catalog_retry_body">Vuelve a cargar esta sección. Si el problema sigue, cierra y abre otra vez el hub de base de datos.</string>
+    <string name="database_catalog_empty_title">Sin %1$s todavía</string>
     <string name="database_catalog_empty_body">Agrega el primer %1$s para organizar mejor los productos.</string>
     <string name="database_catalog_add_first">Agregar %1$s</string>
     <string name="database_catalog_no_results_body">Prueba con otro nombre o crea este %1$s al instante.</string>
     <string name="database_catalog_quick_create">Crear "%1$s"</string>
     <string name="database_suppliers_load_failed">No se pudieron cargar los proveedores.</string>
-    <string name="database_categories_load_failed">No se pudieron cargar las categorias.</string>
+    <string name="database_categories_load_failed">No se pudieron cargar las categorías.</string>
     <string name="database_catalog_name_required">Escribe un nombre para el %1$s.</string>
     <string name="database_catalog_name_exists">Ya existe un %1$s con este nombre.</string>
     <string name="database_catalog_created">%1$s agregado.</string>
     <string name="database_catalog_renamed">%1$s actualizado.</string>
     <string name="database_catalog_deleted">%1$s eliminado.</string>
-    <string name="database_catalog_deleted_reassigned">%1$s eliminado. %2$d productos reasignados a %3$s.</string>
-    <string name="database_catalog_deleted_cleared">%1$s eliminado. Se quito la asignacion de %2$d productos.</string>
-    <string name="database_catalog_delete_requires_resolution">No se pudo eliminar el %1$s porque sigue asignado a %2$d productos.</string>
+    <plurals name="database_catalog_deleted_reassigned">
+        <item quantity="one">%1$s eliminado. 1 producto reasignado a %3$s.</item>
+        <item quantity="other">%1$s eliminado. %2$d productos reasignados a %3$s.</item>
+        <item quantity="many">%1$s eliminado. %2$d productos reasignados a %3$s.</item>
+    </plurals>
+    <plurals name="database_catalog_deleted_cleared">
+        <item quantity="one">%1$s eliminado. Se quitó la asignación de 1 producto.</item>
+        <item quantity="other">%1$s eliminado. Se quitó la asignación de %2$d productos.</item>
+        <item quantity="many">%1$s eliminado. Se quitó la asignación de %2$d productos.</item>
+    </plurals>
+    <plurals name="database_catalog_delete_requires_resolution">
+        <item quantity="one">No se pudo eliminar el %1$s porque sigue asignado a 1 producto.</item>
+        <item quantity="other">No se pudo eliminar el %1$s porque sigue asignado a %2$d productos.</item>
+        <item quantity="many">No se pudo eliminar el %1$s porque sigue asignado a %2$d productos.</item>
+    </plurals>
     <string name="database_catalog_replacement_invalid">Selecciona un %1$s distinto para reemplazar el actual.</string>
-    <string name="database_catalog_item_missing">Este %1$s ya no esta disponible.</string>
-    <string name="database_catalog_operation_failed">No se pudo completar la operacion para este %1$s.</string>
+    <string name="database_catalog_item_missing">Este %1$s ya no está disponible.</string>
+    <string name="database_catalog_operation_failed">No se pudo completar la operación para este %1$s.</string>
     <string name="database_catalog_create_title">Nuevo %1$s</string>
     <string name="database_catalog_rename_title">Renombrar %1$s</string>
     <string name="database_catalog_create_replacement_title">Nuevo %1$s de reemplazo</string>
-    <string name="database_catalog_create_replacement_body">Crea el nuevo %1$s que recibira los productos vinculados a "%2$s".</string>
+    <string name="database_catalog_create_replacement_body">Crea el nuevo %1$s que recibirá los productos vinculados a "%2$s".</string>
     <string name="database_catalog_name_field_label">Nombre del %1$s</string>
     <string name="database_catalog_action_rename">Renombrar</string>
     <string name="database_catalog_action_rename_body">Actualiza el nombre manteniendo conectados los productos vinculados.</string>
     <string name="database_catalog_action_delete">Eliminar</string>
-    <string name="database_catalog_action_delete_body">Quita este elemento con un flujo simple o guiado segun los productos vinculados.</string>
+    <string name="database_catalog_action_delete_body">Quita este elemento con un flujo simple o guiado según los productos vinculados.</string>
     <string name="database_catalog_simple_delete_title">Eliminar %1$s</string>
-    <string name="database_catalog_simple_delete_body">"%2$s" no esta vinculado a ningun producto. Puedes eliminarlo ahora.</string>
+    <string name="database_catalog_simple_delete_body">"%1$s" no está vinculado a ningún producto. Puedes eliminarlo ahora.</string>
     <string name="database_catalog_guided_delete_title">Eliminar %1$s en uso</string>
-    <string name="database_catalog_guided_delete_body">"%1$s" esta vinculado a %2$d productos. Elige como gestionar esos enlaces antes de eliminarlo.</string>
+    <plurals name="database_catalog_guided_delete_body">
+        <item quantity="one">"%1$s" está vinculado a 1 producto. Elige cómo gestionar ese enlace antes de eliminarlo.</item>
+        <item quantity="other">"%1$s" está vinculado a %2$d productos. Elige cómo gestionar esos enlaces antes de eliminarlo.</item>
+        <item quantity="many">"%1$s" está vinculado a %2$d productos. Elige cómo gestionar esos enlaces antes de eliminarlo.</item>
+    </plurals>
     <string name="database_catalog_strategy_replace_existing">Reemplazar con uno existente</string>
     <string name="database_catalog_strategy_replace_existing_body">Reasigna todos los productos vinculados a otro %1$s ya existente.</string>
     <string name="database_catalog_strategy_create_new">Crear nuevo y reemplazar</string>
-    <string name="database_catalog_strategy_create_new_body">Crea un nuevo %1$s y mueve alli todos los productos vinculados.</string>
-    <string name="database_catalog_strategy_clear">Quitar asignacion</string>
-    <string name="database_catalog_strategy_clear_body">Quita la asignacion de los productos vinculados y despues elimina este elemento definitivamente.</string>
-    <string name="database_catalog_clear_assignments_title">¿Quitar la asignacion?</string>
-    <string name="database_catalog_clear_assignments_body">%2$d productos vinculados a "%1$s" perderan esta asignacion antes de la eliminacion.</string>
+    <string name="database_catalog_strategy_create_new_body">Crea un nuevo %1$s y mueve allí todos los productos vinculados.</string>
+    <string name="database_catalog_strategy_clear">Quitar asignación</string>
+    <string name="database_catalog_strategy_clear_body">Quita la asignación de los productos vinculados y después elimina este elemento definitivamente.</string>
+    <string name="database_catalog_clear_assignments_title">¿Quitar la asignación?</string>
+    <plurals name="database_catalog_clear_assignments_body">
+        <item quantity="one">1 producto vinculado a "%1$s" perderá esta asignación antes de la eliminación.</item>
+        <item quantity="other">%2$d productos vinculados a "%1$s" perderán esta asignación antes de la eliminación.</item>
+        <item quantity="many">%2$d productos vinculados a "%1$s" perderán esta asignación antes de la eliminación.</item>
+    </plurals>
     <string name="database_catalog_replacement_picker_title">Reemplazar con otro %1$s</string>
     <string name="database_catalog_replacement_picker_hint">Buscar %1$s existente</string>
     <string name="database_catalog_replacement_picker_empty">No hay %1$s disponibles con este filtro.</string>
 
     <!-- Pantalla Opciones — Cuenta (task 011) -->
     <string name="account_section_title">Cuenta</string>
-    <string name="account_signed_in_as">Sesion iniciada como %1$s</string>
-    <string name="account_signed_in">Sesion iniciada</string>
-    <string name="account_not_signed_in">Sin sesion</string>
+    <string name="account_signed_in_as">Sesión iniciada como %1$s</string>
+    <string name="account_signed_in">Sesión iniciada</string>
+    <string name="account_not_signed_in">Sin sesión</string>
     <string name="account_checking">Verificando\u2026</string>
-    <string name="account_sign_in_google">Iniciar sesion con Google</string>
-    <string name="account_sign_out">Cerrar sesion</string>
+    <string name="account_sign_in_google">Iniciar sesión con Google</string>
+    <string name="account_sign_out">Cerrar sesión</string>
 
     <string name="local_database_status_title">Estado de la base local</string>
     <string name="local_database_status_loading">Comprobando datos locales…</string>
-    <string name="local_database_status_empty">Sin datos locales todavia</string>
+    <string name="local_database_status_empty">Sin datos locales todavía</string>
     <string name="local_database_status_ready">Base local lista</string>
-    <string name="local_database_status_reconcile">Requiere reconciliacion con la nube</string>
+    <string name="local_database_status_reconcile">Requiere reconciliación con la nube</string>
     <string name="local_database_status_pending">Cambios locales pendientes</string>
     <string name="local_database_status_products">Productos</string>
     <string name="local_database_status_suppliers">Proveedores</string>
-    <string name="local_database_status_categories">Categorias</string>
+    <string name="local_database_status_categories">Categorías</string>
     <string name="local_database_status_price_history">Historial de precios</string>
     <string name="local_database_status_history_sessions">Sesiones de historial</string>
     <string name="local_database_status_pending_changes">Cambios locales pendientes</string>
-    <string name="local_database_status_last_sync">Ultima sincronizacion</string>
+    <string name="local_database_status_last_sync">Última sincronización</string>
     <string name="local_database_status_cloud_account">Cuenta cloud</string>
     <string name="local_database_status_unknown">—</string>
 
     <string name="catalog_cloud_section_title">Sincronización automática</string>
-    <string name="catalog_cloud_refresh">Actualización automática desde cloud</string>
-    <string name="catalog_cloud_sync_full">Realineación automática</string>
-    <string name="catalog_cloud_sync_now">Sincronización automática activa</string>
-    <string name="catalog_cloud_sync_quick">Actualización automática</string>
     <string name="catalog_cloud_sync_quick_body">Los cambios locales se envían automáticamente cuando la cuenta y la red están listas.</string>
     <string name="catalog_cloud_sync_quick_body_events">La app envía cambios locales y recibe automáticamente actualizaciones recientes verificables.</string>
-    <string name="catalog_cloud_sync_full_body">La app realinea automáticamente catálogo, precios y sesiones cuando hace falta una revisión completa.</string>
-    <string name="catalog_cloud_sync_quick_hint">La app gestiona envío y recepción sin un comando público de sincronización manual.</string>
     <string name="catalog_cloud_auto_status_title">Sincronización automática activa</string>
     <string name="catalog_cloud_auto_status_body">Cambios y actualizaciones se gestionan automáticamente en segundo plano cuando la cuenta y la red están listas.</string>
     <string name="catalog_cloud_auto_reconcile_title">Realineación automática necesaria</string>
     <string name="catalog_cloud_auto_reconcile_body">Algunos datos necesitan una revisión completa. La app la programará automáticamente cuando el contexto sea seguro.</string>
-    <string name="catalog_cloud_quick_sync_locals_sent">Envío de cambios: enviados %1$d cambios locales (proveedores, categorías, productos y precios).</string>
-    <string name="catalog_cloud_quick_sync_recent_updates">Recepción de actualizaciones: %2$d aplicadas; notificaciones recientes revisadas: %1$d.</string>
-    <string name="catalog_cloud_sync_event_outbox_hint">Envío de cambios: %1$d notificaciones de sincronización se reintentarán más tarde.</string>
+    <plurals name="catalog_cloud_quick_sync_locals_sent">
+        <item quantity="one">Envío de cambios: enviado 1 cambio local (proveedores, categorías, productos y precios).</item>
+        <item quantity="other">Envío de cambios: enviados %1$d cambios locales (proveedores, categorías, productos y precios).</item>
+        <item quantity="many">Envío de cambios: enviados %1$d cambios locales (proveedores, categorías, productos y precios).</item>
+    </plurals>
+    <plurals name="catalog_cloud_quick_sync_recent_updates">
+        <item quantity="one">Recepción de actualizaciones: 1 aplicada; notificaciones recientes revisadas: %1$d.</item>
+        <item quantity="other">Recepción de actualizaciones: %2$d aplicadas; notificaciones recientes revisadas: %1$d.</item>
+        <item quantity="many">Recepción de actualizaciones: %2$d aplicadas; notificaciones recientes revisadas: %1$d.</item>
+    </plurals>
+    <plurals name="catalog_cloud_sync_event_outbox_hint">
+        <item quantity="one">Envío de cambios: 1 notificación de sincronización se reintentará más tarde.</item>
+        <item quantity="other">Envío de cambios: %1$d notificaciones de sincronización se reintentarán más tarde.</item>
+        <item quantity="many">Envío de cambios: %1$d notificaciones de sincronización se reintentarán más tarde.</item>
+    </plurals>
     <string name="catalog_cloud_manual_full_sync_required_hint">Hace falta realineación automática: algunos cambios de cloud requieren una revisión completa.</string>
     <string name="catalog_cloud_state_syncing">Actualización automática en curso\u2026</string>
     <string name="catalog_cloud_stage_realign">Preparando base de datos local\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers">Enviando cambios de proveedores\u2026</string>
     <string name="catalog_cloud_stage_push_suppliers_count">Enviando cambios de proveedores %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_push_categories">Enviando cambios de categorias\u2026</string>
-    <string name="catalog_cloud_stage_push_categories_count">Enviando cambios de categorias %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_push_products">Enviando productos a la nube...</string>
+    <string name="catalog_cloud_stage_push_categories">Enviando cambios de categorías\u2026</string>
+    <string name="catalog_cloud_stage_push_categories_count">Enviando cambios de categorías %1$d / %2$d</string>
+    <string name="catalog_cloud_stage_push_products">Enviando productos a la nube…</string>
     <string name="catalog_cloud_stage_push_products_count">Enviando productos a la nube %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_pull_catalog">Actualizando catalogo desde la nube...</string>
-    <string name="catalog_cloud_stage_sync_prices">Sincronizando precios...</string>
+    <string name="catalog_cloud_stage_pull_catalog">Actualizando catálogo desde la nube…</string>
+    <string name="catalog_cloud_stage_sync_prices">Sincronizando precios…</string>
     <string name="catalog_cloud_stage_sync_prices_count">Sincronizando precios %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_prices_push">Enviando precios a la nube...</string>
+    <string name="catalog_cloud_stage_sync_prices_push">Enviando precios a la nube…</string>
     <string name="catalog_cloud_stage_sync_prices_push_count">Enviando precios a la nube %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_prices_pull">Actualizando precios desde la nube...</string>
+    <string name="catalog_cloud_stage_sync_prices_pull">Actualizando precios desde la nube…</string>
     <string name="catalog_cloud_stage_sync_prices_pull_count">Actualizando precios desde la nube %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_events_drain">Actualizando eventos de sincronización...</string>
-    <string name="catalog_cloud_stage_sync_history">Sincronizando historial...</string>
+    <string name="catalog_cloud_stage_sync_events_drain">Actualizando eventos de sincronización…</string>
+    <string name="catalog_cloud_stage_sync_history">Sincronizando historial…</string>
     <string name="catalog_cloud_stage_realign_short">Preparando</string>
     <string name="catalog_cloud_stage_push_suppliers_short">Enviando proveedores</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">Proveedores %1$d/%2$d</string>
@@ -637,27 +610,26 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">Precios recibidos %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">Actualizando eventos sync</string>
     <string name="catalog_cloud_stage_sync_history_short">Sesiones</string>
-    <string name="cloud_sync_indicator_cd">Sincronizacion en la nube en curso</string>
     <string name="cloud_sync_indicator_status_cd">Sincronización en la nube: %1$s</string>
     <string name="cloud_sync_indicator_local_ready">La base local está lista: ya puedes usarla</string>
     <string name="cloud_sync_indicator_completed">Catálogo en la nube sincronizado</string>
     <string name="cloud_sync_indicator_failed">La sincronización en la nube no terminó, reintenta</string>
     <string name="catalog_cloud_state_synced">Actualizado</string>
     <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
-    <string name="catalog_cloud_state_last_failed">El ultimo intento fallo</string>
+    <string name="catalog_cloud_state_last_failed">El último intento falló</string>
     <string name="catalog_cloud_state_forbidden">Revisa los permisos de la nube</string>
-    <string name="catalog_cloud_state_config_problem">Revisa la configuracion de la nube</string>
+    <string name="catalog_cloud_state_config_problem">Revisa la configuración de la nube</string>
     <string name="catalog_cloud_state_prices_incomplete">Catálogo actualizado; los precios se reintentarán automáticamente.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Catálogo actualizado; las sesiones se reintentarán automáticamente.</string>
-    <string name="catalog_cloud_state_offline">Sin conexion estable</string>
+    <string name="catalog_cloud_state_offline">Sin conexión estable</string>
     <string name="catalog_cloud_state_sign_in_required">Inicia sesión para activar la sincronización automática</string>
     <string name="catalog_cloud_state_session_required">Vuelve a iniciar sesión para continuar la sincronización</string>
-    <string name="catalog_cloud_not_configured">La sincronizacion en la nube no esta disponible</string>
-    <string name="catalog_cloud_last_ok">Ultima sincronizacion correcta: %1$s</string>
+    <string name="catalog_cloud_not_configured">La sincronización en la nube no está disponible</string>
+    <string name="catalog_cloud_last_ok">Última sincronización correcta: %1$s</string>
     <string name="catalog_cloud_prices_sync_hint">Precios: enviados %1$d, recibidos %2$d · pendiente (catálogo): %3$d</string>
     <string name="catalog_cloud_sessions_sync_hint">Sesiones: restauradas %1$d, enviadas %2$d</string>
     <string name="catalog_cloud_sessions_issue_hint">Sesiones incompletas: %1$d</string>
-    <string name="catalog_cloud_sessions_permission_hint">La copia de sesiones esta bloqueada por permisos de la nube. Los cambios locales quedan pendientes.</string>
+    <string name="catalog_cloud_sessions_permission_hint">La copia de sesiones está bloqueada por permisos de la nube. Los cambios locales quedan pendientes.</string>
     <string name="catalog_cloud_sessions_pending_hint">Sesiones aún pendientes: %1$d</string>
     <string name="catalog_cloud_pending_catalog_hint">Envío de cambios: catálogo, precios o eliminaciones esperan la nube.</string>
     <string name="catalog_cloud_prices_skipped_hint">Recepción de precios: filas de la nube no importadas porque falta el producto local vinculado: %1$d</string>
@@ -670,11 +642,6 @@
     <string name="catalog_cloud_badge_download">Recepción</string>
     <string name="catalog_cloud_badge_sessions">Sesiones</string>
     <string name="catalog_cloud_badge_full_required">Hace falta completa</string>
-    <string name="catalog_cloud_quick_recommended_label">Recomendada para enviar cambios locales</string>
-    <string name="catalog_cloud_full_recommended_label">Hace falta realineación automática</string>
-    <string name="catalog_cloud_sync_quick_cd">Estado de actualización automática: envía cambios locales y recibe actualizaciones recientes</string>
-    <string name="catalog_cloud_sync_full_cd">Estado de realineación automática: catálogo, precios y sesiones desde cloud</string>
-    <string name="catalog_cloud_sync_now_cd">Estado de sincronización automática: catálogo, precios, historial y cambios locales</string>
     <string name="catalog_cloud_section_cd">Estado de sincronización en la nube: %1$s</string>
     <string name="task126_review_cancel">Cancelar</string>
     <string name="task126_account_keep_current">Mantener cuenta actual</string>

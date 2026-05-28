@@ -1022,7 +1022,7 @@ class CatalogSyncViewModelTest {
         assertTrue(viewModel.uiState.value.catalogDetail?.isNotBlank() == true)
         assertTrue(
             viewModel.uiState.value.catalogDetail!!.contains(
-                app.getString(R.string.catalog_cloud_quick_sync_locals_sent, 2)
+                app.resources.getQuantityString(R.plurals.catalog_cloud_quick_sync_locals_sent, 2, 2)
             )
         )
         assertTrue(
@@ -1137,7 +1137,7 @@ class CatalogSyncViewModelTest {
         )
         assertFalse(
             viewModel.uiState.value.catalogDetail!!.contains(
-                app.getString(R.string.catalog_cloud_quick_sync_locals_sent, 2)
+                app.resources.getQuantityString(R.plurals.catalog_cloud_quick_sync_locals_sent, 2, 2)
             )
         )
 
@@ -1180,7 +1180,7 @@ class CatalogSyncViewModelTest {
 
         assertTrue(
             viewModel.uiState.value.catalogDetail!!.contains(
-                app.getString(R.string.catalog_cloud_sync_event_outbox_hint, 3)
+                app.resources.getQuantityString(R.plurals.catalog_cloud_sync_event_outbox_hint, 3, 3)
             )
         )
         assertTrue(
@@ -1306,7 +1306,7 @@ class CatalogSyncViewModelTest {
         )
         assertFalse(
             viewModel.uiState.value.catalogDetail?.contains(
-                app.getString(R.string.catalog_cloud_sync_event_outbox_hint, 4)
+                app.resources.getQuantityString(R.plurals.catalog_cloud_sync_event_outbox_hint, 4, 4)
             ) == true
         )
 

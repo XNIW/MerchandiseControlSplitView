@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.viewmodel
 
 import android.app.Application
 import android.util.Log
+import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -273,6 +274,9 @@ class CatalogSyncViewModel(
     private fun str(@StringRes id: Int, vararg args: Any): String =
         if (args.isEmpty()) getApplication<Application>().getString(id)
         else getApplication<Application>().getString(id, *args)
+
+    private fun quantityStr(@PluralsRes id: Int, quantity: Int, vararg args: Any): String =
+        getApplication<Application>().resources.getQuantityString(id, quantity, *args)
 
     private fun buildProgressUi(progress: CatalogSyncProgressState?): CatalogSyncStageUiState? {
         if (progress == null || !progress.isBusy) return null
@@ -702,7 +706,13 @@ class CatalogSyncViewModel(
                 val pushedLocal =
                     s.pushedSuppliers + s.pushedCategories + s.pushedProducts + s.pushedProductPrices
                 if (pushedLocal > 0) {
-                    parts.add(str(R.string.catalog_cloud_quick_sync_locals_sent, pushedLocal))
+                    parts.add(
+                        quantityStr(
+                            R.plurals.catalog_cloud_quick_sync_locals_sent,
+                            pushedLocal,
+                            pushedLocal
+                        )
+                    )
                 }
             }
         }
@@ -734,15 +744,22 @@ class CatalogSyncViewModel(
                 (s.syncEventsProcessed > 0 || s.remoteUpdatesApplied > 0)
             ) {
                 parts.add(
-                    str(
-                        R.string.catalog_cloud_quick_sync_recent_updates,
+                    quantityStr(
+                        R.plurals.catalog_cloud_quick_sync_recent_updates,
+                        s.remoteUpdatesApplied,
                         s.syncEventsProcessed,
                         s.remoteUpdatesApplied
                     )
                 )
             }
             if (s.syncEventOutboxPending > 0) {
-                parts.add(str(R.string.catalog_cloud_sync_event_outbox_hint, s.syncEventOutboxPending))
+                parts.add(
+                    quantityStr(
+                        R.plurals.catalog_cloud_sync_event_outbox_hint,
+                        s.syncEventOutboxPending,
+                        s.syncEventOutboxPending
+                    )
+                )
             }
         }
         return parts.joinToString("\n").takeIf { it.isNotEmpty() }

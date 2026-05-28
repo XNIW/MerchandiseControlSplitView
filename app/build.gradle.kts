@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
@@ -75,6 +74,11 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         unitTests.isIncludeAndroidResources = true
     }
 
+    bundle {
+        language {
+            enableSplit = false
+        }
+    }
 }
 
 // CORRETTO: Imposta un toolchain JVM consistente per Java e Kotlin
@@ -84,6 +88,17 @@ kotlin {
 
 tasks.withType<Test>().configureEach {
     jvmArgs("-Djdk.attach.allowAttachSelf=true")
+    if (name == "testDebugUnitTest") {
+        doFirst {
+            val byteBuddyAgent = configurations
+                .named("debugUnitTestRuntimeClasspath")
+                .get()
+                .files
+                .single { it.name.startsWith("byte-buddy-agent") && it.extension == "jar" }
+
+            jvmArgs("-javaagent:${byteBuddyAgent.absolutePath}")
+        }
+    }
 }
 
 dependencies {

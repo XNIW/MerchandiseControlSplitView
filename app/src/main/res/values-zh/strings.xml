@@ -8,15 +8,10 @@
     <string name="confirm">确认</string>
     <string name="delete">删除</string>
     <string name="clear">清除</string>
-    <string name="save_file">保存文件</string>
 
     <!-- 设置页面 -->
     <string name="options">选项</string>
     <string name="select_language">选择语言</string>
-    <string name="chinese">中文</string>
-    <string name="italian">意大利语</string>
-    <string name="spanish">西班牙语</string>
-    <string name="english">英语</string>
     <string name="select_theme">主题</string>
     <string name="theme_auto">自动（系统）</string>
     <string name="theme_light">浅色</string>
@@ -25,7 +20,6 @@
     <!-- 文件选择页面 -->
     <string name="inventory_title">库存</string>
     <string name="history_root_title">历史</string>
-    <string name="file_history">文件历史</string>
     <string name="file_picker_home_title">先从文件开始</string>
     <string name="load_excel_file">选择 Excel 或 HTML 文件</string>
     <string name="file_picker_primary_supporting">选择一个或多个 Excel 或 HTML 文件即可开始。</string>
@@ -33,21 +27,14 @@
     <string name="database">数据库</string>
 
     <!-- 历史页面 -->
-    <string name="history_title">文件历史</string>
     <string name="rename_file">重命名文件</string>
     <string name="new_name">新名称</string>
     <string name="delete_confirm">确定要删除该文件吗？</string>
 
     <!-- 生成前页面 -->
     <string name="select_all">全选</string>
-    <string name="generate_action">生成</string>
     <string name="choose_again">重新选择</string>
     <string name="pre_generate_error_title">无法打开文件</string>
-    <string name="edit">编辑</string>
-    <string name="exit_edit">退出编辑</string>
-    <string name="generate_filtered_sheet">生成筛选表</string>
-    <string name="exit_confirm_title">确定要退出吗？已加载数据将丢失。</string>
-    <string name="supplier_dialog_title">请输入供应商名称</string>
     <string name="supplier_label">供应商</string>
     <string name="custom_header_dialog_title">请输入列名</string>
     <string name="custom_header_label">自定义名称</string>
@@ -90,33 +77,20 @@
     <string name="header_complete">完成</string>
     <string name="header_old_purchase_price">旧进价</string>
     <string name="header_old_retail_price">旧零售价</string>
-    <string name="header_new_retail_price">新零售价</string>
     <string name="header_real_quantity">实点数量</string>
     <string name="header_row_number">序号</string>
     <string name="header_discount">折扣</string>
     <string name="header_discounted_price">折后价</string>
 
     <!-- 数据库页面 -->
-    <string name="database_screen_title">商品管理</string>
     <string name="import_file">导入</string>
     <string name="export_file">导出</string>
-    <string name="barcode_filter_label">条码, 名称, 货号, 供应商</string>
     <string name="retry">重试</string>
     <string name="scan_barcode">扫描条码</string>
-    <string name="barcode">条码</string>
-    <string name="item_number">货号</string>
-    <string name="product_name">商品名称</string>
-    <string name="new_purchase_price">新进价</string>
-    <string name="new_retail_price">新零售价</string>
-    <string name="old_purchase_price">旧进价</string>
-    <string name="old_retail_price">旧零售价</string>
-    <string name="supplier">供应商</string>
 
     <!-- viewmodel DatabaseViewModel -->
     <string name="import_success">导入完成</string>
     <string name="export_success">导出完成</string>
-    <string name="import_error">导入错误：%1$s</string>
-    <string name="export_error">导出错误：%1$s</string>
     <string name="sync_with_database">与数据库同步</string>
 
     <!-- 通用 / 状态消息 -->
@@ -157,15 +131,10 @@
     <string name="item_code_label">商品编码</string>
     <string name="purchase_price_label">进货价</string>
     <string name="retail_price_label">零售价</string>
-    <string name="old_purchase_price_label">原进货价</string>
-    <string name="old_retail_price_label">原零售价</string>
-    <string name="add_previous_prices">添加历史价格</string>
     <string name="select_supplier_title">选择供应商</string>
     <string name="search_or_add_supplier">搜索或添加供应商</string>
     <string name="add_new_supplier_prompt">将“%1$s”添加为新供应商</string>
     <string name="save">保存</string>
-    <string name="import_analysis_in_progress">文件分析中…</string>
-    <string name="action_completed">Acción completada</string>
     <string name="file_exported_successfully">文件导出成功</string>
 
     <string name="import_analysis_title">导入审核</string>
@@ -180,7 +149,6 @@
     <string name="errors_found">发现错误：%1$d</string>
     <string name="no_critical_errors_found">未发现严重错误。</string>
     <string name="export_errors">导出错误</string>
-    <string name="correct_errors">纠正</string>
     <string name="import_correct_data">修正数据</string>
     <string name="import_edit_rows">编辑行</string>
     <string name="edit_update">编辑更新</string>
@@ -192,34 +160,24 @@
     <string name="row_prefix">行</string>
     <string name="counted_quantity_label">已计数量</string>
     <string name="new_retail_price_short_label">新售价</string>
-    <string name="error_unexpected_parsing">解析出现意外错误：%1$s</string>
     <string name="error_import_row_processing_failed">无法处理这一行。</string>
     <string name="error_invalid_retail_price">售价不是有效数字。</string>
     <string name="error_negative_prices">价格不能为负数。</string>
     <string name="error_invalid_quantity">数量不是有效数字。</string>
     <string name="field_product_name">产品名称</string>
-    <string name="field_item_number">商品编码</string>
-    <string name="field_purchase_price">进货价</string>
-    <string name="field_retail_price">零售价</string>
     <string name="field_supplier">供应商</string>
-    <string name="invalid_data_for_analysis">数据无效，无法分析。</string>
     <string name="sync_analysis_started">同步分析已启动。</string>
-    <string name="exit_confirmation_message">你确定要退出吗？进度已保存到历史记录。</string>
     <string name="calculate_new_value">计算新值</string>
     <string name="status_completed">已完成</string>
     <string name="status_incomplete">未完成</string>
     <string name="status_warning">警告</string>
     <string name="preview_file_title">文件预览</string>
-    <string name="analysis_in_progress">正在分析…</string>
     <string name="loading_file">正在加载文件…</string>
     <string name="unknown_error">未知错误</string>
-    <string name="no_supplier_found">未找到供应商</string>
-    <string name="date_label">日期：</string>
     <string name="sync_status">同步状态</string>
     <string name="export_status">导出状态</string>
     <string name="history_deleted_pending_status">删除等待同步</string>
     <string name="generated_column_prefix">列</string>
-    <string name="default_export_filename">products.xlsx</string>
     <string name="supplier_id_prefix">ID：</string>
     <string name="edit_product">编辑产品</string>
     <string name="barcode_prefix">条码：</string>
@@ -229,11 +187,7 @@
     <string name="compare_field">字段</string>
     <string name="compare_previous">之前</string>
     <string name="compare_new">新</string>
-    <string name="unidentified_product">未识别产品</string>
-    <string name="unknown">未知</string>
     <string name="error_file_empty_or_invalid">Excel文件为空或没有有效的表头。</string>
-    <string name="error_no_products_to_export">没有可导出的产品。</string>
-    <string name="error_data_analysis">数据分析时出错：%1$s</string>
     <string name="error_data_analysis_generic">无法分析所选文件。</string>
     <string name="error_import_generic">无法完成导入。</string>
     <string name="import_preview_invalidated">此预览已失效。请重新分析后再确认。</string>
@@ -257,9 +211,7 @@
     <string name="error_first_file_empty_or_invalid">选择的第一个文件为空或格式无效。</string>
     <string name="error_different_columns">所选文件的列不一致。操作已取消。</string>
     <string name="error_unknown_file_analysis">分析文件时发生未知错误。</string>
-    <string name="sheet_name_products">产品</string>
     <string name="sheet_name_export">导出</string>
-    <string name="header_new_purchase_price">新进价</string>
     <string name="header_supplier_id">供应商ID</string>
     <string name="default_error_export_filename">导入错误.xlsx</string>
     <string name="header_category">类别</string>
@@ -278,7 +230,6 @@
     <string name="add_new_category_prompt">添加新类别：%1$s</string>
     <string name="header_category_id">类别ID</string>
     <string name="add_item_code">添加商品编码</string>
-    <string name="supplier_and_category_dialog_title">选择供应商和类别</string>
     <string name="loading_ellipsis">加载中…</string>
     <string name="not_found_short">未找到</string>
     <string name="summary_label">汇总</string>
@@ -296,7 +247,6 @@
     <string name="filter_current_month">本月</string>
     <string name="filter_previous_month">上月</string>
     <string name="filter_custom_range">自定义范围…</string>
-    <string name="history_filter_active">当前筛选：%1$s</string>
     <string name="history_entry_created_at">创建于 %1$s</string>
     <string name="history_filter_custom_range_value">%1$s - %2$s</string>
     <string name="history_empty_title">还没有历史记录</string>
@@ -325,7 +275,9 @@
     <string name="warning_duplicate_barcode">条码：%1$s</string>
     <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
     <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>
-    <string name="warning_duplicate_rows_truncated">行列表已截断：另有 %1$d 行未显示（共 %2$d 行）。</string>
+    <plurals name="warning_duplicate_rows_truncated">
+        <item quantity="other">行列表已截断：另有 %1$d 行未显示（共 %2$d 行）。</item>
+    </plurals>
     <string name="missing_items_label">缺少商品</string>
 
     <string name="discard_and_exit_title">取消并返回</string>
@@ -367,8 +319,7 @@
     <string name="pre_generate_required_columns_hint">必需列不能被禁用。</string>
     <string name="pre_generate_supplier_section_supporting">搜索、选择或创建将应用到生成商品的供应商。</string>
     <string name="pre_generate_category_section_supporting">搜索、选择或创建将应用到生成商品的类别。</string>
-    <string name="pre_generate_show_all_options">显示全部...</string>
-    <string name="pre_generate_selection_pending">请选择一个结果，或新建一个后继续。</string>
+    <string name="pre_generate_show_all_options">显示全部…</string>
     <string name="pre_generate_selection_ready">已选择：%1$s</string>
     <string name="pre_generate_new_supplier_status">新供应商：%1$s</string>
     <string name="pre_generate_new_category_status">新类别：%1$s</string>
@@ -400,9 +351,6 @@
     <string name="database_lookup_price_summary">%1$s - 零售价：%2$s</string>
     <string name="add_and_next">添加并继续</string>
     <string name="product_found_in_db">该商品已存在于数据库中</string>
-
-    <string name="mark_as_complete">标为完成</string>
-    <string name="mark_as_incomplete">标为未完成</string>
     <string name="error_negative_quantity">数量不能为负数。</string>
     <string name="error_invalid_discount">折扣必须是介于 0 和 100 之间的数值。</string>
 
@@ -445,11 +393,6 @@
     <string name="share_export_message">%1$s 生成的 Excel 文件。</string>
     <string name="more_actions">更多操作</string>
     <string name="untitled">未命名</string>
-    <string name="exported_short">已导出</string>
-    <string name="all_complete_banner_title">全部完成</string>
-    <string name="all_complete_banner_subtitle">你可以立即导出 Excel 文件。</string>
-    <string name="all_complete_banner_title_exported">可导出副本</string>
-    <string name="all_complete_banner_subtitle_exported">你可以保存 Excel 文件的新副本。</string>
     <string name="export_now">立即导出</string>
     <string name="generated_complete_card_title">全部完成</string>
     <string name="generated_complete_card_message_sync_pending">你现在可以同步数据库，或导出 Excel 文件。</string>
@@ -467,10 +410,6 @@
     <string name="error_history_entry_delete">无法删除该文件。</string>
 
     <!-- 菜单 / 操作 -->
-    <string name="import_products_single_sheet">导入商品（单个工作表）</string>
-    <string name="import_database_full">导入数据库（完整）</string>
-    <string name="export_products">导出商品</string>
-    <string name="export_database_full">导出数据库（完整）</string>
     <string name="export_database_dialog_title">导出数据库</string>
     <string name="export_database_dialog_subtitle">选择要包含在 Excel 文件中的工作表。</string>
     <string name="export_database_dialog_presets_label">快捷预设</string>
@@ -496,9 +435,9 @@
     <string name="finish">完成</string>
     <string name="show_only_errors">仅显示错误</string>
     <string name="errors_filter_active">筛选：仅错误</string>
-    <string name="n_error_rows">%d 有错误</string>
-    <string name="no_errors_found">无错误</string>
-    <string name="summary_completed_label">已完成</string>
+    <plurals name="n_error_rows">
+        <item quantity="other">%d 行有错误</item>
+    </plurals>
     <string name="summary_pending_label">待处理</string>
     <string name="generated_progress_pending_compact">剩 %1$s</string>
     <string name="generated_progress_all_complete">全部完成</string>
@@ -517,7 +456,9 @@
     <string name="database_catalog_entity_supplier">供应商</string>
     <string name="database_catalog_entity_category">类别</string>
     <string name="database_catalog_add_fab">添加%1$s</string>
-    <string name="database_catalog_linked_products">关联产品 %1$d 个</string>
+    <plurals name="database_catalog_linked_products">
+        <item quantity="other">关联产品 %1$d 个</item>
+    </plurals>
     <string name="database_catalog_manage_actions">重命名或删除</string>
     <string name="database_catalog_retry_body">请重试加载此分区。如果问题持续存在，请关闭后重新打开数据库中心。</string>
     <string name="database_catalog_empty_title">还没有%1$s</string>
@@ -532,9 +473,15 @@
     <string name="database_catalog_created">%1$s已添加。</string>
     <string name="database_catalog_renamed">%1$s已更新。</string>
     <string name="database_catalog_deleted">%1$s已删除。</string>
-    <string name="database_catalog_deleted_reassigned">%1$s已删除。%2$d 个产品已重新分配到 %3$s。</string>
-    <string name="database_catalog_deleted_cleared">%1$s已删除。已从 %2$d 个产品中移除该分配。</string>
-    <string name="database_catalog_delete_requires_resolution">无法删除%1$s，因为它仍分配给 %2$d 个产品。</string>
+    <plurals name="database_catalog_deleted_reassigned">
+        <item quantity="other">%1$s已删除。%2$d 个产品已重新分配到 %3$s。</item>
+    </plurals>
+    <plurals name="database_catalog_deleted_cleared">
+        <item quantity="other">%1$s已删除。已从 %2$d 个产品中移除该分配。</item>
+    </plurals>
+    <plurals name="database_catalog_delete_requires_resolution">
+        <item quantity="other">无法删除%1$s，因为它仍分配给 %2$d 个产品。</item>
+    </plurals>
     <string name="database_catalog_replacement_invalid">请选择另一个%1$s作为替换项。</string>
     <string name="database_catalog_item_missing">该%1$s已不可用。</string>
     <string name="database_catalog_operation_failed">无法完成此%1$s的操作。</string>
@@ -548,9 +495,11 @@
     <string name="database_catalog_action_delete">删除</string>
     <string name="database_catalog_action_delete_body">根据关联产品情况，使用简单或引导式流程移除此项。</string>
     <string name="database_catalog_simple_delete_title">删除%1$s</string>
-    <string name="database_catalog_simple_delete_body">“%2$s”当前没有关联任何产品，现在可以直接删除。</string>
+    <string name="database_catalog_simple_delete_body">“%1$s”当前没有关联任何产品，现在可以直接删除。</string>
     <string name="database_catalog_guided_delete_title">删除正在使用的%1$s</string>
-    <string name="database_catalog_guided_delete_body">“%1$s”当前关联 %2$d 个产品。删除前请选择如何处理这些关联。</string>
+    <plurals name="database_catalog_guided_delete_body">
+        <item quantity="other">“%1$s”当前关联 %2$d 个产品。删除前请选择如何处理这些关联。</item>
+    </plurals>
     <string name="database_catalog_strategy_replace_existing">替换为现有项</string>
     <string name="database_catalog_strategy_replace_existing_body">把所有关联产品重新分配到另一个现有%1$s。</string>
     <string name="database_catalog_strategy_create_new">创建新项并替换</string>
@@ -558,7 +507,9 @@
     <string name="database_catalog_strategy_clear">移除分配</string>
     <string name="database_catalog_strategy_clear_body">先从关联产品中清除此分配，再永久删除该项。</string>
     <string name="database_catalog_clear_assignments_title">移除此分配？</string>
-    <string name="database_catalog_clear_assignments_body">与“%1$s”关联的 %2$d 个产品会在删除前失去该分配。</string>
+    <plurals name="database_catalog_clear_assignments_body">
+        <item quantity="other">与“%1$s”关联的 %2$d 个产品会在删除前失去该分配。</item>
+    </plurals>
     <string name="database_catalog_replacement_picker_title">替换为另一个%1$s</string>
     <string name="database_catalog_replacement_picker_hint">搜索现有%1$s</string>
     <string name="database_catalog_replacement_picker_empty">当前筛选下没有可用的%1$s。</string>
@@ -589,21 +540,21 @@
     <string name="local_database_status_unknown">—</string>
 
     <string name="catalog_cloud_section_title">自动同步</string>
-    <string name="catalog_cloud_refresh">自动从云端更新</string>
-    <string name="catalog_cloud_sync_full">自动重新对齐</string>
-    <string name="catalog_cloud_sync_now">自动同步已启用</string>
-    <string name="catalog_cloud_sync_quick">自动更新</string>
     <string name="catalog_cloud_sync_quick_body">账号和网络就绪时，本地更改会自动发送。</string>
     <string name="catalog_cloud_sync_quick_body_events">App 会自动发送本地更改，并接收可验证的近期更新。</string>
-    <string name="catalog_cloud_sync_full_body">需要完整检查时，App 会自动重新对齐目录、价格与会话。</string>
-    <string name="catalog_cloud_sync_quick_hint">App 会自动处理发送与接收，不提供公开的手动同步命令。</string>
     <string name="catalog_cloud_auto_status_title">自动同步已启用</string>
     <string name="catalog_cloud_auto_status_body">账号和网络就绪时，更改与更新会在后台自动处理。</string>
     <string name="catalog_cloud_auto_reconcile_title">需要自动重新对齐</string>
     <string name="catalog_cloud_auto_reconcile_body">部分数据需要完整检查。上下文安全时，App 会自动安排。</string>
-    <string name="catalog_cloud_quick_sync_locals_sent">发送更改：已上传 %1$d 项本地修改（供应商、分类、商品与价格）。</string>
-    <string name="catalog_cloud_quick_sync_recent_updates">接收更新：已应用 %2$d 项；已检查近期通知 %1$d 条。</string>
-    <string name="catalog_cloud_sync_event_outbox_hint">发送更改：%1$d 条同步通知稍后会重试。</string>
+    <plurals name="catalog_cloud_quick_sync_locals_sent">
+        <item quantity="other">发送更改：已上传 %1$d 项本地修改（供应商、分类、商品与价格）。</item>
+    </plurals>
+    <plurals name="catalog_cloud_quick_sync_recent_updates">
+        <item quantity="other">接收更新：已应用 %2$d 项；已检查近期通知 %1$d 条。</item>
+    </plurals>
+    <plurals name="catalog_cloud_sync_event_outbox_hint">
+        <item quantity="other">发送更改：%1$d 条同步通知稍后会重试。</item>
+    </plurals>
     <string name="catalog_cloud_manual_full_sync_required_hint">需要自动重新对齐：部分云端更改需要完整检查。</string>
     <string name="catalog_cloud_state_syncing">正在自动更新\u2026</string>
     <string name="catalog_cloud_stage_realign">正在准备本地数据库\u2026</string>
@@ -611,17 +562,17 @@
     <string name="catalog_cloud_stage_push_suppliers_count">正在发送供应商更改 %1$d / %2$d</string>
     <string name="catalog_cloud_stage_push_categories">正在发送分类更改\u2026</string>
     <string name="catalog_cloud_stage_push_categories_count">正在发送分类更改 %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_push_products">正在将商品发送到云端...</string>
+    <string name="catalog_cloud_stage_push_products">正在将商品发送到云端…</string>
     <string name="catalog_cloud_stage_push_products_count">正在将商品发送到云端 %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_pull_catalog">正在从云端更新目录...</string>
-    <string name="catalog_cloud_stage_sync_prices">正在同步价格...</string>
+    <string name="catalog_cloud_stage_pull_catalog">正在从云端更新目录…</string>
+    <string name="catalog_cloud_stage_sync_prices">正在同步价格…</string>
     <string name="catalog_cloud_stage_sync_prices_count">正在同步价格 %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_prices_push">正在将价格发送到云端...</string>
+    <string name="catalog_cloud_stage_sync_prices_push">正在将价格发送到云端…</string>
     <string name="catalog_cloud_stage_sync_prices_push_count">正在将价格发送到云端 %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_prices_pull">正在从云端更新价格...</string>
+    <string name="catalog_cloud_stage_sync_prices_pull">正在从云端更新价格…</string>
     <string name="catalog_cloud_stage_sync_prices_pull_count">正在从云端更新价格 %1$d / %2$d</string>
-    <string name="catalog_cloud_stage_sync_events_drain">正在更新同步事件...</string>
-    <string name="catalog_cloud_stage_sync_history">正在同步历史...</string>
+    <string name="catalog_cloud_stage_sync_events_drain">正在更新同步事件…</string>
+    <string name="catalog_cloud_stage_sync_history">正在同步历史…</string>
     <string name="catalog_cloud_stage_realign_short">准备中</string>
     <string name="catalog_cloud_stage_push_suppliers_short">发送供应商</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">供应商 %1$d/%2$d</string>
@@ -638,7 +589,6 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">已接收价格 %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">更新同步事件</string>
     <string name="catalog_cloud_stage_sync_history_short">会话</string>
-    <string name="cloud_sync_indicator_cd">云同步进行中</string>
     <string name="cloud_sync_indicator_status_cd">云同步：%1$s</string>
     <string name="cloud_sync_indicator_local_ready">本地数据库已就绪：现在可以使用</string>
     <string name="cloud_sync_indicator_completed">云端目录已同步</string>
@@ -671,11 +621,6 @@
     <string name="catalog_cloud_badge_download">接收</string>
     <string name="catalog_cloud_badge_sessions">会话</string>
     <string name="catalog_cloud_badge_full_required">需要完整</string>
-    <string name="catalog_cloud_quick_recommended_label">建议用于发送本地修改</string>
-    <string name="catalog_cloud_full_recommended_label">需要自动重新对齐</string>
-    <string name="catalog_cloud_sync_quick_cd">自动更新状态：发送本地修改并接收近期更新</string>
-    <string name="catalog_cloud_sync_full_cd">自动重新对齐状态：云端目录、价格与会话</string>
-    <string name="catalog_cloud_sync_now_cd">自动同步状态：目录、价格、历史和本地更改</string>
     <string name="catalog_cloud_section_cd">云同步状态：%1$s</string>
     <string name="task126_review_cancel">取消</string>
     <string name="task126_account_keep_current">保留当前账号</string>

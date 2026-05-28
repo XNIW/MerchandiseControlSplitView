@@ -1,32 +1,32 @@
 [versions]
 agp = "9.2.1"
-kotlin = "2.3.20"
+kotlin = "2.3.21"
 coreKtx = "1.18.0"
 lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.13.0"
-navigationCompose = "2.9.7"
-composeBom = "2026.03.01"
-composeRuntimeLivedata = "1.10.6"
+navigationCompose = "2.9.8"
+composeBom = "2026.05.01"
+composeRuntimeLivedata = "1.11.2"
 room = "2.8.4"
-paging = "3.4.2"
+paging = "3.5.0"
 zxing = "4.3.0"
 poi = "5.5.1"
 commonsCollections4 = "4.5.0"
-gson = "2.13.2"
-material = "1.13.0"
+gson = "2.14.0"
+material = "1.14.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
-ksp = "2.3.2"
+ksp = "2.3.4"
 work = "2.11.2"
-jsoup = "1.22.1"
+jsoup = "1.22.2"
 robolectric = "4.16.1"
-coroutinesTest = "1.10.2"
+coroutinesTest = "1.11.0"
 turbine = "1.2.1"
 mockk = "1.14.9"
 coreTesting = "2.2.0"
-supabase = "3.5.0"
-ktor = "3.4.2"
+supabase = "3.6.0"
+ktor = "3.5.0"
 credentials = "1.6.0"
 googleid = "1.2.0"
 
@@ -89,7 +89,6 @@ google-id                      = { group = "com.google.android.libraries.identit
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

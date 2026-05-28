@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -434,8 +435,9 @@ internal fun CatalogActionBottomSheet(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    text = stringResource(
-                        R.string.database_catalog_linked_products,
+                    text = pluralStringResource(
+                        R.plurals.database_catalog_linked_products,
+                        item.productCount,
                         item.productCount
                     ),
                     style = MaterialTheme.typography.bodyMedium,
@@ -594,7 +596,6 @@ internal fun CatalogDeleteConfirmationDialog(
                 Text(
                     text = stringResource(
                         R.string.database_catalog_simple_delete_body,
-                        stringResource(kind.entityLabelRes()),
                         item.name
                     ),
                     style = MaterialTheme.typography.bodyMedium
@@ -604,8 +605,9 @@ internal fun CatalogDeleteConfirmationDialog(
                     color = MaterialTheme.colorScheme.surfaceContainerLow
                 ) {
                     Text(
-                        text = stringResource(
-                            R.string.database_catalog_linked_products,
+                        text = pluralStringResource(
+                            R.plurals.database_catalog_linked_products,
+                            item.productCount,
                             item.productCount
                         ),
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -658,8 +660,9 @@ internal fun CatalogDeleteStrategyDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = stringResource(
-                        R.string.database_catalog_guided_delete_body,
+                    text = pluralStringResource(
+                        R.plurals.database_catalog_guided_delete_body,
+                        item.productCount,
                         item.name,
                         item.productCount
                     ),
@@ -723,8 +726,9 @@ internal fun CatalogClearAssignmentsConfirmationDialog(
         },
         text = {
             Text(
-                text = stringResource(
-                    R.string.database_catalog_clear_assignments_body,
+                text = pluralStringResource(
+                    R.plurals.database_catalog_clear_assignments_body,
+                    item.productCount,
                     item.name,
                     item.productCount
                 ),

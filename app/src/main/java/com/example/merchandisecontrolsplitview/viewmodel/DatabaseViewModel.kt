@@ -473,8 +473,9 @@ class DatabaseViewModel(
             catalogEntityLabel(kind)
         )
 
-        is CatalogEntityInUseException -> appContext.getString(
-            R.string.database_catalog_delete_requires_resolution,
+        is CatalogEntityInUseException -> appContext.resources.getQuantityString(
+            R.plurals.database_catalog_delete_requires_resolution,
+            throwable.productCount,
             catalogEntityLabel(kind),
             throwable.productCount
         )
@@ -505,15 +506,17 @@ class DatabaseViewModel(
         )
 
         is CatalogDeleteStrategy.ReplaceWithExisting,
-        is CatalogDeleteStrategy.CreateNewAndReplace -> appContext.getString(
-            R.string.database_catalog_deleted_reassigned,
+        is CatalogDeleteStrategy.CreateNewAndReplace -> appContext.resources.getQuantityString(
+            R.plurals.database_catalog_deleted_reassigned,
+            result.affectedProducts,
             catalogEntityLabel(kind),
             result.affectedProducts,
             result.replacementName.orEmpty()
         )
 
-        CatalogDeleteStrategy.ClearAssignments -> appContext.getString(
-            R.string.database_catalog_deleted_cleared,
+        CatalogDeleteStrategy.ClearAssignments -> appContext.resources.getQuantityString(
+            R.plurals.database_catalog_deleted_cleared,
+            result.affectedProducts,
             catalogEntityLabel(kind),
             result.affectedProducts
         )

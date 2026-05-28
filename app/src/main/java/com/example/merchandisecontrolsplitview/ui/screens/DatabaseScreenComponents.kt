@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -385,8 +386,9 @@ private fun DatabaseCatalogRow(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = stringResource(
-                            R.string.database_catalog_linked_products,
+                        text = pluralStringResource(
+                            R.plurals.database_catalog_linked_products,
+                            item.productCount,
                             item.productCount
                         ),
                         style = MaterialTheme.typography.bodyMedium,
@@ -419,12 +421,12 @@ private fun DatabaseCatalogRow(
 internal fun DatabaseProductListSection(
     filter: String,
     products: LazyPagingItems<ProductWithDetails>,
-    productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
     listState: LazyListState,
     onProductClick: (Product) -> Unit,
     onDeleteRequest: (Product) -> Unit,
     onShowHistory: (Product) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap()
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
@@ -479,6 +481,7 @@ internal fun DatabaseProductListSection(
                         val effectiveDetails = productDetailsOverrides[details.product.id] ?: details
                         val currentProduct = effectiveDetails.productWithCurrentPrices()
 
+                        @Suppress("DEPRECATION")
                         val dismissState = rememberSwipeToDismissBoxState(
                             confirmValueChange = { value ->
                                 if (value == SwipeToDismissBoxValue.EndToStart) {
