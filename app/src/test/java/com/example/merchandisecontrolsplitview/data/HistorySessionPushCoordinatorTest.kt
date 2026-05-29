@@ -165,6 +165,112 @@ class HistorySessionPushCoordinatorTest {
             }
         )
     }
+
+    @Test
+    fun `131 history push records targeted sync event without capability probe dependency`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000131"
+        val syncEvents = CapturingSyncEventRemote131()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(131L, 132L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(131L, 132L))
+        } returns Result.success(
+            HistorySessionBackupPushSummary(
+                uploaded = 2,
+                skippedAlreadySynced = 0,
+                attempted = 2,
+                remoteIds = listOf(" SESSION-A ", "SESSION-B")
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            syncEventRemote = syncEvents,
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("debounce_fired")
+
+        assertEquals(1, syncEvents.recorded.size)
+        val event = syncEvents.recorded.single()
+        assertEquals(SyncEventDomains.HISTORY, event.domain)
+        assertEquals(SyncEventTypes.HISTORY_CHANGED, event.eventType)
+        assertEquals(2, event.changedCount)
+        assertEquals(listOf("session-a", "session-b"), event.entityIds?.sessionIds)
+        assertTrue(logs.any { it.contains("cycle=push syncEvent=history outcome=ok") })
+    }
+
+    @Test
+    fun `131 history sync event failure enqueues durable outbox`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val outbox = mockk<SyncEventOutboxDao>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000231"
+        val syncEvents = FailingSyncEventRemote131()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(231L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(231L))
+        } returns Result.success(
+            HistorySessionBackupPushSummary(
+                uploaded = 1,
+                skippedAlreadySynced = 0,
+                attempted = 1,
+                remoteIds = listOf(" SESSION-A ")
+            )
+        )
+        coEvery { outbox.insert(any()) } returns 7L
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            syncEventRemote = syncEvents,
+            syncEventOutboxDao = outbox,
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("debounce_fired")
+
+        assertEquals(3, syncEvents.attempts)
+        coVerify(exactly = 1) {
+            outbox.insert(
+                match {
+                    it.ownerUserId == owner &&
+                        it.domain == SyncEventDomains.HISTORY &&
+                        it.eventType == SyncEventTypes.HISTORY_CHANGED &&
+                        it.changedCount == 1 &&
+                        it.entityIdsJson.contains("session-a") &&
+                        it.lastErrorType != null
+                }
+            )
+        }
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push syncEvent=history outcome=enqueued") &&
+                    it.contains("attempts=3") &&
+                    it.contains("outboxInserted=1")
+            }
+        )
+    }
 }
 
 private class FakeConfiguredSessionRemote040 : SessionBackupRemoteDataSource {
@@ -178,4 +284,57 @@ private class FakeConfiguredSessionRemote040 : SessionBackupRemoteDataSource {
 
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =
         Result.success(Unit)
+}
+
+private class CapturingSyncEventRemote131 : SyncEventRemoteDataSource {
+    override val isConfigured: Boolean = true
+    val recorded = mutableListOf<SyncEventRecordRpcParams>()
+
+    override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
+        Result.failure(AssertionError("TASK-131 history event recording must not depend on capability probe"))
+
+    override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+        recorded += params
+        return Result.success(
+            SyncEventRemoteRow(
+                id = recorded.size.toLong(),
+                ownerUserId = "00000000-0000-4000-8000-000000000131",
+                domain = params.domain,
+                eventType = params.eventType,
+                source = params.source,
+                batchId = params.batchId,
+                clientEventId = params.clientEventId,
+                changedCount = params.changedCount,
+                entityIds = params.entityIds,
+                createdAt = "2026-05-28T00:00:00Z"
+            )
+        )
+    }
+
+    override suspend fun fetchSyncEventsAfter(
+        ownerUserId: String,
+        storeId: String?,
+        afterId: Long,
+        limit: Long
+    ): Result<List<SyncEventRemoteRow>> = Result.success(emptyList())
+}
+
+private class FailingSyncEventRemote131 : SyncEventRemoteDataSource {
+    override val isConfigured: Boolean = true
+    var attempts = 0
+
+    override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
+        Result.failure(AssertionError("TASK-131 history event recording must not depend on capability probe"))
+
+    override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+        attempts++
+        return Result.failure(IllegalStateException("transient sync event failure"))
+    }
+
+    override suspend fun fetchSyncEventsAfter(
+        ownerUserId: String,
+        storeId: String?,
+        afterId: Long,
+        limit: Long
+    ): Result<List<SyncEventRemoteRow>> = Result.success(emptyList())
 }

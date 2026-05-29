@@ -653,7 +653,8 @@ class Task103CrossPlatformAcceptanceTest {
             ?: throw AssertionError("task114CleanupPrefix is required")
         val allowedCleanupPrefix = prefix.startsWith("TASK114_") ||
             prefix.startsWith("TASK123_") ||
-            prefix.startsWith("TASK125_")
+            prefix.startsWith("TASK125_") ||
+            prefix.startsWith("TASK131_")
         require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
             "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
         }
@@ -1056,7 +1057,8 @@ class Task103CrossPlatformAcceptanceTest {
                 prefix.startsWith("TASK115_") ||
                 prefix.startsWith("TASK123_") ||
                 prefix.startsWith("TASK124_") ||
-                prefix.startsWith("TASK125_")
+                prefix.startsWith("TASK125_") ||
+                prefix.startsWith("TASK131_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -1417,6 +1419,7 @@ class Task103CrossPlatformAcceptanceTest {
 
     private data class Fixture(val prefix: String) {
         val logPrefix: String = when {
+            prefix.startsWith("TASK131_") -> "TASK131"
             prefix.startsWith("TASK124_") -> "TASK124"
             prefix.startsWith("TASK125_") -> "TASK125"
             prefix.startsWith("TASK123_") -> "TASK123"

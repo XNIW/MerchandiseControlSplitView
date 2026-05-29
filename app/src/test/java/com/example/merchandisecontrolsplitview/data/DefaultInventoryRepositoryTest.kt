@@ -3911,6 +3911,63 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `131 quick price push isolates stale product foreign key and emits valid price event`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001311"
+        repository.addProduct(
+            Product(
+                barcode = "task131-stale-price-fk",
+                productName = "Task 131 Stale Price FK",
+                purchasePrice = 11.0,
+                retailPrice = 13.0
+            )
+        )
+        val staleLocal = repository.findProductByBarcode("task131-stale-price-fk")!!
+        val staleRef = db.productRemoteRefDao().getByProductId(staleLocal.id)!!
+        db.productRemoteRefDao().updateRemoteApplyState(
+            productId = staleLocal.id,
+            rev = staleRef.localChangeRevision,
+            appliedAt = System.currentTimeMillis(),
+            fingerprint = "stale-remote-product",
+            remoteUpdatedAt = "2026-05-28T10:00:00Z"
+        )
+
+        repository.addProduct(
+            Product(
+                barcode = "task131-valid-price-push",
+                productName = "Task 131 Valid Price Push",
+                purchasePrice = 21.0,
+                retailPrice = 23.0
+            )
+        )
+        val validLocal = repository.findProductByBarcode("task131-valid-price-push")!!
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016().apply {
+            allowedProductIdsProvider = { remote.upsertedProducts.flatten().map { it.id }.toSet() }
+        }
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(2, summary.pushedProductPrices)
+        val validRemoteProductId = db.productRemoteRefDao().getByProductId(validLocal.id)!!.remoteId
+        assertEquals(setOf(validRemoteProductId), priceRemote.upsertBatches.flatten().map { it.productId }.toSet())
+        assertEquals(2, syncEvents.recordedParams.size)
+        val priceEvent = syncEvents.recordedParams.single { it.domain == SyncEventDomains.PRICES }
+        assertEquals(2, priceEvent.entityIds!!.priceIds.size)
+        assertEquals(
+            2,
+            db.productPriceDao().getAllForCloudPush().count { it.productId == staleLocal.id }
+        )
+    }
+
+    @Test
     fun `045 generated import batch emits at most catalog and price events with shared batch`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000452"
         repeat(30) { index ->
@@ -5932,6 +5989,10 @@ private class FakePostgrestUniqueViolation : RuntimeException(
     "httpStatus=409 postgrestCode=23505 duplicate key value violates unique constraint"
 )
 
+private class FakePostgrestForeignKeyViolation : RuntimeException(
+    "httpStatus=409 postgrestCode=23503 insert or update violates foreign key constraint"
+)
+
 private class RecordingPriceRemote016(
     private val configured: Boolean = true
 ) : ProductPriceRemoteDataSource {
@@ -5947,12 +6008,18 @@ private class RecordingPriceRemote016(
     var failIfCalled = false
     var failNextFetch: Throwable? = null
     var failNextUpsert: Throwable? = null
+    var allowedProductIdsProvider: (() -> Set<String>)? = null
     override val isConfigured get() = configured
     override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>): Result<Unit> {
         if (failIfCalled) error("ProductPriceRemoteDataSource should not be called")
         failNextUpsert?.let { t ->
             failNextUpsert = null
             return Result.failure(t)
+        }
+        allowedProductIdsProvider?.invoke()?.let { allowed ->
+            if (rows.any { it.productId !in allowed }) {
+                return Result.failure(FakePostgrestForeignKeyViolation())
+            }
         }
         upsertBatches.add(rows)
         return Result.success(Unit)

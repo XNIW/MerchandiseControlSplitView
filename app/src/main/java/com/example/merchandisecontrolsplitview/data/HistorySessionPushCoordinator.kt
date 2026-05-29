@@ -4,19 +4,27 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.system.measureTimeMillis
 
 class HistorySessionPushCoordinator(
     private val repository: InventoryRepository,
     private val remote: SessionBackupRemoteDataSource,
     private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
+    private val syncEventOutboxDao: SyncEventOutboxDao? = null,
     private val authFlow: StateFlow<AuthState>,
     private val flightOwner: SessionCloudSessionFlightOwner,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
@@ -27,6 +35,13 @@ class HistorySessionPushCoordinator(
         const val DEBOUNCE_MS = 500L
         private const val LOG_SAMPLE_LIMIT = 5
         private const val REASON_LOGIN_FRESH_TICK = "login_fresh_tick"
+        private const val HISTORY_SYNC_EVENT_RECORD_ATTEMPTS = 3
+        private const val HISTORY_SYNC_EVENT_RETRY_DELAY_MS = 500L
+    }
+
+    private val syncEventJson = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
     }
 
     private val dirtyHints = LinkedHashSet<Long>()
@@ -188,8 +203,6 @@ class HistorySessionPushCoordinator(
             .distinct()
             .sorted()
         if (remoteIds.isEmpty() || !syncEventRemote.isConfigured) return
-        val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrNull() ?: return
-        if (!capabilities.recordSyncEventAvailable) return
         val batchId = java.util.UUID.randomUUID().toString()
         val params = SyncEventRecordRpcParams(
             domain = SyncEventDomains.HISTORY,
@@ -202,10 +215,64 @@ class HistorySessionPushCoordinator(
             batchId = batchId,
             clientEventId = "android-$batchId-history-${remoteIds.joinToString(",").hashCode().toUInt().toString(16)}"
         )
-        val recorded = syncEventRemote.recordSyncEvent(params)
-        logger(
-            "cycle=push syncEvent=history outcome=${if (recorded.isSuccess) "ok" else "fail"} " +
-                "sessions=${remoteIds.size} syncType=EVENT_INCREMENTAL fullPull=false"
+        withContext(NonCancellable) {
+            var recorded: Result<SyncEventRemoteRow>? = null
+            var attempts = 0
+            for (index in 0 until HISTORY_SYNC_EVENT_RECORD_ATTEMPTS) {
+                attempts = index + 1
+                val result = syncEventRemote.recordSyncEvent(params)
+                recorded = result
+                if (result.isSuccess) break
+                if (index < HISTORY_SYNC_EVENT_RECORD_ATTEMPTS - 1) {
+                    delay(HISTORY_SYNC_EVENT_RETRY_DELAY_MS)
+                }
+            }
+            val recordedResult = recorded
+            val outboxInserted = if (recordedResult?.isSuccess == true) {
+                0
+            } else {
+                enqueueHistorySyncEvent(ownerUserId, params, recordedResult?.exceptionOrNull())
+            }
+            val outcome = when {
+                recordedResult?.isSuccess == true -> "ok"
+                outboxInserted > 0 -> "enqueued"
+                else -> "fail"
+            }
+            logger(
+                "cycle=push syncEvent=history outcome=$outcome sessions=${remoteIds.size} " +
+                    "syncType=EVENT_INCREMENTAL fullPull=false attempts=$attempts outboxInserted=$outboxInserted"
+            )
+        }
+    }
+
+    private suspend fun enqueueHistorySyncEvent(
+        ownerUserId: String,
+        params: SyncEventRecordRpcParams,
+        error: Throwable?
+    ): Int {
+        val outboxDao = syncEventOutboxDao ?: return 0
+        val ids = params.entityIds ?: SyncEventEntityIds()
+        val metadata = params.metadata
+        val errorType = error?.let { SyncErrorClassifier.classify(it).category.name } ?: "unknown"
+        val inserted = outboxDao.insert(
+            SyncEventOutboxEntry(
+                ownerUserId = ownerUserId,
+                storeScope = params.storeId.orEmpty(),
+                domain = params.domain,
+                eventType = params.eventType,
+                source = params.source,
+                sourceDeviceId = params.sourceDeviceId,
+                batchId = params.batchId,
+                clientEventId = params.clientEventId
+                    ?: "android-history-${params.batchId ?: java.util.UUID.randomUUID()}",
+                changedCount = params.changedCount,
+                entityIdsJson = syncEventJson.encodeToString(ids),
+                metadataJson = syncEventJson.encodeToString(metadata),
+                createdAtMs = System.currentTimeMillis(),
+                lastAttemptAtMs = System.currentTimeMillis(),
+                lastErrorType = errorType
+            )
         )
+        return if (inserted != -1L) 1 else 0
     }
 }

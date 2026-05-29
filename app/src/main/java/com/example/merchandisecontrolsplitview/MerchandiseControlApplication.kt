@@ -193,6 +193,7 @@ class MerchandiseControlApplication : Application() {
             repository = repository,
             remote = sessionBackupRemoteDataSource,
             syncEventRemote = syncEventRemoteDataSource,
+            syncEventOutboxDao = database.syncEventOutboxDao(),
             authFlow = authManager.state,
             flightOwner = sessionCloudSessionFlightOwner,
             logger = { message -> Log.i("HistorySessionSyncV2", message) }

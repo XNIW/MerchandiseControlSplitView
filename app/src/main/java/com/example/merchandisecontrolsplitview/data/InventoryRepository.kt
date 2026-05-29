@@ -350,7 +350,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
     private data class ProductPricePushResult(
         val count: Int,
-        val remoteIds: List<String>
+        val remoteIds: List<String>,
+        val skippedForeignKey: Int = 0
     )
 
     private data class SyncEventDrainResult(
@@ -4131,6 +4132,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val SESSION_BACKUP_PUSH_CHUNK = 80
         const val LOG_SAMPLE_LIMIT = 5
         const val POSTGREST_UNIQUE_VIOLATION = "23505"
+        const val POSTGREST_FOREIGN_KEY_VIOLATION = "23503"
         val COMBINING_MARKS = Regex("\\p{Mn}+")
         val SUPPORTED_SESSION_PAYLOAD_VERSIONS = setOf(
             SESSION_PAYLOAD_VERSION_LEGACY_V1,
@@ -4235,6 +4237,18 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             (text.contains("409") || text.contains("duplicate key"))
     }
 
+    private fun Throwable.isPostgrestForeignKeyViolationConflict(): Boolean {
+        val classification = SyncErrorClassifier.classify(this)
+        if (classification.httpStatus == 409 &&
+            classification.postgrestCode == POSTGREST_FOREIGN_KEY_VIOLATION
+        ) {
+            return true
+        }
+        val text = causeChainText()
+        return text.contains(POSTGREST_FOREIGN_KEY_VIOLATION) &&
+            (text.contains("409") || text.contains("foreign key"))
+    }
+
     private fun Throwable.causeChainText(): String =
         generateSequence(this) { it.cause }
             .mapNotNull { it.message }
@@ -4325,46 +4339,68 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             return ProductPricePushResult(count = 0, remoteIds = emptyList())
         }
         var pushed = 0
+        var processed = 0
         var batchCount = 0
         var totalBatchMs = 0L
+        var skippedForeignKey = 0
         val pushedRemoteIds = mutableListOf<String>()
         for (chunk in rows.chunked(PRODUCT_PRICE_PUSH_CHUNK)) {
             val pairs = chunk.map { r ->
                 val rid = r.existingPriceRemoteId ?: java.util.UUID.randomUUID().toString()
                 r to rid
             }
-            val upsertRows = pairs.map { (r, rid) ->
-                InventoryProductPriceRow(
-                    id = rid,
-                    ownerUserId = ownerUserId,
-                    productId = r.productRemoteId,
-                    type = r.type,
-                    price = r.price,
-                    effectiveAt = r.effectiveAt,
-                    source = r.source,
-                    note = r.note,
-                    createdAt = r.createdAt
-                )
-            }
+            val upsertRows = pairs.map { (r, rid) -> buildProductPricePushRow(r, rid, ownerUserId) }
             val batchStartedAt = System.currentTimeMillis()
-            priceRemote.upsertProductPrices(upsertRows).getOrThrow()
+            val result = priceRemote.upsertProductPrices(upsertRows)
             totalBatchMs += System.currentTimeMillis() - batchStartedAt
             batchCount++
-            db.withTransaction {
+            val firstError = result.exceptionOrNull()
+            if (firstError == null) {
+                markProductPricePushApplied(pairs)
+                pushed += chunk.size
+                pushedRemoteIds += pairs.map { it.second }
+                processed += chunk.size
+            } else if (firstError.isPostgrestForeignKeyViolationConflict()) {
+                Log.w(
+                    TAG,
+                    "price_push_batch_fk_fallback rows=${chunk.size} requireProductSynced=$requireProductSynced"
+                )
                 for ((r, rid) in pairs) {
-                    if (r.existingPriceRemoteId == null) {
-                        productPriceRemoteRefDao.insert(
-                            ProductPriceRemoteRef(productPriceId = r.id, remoteId = rid)
+                    val row = buildProductPricePushRow(r, rid, ownerUserId)
+                    val singleStartedAt = System.currentTimeMillis()
+                    val single = priceRemote.upsertProductPrices(listOf(row))
+                    totalBatchMs += System.currentTimeMillis() - singleStartedAt
+                    batchCount++
+                    val singleError = single.exceptionOrNull()
+                    if (singleError == null) {
+                        markProductPricePushApplied(listOf(r to rid))
+                        pushed++
+                        pushedRemoteIds += rid
+                    } else if (singleError.isPostgrestForeignKeyViolationConflict()) {
+                        skippedForeignKey++
+                        Log.w(
+                            TAG,
+                            "price_push_skip_fk requireProductSynced=$requireProductSynced"
                         )
+                    } else {
+                        throw singleError
                     }
+                    processed++
+                    progressReporter.onProgress(
+                        CatalogSyncProgressState.running(
+                            CatalogSyncStage.SYNC_PRICES_PUSH,
+                            current = processed,
+                            total = rows.size
+                        )
+                    )
                 }
+            } else {
+                throw firstError
             }
-            pushed += chunk.size
-            pushedRemoteIds += pairs.map { it.second }
             progressReporter.onProgress(
                 CatalogSyncProgressState.running(
                     CatalogSyncStage.SYNC_PRICES_PUSH,
-                    current = pushed,
+                    current = processed,
                     total = rows.size
                 )
             )
@@ -4373,10 +4409,46 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             TAG,
             "phase_metrics syncDomain=PRICES phase=SYNC_PRICES_PUSH " +
                 "pricesEvaluated=${candidates.size} pricesEligible=${rows.size} pricesPushed=$pushed " +
-                "requireProductSynced=$requireProductSynced batchSize=$PRODUCT_PRICE_PUSH_CHUNK " +
+                "pricesSkippedForeignKey=$skippedForeignKey requireProductSynced=$requireProductSynced " +
+                "batchSize=$PRODUCT_PRICE_PUSH_CHUNK " +
                 "batchCount=$batchCount avgBatchMs=${if (batchCount == 0) 0 else totalBatchMs / batchCount}"
         )
-        return ProductPricePushResult(count = pushed, remoteIds = pushedRemoteIds.distinct())
+        return ProductPricePushResult(
+            count = pushed,
+            remoteIds = pushedRemoteIds.distinct(),
+            skippedForeignKey = skippedForeignKey
+        )
+    }
+
+    private fun buildProductPricePushRow(
+        row: ProductPricePushRow,
+        remoteId: String,
+        ownerUserId: String
+    ): InventoryProductPriceRow =
+        InventoryProductPriceRow(
+            id = remoteId,
+            ownerUserId = ownerUserId,
+            productId = row.productRemoteId,
+            type = row.type,
+            price = row.price,
+            effectiveAt = row.effectiveAt,
+            source = row.source,
+            note = row.note,
+            createdAt = row.createdAt
+        )
+
+    private suspend fun markProductPricePushApplied(
+        pairs: List<Pair<ProductPricePushRow, String>>
+    ) {
+        db.withTransaction {
+            for ((row, remoteId) in pairs) {
+                if (row.existingPriceRemoteId == null) {
+                    productPriceRemoteRefDao.insert(
+                        ProductPriceRemoteRef(productPriceId = row.id, remoteId = remoteId)
+                    )
+                }
+            }
+        }
     }
 
     /**
