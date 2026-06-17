@@ -29,5 +29,6 @@ data class ProductRemoteRef(
     val lastSyncedLocalRevision: Int = 0,
     val lastRemoteAppliedAt: Long? = null,
     val lastRemotePayloadFingerprint: String? = null,
-    val remoteUpdatedAt: String? = null
+    val remoteUpdatedAt: String? = null,
+    val localChangedFields: String? = null
 )

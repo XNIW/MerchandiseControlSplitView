@@ -16,6 +16,7 @@ import com.example.merchandisecontrolsplitview.data.HistoryEntry
 import com.example.merchandisecontrolsplitview.data.HistoryEntryRemoteRef
 import com.example.merchandisecontrolsplitview.data.InventoryCatalogFetchBundle
 import com.example.merchandisecontrolsplitview.data.InventoryCategoryRow
+import com.example.merchandisecontrolsplitview.data.InventoryProductPatch
 import com.example.merchandisecontrolsplitview.data.InventoryProductPriceRow
 import com.example.merchandisecontrolsplitview.data.InventoryProductRow
 import com.example.merchandisecontrolsplitview.data.InventorySupplierRow
@@ -654,7 +655,9 @@ class Task103CrossPlatformAcceptanceTest {
         val allowedCleanupPrefix = prefix.startsWith("TASK114_") ||
             prefix.startsWith("TASK123_") ||
             prefix.startsWith("TASK125_") ||
-            prefix.startsWith("TASK131_")
+            prefix.startsWith("TASK131_") ||
+            prefix.startsWith("TASK133_") ||
+            prefix.startsWith("TASK134_")
         require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
             "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
         }
@@ -1024,12 +1027,13 @@ class Task103CrossPlatformAcceptanceTest {
             .getString("task115LiveAcceptance")
             ?.lowercase()
         assumeTrue(
-            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true, -e task114LiveAcceptance true or -e task115LiveAcceptance true.",
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true, -e task114LiveAcceptance true, -e task115LiveAcceptance true or -e task134LiveAcceptance true.",
             task103Value == "1" || task103Value == "true" ||
                 task104Value == "1" || task104Value == "true" ||
                 task112Value == "1" || task112Value == "true" ||
                 task114Value == "1" || task114Value == "true" ||
-                task115Value == "1" || task115Value == "true"
+                task115Value == "1" || task115Value == "true" ||
+                isEnabled(args.getString("task134LiveAcceptance")?.lowercase())
         )
     }
 
@@ -1047,8 +1051,10 @@ class Task103CrossPlatformAcceptanceTest {
             ?: args
             .getString("task115RunPrefix")
             ?: args
+            .getString("task134RunPrefix")
+            ?: args
             .getString("task114RunPrefix")
-            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix, task114RunPrefix or task115RunPrefix must be explicitly set for live acceptance.")
+            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix, task114RunPrefix, task115RunPrefix or task134RunPrefix must be explicitly set for live acceptance.")
         assertTrue(
             prefix.startsWith("TASK103_REAL_R") ||
                 prefix.startsWith("TASK104_PASS2_") ||
@@ -1058,7 +1064,9 @@ class Task103CrossPlatformAcceptanceTest {
                 prefix.startsWith("TASK123_") ||
                 prefix.startsWith("TASK124_") ||
                 prefix.startsWith("TASK125_") ||
-                prefix.startsWith("TASK131_")
+                prefix.startsWith("TASK131_") ||
+                prefix.startsWith("TASK133_") ||
+                prefix.startsWith("TASK134_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -1419,6 +1427,8 @@ class Task103CrossPlatformAcceptanceTest {
 
     private data class Fixture(val prefix: String) {
         val logPrefix: String = when {
+            prefix.startsWith("TASK133_") -> "TASK133"
+            prefix.startsWith("TASK134_") -> "TASK134"
             prefix.startsWith("TASK131_") -> "TASK131"
             prefix.startsWith("TASK124_") -> "TASK124"
             prefix.startsWith("TASK125_") -> "TASK125"
@@ -1534,6 +1544,13 @@ class Task103CrossPlatformAcceptanceTest {
 
         override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> =
             delegate.upsertProducts(rows)
+
+        override suspend fun patchProduct(
+            id: String,
+            ownerUserId: String,
+            patch: InventoryProductPatch
+        ): Result<Unit> =
+            delegate.patchProduct(id, ownerUserId, patch)
 
         override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> = runCatching {
             val products = fetchProductsByBarcodes(fixture.allBarcodes)

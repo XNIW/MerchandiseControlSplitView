@@ -81,7 +81,6 @@ class CatalogAutoSyncCoordinator(
             authFlow.collect { state ->
                 if (state is AuthState.SignedIn) {
                     scheduleBootstrap("auth_signed_in")
-                    schedulePush("auth_signed_in")
                 } else {
                     synchronized(dirtyLock) { dirtyHints.clear() }
                     lastBootstrapUserId = null
@@ -238,6 +237,27 @@ class CatalogAutoSyncCoordinator(
             logger("cycle=catalog_push outcome=skip reason=background_policy debounceMs=$debounceMs")
             return
         }
+        if (!isLocalMutationPushReason(reason)) {
+            logger(
+                "cycle=catalog_push outcome=skip reason=automatic_push_safety_guard " +
+                    "originalReason=$reason policy=non_local_trigger debounceMs=$debounceMs"
+            )
+            return
+        }
+        if (repository.shouldRunCatalogBootstrap(auth.userId)) {
+            logger(
+                "cycle=catalog_push outcome=skip reason=automatic_push_safety_guard " +
+                    "originalReason=$reason policy=bootstrap_required debounceMs=$debounceMs"
+            )
+            return
+        }
+        if (!repository.hasCatalogCloudPendingWorkInclusive()) {
+            logger(
+                "cycle=catalog_push outcome=skip reason=no_pending_catalog_work " +
+                    "originalReason=$reason debounceMs=$debounceMs"
+            )
+            return
+        }
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
             dirtyHints.clear()
@@ -311,6 +331,12 @@ class CatalogAutoSyncCoordinator(
             syncStateTracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
         }
     }
+
+    private fun isLocalMutationPushReason(reason: String): Boolean =
+        reason == "local_commit" ||
+            reason == "local_catalog_commit" ||
+            reason.startsWith("local_commit_") ||
+            reason.startsWith("local_catalog_commit_")
 
     internal suspend fun runBootstrapCycle(reason: String) {
         val auth = authFlow.value
@@ -397,6 +423,14 @@ class CatalogAutoSyncCoordinator(
         }
         if (!isForeground) {
             logger("cycle=sync_events_drain outcome=skip reason=background_policy")
+            return
+        }
+        if (repository.shouldRunCatalogBootstrap(auth.userId)) {
+            logger(
+                "cycle=sync_events_drain outcome=skip reason=bootstrap_required " +
+                    "originalReason=$reason"
+            )
+            scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
             return
         }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {

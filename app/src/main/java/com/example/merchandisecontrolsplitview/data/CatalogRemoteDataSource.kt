@@ -14,6 +14,9 @@ interface CatalogRemoteDataSource {
 
     suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit>
 
+    suspend fun patchProduct(id: String, ownerUserId: String, patch: InventoryProductPatch): Result<Unit> =
+        Result.failure(UnsupportedOperationException("patchProduct not implemented"))
+
     suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle>
 
     suspend fun fetchCatalogByIds(

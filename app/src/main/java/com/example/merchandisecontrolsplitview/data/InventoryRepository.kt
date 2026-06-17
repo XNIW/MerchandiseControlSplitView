@@ -528,13 +528,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
     override suspend fun updateProduct(product: Product) {
         withContext(Dispatchers.IO) {
+            val existing = productDao.getById(product.id)
             productDao.update(product)
 
             val now = LocalDateTime.now().format(tSFMT)
 
             product.purchasePrice?.let { priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL") }
             product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
-            touchProductDirty(product.id)
+            val changedFields = existing?.let { productChangedFields(it, product) }.orEmpty()
+            if (changedFields.isNotEmpty()) {
+                touchProductDirty(product.id, changedFields)
+            }
         }
         notifyProductCatalogChanged(product.id)
     }
@@ -574,7 +578,16 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
                 if (priceChanged) {
                     productDao.update(updated)
-                    touchProductDirty(productId)
+                    touchProductDirty(
+                        productId,
+                        setOf(
+                            when (normalizedType) {
+                                "PURCHASE" -> "purchaseprice"
+                                "RETAIL" -> "retailprice"
+                                else -> "__all__"
+                            }
+                        )
+                    )
                 } else if (inserted) {
                     ensureProductRefForPricePushIfMissing(productId)
                 }
@@ -2165,7 +2178,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             CatalogEntityKind.SUPPLIER -> productDao.reassignSupplier(sourceId, replacementId)
             CatalogEntityKind.CATEGORY -> productDao.reassignCategory(sourceId, replacementId)
         }
-        touchedIds.forEach { touchProductDirty(it) }
+        touchedIds.forEach { touchProductDirty(it, setOf("supplier")) }
         return n
     }
 
@@ -2181,7 +2194,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             CatalogEntityKind.SUPPLIER -> productDao.clearSupplierAssignments(id)
             CatalogEntityKind.CATEGORY -> productDao.clearCategoryAssignments(id)
         }
-        touchedIds.forEach { touchProductDirty(it) }
+        touchedIds.forEach { touchProductDirty(it, setOf("category")) }
         return n
     }
 
@@ -2222,7 +2235,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = withContext(Dispatchers.IO) {
-        supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0
+        productDao.count() == 0
     }
 
     override suspend fun getLocalDatabaseStatusSnapshot(ownerUserId: String?): LocalDatabaseStatusSnapshot =
@@ -4529,7 +4542,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
     }
 
-    private suspend fun touchProductDirty(productId: Long) {
+    private suspend fun touchProductDirty(productId: Long, changedFields: Set<String>? = null) {
         if (productRemoteRefDao.getByProductId(productId) == null) {
             productRemoteRefDao.insert(
                 ProductRemoteRef(
@@ -4538,9 +4551,53 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 )
             )
         } else {
-            productRemoteRefDao.incrementLocalRevision(productId)
+            val encoded = encodeProductChangedFields(changedFields)
+            if (encoded == null) {
+                productRemoteRefDao.incrementLocalRevision(productId)
+            } else {
+                productRemoteRefDao.markLocalChanged(productId, encoded)
+            }
         }
     }
+
+    private fun productChangedFields(old: Product, new: Product): Set<String> =
+        buildSet {
+            if (old.barcode != new.barcode) add("barcode")
+            if (old.itemNumber != new.itemNumber) add("itemnumber")
+            if (old.productName != new.productName) add("productname")
+            if (old.secondProductName != new.secondProductName) add("secondproductname")
+            if (!nullableDoubleEquals(old.purchasePrice, new.purchasePrice)) add("purchaseprice")
+            if (!nullableDoubleEquals(old.retailPrice, new.retailPrice)) add("retailprice")
+            if (old.supplierId != new.supplierId) add("supplier")
+            if (old.categoryId != new.categoryId) add("category")
+            if (!nullableDoubleEquals(old.stockQuantity, new.stockQuantity)) add("stockquantity")
+        }
+
+    private fun nullableDoubleEquals(lhs: Double?, rhs: Double?): Boolean =
+        when {
+            lhs == null && rhs == null -> true
+            lhs == null || rhs == null -> false
+            else -> abs(lhs - rhs) <= IMPORT_DIRTY_PRICE_TOLERANCE
+        }
+
+    private fun encodeProductChangedFields(fields: Set<String>?): String? {
+        val normalized = fields
+            ?.map { it.trim().lowercase(Locale.ROOT) }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            .orEmpty()
+        if (normalized.isEmpty()) return null
+        if ("__all__" in normalized) return "__all__"
+        return normalized.sorted().joinToString(",")
+    }
+
+    private fun decodeProductChangedFields(raw: String?): Set<String> =
+        raw
+            ?.split(',')
+            ?.map { it.trim().lowercase(Locale.ROOT) }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            .orEmpty()
 
     private suspend fun ensureProductRefForPricePushIfMissing(productId: Long): Boolean {
         if (productRemoteRefDao.getByProductId(productId) != null) return false
@@ -4703,22 +4760,43 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             val ref = candidate.remoteRef ?: ensureProductRefForPush(p.id)
             if (productNeedsPush(ref)) {
                 dirty++
-                val row = buildProductPushRow(
-                    product = productForPush,
-                    ref = ref,
-                    ownerUserId = ownerUserId,
-                    allowCreatingDependencyRefs = allowCreatingDependencyRefs
-                )
-                if (row == null) {
-                    skippedMissingDependencyRef++
+                if (canPatchProduct(ref)) {
+                    val patch = buildProductPatch(
+                        product = productForPush,
+                        ref = ref,
+                        allowCreatingDependencyRefs = allowCreatingDependencyRefs
+                    )
+                    if (patch == null) {
+                        skippedMissingDependencyRef++
+                    } else if (!patch.isEmpty) {
+                        val startedAt = System.currentTimeMillis()
+                        remote.patchProduct(ref.remoteId, ownerUserId, patch).getOrThrow()
+                        accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
+                        accumulator.batchCount++
+                        markProductPatchApplied(productForPush.id, ref, patch)
+                        accumulator.pushed++
+                        accumulator.remoteIds += ref.remoteId
+                    }
                     accumulator.completed++
                     reportProductPushProgress(progressReporter, accumulator.completed, candidates.size)
                 } else {
-                    prepared += ProductPushCandidatePrepared(
+                    val row = buildProductPushRow(
                         product = productForPush,
                         ref = ref,
-                        row = row
+                        ownerUserId = ownerUserId,
+                        allowCreatingDependencyRefs = allowCreatingDependencyRefs
                     )
+                    if (row == null) {
+                        skippedMissingDependencyRef++
+                        accumulator.completed++
+                        reportProductPushProgress(progressReporter, accumulator.completed, candidates.size)
+                    } else {
+                        prepared += ProductPushCandidatePrepared(
+                            product = productForPush,
+                            ref = ref,
+                            row = row
+                        )
+                    }
                 }
             } else {
                 skippedAlreadySynced++
@@ -5018,6 +5096,55 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         )
     }
 
+    private fun canPatchProduct(ref: ProductRemoteRef): Boolean {
+        val fields = decodeProductChangedFields(ref.localChangedFields)
+        return ref.lastRemoteAppliedAt != null && fields.isNotEmpty() && "__all__" !in fields
+    }
+
+    private suspend fun buildProductPatch(
+        product: Product,
+        ref: ProductRemoteRef,
+        allowCreatingDependencyRefs: Boolean = true
+    ): InventoryProductPatch? {
+        val fields = decodeProductChangedFields(ref.localChangedFields)
+        if (fields.isEmpty() || "__all__" in fields) return null
+        val supplierRemoteId = if ("supplier" in fields) {
+            product.supplierId?.let { supplierId ->
+                if (allowCreatingDependencyRefs) {
+                    ensureSupplierRefForPush(supplierId).remoteId
+                } else {
+                    supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId ?: return null
+                }
+            }
+        } else {
+            null
+        }
+        val categoryRemoteId = if ("category" in fields) {
+            product.categoryId?.let { categoryId ->
+                if (allowCreatingDependencyRefs) {
+                    ensureCategoryRefForPush(categoryId).remoteId
+                } else {
+                    categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId ?: return null
+                }
+            }
+        } else {
+            null
+        }
+        return InventoryProductPatch(
+            changedFields = fields,
+            barcode = product.barcode,
+            itemNumber = product.itemNumber,
+            productName = product.productName,
+            secondProductName = product.secondProductName,
+            purchasePrice = product.purchasePrice,
+            retailPrice = product.retailPrice,
+            supplierId = supplierRemoteId,
+            categoryId = categoryRemoteId,
+            stockQuantity = product.stockQuantity,
+            deletedAt = null
+        )
+    }
+
     private suspend fun pushCatalogSupplierRow(
         remote: CatalogRemoteDataSource,
         ownerUserId: String,
@@ -5143,6 +5270,39 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             row.updatedAt
         )
     }
+
+    private suspend fun markProductPatchApplied(
+        productId: Long,
+        ref: ProductRemoteRef,
+        patch: InventoryProductPatch
+    ) {
+        productRemoteRefDao.updateRemoteApplyState(
+            productId,
+            ref.localChangeRevision,
+            System.currentTimeMillis(),
+            fingerprintProductPatch(ref.lastRemotePayloadFingerprint, patch),
+            null
+        )
+    }
+
+    private fun fingerprintProductPatch(base: String?, patch: InventoryProductPatch): String =
+        buildString {
+            append("patch:")
+            append(base.orEmpty())
+            append('|')
+            append(patch.changedFields.sorted().joinToString(","))
+            append('|')
+            if (patch.includes("barcode")) append("barcode=").append(patch.barcode)
+            if (patch.includes("itemnumber")) append("itemNumber=").append(patch.itemNumber)
+            if (patch.includes("productname")) append("productName=").append(patch.productName)
+            if (patch.includes("secondproductname")) append("secondProductName=").append(patch.secondProductName)
+            if (patch.includes("purchaseprice")) append("purchasePrice=").append(patch.purchasePrice)
+            if (patch.includes("retailprice")) append("retailPrice=").append(patch.retailPrice)
+            if (patch.includes("supplier")) append("supplierId=").append(patch.supplierId)
+            if (patch.includes("category")) append("categoryId=").append(patch.categoryId)
+            if (patch.includes("stockquantity")) append("stockQuantity=").append(patch.stockQuantity)
+            if (patch.includes("tombstone")) append("deletedAt=").append(patch.deletedAt)
+        }
 
     private suspend fun reconcileSupplierBridgeAfterUniqueConflict(
         remote: CatalogRemoteDataSource,

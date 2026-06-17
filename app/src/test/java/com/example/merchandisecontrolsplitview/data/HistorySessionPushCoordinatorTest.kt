@@ -58,7 +58,7 @@ class HistorySessionPushCoordinatorTest {
     }
 
     @Test
-    fun `110 login fresh tick bootstraps then runs full reconciliation push`() = runTest {
+    fun `132 login fresh tick bootstraps but skips history push when no pending sessions`() = runTest {
         val repository = mockk<InventoryRepository>()
         val logs = mutableListOf<String>()
         val owner = "00000000-0000-4000-8000-000000000110"
@@ -77,13 +77,60 @@ class HistorySessionPushCoordinatorTest {
                 unsupported = 0
             )
         )
+        coEvery { repository.getPendingHistorySessionPushUids() } returns emptyList()
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("login_fresh_tick")
+
+        coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
+        coVerify(exactly = 1) { repository.getPendingHistorySessionPushUids() }
+        coVerify(exactly = 0) { repository.pushHistorySessionsToRemote(any(), any(), any()) }
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=ok") &&
+                    it.contains("dirtySetMode=full_reconcile") &&
+                    it.contains("bootstrapInserted=1") &&
+                    it.contains("sessionsUploaded=0")
+            }
+        )
+    }
+
+    @Test
+    fun `132 login fresh tick pushes only pending history sessions after bootstrap`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000132"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returns Result.success(
+            RemoteSessionBatchResult(
+                inserted = 0,
+                updated = 1,
+                skipped = 0,
+                failed = 0,
+                unsupported = 0
+            )
+        )
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(132L)
         coEvery {
-            repository.pushHistorySessionsToRemote(any(), owner, null)
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(132L))
         } returns Result.success(
             HistorySessionBackupPushSummary(
-                uploaded = 2,
+                uploaded = 1,
                 skippedAlreadySynced = 0,
-                attempted = 2
+                attempted = 1
             )
         )
         val coordinator = HistorySessionPushCoordinator(
@@ -99,14 +146,14 @@ class HistorySessionPushCoordinatorTest {
         coordinator.runPushCycle("login_fresh_tick")
 
         coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
-        coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), owner, null) }
-        coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
+        coVerify(exactly = 1) { repository.getPendingHistorySessionPushUids() }
+        coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), owner, setOf(132L)) }
+        coVerify(exactly = 0) { repository.pushHistorySessionsToRemote(any(), owner, null) }
         assertTrue(
             logs.any {
                 it.contains("cycle=push outcome=ok") &&
                     it.contains("dirtySetMode=full_reconcile") &&
-                    it.contains("bootstrapInserted=1") &&
-                    it.contains("sessionsUploaded=2")
+                    it.contains("sessionsUploaded=1")
             }
         )
     }

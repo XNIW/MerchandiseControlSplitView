@@ -28,7 +28,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncEventOutboxEntry::class
     ],
     views = [ProductPriceSummary::class],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -357,6 +357,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 17 -> 18: field mask locale per patch-only product push (TASK-134).
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE product_remote_refs ADD COLUMN localChangedFields TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -380,7 +387,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_13_14,
                         MIGRATION_14_15,
                         MIGRATION_15_16,
-                        MIGRATION_16_17
+                        MIGRATION_16_17,
+                        MIGRATION_17_18
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

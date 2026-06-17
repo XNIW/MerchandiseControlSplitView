@@ -139,11 +139,17 @@ class HistorySessionPushCoordinator(
                 durationMs = measureTimeMillis {
                     if (fullReconciliation) {
                         bootstrap = repository.bootstrapHistorySessionsFromRemote(remote).getOrThrow()
-                        summary = repository
-                            .pushHistorySessionsToRemote(remote, auth.userId, candidateUids = null)
-                            .getOrThrow()
-                        pendingSize = summary?.attempted ?: 0
-                        coalesced = coalesced || pendingSize > 1
+                        val pending = repository.getPendingHistorySessionPushUids().toSet()
+                        pendingSize = pending.size
+                        pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
+                        coalesced = coalesced || pending.size > 1
+                        if (pending.isEmpty()) {
+                            emptyPending = true
+                        } else {
+                            summary = repository
+                                .pushHistorySessionsToRemote(remote, auth.userId, pending)
+                                .getOrThrow()
+                        }
                     } else {
                         val pending = repository.getPendingHistorySessionPushUids().toSet()
                         pendingSize = pending.size
@@ -159,15 +165,6 @@ class HistorySessionPushCoordinator(
                     }
                 }
             }
-            if (emptyPending) {
-                logger(
-                    "cycle=push outcome=ok reason=$reason sessionsAttempted=0 sessionsUploaded=0 " +
-                        "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push"
-                )
-                return
-            }
-            val s = summary
-            recordHistorySyncEventIfNeeded(auth.userId, s)
             val b = bootstrap
             val bootstrapSummary = if (b != null) {
                 " bootstrapInserted=${b.inserted} bootstrapUpdated=${b.updated} " +
@@ -175,6 +172,16 @@ class HistorySessionPushCoordinator(
             } else {
                 ""
             }
+            if (emptyPending) {
+                logger(
+                    "cycle=push outcome=ok reason=$reason sessionsAttempted=0 sessionsUploaded=0 " +
+                        "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push" +
+                        bootstrapSummary
+                )
+                return
+            }
+            val s = summary
+            recordHistorySyncEventIfNeeded(auth.userId, s)
             logger(
                 "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
                     "sessionsAttempted=${s?.attempted ?: pendingSize} sessionsUploaded=${s?.uploaded ?: 0} " +

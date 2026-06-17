@@ -46,6 +46,23 @@ data class InventoryProductRow(
     val deletedAt: String? = null
 )
 
+data class InventoryProductPatch(
+    val changedFields: Set<String>,
+    val barcode: String? = null,
+    val itemNumber: String? = null,
+    val productName: String? = null,
+    val secondProductName: String? = null,
+    val purchasePrice: Double? = null,
+    val retailPrice: Double? = null,
+    val supplierId: String? = null,
+    val categoryId: String? = null,
+    val stockQuantity: Double? = null,
+    val deletedAt: String? = null
+) {
+    fun includes(field: String): Boolean = changedFields.contains(field)
+    val isEmpty: Boolean get() = changedFields.isEmpty()
+}
+
 /** Patch minimo per tombstone remoto (UPDATE `deleted_at` / `updated_at`). */
 data class CatalogTombstonePatch(
     val id: String,

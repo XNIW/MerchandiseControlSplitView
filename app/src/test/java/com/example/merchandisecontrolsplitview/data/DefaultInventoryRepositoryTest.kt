@@ -825,6 +825,64 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `134 product name update pushes patch only and preserves remote prices`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001341"
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "134-patch-name-only",
+            productName = "Remote Name 134",
+            purchasePrice = 13.0,
+            retailPrice = 23.0
+        )
+        val remoteId = db.productRemoteRefDao().getByProductId(product.id)!!.remoteId
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = remoteId,
+                        ownerUserId = owner,
+                        barcode = product.barcode,
+                        productName = "Remote Name 134",
+                        purchasePrice = 99.0,
+                        retailPrice = 199.0
+                    )
+                )
+            )
+        )
+
+        repository.updateProduct(product.copy(productName = "Local Name 134"))
+
+        val dirtyRef = db.productRemoteRefDao().getByProductId(product.id)!!
+        assertEquals("productname", dirtyRef.localChangedFields)
+
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        assertTrue(remote.upsertedProducts.isEmpty())
+        val patchCall = remote.patchedProducts.single()
+        assertEquals(remoteId, patchCall.id)
+        assertEquals(owner, patchCall.ownerUserId)
+        assertEquals(setOf("productname"), patchCall.patch.changedFields)
+        assertEquals("Local Name 134", patchCall.patch.productName)
+        assertFalse(patchCall.patch.includes("purchaseprice"))
+        assertFalse(patchCall.patch.includes("retailprice"))
+
+        val remoteProduct = remote.fetchCatalog().getOrThrow().products.single()
+        assertEquals("Local Name 134", remoteProduct.productName)
+        assertEquals(99.0, remoteProduct.purchasePrice!!, 0.0001)
+        assertEquals(199.0, remoteProduct.retailPrice!!, 0.0001)
+        val syncedRef = db.productRemoteRefDao().getByProductId(product.id)!!
+        assertNull(syncedRef.localChangedFields)
+        assertEquals(dirtyRef.localChangeRevision, syncedRef.lastSyncedLocalRevision)
+    }
+
+    @Test
     fun `068 purchasePrice update dirties only purchase price rows`() = runTest {
         val product = seedSyncedProductWithPriceBridge(
             barcode = "068-purchase-price-delta",
@@ -2562,6 +2620,14 @@ class DefaultInventoryRepositoryTest {
             )
         )
         assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+    }
+
+    @Test
+    fun `132 catalog bootstrap is required when history lookups exist but products are empty`() = runTest {
+        db.supplierDao().insert(Supplier(name = "T102 Supplier"))
+        db.categoryDao().insert(Category(name = "T102 Category"))
+
+        assertTrue(repository.shouldRunCatalogBootstrap("owner-task-132"))
     }
 
     @Test
@@ -5840,6 +5906,7 @@ private class FakeCatalogRemote016(
     val upsertedSuppliers = mutableListOf<List<InventorySupplierRow>>()
     val upsertedCategories = mutableListOf<List<InventoryCategoryRow>>()
     val upsertedProducts = mutableListOf<List<InventoryProductRow>>()
+    val patchedProducts = mutableListOf<FakeProductPatchCall>()
     val productUpsertAttemptSizes = mutableListOf<Int>()
     var fetchCount = 0
     var targetedFetchCount = 0
@@ -5862,6 +5929,13 @@ private class FakeCatalogRemote016(
         upsertedSuppliers.flatten().forEach { suppliers[it.id] = it }
         upsertedCategories.flatten().forEach { categories[it.id] = it }
         upsertedProducts.flatten().forEach { products[it.id] = it }
+        patchedProducts.forEach { call ->
+            products[call.id] = (products[call.id] ?: InventoryProductRow(
+                id = call.id,
+                ownerUserId = call.ownerUserId,
+                barcode = call.patch.barcode ?: "<patched>"
+            )).applyPatch(call)
+        }
         supplierTombstones.forEach { patch ->
             suppliers[patch.id] = suppliers[patch.id]?.copy(
                 updatedAt = patch.updatedAt,
@@ -5936,6 +6010,10 @@ private class FakeCatalogRemote016(
         upsertedProducts.add(rows)
         return Result.success(Unit)
     }
+    override suspend fun patchProduct(id: String, ownerUserId: String, patch: InventoryProductPatch): Result<Unit> {
+        patchedProducts.add(FakeProductPatchCall(id, ownerUserId, patch))
+        return Result.success(Unit)
+    }
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> {
         fetchCount++
         failNextFetch?.let { t ->
@@ -5983,6 +6061,28 @@ private class FakeCatalogRemote016(
         productTombstones.add(patch)
         return Result.success(Unit)
     }
+}
+
+private data class FakeProductPatchCall(
+    val id: String,
+    val ownerUserId: String,
+    val patch: InventoryProductPatch
+)
+
+private fun InventoryProductRow.applyPatch(call: FakeProductPatchCall): InventoryProductRow {
+    val patch = call.patch
+    return copy(
+        barcode = if (patch.includes("barcode")) patch.barcode ?: barcode else barcode,
+        itemNumber = if (patch.includes("itemnumber")) patch.itemNumber else itemNumber,
+        productName = if (patch.includes("productname")) patch.productName else productName,
+        secondProductName = if (patch.includes("secondproductname")) patch.secondProductName else secondProductName,
+        purchasePrice = if (patch.includes("purchaseprice")) patch.purchasePrice else purchasePrice,
+        retailPrice = if (patch.includes("retailprice")) patch.retailPrice else retailPrice,
+        supplierId = if (patch.includes("supplier")) patch.supplierId else supplierId,
+        categoryId = if (patch.includes("category")) patch.categoryId else categoryId,
+        stockQuantity = if (patch.includes("stockquantity")) patch.stockQuantity else stockQuantity,
+        deletedAt = if (patch.includes("tombstone")) patch.deletedAt else deletedAt
+    )
 }
 
 private class FakePostgrestUniqueViolation : RuntimeException(

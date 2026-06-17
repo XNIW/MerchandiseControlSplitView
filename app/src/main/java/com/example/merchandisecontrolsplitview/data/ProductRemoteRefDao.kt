@@ -25,6 +25,7 @@ interface ProductRemoteRefDao {
     @Query(
         """
         UPDATE product_remote_refs SET localChangeRevision = localChangeRevision + 1
+        , localChangedFields = '__all__'
         WHERE productId = :productId
         """
     )
@@ -32,10 +33,20 @@ interface ProductRemoteRefDao {
 
     @Query(
         """
+        UPDATE product_remote_refs SET localChangeRevision = localChangeRevision + 1,
+        localChangedFields = :changedFields
+        WHERE productId = :productId
+        """
+    )
+    suspend fun markLocalChanged(productId: Long, changedFields: String)
+
+    @Query(
+        """
         UPDATE product_remote_refs SET lastSyncedLocalRevision = :rev,
         lastRemoteAppliedAt = :appliedAt,
         lastRemotePayloadFingerprint = :fingerprint,
-        remoteUpdatedAt = COALESCE(:remoteUpdatedAt, remoteUpdatedAt)
+        remoteUpdatedAt = COALESCE(:remoteUpdatedAt, remoteUpdatedAt),
+        localChangedFields = NULL
         WHERE productId = :productId
         """
     )

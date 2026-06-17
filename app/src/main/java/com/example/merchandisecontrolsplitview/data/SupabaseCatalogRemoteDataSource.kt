@@ -42,6 +42,35 @@ class SupabaseCatalogRemoteDataSource(
             }
         }
 
+    override suspend fun patchProduct(
+        id: String,
+        ownerUserId: String,
+        patch: InventoryProductPatch
+    ): Result<Unit> =
+        runCatching {
+            if (patch.isEmpty) return@runCatching
+            requireClient().postgrest["inventory_products"].update(
+                update = {
+                    if (patch.includes("barcode")) set("barcode", patch.barcode)
+                    if (patch.includes("itemnumber")) set("item_number", patch.itemNumber)
+                    if (patch.includes("productname")) set("product_name", patch.productName)
+                    if (patch.includes("secondproductname")) set("second_product_name", patch.secondProductName)
+                    if (patch.includes("purchaseprice")) set("purchase_price", patch.purchasePrice)
+                    if (patch.includes("retailprice")) set("retail_price", patch.retailPrice)
+                    if (patch.includes("supplier")) set("supplier_id", patch.supplierId)
+                    if (patch.includes("category")) set("category_id", patch.categoryId)
+                    if (patch.includes("stockquantity")) set("stock_quantity", patch.stockQuantity)
+                    if (patch.includes("tombstone")) set("deleted_at", patch.deletedAt)
+                },
+                request = {
+                    filter {
+                        eq("id", id)
+                        eq("owner_user_id", ownerUserId)
+                    }
+                }
+            )
+        }
+
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         runCatching {
             val pg = requireClient().postgrest

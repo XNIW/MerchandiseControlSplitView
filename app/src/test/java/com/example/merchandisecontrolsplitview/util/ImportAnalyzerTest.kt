@@ -390,6 +390,26 @@ class ImportAnalyzerTest {
     }
 
     @Test
+    fun `analyzeStreaming keeps missing supplier and category deferred without preview writes`() = runTest {
+        val analysis = analyzeStreaming(
+            chunks = sequenceOf(
+                listOf(
+                    importedRow(
+                        supplier = "Streaming Supplier",
+                        category = "Streaming Category"
+                    )
+                )
+            )
+        )
+
+        val product = analysis.newProducts.single()
+        assertTrue((product.supplierId ?: 0L) < 0L)
+        assertTrue((product.categoryId ?: 0L) < 0L)
+        coVerify(exactly = 0) { repository.addSupplier(any()) }
+        coVerify(exactly = 0) { repository.addCategory(any()) }
+    }
+
+    @Test
     fun `analyzeStreaming merges cross chunk duplicates with last row wins and aggregated quantity`() = runTest {
         val analysis = analyzeStreaming(
             chunks = sequenceOf(

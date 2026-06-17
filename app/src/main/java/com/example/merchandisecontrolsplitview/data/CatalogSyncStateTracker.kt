@@ -130,6 +130,8 @@ interface CatalogSyncProgressRepository {
 interface CatalogAutoSyncRepository {
     suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = true
 
+    suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = true
+
     suspend fun pushDirtyCatalogDeltaToRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
