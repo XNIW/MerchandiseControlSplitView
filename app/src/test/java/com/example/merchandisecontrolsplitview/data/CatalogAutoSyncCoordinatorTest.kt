@@ -107,6 +107,33 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `132D local dirty push schedules final sync event drain`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+        }
+        val tracker = CatalogSyncStateTracker()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L
+        )
+        runCurrent()
+
+        coordinator.runPushCycle("local_commit")
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(1, repository.drainCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
     fun `132 sync event drain yields to catalog bootstrap when bootstrap is required`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = true
@@ -208,9 +235,10 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
-    fun `114 foreground does not run bootstrap when local baseline is already usable`() = runTest {
+    fun `132D foreground runs pull only reconcile when local baseline is already usable`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = false
+            hasPendingWork = false
         }
         val tracker = CatalogSyncStateTracker()
         val logs = mutableListOf<String>()
@@ -228,8 +256,12 @@ class CatalogAutoSyncCoordinatorTest {
 
         coordinator.runBootstrapCycle("foreground")
 
-        assertEquals(0, repository.bootstrapCalls)
-        assertTrue(logs.any { it.contains("reason=not_needed") })
+        assertEquals(1, repository.bootstrapCalls)
+        assertEquals(0, repository.pushCalls)
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertEquals(CatalogSyncFlightOwner.BOOTSTRAP, tracker.lastOutcome.value?.source)
+        assertEquals(USER_ID, tracker.lastOutcome.value?.ownerUserId)
+        assertTrue(logs.any { it.contains("bootstrapRequired=false") && it.contains("pullOnly=true") })
         coordinator.shutdown()
     }
 

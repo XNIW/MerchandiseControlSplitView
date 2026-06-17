@@ -81,6 +81,7 @@ class CatalogAutoSyncCoordinator(
             authFlow.collect { state ->
                 if (state is AuthState.SignedIn) {
                     scheduleBootstrap("auth_signed_in")
+                    scheduleSyncEventDrain("auth_signed_in")
                 } else {
                     synchronized(dirtyLock) { dirtyHints.clear() }
                     lastBootstrapUserId = null
@@ -315,6 +316,7 @@ class CatalogAutoSyncCoordinator(
                     "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
                     "priceSyncFailed=${s?.priceSyncFailed ?: false}"
             )
+            scheduleSyncEventDrain("local_push_completed")
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -354,7 +356,9 @@ class CatalogAutoSyncCoordinator(
         }
         val now = System.currentTimeMillis()
         val forcedByRemoteGap = reason == BOOTSTRAP_REASON_SYNC_EVENT_GAP
-        if (!forcedByRemoteGap && !repository.shouldRunCatalogBootstrap(auth.userId)) {
+        val bootstrapRequired = repository.shouldRunCatalogBootstrap(auth.userId)
+        val automaticPullReconcile = isAutomaticPullReconcileReason(reason)
+        if (!forcedByRemoteGap && !bootstrapRequired && !automaticPullReconcile) {
             logger("cycle=catalog_bootstrap outcome=skip reason=not_needed")
             return
         }
@@ -388,8 +392,12 @@ class CatalogAutoSyncCoordinator(
             lastBootstrapUserId = auth.userId
             lastBootstrapOkAtMs = System.currentTimeMillis()
             val s = summary
+            s?.let {
+                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.BOOTSTRAP, it)
+            }
             logger(
                 "cycle=catalog_bootstrap outcome=ok reason=$reason durationMs=$durationMs " +
+                    "bootstrapRequired=$bootstrapRequired pullOnly=true " +
                     "productsPulled=${s?.pulledProducts ?: 0} suppliersPulled=${s?.pulledSuppliers ?: 0} " +
                     "categoriesPulled=${s?.pulledCategories ?: 0} pricesPulled=${s?.pulledProductPrices ?: 0} " +
                     "priceSyncFailed=${s?.priceSyncFailed ?: false}"
@@ -410,6 +418,14 @@ class CatalogAutoSyncCoordinator(
             syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
         }
     }
+
+    private fun isAutomaticPullReconcileReason(reason: String): Boolean =
+        reason == "auth_signed_in" ||
+            reason == "foreground" ||
+            reason == "network_available" ||
+            reason.startsWith("auth_signed_in_") ||
+            reason.startsWith("foreground_") ||
+            reason.startsWith("network_available_")
 
     internal suspend fun runSyncEventDrainCycle(reason: String) {
         val auth = authFlow.value

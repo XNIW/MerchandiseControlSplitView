@@ -268,6 +268,19 @@ class CatalogSyncViewModel(
                 }
             }
         }
+        viewModelScope.launch {
+            combine(authFlow, trackerOutcomeFlow) { auth, outcome ->
+                if (auth is AuthState.SignedIn && outcome?.ownerUserId == auth.userId) {
+                    outcome
+                } else {
+                    null
+                }
+            }.collect { outcome ->
+                if (outcome != null) {
+                    applyTrackerOutcome(outcome)
+                }
+            }
+        }
         refreshLocalDatabaseStatus()
     }
 
@@ -820,6 +833,20 @@ class CatalogSyncViewModel(
                 localDatabaseStatusLoading.value = false
             }
         }
+    }
+
+    private suspend fun applyTrackerOutcome(outcome: CatalogSyncOutcomeState) {
+        lastCatalogSyncSummary.value = outcome.summary
+        lastSuccessAt.value = System.currentTimeMillis()
+        lastErrorKind.value = if (outcome.summary.priceSyncFailed) {
+            ErrorKind.CatalogOkPricesIncomplete
+        } else {
+            null
+        }
+        pendingHint.value = runCatching {
+            repository.hasCatalogCloudPendingWorkInclusive()
+        }.getOrDefault(pendingHint.value)
+        refreshLocalDatabaseStatus()
     }
 
     private fun startSyncProgress(source: String, firstStage: CatalogSyncStage): Long {

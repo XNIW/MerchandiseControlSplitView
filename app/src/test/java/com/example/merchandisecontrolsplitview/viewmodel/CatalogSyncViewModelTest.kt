@@ -110,6 +110,60 @@ class CatalogSyncViewModelTest {
     }
 
     @Test
+    fun `132D automatic bootstrap outcome marks signed-in UI synced`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "automatic@example.test")
+        )
+        val tracker = CatalogSyncStateTracker()
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_pending),
+            viewModel.uiState.value.primaryMessage
+        )
+
+        tracker.publishSummary(
+            OWNER_VM_021,
+            CatalogSyncFlightOwner.BOOTSTRAP,
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 1,
+                pulledCategories = 1,
+                pulledProducts = 1,
+                pulledProductPrices = 1
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_synced),
+            viewModel.uiState.value.primaryMessage
+        )
+        coVerify(atLeast = 1) {
+            repository.hasCatalogCloudPendingWorkInclusive()
+        }
+
+        collectJob.cancel()
+    }
+
+    @Test
     fun `021 fresh signed-in manual refresh bootstraps catalog and then reports synced`() = runTest {
         val repository = mockk<InventoryRepository>()
         coEvery {
