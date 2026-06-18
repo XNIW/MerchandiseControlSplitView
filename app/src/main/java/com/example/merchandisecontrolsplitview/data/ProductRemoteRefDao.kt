@@ -95,7 +95,8 @@ interface ProductRemoteRefDao {
     @Query(
         """
         SELECT * FROM product_remote_refs
-        WHERE localChangeRevision <= lastSyncedLocalRevision
+        WHERE lastRemoteAppliedAt IS NOT NULL
+          AND localChangeRevision <= lastSyncedLocalRevision
         """
     )
     suspend fun getCleanRefs(): List<ProductRemoteRef>

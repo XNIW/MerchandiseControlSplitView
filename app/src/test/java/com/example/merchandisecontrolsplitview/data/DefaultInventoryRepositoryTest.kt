@@ -87,6 +87,75 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `135 backfill cleanup removes only cloud-linked generated price rows`() = runTest {
+        val now = LocalDateTime.now().format(timestampFormatter)
+        db.productDao().insert(
+            Product(
+                barcode = "task135-cloud-linked",
+                productName = "TASK135 cloud linked",
+                purchasePrice = 44.1,
+                retailPrice = 55.2
+            )
+        )
+        db.productDao().insert(
+            Product(
+                barcode = "task135-local-only",
+                productName = "TASK135 local only",
+                purchasePrice = 11.0,
+                retailPrice = 22.0
+            )
+        )
+        val cloudProduct = db.productDao().findByBarcode("task135-cloud-linked")!!
+        val localProduct = db.productDao().findByBarcode("task135-local-only")!!
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(
+                productId = cloudProduct.id,
+                remoteId = "00000000-0000-4000-8000-000000013501"
+            )
+        )
+        val cloudGenerated = db.productPriceDao().insert(
+            ProductPrice(
+                productId = cloudProduct.id,
+                type = "PURCHASE",
+                price = 44.1,
+                effectiveAt = now,
+                source = "BACKFILL_CURR",
+                createdAt = now
+            )
+        )
+        val cloudManual = db.productPriceDao().insert(
+            ProductPrice(
+                productId = cloudProduct.id,
+                type = "RETAIL",
+                price = 55.2,
+                effectiveAt = "$now manual",
+                source = "MANUAL",
+                createdAt = now
+            )
+        )
+        val localGenerated = db.productPriceDao().insert(
+            ProductPrice(
+                productId = localProduct.id,
+                type = "PURCHASE",
+                price = 11.0,
+                effectiveAt = now,
+                source = "BACKFILL_CURR",
+                createdAt = now
+            )
+        )
+
+        assertEquals(1, db.productPriceDao().deleteCloudLinkedBackfillRowsWithoutRemoteRef())
+
+        val remainingIds = db.productPriceDao()
+            .getForProducts(listOf(cloudProduct.id, localProduct.id))
+            .map { it.id }
+            .toSet()
+        assertFalse(remainingIds.contains(cloudGenerated))
+        assertTrue(remainingIds.contains(cloudManual))
+        assertTrue(remainingIds.contains(localGenerated))
+    }
+
+    @Test
     fun `updateProduct appends only changed manual price history`() = runTest {
         repository.addProduct(
             Product(

@@ -657,7 +657,8 @@ class Task103CrossPlatformAcceptanceTest {
             prefix.startsWith("TASK125_") ||
             prefix.startsWith("TASK131_") ||
             prefix.startsWith("TASK133_") ||
-            prefix.startsWith("TASK134_")
+            prefix.startsWith("TASK134_") ||
+            prefix.startsWith("TASK135_")
         require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
             "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
         }
@@ -1066,7 +1067,8 @@ class Task103CrossPlatformAcceptanceTest {
                 prefix.startsWith("TASK125_") ||
                 prefix.startsWith("TASK131_") ||
                 prefix.startsWith("TASK133_") ||
-                prefix.startsWith("TASK134_")
+                prefix.startsWith("TASK134_") ||
+                prefix.startsWith("TASK135_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -1429,6 +1431,7 @@ class Task103CrossPlatformAcceptanceTest {
         val logPrefix: String = when {
             prefix.startsWith("TASK133_") -> "TASK133"
             prefix.startsWith("TASK134_") -> "TASK134"
+            prefix.startsWith("TASK135_") -> "TASK135"
             prefix.startsWith("TASK131_") -> "TASK131"
             prefix.startsWith("TASK124_") -> "TASK124"
             prefix.startsWith("TASK125_") -> "TASK125"

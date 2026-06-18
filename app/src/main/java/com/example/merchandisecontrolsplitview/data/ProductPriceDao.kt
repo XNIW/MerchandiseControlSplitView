@@ -101,6 +101,21 @@ interface ProductPriceDao {
 
     @Query(
         """
+        DELETE FROM product_prices
+        WHERE source = 'BACKFILL_CURR'
+          AND id IN (
+            SELECT pr.id
+            FROM product_prices pr
+            INNER JOIN product_remote_refs pref ON pref.productId = pr.productId
+            LEFT JOIN product_price_remote_refs pprf ON pprf.productPriceId = pr.id
+            WHERE pprf.id IS NULL
+          )
+        """
+    )
+    suspend fun deleteCloudLinkedBackfillRowsWithoutRemoteRef(): Int
+
+    @Query(
+        """
         SELECT * FROM product_prices
         WHERE productId = :productId AND type = :type AND effectiveAt = :effectiveAt
         LIMIT 1

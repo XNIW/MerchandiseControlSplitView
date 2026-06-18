@@ -19,9 +19,12 @@ class PriceBackfillWorker(
         val db = AppDatabase.getDatabase(applicationContext)
         val productDao = db.productDao()
         val priceDao = db.productPriceDao()
+        val productRemoteRefDao = db.productRemoteRefDao()
 
         val now = LocalDateTime.now()
         val nowStr = fmt.format(now)
+
+        priceDao.deleteCloudLinkedBackfillRowsWithoutRemoteRef()
 
         // Evita di backfillare prodotti che hanno già almeno un prezzo in history
         val already = priceDao.getProductIdsWithAnyPrice().toSet()
@@ -29,6 +32,7 @@ class PriceBackfillWorker(
         val products = productDao.getAll()
         for (p in products) {
             if (p.id in already) continue
+            if (productRemoteRefDao.getByProductId(p.id) != null) continue
 
             p.purchasePrice?.let { price ->
                 priceDao.insertIfChanged(p.id, "PURCHASE", price, nowStr, "BACKFILL_CURR")
