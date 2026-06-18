@@ -1299,6 +1299,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (payload.deletedAt != null) {
             return RemoteSessionApplyOutcome.Skipped
         }
+        linkEquivalentLocalHistorySession(
+            payload = payload,
+            payloadFingerprint = fp,
+            overlayState = overlayState
+        )?.let { return it }
+
         // Insert path: remoteId sconosciuto → nuova entry + bridge con sync state inizializzato.
         val localState = when (overlayState) {
             is OverlayApplyState.Valid -> overlayState.localState
@@ -1342,6 +1348,86 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             ) > 0L
         ) { "insert bridge ignorato per remoteId=${payload.remoteId}" }
         return RemoteSessionApplyOutcome.Inserted
+    }
+
+    private suspend fun linkEquivalentLocalHistorySession(
+        payload: SessionRemotePayload,
+        payloadFingerprint: String,
+        overlayState: OverlayApplyState
+    ): RemoteSessionApplyOutcome? {
+        val candidates = historyDao.getAllUserVisibleSnapshot()
+        for (entry in candidates) {
+            val localRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
+            if (localRef?.remoteId.equals(payload.remoteId, ignoreCase = true)) {
+                continue
+            }
+            if (localRef?.lastRemoteAppliedAt != null) {
+                continue
+            }
+            val localPayload = entry.toRemotePayload(localRef?.remoteId ?: payload.remoteId)
+            if (localPayload.payloadFingerprint() != payloadFingerprint) {
+                continue
+            }
+
+            val localRevision = localRef?.localChangeRevision ?: 0
+            val localState = when (overlayState) {
+                is OverlayApplyState.Valid -> overlayState.localState
+                OverlayApplyState.Invalid,
+                OverlayApplyState.Missing -> buildRemoteSessionLocalState(payload.data)
+            }
+            historyDao.update(
+                entry.copy(
+                    displayName = displayNameFromPayload(payload, entry.displayName),
+                    timestamp = payload.timestamp,
+                    supplier = payload.supplier,
+                    category = payload.category,
+                    isManualEntry = payload.isManualEntry,
+                    data = payload.data,
+                    editable = localState.editable,
+                    complete = localState.complete,
+                    totalItems = localState.totalItems,
+                    orderTotal = localState.orderTotal,
+                    paymentTotal = localState.paymentTotal,
+                    missingItems = localState.missingItems,
+                    syncStatus = SyncStatus.SYNCED_SUCCESSFULLY,
+                    deletedAt = null
+                )
+            )
+
+            if (localRef == null) {
+                val inserted = remoteRefDao.insert(
+                    HistoryEntryRemoteRef(
+                        historyEntryUid = entry.uid,
+                        remoteId = payload.remoteId,
+                        localChangeRevision = 0,
+                        lastSyncedLocalRevision = 0,
+                        lastRemoteAppliedAt = System.currentTimeMillis(),
+                        lastRemotePayloadFingerprint = payloadFingerprint
+                    )
+                )
+                if (inserted <= 0L) {
+                    return RemoteSessionApplyOutcome.Failed(
+                        IllegalStateException("insert bridge ignorato per relink remoteId=${payload.remoteId}")
+                    )
+                }
+            } else if (!localRef.remoteId.equals(payload.remoteId, ignoreCase = true)) {
+                val updated = remoteRefDao.updateRemoteId(entry.uid, payload.remoteId)
+                if (updated <= 0) {
+                    return RemoteSessionApplyOutcome.Failed(
+                        IllegalStateException("update bridge remoteId fallito per uid=${entry.uid}")
+                    )
+                }
+            }
+
+            remoteRefDao.updateRemoteApplyState(
+                uid = entry.uid,
+                rev = localRevision,
+                appliedAt = System.currentTimeMillis(),
+                fingerprint = payloadFingerprint
+            )
+            return RemoteSessionApplyOutcome.Updated
+        }
+        return null
     }
 
     private fun buildOverlayStateForPayload(payload: SessionRemotePayload): OverlayApplyState {

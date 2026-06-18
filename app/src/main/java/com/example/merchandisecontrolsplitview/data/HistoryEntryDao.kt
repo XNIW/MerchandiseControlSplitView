@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.Flow
 internal const val USER_VISIBLE_HISTORY_WHERE_CLAUSE = """
     id NOT LIKE 'APPLY_IMPORT_%'
     AND id NOT LIKE 'FULL_IMPORT_%'
+    AND UPPER(id) NOT LIKE 'TASK135_MATRIX_%'
+    AND UPPER(COALESCE(displayName, '')) NOT LIKE 'TASK135_MATRIX_%'
     AND (deletedAt IS NULL OR syncStatus = 'NOT_ATTEMPTED')
 """
 
@@ -109,6 +111,8 @@ interface HistoryEntryDao {
         LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
         WHERE h.id NOT LIKE 'APPLY_IMPORT_%'
           AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND UPPER(h.id) NOT LIKE 'TASK135_MATRIX_%'
+          AND UPPER(COALESCE(h.displayName, '')) NOT LIKE 'TASK135_MATRIX_%'
           AND (
             h.deletedAt IS NULL
             OR r.localChangeRevision > r.lastSyncedLocalRevision
@@ -126,6 +130,8 @@ interface HistoryEntryDao {
         WHERE h.uid IN (:uids)
           AND h.id NOT LIKE 'APPLY_IMPORT_%'
           AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND UPPER(h.id) NOT LIKE 'TASK135_MATRIX_%'
+          AND UPPER(COALESCE(h.displayName, '')) NOT LIKE 'TASK135_MATRIX_%'
           AND (
             h.deletedAt IS NULL
             OR r.localChangeRevision > r.lastSyncedLocalRevision
@@ -142,6 +148,8 @@ interface HistoryEntryDao {
         LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
         WHERE h.id NOT LIKE 'APPLY_IMPORT_%'
           AND h.id NOT LIKE 'FULL_IMPORT_%'
+          AND UPPER(h.id) NOT LIKE 'TASK135_MATRIX_%'
+          AND UPPER(COALESCE(h.displayName, '')) NOT LIKE 'TASK135_MATRIX_%'
           AND (
             r.historyEntryUid IS NULL
             OR r.lastRemoteAppliedAt IS NULL

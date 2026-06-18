@@ -33,6 +33,19 @@ class OptionsScreenPublicUxTest {
         assertNull(maskEmailForOptions("not-an-email"))
     }
 
+    @Test
+    fun `history display title treats uuid-only displayName as blank`() {
+        val title = formatHistorySessionDisplayTitle(
+            displayName = "038aed8a-299c-489a-9c21-d1d70828a4ab",
+            supplier = "",
+            timestamp = "2026-05-12 20:12:10",
+            contextFallback = "Supplier fallback",
+            genericFallback = "History fallback"
+        )
+
+        assertEquals("History fallback", title)
+    }
+
     private fun optionsScreenSource(): File {
         val candidates = listOf(
             File("app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt"),

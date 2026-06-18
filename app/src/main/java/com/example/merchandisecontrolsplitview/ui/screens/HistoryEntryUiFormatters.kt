@@ -18,6 +18,9 @@ private val historySpreadsheetExtensions = listOf(".xlsx", ".xlsm", ".xls")
 private val historyUnderscorePattern = Regex("""_+""")
 private val historyWhitespacePattern = Regex("""\s+""")
 private val historyComparisonSeparatorPattern = Regex("""[_\-\s]+""")
+private val historyUuidDisplayNamePattern = Regex(
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 internal fun formatHistoryTimestamp(timestamp: String, locale: Locale = Locale.getDefault()): String {
     val outputFormatter = DateTimeFormatter
@@ -89,7 +92,9 @@ internal fun formatHistorySessionDisplayTitle(
     contextFallback: String,
     genericFallback: String
 ): String {
-    displayName.trim().takeIf { it.isNotBlank() }?.let { return it }
+    displayName.trim()
+        .takeIf { it.isNotBlank() && !historyUuidDisplayNamePattern.matches(it) }
+        ?.let { return it }
 
     val supplierText = supplier.trim()
     val timestampText = formatHistoryEntryContextTimestamp(timestamp, locale).trim()

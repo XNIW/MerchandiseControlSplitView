@@ -2057,7 +2057,7 @@ class DefaultInventoryRepositoryTest {
     )
 
     @Test
-    fun `040 legacy v1 fingerprint keeps pre v2 canonical contract`() = runTest {
+    fun `040 legacy v1 fingerprint uses logical sha without remoteId`() = runTest {
         val payload = remotePayload(
             payloadVersion = SESSION_PAYLOAD_VERSION_LEGACY_V1,
             displayName = "Ignored by v1",
@@ -2075,8 +2075,65 @@ class DefaultInventoryRepositoryTest {
             )
         )
 
-        val legacyCanonical = "2026-04-15 12:00:00|RemoteSupplier|RemoteCat|true|barcode,purchasePrice,quantity,AAA,10,2"
-        assertEquals(legacyCanonical.hashCode().toString(), payload.payloadFingerprint())
+        val sameLogicalDifferentRemoteId = payload.copy(remoteId = java.util.UUID.randomUUID().toString())
+
+        assertEquals(64, payload.payloadFingerprint().length)
+        assertEquals(payload.payloadFingerprint(), sameLogicalDifferentRemoteId.payloadFingerprint())
+        assertFalse(payload.canonicalLogicalSessionPayloadString().contains(payload.remoteId))
+    }
+
+    @Test
+    fun `135 v2 fingerprint ignores remoteId and changes on logical payload edits`() = runTest {
+        val payload = remotePayload(
+            remoteId = "00000000-0000-4000-8000-000000013501",
+            displayName = "Shared session",
+            timestamp = "2026-04-15T12:00:00.000Z",
+            supplier = "RemoteSupplier",
+            category = "RemoteCat",
+            data = listOf(
+                listOf("barcode", "purchasePrice", "quantity"),
+                listOf("AAA", "10", "2")
+            ),
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("2", "")),
+                complete = listOf(false, true)
+            )
+        )
+        val sameLogicalDifferentRemoteId = payload.copy(
+            remoteId = "00000000-0000-4000-8000-000000013502"
+        )
+        val edited = payload.copy(supplier = "ChangedSupplier")
+
+        assertEquals(64, payload.payloadFingerprint().length)
+        assertEquals(payload.payloadFingerprint(), sameLogicalDifferentRemoteId.payloadFingerprint())
+        assertFalse(payload.canonicalLogicalSessionPayloadString().contains(payload.remoteId))
+        assertFalse(payload.payloadFingerprint() == edited.payloadFingerprint())
+    }
+
+    @Test
+    fun `135 v2 fingerprint treats uuid-only displayName as blank`() = runTest {
+        val uuidTitle = "038aed8a-299c-489a-9c21-d1d70828a4ab"
+        val payload = remotePayload(
+            remoteId = uuidTitle,
+            displayName = uuidTitle,
+            timestamp = "2026-05-12 20:12:10",
+            sessionOverlay = SessionOverlay(
+                editable = listOf(listOf("", ""), listOf("", "")),
+                complete = listOf(false, false)
+            )
+        )
+        val blankTitlePayload = payload.copy(displayName = "")
+        val entry = HistoryEntry(
+            id = uuidTitle,
+            displayName = uuidTitle,
+            timestamp = "2026-05-12 20:12:10",
+            data = payload.data,
+            editable = payload.sessionOverlay!!.editable,
+            complete = payload.sessionOverlay.complete
+        )
+
+        assertEquals(blankTitlePayload.payloadFingerprint(), payload.payloadFingerprint())
+        assertEquals("", entry.toRemotePayload(remoteId = uuidTitle).displayName)
     }
 
     @Test
@@ -2096,6 +2153,101 @@ class DefaultInventoryRepositoryTest {
         assertEquals(payload.isManualEntry, entry.isManualEntry)
         // id usa remoteId (convenzione stabile non tecnica)
         assertEquals(payload.remoteId, entry.id)
+    }
+
+    @Test
+    fun `135 applyRemoteSessionPayload relinks matching local-only entry instead of duplicating`() = runTest {
+        val data = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("AAA", "10", "2")
+        )
+        val overlay = SessionOverlay(
+            editable = listOf(listOf("", ""), listOf("2", "")),
+            complete = listOf(false, true)
+        )
+        val localUid = repository.insertHistoryEntry(
+            HistoryEntry(
+                id = "local_history.xlsx",
+                displayName = "Shared session",
+                timestamp = "2026-04-15 12:00:00",
+                data = data,
+                editable = overlay.editable,
+                complete = overlay.complete,
+                supplier = "RemoteSupplier",
+                category = "RemoteCat",
+                isManualEntry = true
+            )
+        )
+        val payload = remotePayload(
+            remoteId = "00000000-0000-4000-8000-000000013511",
+            displayName = "Shared session",
+            timestamp = "2026-04-15T12:00:00.000Z",
+            supplier = "RemoteSupplier",
+            category = "RemoteCat",
+            isManualEntry = true,
+            data = data,
+            sessionOverlay = overlay
+        )
+
+        val outcome = repository.applyRemoteSessionPayload(payload)
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        val visible = db.historyEntryDao().getAllUserVisibleSnapshot()
+        assertEquals(1, visible.size)
+        assertEquals(localUid, visible.single().uid)
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(localUid, ref.historyEntryUid)
+        assertEquals(ref.localChangeRevision, ref.lastSyncedLocalRevision)
+        assertEquals(payload.payloadFingerprint(), ref.lastRemotePayloadFingerprint)
+        assertTrue(repository.getPendingHistorySessionPushUids().isEmpty())
+    }
+
+    @Test
+    fun `135 applyRemoteSessionPayload replaces never-applied local bridge remoteId on logical match`() = runTest {
+        val data = listOf(
+            listOf("barcode", "purchasePrice", "quantity"),
+            listOf("BBB", "8", "1")
+        )
+        val overlay = SessionOverlay(
+            editable = listOf(listOf("", ""), listOf("1", "")),
+            complete = listOf(false, true)
+        )
+        val localUid = repository.insertHistoryEntry(
+            HistoryEntry(
+                id = "local_pending_history.xlsx",
+                displayName = "Pending shared session",
+                timestamp = "2026-04-16 13:00:00",
+                data = data,
+                editable = overlay.editable,
+                complete = overlay.complete,
+                supplier = "RemoteSupplier",
+                category = "RemoteCat",
+                isManualEntry = false
+            )
+        )
+        val previousLocalRemoteId = repository.getOrCreateRemoteId(localUid)!!
+        val payload = remotePayload(
+            remoteId = "00000000-0000-4000-8000-000000013512",
+            displayName = "Pending shared session",
+            timestamp = "2026-04-16 13:00:00",
+            supplier = "RemoteSupplier",
+            category = "RemoteCat",
+            isManualEntry = false,
+            data = data,
+            sessionOverlay = overlay
+        )
+
+        val outcome = repository.applyRemoteSessionPayload(payload)
+
+        assertEquals(RemoteSessionApplyOutcome.Updated, outcome)
+        assertNull(db.historyEntryRemoteRefDao().getByRemoteId(previousLocalRemoteId))
+        val ref = db.historyEntryRemoteRefDao().getByRemoteId(payload.remoteId)!!
+        assertEquals(localUid, ref.historyEntryUid)
+        assertNotNull(ref.lastRemoteAppliedAt)
+        assertEquals(ref.localChangeRevision, ref.lastSyncedLocalRevision)
+        assertEquals(payload.payloadFingerprint(), ref.lastRemotePayloadFingerprint)
+        assertTrue(repository.getPendingHistorySessionPushUids().isEmpty())
     }
 
     @Test
@@ -5639,6 +5791,40 @@ class DefaultInventoryRepositoryTest {
 
         assertEquals(0, status.historySessions)
         assertEquals(0, status.pendingLocalChanges)
+    }
+
+    @Test
+    fun `135 task-prefixed history fixture is not user-visible pending work`() = runTest {
+        repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("TASK135_MATRIX_fixture.xlsx").copy(
+                displayName = "TASK135_MATRIX_fixture"
+            )
+        )
+
+        assertTrue(repository.getPendingHistorySessionPushUids().isEmpty())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+
+        val status = repository.getLocalDatabaseStatusSnapshot(ownerUserId = null)
+
+        assertEquals(0, status.historySessions)
+        assertEquals(0, status.pendingLocalChanges)
+    }
+
+    @Test
+    fun `135 final live history fixture stays user-visible pending work`() = runTest {
+        val uid = repository.insertHistoryEntry(
+            buildMinimalHistoryEntry("TASK135_HISTORY_FINAL_ANDROID_visible.xlsx").copy(
+                displayName = "TASK135_HISTORY_FINAL_ANDROID_visible"
+            )
+        )
+
+        assertEquals(listOf(uid), repository.getPendingHistorySessionPushUids())
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+
+        val status = repository.getLocalDatabaseStatusSnapshot(ownerUserId = null)
+
+        assertEquals(1, status.historySessions)
+        assertEquals(1, status.pendingLocalChanges)
     }
 
     @Test
