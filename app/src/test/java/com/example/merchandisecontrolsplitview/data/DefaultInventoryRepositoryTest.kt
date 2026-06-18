@@ -5299,6 +5299,55 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `135 quick sync fallback drains pending product tombstone without product row`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001350"
+        val remoteId = "00000000-0000-4000-8000-000000001351"
+        repository.addProduct(
+            Product(
+                barcode = "task135-fallback-delete",
+                productName = "Task 135 fallback delete",
+                purchasePrice = 5.0,
+                retailPrice = 8.0
+            )
+        )
+        val product = repository.findProductByBarcode("task135-fallback-delete")!!
+        db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId = ${product.id}")
+        db.productRemoteRefDao().insert(ProductRemoteRef(productId = product.id, remoteId = remoteId))
+        repository.deleteProduct(product)
+        assertNull(repository.findProductByBarcode("task135-fallback-delete"))
+        assertEquals(1, db.pendingCatalogTombstoneDao().count())
+
+        val remote = FakeCatalogRemote016()
+        val priceRemote = RecordingPriceRemote016(configured = false)
+        val syncEvents = FakeSyncEventRemote(
+            capabilities = SyncEventRemoteCapabilities(
+                syncEventsAvailable = true,
+                recordSyncEventAvailable = false,
+                realtimeSyncEventsAvailable = true
+            )
+        )
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.syncEventsDisabled)
+        assertTrue(summary.syncEventsFallback044)
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+        assertEquals(1, remote.productTombstones.size)
+        assertEquals(remoteId, remote.productTombstones.single().id)
+        assertEquals(owner, remote.productTombstones.single().ownerUserId)
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, priceRemote.fetchCount)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+    }
+
+    @Test
     fun `044A manual sync summary marks full catalog and price fetch`() = runTest {
         val owner = "00000000-0000-4000-8000-00000000044a"
         val productRemoteId = "00000000-0000-4000-8000-00000000044b"

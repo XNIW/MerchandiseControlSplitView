@@ -2670,6 +2670,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
         try {
             val recoveryCache = CatalogConflictRecoveryCache(allowRemoteFetch = false)
+            val tombstonedIds = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
+                progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
+                drainPendingCatalogTombstones(remote, ownerUserId)
+            }
             val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
             val pushedProducts = measureCatalogSyncPhase(CatalogSyncStage.PUSH_PRODUCTS, phaseDurationsMs) {
                 pushCatalogProducts(
@@ -2707,9 +2711,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             )
             Result.success(
                 CatalogSyncSummary(
-                    pushedSuppliers = 0,
-                    pushedCategories = 0,
-                    pushedProducts = pushedProducts.count,
+                    pushedSuppliers = tombstonedIds.supplierIds.size,
+                    pushedCategories = tombstonedIds.categoryIds.size,
+                    pushedProducts = pushedProducts.count + tombstonedIds.productIds.size,
                     pulledSuppliers = 0,
                     pulledCategories = 0,
                     pulledProducts = 0,
