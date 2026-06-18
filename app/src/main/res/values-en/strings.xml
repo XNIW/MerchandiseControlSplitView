@@ -525,6 +525,8 @@
 
     <!-- Options Screen — Account (task 011) -->
     <string name="account_section_title">Account</string>
+    <string name="account_cloud_sync_section_title">Cloud account and sync</string>
+    <string name="account_cloud_connected_title">Cloud account connected</string>
     <string name="account_signed_in_as">Signed in as %1$s</string>
     <string name="account_signed_in">Signed in</string>
     <string name="account_not_signed_in">Not signed in</string>
@@ -537,15 +539,15 @@
     <string name="local_database_status_empty">No local data yet</string>
     <string name="local_database_status_ready">Local database ready</string>
     <string name="local_database_status_reconcile">Needs cloud reconciliation</string>
-    <string name="local_database_status_pending">Local changes pending</string>
+    <string name="local_database_status_pending">Local changes saved</string>
     <string name="local_database_status_products">Products</string>
     <string name="local_database_status_suppliers">Suppliers</string>
     <string name="local_database_status_categories">Categories</string>
     <string name="local_database_status_price_history">Price history</string>
     <string name="local_database_status_history_sessions">History sessions</string>
-    <string name="local_database_status_pending_changes">Pending local changes</string>
+    <string name="local_database_status_pending_changes">Local changes</string>
     <string name="local_database_status_last_sync">Last sync</string>
-    <string name="local_database_status_cloud_account">Cloud account</string>
+    <string name="local_database_status_cloud_account">Account</string>
     <string name="local_database_status_unknown">—</string>
 
     <string name="catalog_cloud_section_title">Automatic sync</string>
@@ -606,7 +608,8 @@
     <string name="cloud_sync_indicator_completed">Cloud catalog synced</string>
     <string name="cloud_sync_indicator_failed">Cloud sync did not finish, retry</string>
     <string name="catalog_cloud_state_synced">Up to date</string>
-    <string name="catalog_cloud_state_pending">Waiting to sync</string>
+    <string name="catalog_cloud_state_pending">Automatic sync active</string>
+    <string name="catalog_cloud_state_sending_changes">Sending changes</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>
     <string name="catalog_cloud_state_forbidden">Cloud permissions need checking</string>
     <string name="catalog_cloud_state_config_problem">Cloud setup needs checking</string>

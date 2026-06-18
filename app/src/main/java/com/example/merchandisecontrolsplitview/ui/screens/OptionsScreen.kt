@@ -21,9 +21,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Palette
@@ -54,6 +56,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import com.example.merchandisecontrolsplitview.R
@@ -166,36 +169,29 @@ fun OptionsScreen(
         }
 
         if (authEnabled) {
-            AccountSection(
+            AccountCloudSyncSection(
                 authState = authState,
+                catalogSyncUi = catalogSyncUi,
                 onSignIn = { onSignIn(context) },
                 onSignOut = onSignOut,
                 onDismissError = onDismissError
             )
-            catalogSyncUi?.let { sync ->
-                CatalogCloudSection(state = sync)
-            }
         }
 
         localDatabaseStatusUi?.let { status ->
-            LocalDatabaseStatusSection(
-                state = status,
-                authState = authState
-            )
+            LocalDatabaseStatusSection(state = status)
         }
     }
 }
 
 @Composable
 private fun LocalDatabaseStatusSection(
-    state: LocalDatabaseStatusUiState,
-    authState: AuthState
+    state: LocalDatabaseStatusUiState
 ) {
     OptionsGroup(
         title = stringResource(R.string.local_database_status_title),
         subtitle = when {
             state.isLoading -> stringResource(R.string.local_database_status_loading)
-            state.hasPendingLocalChanges -> stringResource(R.string.local_database_status_pending)
             state.needsReconciliation -> stringResource(R.string.local_database_status_reconcile)
             state.isEmpty -> stringResource(R.string.local_database_status_empty)
             else -> stringResource(R.string.local_database_status_ready)
@@ -223,25 +219,12 @@ private fun LocalDatabaseStatusSection(
             label = stringResource(R.string.local_database_status_history_sessions),
             value = state.historySessionsCount?.toString() ?: dash
         )
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_pending_changes),
-            value = state.pendingLocalChangesCount?.toString() ?: dash
-        )
         state.lastSyncText?.let { lastSync ->
             LocalDatabaseStatusRow(
                 label = stringResource(R.string.local_database_status_last_sync),
                 value = lastSync
             )
         }
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_cloud_account),
-            value = when (authState) {
-                is AuthState.Checking -> stringResource(R.string.account_checking)
-                is AuthState.SignedIn -> stringResource(R.string.account_signed_in)
-                is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
-                is AuthState.ErrorRecoverable -> stringResource(R.string.catalog_cloud_state_session_required)
-            }
-        )
     }
 }
 
@@ -272,66 +255,60 @@ private fun LocalDatabaseStatusRow(
 }
 
 @Composable
-private fun CatalogCloudSection(
+private fun CatalogCloudContent(
     state: CatalogSyncUiState
 ) {
-    OptionsGroup(
-        title = stringResource(R.string.catalog_cloud_section_title),
-        subtitle = state.primaryMessage,
-        icon = Icons.Default.Sync
+    val spacing = MaterialTheme.appSpacing
+    val sectionDescription = stringResource(
+        R.string.catalog_cloud_section_cd,
+        state.primaryMessage
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = sectionDescription },
+        verticalArrangement = Arrangement.spacedBy(spacing.md)
     ) {
-        val spacing = MaterialTheme.appSpacing
-        val sectionDescription = stringResource(
-            R.string.catalog_cloud_section_cd,
-            state.primaryMessage
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = sectionDescription },
-            verticalArrangement = Arrangement.spacedBy(spacing.md)
-        ) {
-            if (state.statusBadges.isNotEmpty()) {
-                CatalogCloudBadgeRow(badges = state.statusBadges)
-            }
-            state.catalogDetail?.let { detail ->
-                CatalogCloudDetailBlock(
-                    title = stringResource(R.string.catalog_cloud_detail_catalog_title),
-                    body = detail
-                )
-            }
-            state.sessionDetail?.let { sessionText ->
-                CatalogCloudDetailBlock(
-                    title = stringResource(R.string.catalog_cloud_detail_sessions_title),
-                    body = sessionText
-                )
-            }
-            if (state.isSyncing) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = spacing.sm),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-                }
-            }
+        if (state.statusBadges.isNotEmpty()) {
+            CatalogCloudBadgeRow(badges = state.statusBadges)
+        }
+        state.catalogDetail?.let { detail ->
             CatalogCloudDetailBlock(
-                title = if (state.fullSyncRecommended) {
-                    stringResource(R.string.catalog_cloud_auto_reconcile_title)
-                } else {
-                    stringResource(R.string.catalog_cloud_auto_status_title)
-                },
-                body = if (state.fullSyncRecommended) {
-                    stringResource(R.string.catalog_cloud_auto_reconcile_body)
-                } else {
-                    stringResource(R.string.catalog_cloud_auto_status_body)
-                }
+                title = stringResource(R.string.catalog_cloud_detail_catalog_title),
+                body = detail
             )
         }
+        state.sessionDetail?.let { sessionText ->
+            CatalogCloudDetailBlock(
+                title = stringResource(R.string.catalog_cloud_detail_sessions_title),
+                body = sessionText
+            )
+        }
+        if (state.isSyncing) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = spacing.sm),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            }
+        }
+        CatalogCloudDetailBlock(
+            title = if (state.fullSyncRecommended) {
+                stringResource(R.string.catalog_cloud_auto_reconcile_title)
+            } else {
+                stringResource(R.string.catalog_cloud_auto_status_title)
+            },
+            body = if (state.fullSyncRecommended) {
+                stringResource(R.string.catalog_cloud_auto_reconcile_body)
+            } else {
+                stringResource(R.string.catalog_cloud_auto_status_body)
+            }
+        )
     }
 }
 
@@ -418,6 +395,7 @@ private fun OptionsGroup(
     title: String,
     subtitle: String,
     icon: ImageVector,
+    showHeader: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
@@ -432,27 +410,29 @@ private fun OptionsGroup(
             modifier = Modifier.padding(spacing.lg),
             verticalArrangement = Arrangement.spacedBy(spacing.md)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+            if (showHeader) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
                     )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
+                HorizontalDivider()
             }
-            HorizontalDivider()
             Column(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 horizontalAlignment = Alignment.Start
@@ -509,8 +489,9 @@ private fun SelectableOptionRow(
  * Nessuna logica auth nel composable: solo trigger (click) e binding stato.
  */
 @Composable
-private fun AccountSection(
+private fun AccountCloudSyncSection(
     authState: AuthState,
+    catalogSyncUi: CatalogSyncUiState?,
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onDismissError: () -> Unit
@@ -518,18 +499,15 @@ private fun AccountSection(
     val subtitle = when (authState) {
         is AuthState.Checking -> stringResource(R.string.account_checking)
         is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
-        is AuthState.SignedIn -> if (authState.email != null) {
-            stringResource(R.string.account_signed_in_as, authState.email)
-        } else {
-            stringResource(R.string.account_signed_in)
-        }
+        is AuthState.SignedIn -> catalogSyncUi?.primaryMessage ?: stringResource(R.string.account_signed_in)
         is AuthState.ErrorRecoverable -> authState.message
     }
 
     OptionsGroup(
-        title = stringResource(R.string.account_section_title),
+        title = stringResource(R.string.account_cloud_sync_section_title),
         subtitle = subtitle,
-        icon = Icons.Default.AccountCircle
+        icon = Icons.Default.AccountCircle,
+        showHeader = authState !is AuthState.SignedIn
     ) {
         when (authState) {
             is AuthState.Checking -> {
@@ -554,11 +532,13 @@ private fun AccountSection(
                 }
             }
             is AuthState.SignedIn -> {
-                OutlinedButton(
-                    onClick = onSignOut,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.account_sign_out))
+                ConnectedAccountRow(
+                    email = authState.email,
+                    onSignOut = onSignOut
+                )
+                catalogSyncUi?.let { sync ->
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    CatalogCloudContent(state = sync)
                 }
             }
             is AuthState.ErrorRecoverable -> {
@@ -582,4 +562,79 @@ private fun AccountSection(
             }
         }
     }
+}
+
+@Composable
+private fun ConnectedAccountRow(
+    email: String?,
+    onSignOut: () -> Unit
+) {
+    val spacing = MaterialTheme.appSpacing
+    val maskedEmail = maskEmailForOptions(email)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacing.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            modifier = Modifier.size(44.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.primary
+        ) {
+            Icon(
+                imageVector = Icons.Default.AccountCircle,
+                contentDescription = null,
+                modifier = Modifier.padding(8.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.account_cloud_connected_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (maskedEmail != null) {
+                    stringResource(R.string.account_signed_in_as, maskedEmail)
+                } else {
+                    stringResource(R.string.account_signed_in)
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        OutlinedButton(
+            onClick = onSignOut,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ExitToApp,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.account_sign_out))
+        }
+    }
+}
+
+internal fun maskEmailForOptions(email: String?): String? {
+    val trimmed = email?.trim().orEmpty()
+    val atIndex = trimmed.indexOf('@')
+    if (trimmed.isEmpty() || atIndex <= 0 || atIndex == trimmed.lastIndex) {
+        return null
+    }
+    return "${trimmed.first()}***${trimmed.substring(atIndex)}"
 }

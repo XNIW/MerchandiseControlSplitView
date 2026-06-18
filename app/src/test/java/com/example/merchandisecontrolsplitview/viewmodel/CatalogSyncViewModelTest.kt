@@ -98,7 +98,7 @@ class CatalogSyncViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            app.getString(R.string.catalog_cloud_state_pending),
+            app.getString(R.string.catalog_cloud_auto_status_title),
             viewModel.uiState.value.primaryMessage
         )
         assertTrue(viewModel.uiState.value.canRefresh)
@@ -133,7 +133,7 @@ class CatalogSyncViewModelTest {
         val collectJob = launch { viewModel.uiState.collect {} }
         advanceUntilIdle()
         assertEquals(
-            app.getString(R.string.catalog_cloud_state_pending),
+            app.getString(R.string.catalog_cloud_auto_status_title),
             viewModel.uiState.value.primaryMessage
         )
 
@@ -642,7 +642,7 @@ class CatalogSyncViewModelTest {
         advanceUntilIdle()
 
         assertEquals(
-            app.getString(R.string.catalog_cloud_state_pending),
+            app.getString(R.string.catalog_cloud_state_sending_changes),
             viewModel.uiState.value.primaryMessage
         )
         assertTrue(

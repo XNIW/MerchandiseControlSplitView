@@ -539,27 +539,29 @@
 
     <!-- Schermata Opzioni — Account (task 011) -->
     <string name="account_section_title">Account</string>
-    <string name="account_signed_in_as">Accesso effettuato come %1$s</string>
+    <string name="account_cloud_sync_section_title">Account cloud e sincronizzazione</string>
+    <string name="account_cloud_connected_title">Account cloud collegato</string>
+    <string name="account_signed_in_as">Accesso come %1$s</string>
     <string name="account_signed_in">Accesso effettuato</string>
     <string name="account_not_signed_in">Nessun accesso</string>
     <string name="account_checking">Verifica in corso\u2026</string>
     <string name="account_sign_in_google">Accedi con Google</string>
-    <string name="account_sign_out">Esci dall\'account</string>
+    <string name="account_sign_out">Esci</string>
 
     <string name="local_database_status_title">Stato database locale</string>
     <string name="local_database_status_loading">Controllo dati locali…</string>
     <string name="local_database_status_empty">Nessun dato locale</string>
     <string name="local_database_status_ready">Database locale pronto</string>
     <string name="local_database_status_reconcile">Da riconciliare con il cloud</string>
-    <string name="local_database_status_pending">Modifiche locali in attesa</string>
+    <string name="local_database_status_pending">Modifiche locali salvate</string>
     <string name="local_database_status_products">Prodotti</string>
     <string name="local_database_status_suppliers">Fornitori</string>
     <string name="local_database_status_categories">Categorie</string>
     <string name="local_database_status_price_history">Storico prezzi</string>
     <string name="local_database_status_history_sessions">Sessioni cronologia</string>
-    <string name="local_database_status_pending_changes">Modifiche locali in attesa</string>
+    <string name="local_database_status_pending_changes">Modifiche locali</string>
     <string name="local_database_status_last_sync">Ultima sincronizzazione</string>
-    <string name="local_database_status_cloud_account">Account cloud</string>
+    <string name="local_database_status_cloud_account">Account</string>
     <string name="local_database_status_unknown">—</string>
 
     <!-- Catalogo cloud (task 013) — messaggi non tecnici -->
@@ -621,7 +623,8 @@
     <string name="cloud_sync_indicator_completed">Catalogo cloud sincronizzato</string>
     <string name="cloud_sync_indicator_failed">Sincronizzazione cloud non completata, riprova</string>
     <string name="catalog_cloud_state_synced">Sincronizzato</string>
-    <string name="catalog_cloud_state_pending">Da sincronizzare</string>
+    <string name="catalog_cloud_state_pending">Sincronizzazione automatica attiva</string>
+    <string name="catalog_cloud_state_sending_changes">Invio modifiche</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
     <string name="catalog_cloud_state_forbidden">Permessi cloud da verificare</string>
     <string name="catalog_cloud_state_config_problem">Configurazione cloud da verificare</string>

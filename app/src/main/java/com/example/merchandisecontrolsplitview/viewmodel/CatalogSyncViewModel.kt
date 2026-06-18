@@ -556,7 +556,7 @@ class CatalogSyncViewModel(
                 val sessionDetail = sessionDetailOnly
                 if (pending || lastHistorySessionSummary?.hasPendingWork == true) {
                     return CatalogSyncUiState(
-                        primaryMessage = str(R.string.catalog_cloud_state_pending),
+                        primaryMessage = str(R.string.catalog_cloud_state_sending_changes),
                         catalogDetail = catalogDetail,
                         sessionDetail = sessionDetail,
                         isSyncing = false,
@@ -570,7 +570,7 @@ class CatalogSyncViewModel(
                 }
                 if (successAt == null) {
                     return CatalogSyncUiState(
-                        primaryMessage = str(R.string.catalog_cloud_state_pending),
+                        primaryMessage = str(R.string.catalog_cloud_auto_status_title),
                         catalogDetail = catalogDetail,
                         sessionDetail = sessionDetail,
                         isSyncing = false,

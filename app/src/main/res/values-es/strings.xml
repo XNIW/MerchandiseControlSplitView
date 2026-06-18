@@ -531,27 +531,29 @@
 
     <!-- Pantalla Opciones — Cuenta (task 011) -->
     <string name="account_section_title">Cuenta</string>
-    <string name="account_signed_in_as">Sesión iniciada como %1$s</string>
+    <string name="account_cloud_sync_section_title">Cuenta cloud y sincronización</string>
+    <string name="account_cloud_connected_title">Cuenta cloud conectada</string>
+    <string name="account_signed_in_as">Acceso como %1$s</string>
     <string name="account_signed_in">Sesión iniciada</string>
     <string name="account_not_signed_in">Sin sesión</string>
     <string name="account_checking">Verificando\u2026</string>
     <string name="account_sign_in_google">Iniciar sesión con Google</string>
-    <string name="account_sign_out">Cerrar sesión</string>
+    <string name="account_sign_out">Salir</string>
 
     <string name="local_database_status_title">Estado de la base local</string>
     <string name="local_database_status_loading">Comprobando datos locales…</string>
     <string name="local_database_status_empty">Sin datos locales todavía</string>
     <string name="local_database_status_ready">Base local lista</string>
     <string name="local_database_status_reconcile">Requiere reconciliación con la nube</string>
-    <string name="local_database_status_pending">Cambios locales pendientes</string>
+    <string name="local_database_status_pending">Cambios locales guardados</string>
     <string name="local_database_status_products">Productos</string>
     <string name="local_database_status_suppliers">Proveedores</string>
     <string name="local_database_status_categories">Categorías</string>
     <string name="local_database_status_price_history">Historial de precios</string>
     <string name="local_database_status_history_sessions">Sesiones de historial</string>
-    <string name="local_database_status_pending_changes">Cambios locales pendientes</string>
+    <string name="local_database_status_pending_changes">Cambios locales</string>
     <string name="local_database_status_last_sync">Última sincronización</string>
-    <string name="local_database_status_cloud_account">Cuenta cloud</string>
+    <string name="local_database_status_cloud_account">Cuenta</string>
     <string name="local_database_status_unknown">—</string>
 
     <string name="catalog_cloud_section_title">Sincronización automática</string>
@@ -615,7 +617,8 @@
     <string name="cloud_sync_indicator_completed">Catálogo en la nube sincronizado</string>
     <string name="cloud_sync_indicator_failed">La sincronización en la nube no terminó, reintenta</string>
     <string name="catalog_cloud_state_synced">Actualizado</string>
-    <string name="catalog_cloud_state_pending">Pendiente de sincronizar</string>
+    <string name="catalog_cloud_state_pending">Sincronización automática activa</string>
+    <string name="catalog_cloud_state_sending_changes">Enviando cambios</string>
     <string name="catalog_cloud_state_last_failed">El último intento falló</string>
     <string name="catalog_cloud_state_forbidden">Revisa los permisos de la nube</string>
     <string name="catalog_cloud_state_config_problem">Revisa la configuración de la nube</string>
