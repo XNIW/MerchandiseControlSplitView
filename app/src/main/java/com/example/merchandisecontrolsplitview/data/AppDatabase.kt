@@ -361,6 +361,14 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_17_18 = object : Migration(17, 18) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE product_remote_refs ADD COLUMN localChangedFields TEXT")
+                db.execSQL(
+                    """
+                    UPDATE product_remote_refs
+                    SET localChangedFields = '__all__'
+                    WHERE localChangeRevision > lastSyncedLocalRevision
+                      AND localChangedFields IS NULL
+                    """.trimIndent()
+                )
             }
         }
 

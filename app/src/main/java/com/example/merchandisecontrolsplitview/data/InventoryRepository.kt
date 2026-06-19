@@ -2264,7 +2264,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             CatalogEntityKind.SUPPLIER -> productDao.reassignSupplier(sourceId, replacementId)
             CatalogEntityKind.CATEGORY -> productDao.reassignCategory(sourceId, replacementId)
         }
-        touchedIds.forEach { touchProductDirty(it, setOf("supplier")) }
+        val changedField = when (kind) {
+            CatalogEntityKind.SUPPLIER -> "supplier"
+            CatalogEntityKind.CATEGORY -> "category"
+        }
+        touchedIds.forEach { touchProductDirty(it, setOf(changedField)) }
         return n
     }
 
@@ -2280,7 +2284,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             CatalogEntityKind.SUPPLIER -> productDao.clearSupplierAssignments(id)
             CatalogEntityKind.CATEGORY -> productDao.clearCategoryAssignments(id)
         }
-        touchedIds.forEach { touchProductDirty(it, setOf("category")) }
+        val changedField = when (kind) {
+            CatalogEntityKind.SUPPLIER -> "supplier"
+            CatalogEntityKind.CATEGORY -> "category"
+        }
+        touchedIds.forEach { touchProductDirty(it, setOf(changedField)) }
         return n
     }
 
@@ -4633,7 +4641,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private suspend fun touchProductDirty(productId: Long, changedFields: Set<String>? = null) {
-        if (productRemoteRefDao.getByProductId(productId) == null) {
+        val ref = productRemoteRefDao.getByProductId(productId)
+        if (ref == null) {
             productRemoteRefDao.insert(
                 ProductRemoteRef(
                     productId = productId,
@@ -4645,7 +4654,19 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (encoded == null) {
                 productRemoteRefDao.incrementLocalRevision(productId)
             } else {
-                productRemoteRefDao.markLocalChanged(productId, encoded)
+                val existingChangedFields =
+                    if (
+                        ref.localChangedFields == null &&
+                        ref.localChangeRevision > ref.lastSyncedLocalRevision
+                    ) {
+                        "__all__"
+                    } else {
+                        ref.localChangedFields
+                    }
+                productRemoteRefDao.markLocalChanged(
+                    productId,
+                    mergeEncodedProductChangedFields(existingChangedFields, encoded)
+                )
             }
         }
     }
@@ -4679,6 +4700,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (normalized.isEmpty()) return null
         if ("__all__" in normalized) return "__all__"
         return normalized.sorted().joinToString(",")
+    }
+
+    private fun mergeEncodedProductChangedFields(existingRaw: String?, nextEncoded: String): String {
+        val existing = decodeProductChangedFields(existingRaw)
+        val next = decodeProductChangedFields(nextEncoded)
+        if ("__all__" in existing || "__all__" in next) return "__all__"
+        return encodeProductChangedFields(existing + next) ?: nextEncoded
     }
 
     private fun decodeProductChangedFields(raw: String?): Set<String> =

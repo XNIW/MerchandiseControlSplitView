@@ -1493,8 +1493,87 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, categoryDelete.affectedProducts)
         assertEquals(newSupplier.id, supplierProduct.supplierId)
         assertNull(categoryProduct.categoryId)
+        assertEquals(
+            "supplier",
+            db.productRemoteRefDao().getByProductId(supplierProduct.id)!!.localChangedFields
+        )
+        assertEquals(
+            "category",
+            db.productRemoteRefDao().getByProductId(categoryProduct.id)!!.localChangedFields
+        )
         assertNull(repository.getSupplierById(oldSupplier.id))
         assertNull(repository.getCategoryById(category.id))
+    }
+
+    @Test
+    fun `catalog category reassign marks category dirty field only`() = runTest {
+        val oldCategory = repository.addCategory("Old Category Dirty")!!
+        val newCategory = repository.addCategory("New Category Dirty")!!
+        repository.addProduct(
+            Product(
+                barcode = "dirty-category-reassign",
+                productName = "Dirty Category Reassign",
+                categoryId = oldCategory.id,
+                purchasePrice = 2.0,
+                retailPrice = 3.0
+            )
+        )
+
+        repository.deleteCatalogEntry(
+            kind = CatalogEntityKind.CATEGORY,
+            id = oldCategory.id,
+            strategy = CatalogDeleteStrategy.ReplaceWithExisting(newCategory.id)
+        )
+
+        val product = repository.findProductByBarcode("dirty-category-reassign")!!
+        assertEquals(newCategory.id, product.categoryId)
+        assertEquals(
+            "category",
+            db.productRemoteRefDao().getByProductId(product.id)!!.localChangedFields
+        )
+    }
+
+    @Test
+    fun `product dirty fields merge consecutive local edits before patch sync`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "dirty-merge-069",
+            productName = "Dirty Merge Product",
+            purchasePrice = 12.0,
+            retailPrice = 18.0
+        )
+
+        repository.updateProduct(product.copy(productName = "Dirty Merge Product Updated"))
+        repository.updateProduct(
+            repository.findProductByBarcode("dirty-merge-069")!!.copy(stockQuantity = 7.0)
+        )
+
+        val dirtyRef = db.productRemoteRefDao().getByProductId(product.id)!!
+        assertEquals("productname,stockquantity", dirtyRef.localChangedFields)
+    }
+
+    @Test
+    fun `legacy dirty product ref without field mask remains full update on next local edit`() = runTest {
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "dirty-legacy-null-mask",
+            productName = "Dirty Legacy Null Mask",
+            purchasePrice = 12.0,
+            retailPrice = 18.0
+        )
+        db.openHelper.writableDatabase.execSQL(
+            """
+            UPDATE product_remote_refs
+            SET localChangeRevision = 3,
+                lastSyncedLocalRevision = 1,
+                localChangedFields = NULL
+            WHERE productId = ${product.id}
+            """.trimIndent()
+        )
+
+        repository.updateProduct(product.copy(productName = "Dirty Legacy Null Mask Updated"))
+
+        val dirtyRef = db.productRemoteRefDao().getByProductId(product.id)!!
+        assertEquals("__all__", dirtyRef.localChangedFields)
+        assertTrue(dirtyRef.localChangeRevision > dirtyRef.lastSyncedLocalRevision)
     }
 
     @Test

@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("17", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("17", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("17", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("17", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("17", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1626,6 +1626,62 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 17 to 18 backfills dirty product refs as full changed fields`() = runTest {
+        val dbName = "task134-migration-17-18-dirty-fields.db"
+        createLegacyDatabase(dbName, version = 17) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS product_remote_refs(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    productId INTEGER NOT NULL,
+                    remoteId TEXT NOT NULL,
+                    localChangeRevision INTEGER NOT NULL DEFAULT 0,
+                    lastSyncedLocalRevision INTEGER NOT NULL DEFAULT 0,
+                    lastRemoteAppliedAt INTEGER,
+                    lastRemotePayloadFingerprint TEXT,
+                    remoteUpdatedAt TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO product_remote_refs(
+                    id, productId, remoteId, localChangeRevision, lastSyncedLocalRevision,
+                    lastRemoteAppliedAt, lastRemotePayloadFingerprint, remoteUpdatedAt
+                ) VALUES
+                    (1, 101, 'dirty-legacy', 3, 1, 1700000000, 'old-fingerprint', '2026-06-19T00:00:00Z'),
+                    (2, 102, 'clean-legacy', 2, 2, 1700000001, 'clean-fingerprint', '2026-06-19T00:01:00Z')
+                """
+                    .trimIndent()
+            )
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 18) { database, oldVersion, newVersion ->
+            assertEquals(17, oldVersion)
+            assertEquals(18, newVersion)
+            AppDatabase.MIGRATION_17_18.migrate(database)
+        }
+
+        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(columnExists(migrated, "product_remote_refs", "localChangedFields"))
+        assertEquals(
+            "__all__",
+            querySingleValue(
+                migrated,
+                "SELECT localChangedFields FROM product_remote_refs WHERE productId = 101"
+            )
+        )
+        assertEquals(
+            null,
+            queryNullableSingleValue(
+                migrated,
+                "SELECT localChangedFields FROM product_remote_refs WHERE productId = 102"
+            )
+        )
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1644,7 +1700,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_13_14,
                 AppDatabase.MIGRATION_14_15,
                 AppDatabase.MIGRATION_15_16,
-                AppDatabase.MIGRATION_16_17
+                AppDatabase.MIGRATION_16_17,
+                AppDatabase.MIGRATION_17_18
             )
         }
 
@@ -1776,6 +1833,12 @@ class AppDatabaseMigrationTest {
         }
 
     private fun querySingleValue(db: SupportSQLiteDatabase, sql: String): String =
+        db.query(sql).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getString(0)
+        }
+
+    private fun queryNullableSingleValue(db: SupportSQLiteDatabase, sql: String): String? =
         db.query(sql).use { cursor ->
             cursor.moveToFirst()
             cursor.getString(0)
