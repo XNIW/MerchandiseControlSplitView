@@ -25,6 +25,7 @@ class HistorySessionPushCoordinator(
     private val remote: SessionBackupRemoteDataSource,
     private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
     private val syncEventOutboxDao: SyncEventOutboxDao? = null,
+    private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null,
     private val authFlow: StateFlow<AuthState>,
     private val flightOwner: SessionCloudSessionFlightOwner,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
@@ -119,6 +120,7 @@ class HistorySessionPushCoordinator(
             logger("cycle=push outcome=skip reason=skipped_background_policy debounceMs=$debounceMs dirtySetMode=precise")
             return
         }
+        if (!ensureDeviceActiveForSync(reason)) return
 
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
@@ -281,5 +283,19 @@ class HistorySessionPushCoordinator(
             )
         )
         return if (inserted != -1L) 1 else 0
+    }
+
+    private suspend fun ensureDeviceActiveForSync(reason: String): Boolean {
+        val authorization = deviceAuthorization ?: return true
+        val result = authorization.ensureActiveForCloudWrite("history_push:$reason")
+        if (result.isSuccess) return true
+
+        val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
+        logger(
+            "cycle=push outcome=blocked_by_device_status reason=$reason " +
+                "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"} " +
+                "recommendedAction=${snapshot?.recommendedAction ?: "contact_shop_admin"}"
+        )
+        return false
     }
 }

@@ -30,6 +30,8 @@ import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionCloudFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationBlockedException
+import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
@@ -107,13 +109,15 @@ class CatalogSyncViewModel(
     private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
     private val syncStateTracker: CatalogSyncStateTracker? = null,
     private val autoSyncRepository: CatalogAutoSyncRepository? = repository as? CatalogAutoSyncRepository,
-    private val syncEventRemote: SyncEventRemoteDataSource? = null
+    private val syncEventRemote: SyncEventRemoteDataSource? = null,
+    private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
         Offline,
         Session,
         Forbidden,
+        DeviceBlocked,
         NotFoundOrConfig,
         /** Catalog cloud sync completed; price-history block failed (task 017 — partial success). */
         CatalogOkPricesIncomplete,
@@ -328,6 +332,7 @@ class CatalogSyncViewModel(
             )
             CatalogSyncStage.SYNC_EVENTS_DRAIN -> str(R.string.catalog_cloud_stage_sync_events_drain)
             CatalogSyncStage.SYNC_HISTORY -> str(R.string.catalog_cloud_stage_sync_history)
+            CatalogSyncStage.DEVICE_STATUS -> str(R.string.catalog_cloud_stage_device_status)
             CatalogSyncStage.IDLE,
             CatalogSyncStage.COMPLETED -> str(R.string.catalog_cloud_state_syncing)
         }
@@ -481,6 +486,20 @@ class CatalogSyncViewModel(
                             statusBadges = statusBadges,
                             fullSyncRecommended = fullSyncRecommended,
                             quickSyncRecommended = quickSyncRecommended
+                        )
+                    }
+                    ErrorKind.DeviceBlocked -> {
+                        return CatalogSyncUiState(
+                            primaryMessage = str(R.string.catalog_cloud_state_device_blocked),
+                            catalogDetail = null,
+                            sessionDetail = sessionDetailOnly,
+                            isSyncing = false,
+                            canRefresh = true,
+                            canQuickSync = canQuick,
+                            quickSyncBodyRes = quickBodyRes,
+                            statusBadges = statusBadges,
+                            fullSyncRecommended = false,
+                            quickSyncRecommended = false
                         )
                     }
                     ErrorKind.NotFoundOrConfig -> {
@@ -644,6 +663,7 @@ class CatalogSyncViewModel(
                 CatalogSyncStage.SYNC_PRICES_PULL,
                 CatalogSyncStage.SYNC_EVENTS_DRAIN -> add(R.string.catalog_cloud_badge_download)
                 CatalogSyncStage.SYNC_HISTORY -> add(R.string.catalog_cloud_badge_sessions)
+                CatalogSyncStage.DEVICE_STATUS -> add(R.string.catalog_cloud_badge_upload)
                 CatalogSyncStage.IDLE,
                 CatalogSyncStage.COMPLETED -> Unit
             }
@@ -925,6 +945,10 @@ class CatalogSyncViewModel(
                 Log.i(TAG, "sync_request source=manual_refresh outcome=ignored reason=tracker_busy")
                 return@launch
             }
+            if (!ensureDeviceActiveForManualSync("manual_refresh")) {
+                syncStateTracker?.finish(CatalogSyncFlightOwner.MANUAL)
+                return@launch
+            }
             busy.value = true
             val startedAt = startSyncProgress("manual_refresh", CatalogSyncStage.REALIGN)
             lastErrorKind.value = null
@@ -1035,6 +1059,10 @@ class CatalogSyncViewModel(
             }
             if (syncStateTracker?.tryBegin(CatalogSyncFlightOwner.MANUAL) == false) {
                 Log.i(TAG, "sync_request source=manual_quick_sync outcome=ignored reason=tracker_busy")
+                return@launch
+            }
+            if (!ensureDeviceActiveForManualSync("manual_quick_sync")) {
+                syncStateTracker?.finish(CatalogSyncFlightOwner.MANUAL)
                 return@launch
             }
             busy.value = true
@@ -1183,6 +1211,25 @@ class CatalogSyncViewModel(
             0
         }
 
+    private suspend fun ensureDeviceActiveForManualSync(reason: String): Boolean {
+        val authorization = deviceAuthorization ?: return true
+        val result = authorization.ensureActiveForCloudWrite(reason)
+        if (result.isSuccess) return true
+
+        val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
+        lastErrorKind.value = ErrorKind.DeviceBlocked
+        setSyncProgress(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
+        pendingHint.value = runCatching {
+            repository.hasCatalogCloudPendingWorkInclusive()
+        }.getOrDefault(pendingHint.value)
+        Log.w(
+            TAG,
+            "sync_request source=$reason outcome=blocked_by_device_status " +
+                "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"}"
+        )
+        return false
+    }
+
     private fun SyncErrorClassification.toErrorKind(): ErrorKind =
         when (category) {
             SyncErrorCategory.NetworkOfflineOrTimeout -> ErrorKind.Offline
@@ -1210,7 +1257,8 @@ class CatalogSyncViewModel(
                         app.authManager.state,
                         app.sessionCloudSessionFlightOwner,
                         app.catalogSyncStateTracker,
-                        syncEventRemote = app.syncEventRemoteDataSource
+                        syncEventRemote = app.syncEventRemoteDataSource,
+                        deviceAuthorization = app.shopDeviceAuthorizationRepository
                     ) as T
             }
     }

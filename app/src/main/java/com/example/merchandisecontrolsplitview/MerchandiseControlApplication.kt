@@ -13,13 +13,22 @@ import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinator
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStage
 import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
+import com.example.merchandisecontrolsplitview.data.DeviceGuardedCatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.DeviceGuardedProductPriceRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.DeviceGuardedSessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.DeviceGuardedSyncEventRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.DeviceInstallIdProvider
 import com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinator
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
 import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
+import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSyncEventRemoteDataSource
@@ -35,9 +44,12 @@ import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -81,18 +93,24 @@ class MerchandiseControlApplication : Application() {
     private val validatedNetworks = mutableSetOf<Network>()
     private val networkLock = Any()
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastShopDeviceRegistrationUserId: String? = null
+    private var lastShopDeviceRegistrationAtMs: Long = 0L
+    private var shopDeviceStatusPollingJob: Job? = null
 
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppForeground()
             historySessionPushCoordinator.onAppForeground()
             catalogAutoSyncCoordinator.onAppForeground()
+            registerShopDeviceBestEffort(authManager.state.value, "foreground")
+            startShopDeviceStatusPolling()
         }
 
         override fun onStop(owner: LifecycleOwner) {
             realtimeRefreshCoordinator.onAppBackground()
             historySessionPushCoordinator.onAppBackground()
             catalogAutoSyncCoordinator.onAppBackground()
+            stopShopDeviceStatusPolling()
         }
     }
 
@@ -169,23 +187,66 @@ class MerchandiseControlApplication : Application() {
     }
 
     /** Transport PostgREST catalogo (task 013); null client → [CatalogRemoteDataSource.isConfigured] falso. */
-    val catalogRemoteDataSource: CatalogRemoteDataSource by lazy {
+    private val rawCatalogRemoteDataSource: CatalogRemoteDataSource by lazy {
         SupabaseCatalogRemoteDataSource(supabaseClient)
     }
 
+    val catalogRemoteDataSource: CatalogRemoteDataSource by lazy {
+        DeviceGuardedCatalogRemoteDataSource(
+            delegate = rawCatalogRemoteDataSource,
+            authorization = shopDeviceAuthorizationRepository
+        )
+    }
+
     /** Transport PostgREST storico prezzi (task 016). */
-    val productPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
+    private val rawProductPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
         SupabaseProductPriceRemoteDataSource(supabaseClient)
     }
 
+    val productPriceRemoteDataSource: ProductPriceRemoteDataSource by lazy {
+        DeviceGuardedProductPriceRemoteDataSource(
+            delegate = rawProductPriceRemoteDataSource,
+            authorization = shopDeviceAuthorizationRepository
+        )
+    }
+
     /** Transport PostgREST/RPC per `sync_events` (task 045). */
-    val syncEventRemoteDataSource: SyncEventRemoteDataSource by lazy {
+    private val rawSyncEventRemoteDataSource: SyncEventRemoteDataSource by lazy {
         SupabaseSyncEventRemoteDataSource(supabaseClient)
     }
 
+    val syncEventRemoteDataSource: SyncEventRemoteDataSource by lazy {
+        DeviceGuardedSyncEventRemoteDataSource(
+            delegate = rawSyncEventRemoteDataSource,
+            authorization = shopDeviceAuthorizationRepository
+        )
+    }
+
+    val deviceInstallIdProvider: DeviceInstallIdProvider by lazy {
+        DeviceInstallIdProvider(database.syncEventDeviceStateDao())
+    }
+
+    val shopDeviceRegistrationRemoteDataSource: ShopDeviceRegistrationRemoteDataSource by lazy {
+        ShopDeviceRegistrationRemoteDataSource(
+            client = supabaseClient,
+            installIdProvider = deviceInstallIdProvider
+        )
+    }
+
+    val shopDeviceAuthorizationRepository: ShopDeviceAuthorizationRepository by lazy {
+        ShopDeviceAuthorizationRepository(shopDeviceRegistrationRemoteDataSource)
+    }
+
     /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */
-    val sessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
+    private val rawSessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
         SupabaseSessionBackupRemoteDataSource(supabaseClient)
+    }
+
+    val sessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
+        DeviceGuardedSessionBackupRemoteDataSource(
+            delegate = rawSessionBackupRemoteDataSource,
+            authorization = shopDeviceAuthorizationRepository
+        )
     }
 
     val historySessionPushCoordinator: HistorySessionPushCoordinator by lazy {
@@ -194,6 +255,7 @@ class MerchandiseControlApplication : Application() {
             remote = sessionBackupRemoteDataSource,
             syncEventRemote = syncEventRemoteDataSource,
             syncEventOutboxDao = database.syncEventOutboxDao(),
+            deviceAuthorization = shopDeviceAuthorizationRepository,
             authFlow = authManager.state,
             flightOwner = sessionCloudSessionFlightOwner,
             logger = { message -> Log.i("HistorySessionSyncV2", message) }
@@ -211,6 +273,7 @@ class MerchandiseControlApplication : Application() {
             priceRemote = productPriceRemoteDataSource,
             syncEventRemote = syncEventRemoteDataSource,
             sessionRemote = sessionBackupRemoteDataSource,
+            deviceAuthorization = shopDeviceAuthorizationRepository,
             authFlow = authManager.state,
             syncStateTracker = catalogSyncStateTracker,
             logger = { message -> Log.i("CatalogCloudSync", message) }
@@ -275,6 +338,8 @@ class MerchandiseControlApplication : Application() {
                     }
                     is AuthState.SignedIn -> {
                         Log.i(TAG, "Auth: sessione attiva")
+                        registerShopDeviceBestEffort(state, "auth")
+                        startShopDeviceStatusPolling()
                         realtimeSessionSubscriber.start()
                         val syncEventCapabilities = syncEventRemoteDataSource
                             .checkCapabilities(state.userId)
@@ -290,11 +355,13 @@ class MerchandiseControlApplication : Application() {
                         Log.i(TAG, "Auth: nessuna sessione, fermo realtime")
                         realtimeSessionSubscriber.stop()
                         syncEventRealtimeSubscriber.stop()
+                        stopShopDeviceStatusPolling()
                     }
                     is AuthState.ErrorRecoverable -> {
                         Log.w(TAG, "Auth: errore recuperabile, fermo realtime prudenzialmente")
                         realtimeSessionSubscriber.stop()
                         syncEventRealtimeSubscriber.stop()
+                        stopShopDeviceStatusPolling()
                     }
                 }
             }
@@ -323,6 +390,7 @@ class MerchandiseControlApplication : Application() {
                 }
                 if (becameOnline) {
                     Log.i(TAG, "Network: internet validato disponibile, pianifico sync cloud pending")
+                    registerShopDeviceBestEffort(authManager.state.value, "network")
                     catalogAutoSyncCoordinator.onNetworkAvailable()
                     historySessionPushCoordinator.onNetworkAvailable()
                 }
@@ -361,5 +429,68 @@ class MerchandiseControlApplication : Application() {
         synchronized(networkLock) {
             validatedNetworks.clear()
         }
+    }
+
+    private fun registerShopDeviceBestEffort(state: AuthState, reason: String) {
+        val signedIn = state as? AuthState.SignedIn ?: return
+        if (!shopDeviceRegistrationRemoteDataSource.isConfigured) return
+
+        val now = System.currentTimeMillis()
+        val sameRecentUser =
+            lastShopDeviceRegistrationUserId == signedIn.userId &&
+                now - lastShopDeviceRegistrationAtMs < 60_000L
+        if (sameRecentUser) return
+
+        lastShopDeviceRegistrationUserId = signedIn.userId
+        lastShopDeviceRegistrationAtMs = now
+
+        appScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                shopDeviceAuthorizationRepository.registerHeartbeatAndCheck(reason)
+            }
+            result.getOrNull()?.let { response ->
+                Log.i(
+                    TAG,
+                    "Shop device status reason=$reason status=${response.status} code=${response.code} canWrite=${response.canWrite}"
+                )
+                if (!response.canWrite) {
+                    catalogSyncStateTracker.update(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
+                }
+            }
+        }
+    }
+
+    private fun startShopDeviceStatusPolling() {
+        if (shopDeviceStatusPollingJob?.isActive == true) return
+        shopDeviceStatusPollingJob = appScope.launch {
+            while (true) {
+                val signedIn = authManager.state.value as? AuthState.SignedIn
+                if (signedIn != null && shopDeviceRegistrationRemoteDataSource.isConfigured) {
+                    val result = withContext(Dispatchers.IO) {
+                        shopDeviceAuthorizationRepository.checkStatus(
+                            reason = "foreground_poll",
+                            force = false
+                        )
+                    }
+                    result.getOrNull()?.let { snapshot ->
+                        if (!snapshot.canWrite) {
+                            catalogSyncStateTracker.update(
+                                CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS)
+                            )
+                            Log.w(
+                                TAG,
+                                "Shop device foreground poll blocked status=${snapshot.status} code=${snapshot.code}"
+                            )
+                        }
+                    }
+                }
+                delay(15_000L)
+            }
+        }
+    }
+
+    private fun stopShopDeviceStatusPolling() {
+        shopDeviceStatusPollingJob?.cancel()
+        shopDeviceStatusPollingJob = null
     }
 }

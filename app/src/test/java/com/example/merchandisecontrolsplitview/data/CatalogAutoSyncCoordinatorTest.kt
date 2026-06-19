@@ -50,6 +50,38 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `072 revoked device blocks automatic local push before remote writes`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(
+                FakeShopDeviceRegistrationRemote072(status = "revoked")
+            ),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("local_commit")
+
+        assertEquals(0, repository.pushCalls)
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertEquals(CatalogSyncStage.DEVICE_STATUS, tracker.state.value.stage)
+        assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
+        assertTrue(logs.any { it.contains("blocked_by_device_status") && it.contains("status=revoked") })
+        coordinator.shutdown()
+    }
+
+    @Test
     fun `043 auto push skips while a manual catalog flight owns the tracker`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043()
         val tracker = CatalogSyncStateTracker()
@@ -610,6 +642,29 @@ class CatalogAutoSyncCoordinatorTest {
             limit: Long
         ): Result<List<SyncEventRemoteRow>> =
             Result.success(emptyList())
+    }
+
+    private class FakeShopDeviceRegistrationRemote072(
+        private val status: String
+    ) : ShopDeviceRegistrationRemote {
+        override val isConfigured: Boolean = true
+
+        override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
+
+        override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
+            Result.success(
+                ShopDeviceAuthorizationSnapshot(
+                    status = status,
+                    code = if (status == "active") "success" else status,
+                    canWrite = status == "active",
+                    serverTime = "2026-06-19T00:00:00Z",
+                    lastSeenAt = "2026-06-19T00:00:00Z",
+                    reasonCode = status,
+                    recommendedAction = if (status == "active") "allow" else "contact_shop_admin",
+                    checkedAtMs = System.currentTimeMillis()
+                )
+            )
     }
 
     private companion object {

@@ -17,6 +17,7 @@ enum class CatalogSyncStage {
     SYNC_PRICES_PULL,
     SYNC_EVENTS_DRAIN,
     SYNC_HISTORY,
+    DEVICE_STATUS,
     COMPLETED
 }
 
@@ -50,6 +51,7 @@ val CatalogSyncStage.group: CatalogSyncStageGroup
         CatalogSyncStage.SYNC_PRICES_PULL -> CatalogSyncStageGroup.PRICES
         CatalogSyncStage.SYNC_EVENTS_DRAIN -> CatalogSyncStageGroup.UPDATE_FROM_CLOUD
         CatalogSyncStage.SYNC_HISTORY -> CatalogSyncStageGroup.HISTORY
+        CatalogSyncStage.DEVICE_STATUS -> CatalogSyncStageGroup.SEND_CHANGES
         CatalogSyncStage.COMPLETED -> CatalogSyncStageGroup.COMPLETED
     }
 
@@ -92,9 +94,9 @@ data class CatalogSyncProgressState(
                 status = CatalogSyncStatus.COMPLETED
             )
 
-        fun failed(): CatalogSyncProgressState =
+        fun failed(stage: CatalogSyncStage = CatalogSyncStage.COMPLETED): CatalogSyncProgressState =
             CatalogSyncProgressState(
-                stage = CatalogSyncStage.COMPLETED,
+                stage = stage,
                 isBusy = false,
                 status = CatalogSyncStatus.FAILED
             )

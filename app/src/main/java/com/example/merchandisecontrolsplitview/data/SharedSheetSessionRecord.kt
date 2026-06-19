@@ -28,6 +28,9 @@ data class SharedSheetSessionRecord(
     /** Presente nelle SELECT PostgREST; ignorato nel mapping verso [SessionRemotePayload]. */
     @SerialName("owner_user_id")
     val ownerUserId: String? = null,
+    /** Presente sui bridge Admin Web shop-scoped; ignorato dal runtime mobile owner-scoped. */
+    @SerialName("shop_id")
+    val shopId: String? = null,
     /** Opzionale: column server-side (task 010/012). */
     @SerialName("updated_at")
     val updatedAt: String? = null,

@@ -587,6 +587,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count">Refreshing prices from cloud %1$d / %2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain">Updating sync events…</string>
     <string name="catalog_cloud_stage_sync_history">Syncing history…</string>
+    <string name="catalog_cloud_stage_device_status">Checking device status…</string>
     <string name="catalog_cloud_stage_realign_short">Preparing</string>
     <string name="catalog_cloud_stage_push_suppliers_short">Sending suppliers</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">Suppliers %1$d/%2$d</string>
@@ -603,6 +604,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">Received prices %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">Updating sync events</string>
     <string name="catalog_cloud_stage_sync_history_short">Sessions</string>
+    <string name="catalog_cloud_stage_device_status_short">Device status</string>
     <string name="cloud_sync_indicator_status_cd">Cloud sync: %1$s</string>
     <string name="cloud_sync_indicator_local_ready">Local database is ready: you can use it now</string>
     <string name="cloud_sync_indicator_completed">Cloud catalog synced</string>
@@ -612,6 +614,7 @@
     <string name="catalog_cloud_state_sending_changes">Sending changes</string>
     <string name="catalog_cloud_state_last_failed">Last attempt failed</string>
     <string name="catalog_cloud_state_forbidden">Cloud permissions need checking</string>
+    <string name="catalog_cloud_state_device_blocked">Cloud access is blocked for this device</string>
     <string name="catalog_cloud_state_config_problem">Cloud setup needs checking</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalog updated; prices will retry automatically.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Catalog updated; sessions will retry automatically.</string>

@@ -596,6 +596,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count">Actualizando precios desde la nube %1$d / %2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain">Actualizando eventos de sincronización…</string>
     <string name="catalog_cloud_stage_sync_history">Sincronizando historial…</string>
+    <string name="catalog_cloud_stage_device_status">Comprobando estado del dispositivo…</string>
     <string name="catalog_cloud_stage_realign_short">Preparando</string>
     <string name="catalog_cloud_stage_push_suppliers_short">Enviando proveedores</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">Proveedores %1$d/%2$d</string>
@@ -612,6 +613,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">Precios recibidos %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">Actualizando eventos sync</string>
     <string name="catalog_cloud_stage_sync_history_short">Sesiones</string>
+    <string name="catalog_cloud_stage_device_status_short">Estado dispositivo</string>
     <string name="cloud_sync_indicator_status_cd">Sincronización en la nube: %1$s</string>
     <string name="cloud_sync_indicator_local_ready">La base local está lista: ya puedes usarla</string>
     <string name="cloud_sync_indicator_completed">Catálogo en la nube sincronizado</string>
@@ -621,6 +623,7 @@
     <string name="catalog_cloud_state_sending_changes">Enviando cambios</string>
     <string name="catalog_cloud_state_last_failed">El último intento falló</string>
     <string name="catalog_cloud_state_forbidden">Revisa los permisos de la nube</string>
+    <string name="catalog_cloud_state_device_blocked">El acceso a la nube está bloqueado para este dispositivo</string>
     <string name="catalog_cloud_state_config_problem">Revisa la configuración de la nube</string>
     <string name="catalog_cloud_state_prices_incomplete">Catálogo actualizado; los precios se reintentarán automáticamente.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Catálogo actualizado; las sesiones se reintentarán automáticamente.</string>

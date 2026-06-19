@@ -21,6 +21,7 @@ class CatalogAutoSyncCoordinator(
     private val priceRemote: ProductPriceRemoteDataSource,
     private val syncEventRemote: SyncEventRemoteDataSource = DisabledSyncEventRemoteDataSource,
     private val sessionRemote: SessionBackupRemoteDataSource? = null,
+    private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null,
     private val authFlow: StateFlow<AuthState>,
     private val syncStateTracker: CatalogSyncStateTracker,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
@@ -259,6 +260,7 @@ class CatalogAutoSyncCoordinator(
             )
             return
         }
+        if (!ensureDeviceActiveForSync("catalog_push", reason)) return
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
             dirtyHints.clear()
@@ -369,6 +371,7 @@ class CatalogAutoSyncCoordinator(
             logger("cycle=catalog_bootstrap outcome=skip reason=bootstrap_retry_guard")
             return
         }
+        if (!ensureDeviceActiveForSync("catalog_bootstrap", reason)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
             logger("cycle=catalog_bootstrap outcome=skip reason=sync_busy")
             scheduleBootstrapAfterBusy(reason)
@@ -449,6 +452,7 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
             return
         }
+        if (!ensureDeviceActiveForSync("sync_events_drain", reason)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
             logger("cycle=sync_events_drain outcome=skip reason=sync_busy")
             scheduleSyncEventDrainAfterBusy(reason)
@@ -508,5 +512,20 @@ class CatalogAutoSyncCoordinator(
             )
             syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
         }
+    }
+
+    private suspend fun ensureDeviceActiveForSync(cycle: String, reason: String): Boolean {
+        val authorization = deviceAuthorization ?: return true
+        val result = authorization.ensureActiveForCloudWrite("$cycle:$reason")
+        if (result.isSuccess) return true
+
+        val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
+        logger(
+            "cycle=$cycle outcome=blocked_by_device_status reason=$reason " +
+                "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"} " +
+                "recommendedAction=${snapshot?.recommendedAction ?: "contact_shop_admin"}"
+        )
+        syncStateTracker.update(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
+        return false
     }
 }

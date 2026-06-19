@@ -214,6 +214,7 @@ private fun catalogSyncStageMessage(state: CatalogSyncProgressState): String {
         )
         CatalogSyncStage.SYNC_EVENTS_DRAIN -> stringResource(R.string.catalog_cloud_stage_sync_events_drain_short)
         CatalogSyncStage.SYNC_HISTORY -> stringResource(R.string.catalog_cloud_stage_sync_history_short)
+        CatalogSyncStage.DEVICE_STATUS -> stringResource(R.string.catalog_cloud_stage_device_status_short)
         CatalogSyncStage.IDLE -> stringResource(R.string.catalog_cloud_state_syncing)
     }
 }

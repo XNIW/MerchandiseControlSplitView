@@ -602,6 +602,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count">Aggiornamento prezzi dal cloud %1$d / %2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain">Aggiornamento eventi sync…</string>
     <string name="catalog_cloud_stage_sync_history">Sincronizzazione cronologia…</string>
+    <string name="catalog_cloud_stage_device_status">Aggiornamento stato dispositivo…</string>
     <string name="catalog_cloud_stage_realign_short">Preparazione</string>
     <string name="catalog_cloud_stage_push_suppliers_short">Invio fornitori</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">Fornitori %1$d/%2$d</string>
@@ -618,6 +619,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">Prezzi ricevuti %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">Aggiornamento eventi sync</string>
     <string name="catalog_cloud_stage_sync_history_short">Sessioni</string>
+    <string name="catalog_cloud_stage_device_status_short">Stato dispositivo</string>
     <string name="cloud_sync_indicator_status_cd">Sincronizzazione cloud: %1$s</string>
     <string name="cloud_sync_indicator_local_ready">Database locale pronto: puoi già usarlo</string>
     <string name="cloud_sync_indicator_completed">Catalogo cloud sincronizzato</string>
@@ -627,6 +629,7 @@
     <string name="catalog_cloud_state_sending_changes">Invio modifiche</string>
     <string name="catalog_cloud_state_last_failed">Ultimo tentativo non riuscito</string>
     <string name="catalog_cloud_state_forbidden">Permessi cloud da verificare</string>
+    <string name="catalog_cloud_state_device_blocked">Accesso cloud bloccato per questo dispositivo</string>
     <string name="catalog_cloud_state_config_problem">Configurazione cloud da verificare</string>
     <string name="catalog_cloud_state_prices_incomplete">Catalogo aggiornato; i prezzi verranno ritentati automaticamente.</string>
     <string name="catalog_cloud_state_sessions_incomplete">Catalogo aggiornato; le sessioni verranno ritentate automaticamente.</string>

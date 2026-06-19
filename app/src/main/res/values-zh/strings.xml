@@ -575,6 +575,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count">正在从云端更新价格 %1$d / %2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain">正在更新同步事件…</string>
     <string name="catalog_cloud_stage_sync_history">正在同步历史…</string>
+    <string name="catalog_cloud_stage_device_status">正在检查设备状态…</string>
     <string name="catalog_cloud_stage_realign_short">准备中</string>
     <string name="catalog_cloud_stage_push_suppliers_short">发送供应商</string>
     <string name="catalog_cloud_stage_push_suppliers_count_short">供应商 %1$d/%2$d</string>
@@ -591,6 +592,7 @@
     <string name="catalog_cloud_stage_sync_prices_pull_count_short">已接收价格 %1$d/%2$d</string>
     <string name="catalog_cloud_stage_sync_events_drain_short">更新同步事件</string>
     <string name="catalog_cloud_stage_sync_history_short">会话</string>
+    <string name="catalog_cloud_stage_device_status_short">设备状态</string>
     <string name="cloud_sync_indicator_status_cd">云同步：%1$s</string>
     <string name="cloud_sync_indicator_local_ready">本地数据库已就绪：现在可以使用</string>
     <string name="cloud_sync_indicator_completed">云端目录已同步</string>
@@ -600,6 +602,7 @@
     <string name="catalog_cloud_state_sending_changes">正在发送更改</string>
     <string name="catalog_cloud_state_last_failed">上次未成功</string>
     <string name="catalog_cloud_state_forbidden">需要检查云端权限</string>
+    <string name="catalog_cloud_state_device_blocked">此设备的云端访问已被阻止</string>
     <string name="catalog_cloud_state_config_problem">需要检查云端配置</string>
     <string name="catalog_cloud_state_prices_incomplete">目录已更新；价格会自动重试。</string>
     <string name="catalog_cloud_state_sessions_incomplete">目录已更新；会话会自动重试。</string>

@@ -3,10 +3,13 @@ package com.example.merchandisecontrolsplitview
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.merchandisecontrolsplitview.data.AuthState
+import io.github.jan.supabase.auth.auth
+import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -34,13 +37,13 @@ class Task103AuthPreflightTest {
             .targetContext
             .applicationContext as MerchandiseControlApplication
 
-        app.authManager.restoreSession()
-        val authState = withTimeoutOrNull(15_000) {
-            app.authManager.state.first { it !is AuthState.Checking }
-        } ?: app.authManager.state.value
-
-        val signedIn = authState as? AuthState.SignedIn
-            ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session: ${authState::class.java.simpleName}")
+        val signedIn = signedInState(app) ?: run {
+            val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
+            if (!sessionFile.isNullOrBlank()) {
+                importTemporarySession(app, sessionFile)
+            }
+            signedInState(app)
+        } ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session")
 
         assertTrue(app.catalogRemoteDataSource.isConfigured)
         assertTrue(app.productPriceRemoteDataSource.isConfigured)
@@ -61,6 +64,39 @@ class Task103AuthPreflightTest {
     private fun task103Hash(value: String): String {
         val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }.take(12)
+    }
+
+    private suspend fun signedInState(app: MerchandiseControlApplication): AuthState.SignedIn? {
+        app.authManager.restoreSession()
+        val authState = withTimeoutOrNull(15_000) {
+            app.authManager.state.first { it !is AuthState.Checking }
+        } ?: app.authManager.state.value
+        return authState as? AuthState.SignedIn
+    }
+
+    private suspend fun importTemporarySession(
+        app: MerchandiseControlApplication,
+        sessionFilePath: String
+    ) {
+        val file = File(sessionFilePath)
+        if (!file.exists()) {
+            throw AssertionError("TASK-072D task072DSessionFile does not exist")
+        }
+
+        val json = JSONObject(file.readText())
+        val access = json.getString("access")
+        val refresh = json.getString("refresh")
+        if (access.isBlank() || refresh.isBlank()) {
+            throw AssertionError("TASK-072D task072DSessionFile is malformed")
+        }
+
+        app.supabaseClient?.auth?.importAuthToken(
+            accessToken = access,
+            refreshToken = refresh,
+            retrieveUser = true,
+            autoRefresh = true
+        ) ?: throw AssertionError("Supabase client missing")
+        file.delete()
     }
 
     private fun isEnabled(value: String?): Boolean =

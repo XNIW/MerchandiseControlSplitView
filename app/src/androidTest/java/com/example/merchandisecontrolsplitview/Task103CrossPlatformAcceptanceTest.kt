@@ -30,13 +30,16 @@ import com.example.merchandisecontrolsplitview.data.SyncEventDomains
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteRow
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
+import java.io.File
 import java.security.MessageDigest
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -658,7 +661,8 @@ class Task103CrossPlatformAcceptanceTest {
             prefix.startsWith("TASK131_") ||
             prefix.startsWith("TASK133_") ||
             prefix.startsWith("TASK134_") ||
-            prefix.startsWith("TASK135_")
+            prefix.startsWith("TASK135_") ||
+            prefix.startsWith("TASK072D_")
         require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
             "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
         }
@@ -841,13 +845,14 @@ class Task103CrossPlatformAcceptanceTest {
         } else {
             app.catalogAutoSyncCoordinator.onAppBackground()
         }
-        app.authManager.restoreSession()
-
-        val authState = withTimeoutOrNull(15_000) {
-            app.authManager.state.first { it !is AuthState.Checking }
-        } ?: app.authManager.state.value
-        val signedIn = authState as? AuthState.SignedIn
-            ?: throw AssertionError("TASK-103 Android Supabase session is not signed in: ${authState::class.java.simpleName}")
+        val args = InstrumentationRegistry.getArguments()
+        val signedIn = signedInState(app) ?: run {
+            val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
+            if (!sessionFile.isNullOrBlank()) {
+                importTemporarySession(app, sessionFile)
+            }
+            signedInState(app)
+        } ?: throw AssertionError("TASK-103 Android Supabase session is not signed in")
 
         withTimeoutOrNull(5_000) {
             app.catalogSyncStateTracker.state.first { !it.isBusy }
@@ -861,6 +866,39 @@ class Task103CrossPlatformAcceptanceTest {
             priceRemote = Task103ScopedProductPriceRemoteDataSource(app.productPriceRemoteDataSource, client, fixture),
             sessionRemote = app.sessionBackupRemoteDataSource
         )
+    }
+
+    private suspend fun signedInState(app: MerchandiseControlApplication): AuthState.SignedIn? {
+        app.authManager.restoreSession()
+        val authState = withTimeoutOrNull(15_000) {
+            app.authManager.state.first { it !is AuthState.Checking }
+        } ?: app.authManager.state.value
+        return authState as? AuthState.SignedIn
+    }
+
+    private suspend fun importTemporarySession(
+        app: MerchandiseControlApplication,
+        sessionFilePath: String
+    ) {
+        val file = File(sessionFilePath)
+        if (!file.exists()) {
+            throw AssertionError("TASK-072D task072DSessionFile does not exist")
+        }
+
+        val json = JSONObject(file.readText())
+        val access = json.getString("access")
+        val refresh = json.getString("refresh")
+        if (access.isBlank() || refresh.isBlank()) {
+            throw AssertionError("TASK-072D task072DSessionFile is malformed")
+        }
+
+        app.supabaseClient?.auth?.importAuthToken(
+            accessToken = access,
+            refreshToken = refresh,
+            retrieveUser = true,
+            autoRefresh = true
+        ) ?: throw AssertionError("TASK-103 Supabase client missing")
+        file.delete()
     }
 
     private suspend fun waitForCatalogAutoPush(
@@ -1024,15 +1062,19 @@ class Task103CrossPlatformAcceptanceTest {
         val task114Value = args
             .getString("task114LiveAcceptance")
             ?.lowercase()
+        val task072CValue = args
+            .getString("task072CLiveAcceptance")
+            ?.lowercase()
         val task115Value = args
             .getString("task115LiveAcceptance")
             ?.lowercase()
         assumeTrue(
-            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true, -e task114LiveAcceptance true, -e task115LiveAcceptance true or -e task134LiveAcceptance true.",
+            "Live acceptance is gated. Pass -e task103LiveAcceptance true, -e task104Pass2LiveAcceptance true, -e task112LiveAcceptance true, -e task114LiveAcceptance true, -e task072CLiveAcceptance true, -e task115LiveAcceptance true or -e task134LiveAcceptance true.",
             task103Value == "1" || task103Value == "true" ||
                 task104Value == "1" || task104Value == "true" ||
                 task112Value == "1" || task112Value == "true" ||
                 task114Value == "1" || task114Value == "true" ||
+                task072CValue == "1" || task072CValue == "true" ||
                 task115Value == "1" || task115Value == "true" ||
                 isEnabled(args.getString("task134LiveAcceptance")?.lowercase())
         )
@@ -1055,12 +1097,16 @@ class Task103CrossPlatformAcceptanceTest {
             .getString("task134RunPrefix")
             ?: args
             .getString("task114RunPrefix")
-            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix, task114RunPrefix, task115RunPrefix or task134RunPrefix must be explicitly set for live acceptance.")
+            ?: args
+            .getString("task072CRunPrefix")
+            ?: throw AssertionError("task104Pass2RunPrefix, task103RunPrefix, task112RunPrefix, task114RunPrefix, task072CRunPrefix, task115RunPrefix or task134RunPrefix must be explicitly set for live acceptance.")
         assertTrue(
             prefix.startsWith("TASK103_REAL_R") ||
                 prefix.startsWith("TASK104_PASS2_") ||
                 prefix.startsWith("TASK112_") ||
                 prefix.startsWith("TASK114_") ||
+                prefix.startsWith("TASK072C_") ||
+                prefix.startsWith("TASK072D_") ||
                 prefix.startsWith("TASK115_") ||
                 prefix.startsWith("TASK123_") ||
                 prefix.startsWith("TASK124_") ||
@@ -1438,6 +1484,8 @@ class Task103CrossPlatformAcceptanceTest {
             prefix.startsWith("TASK123_") -> "TASK123"
             prefix.startsWith("TASK115_") -> "TASK115"
             prefix.startsWith("TASK114_") -> "TASK114"
+            prefix.startsWith("TASK072C_") -> "TASK072C"
+            prefix.startsWith("TASK072D_") -> "TASK072D"
             prefix.startsWith("TASK112_") -> "TASK112"
             prefix.startsWith("TASK104_PASS2_") -> "TASK104_PASS2"
             else -> "TASK103"
