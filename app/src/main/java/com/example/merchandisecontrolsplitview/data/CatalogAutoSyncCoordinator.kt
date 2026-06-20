@@ -53,6 +53,12 @@ class CatalogAutoSyncCoordinator(
     private var syncEventRetryAfterBusyScheduled = false
 
     @Volatile
+    private var pendingCatalogBootstrapAfterBusy = false
+
+    @Volatile
+    private var pendingSyncEventDrainAfterBusy = false
+
+    @Volatile
     private var isForeground = true
 
     @Volatile
@@ -122,6 +128,17 @@ class CatalogAutoSyncCoordinator(
         scheduleSyncEventDrain("network_available")
     }
 
+    fun onDeviceStatusActive() {
+        logger("cycle=device_status_active outcome=schedule")
+        scheduleBootstrap("device_active")
+        scheduleSyncEventDrain("device_active")
+        scope.launch {
+            delay(RETRY_AFTER_BUSY_MS)
+            runBootstrapCycle("device_active_direct")
+            runSyncEventDrainCycle("device_active_direct")
+        }
+    }
+
     fun shutdown() {
         scope.cancel()
     }
@@ -160,7 +177,9 @@ class CatalogAutoSyncCoordinator(
     }
 
     private fun scheduleBootstrapAfterBusy(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
         val shouldSchedule = synchronized(retryLock) {
+            pendingCatalogBootstrapAfterBusy = true
             if (bootstrapRetryAfterBusyScheduled) {
                 false
             } else {
@@ -170,14 +189,18 @@ class CatalogAutoSyncCoordinator(
         }
         if (!shouldSchedule) return
         scope.launch {
-            delay(RETRY_AFTER_BUSY_MS)
+            delay(RETRY_AFTER_BUSY_MS * 4)
             synchronized(retryLock) { bootstrapRetryAfterBusyScheduled = false }
-            scheduleBootstrap("${reason}_retry_after_busy")
+            if (pendingCatalogBootstrapAfterBusy) {
+                runBootstrapCycle(retryReason)
+            }
         }
     }
 
     private fun scheduleSyncEventDrainAfterBusy(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
         val shouldSchedule = synchronized(retryLock) {
+            pendingSyncEventDrainAfterBusy = true
             if (syncEventRetryAfterBusyScheduled) {
                 false
             } else {
@@ -187,9 +210,35 @@ class CatalogAutoSyncCoordinator(
         }
         if (!shouldSchedule) return
         scope.launch {
-            delay(RETRY_AFTER_BUSY_MS)
+            delay(RETRY_AFTER_BUSY_MS * 4)
             synchronized(retryLock) { syncEventRetryAfterBusyScheduled = false }
-            scheduleSyncEventDrain("${reason}_retry_after_busy")
+            if (pendingSyncEventDrainAfterBusy) {
+                runSyncEventDrainCycle(retryReason)
+            }
+        }
+    }
+
+    private fun compactBusyRetryReason(reason: String): String {
+        val marker = "_retry_after_busy"
+        val base = reason.substringBefore(marker)
+        return "${base}${marker}"
+    }
+
+    private fun consumePendingCatalogBootstrapAfterBusy(): Boolean = synchronized(retryLock) {
+        if (!pendingCatalogBootstrapAfterBusy) {
+            false
+        } else {
+            pendingCatalogBootstrapAfterBusy = false
+            true
+        }
+    }
+
+    private fun consumePendingSyncEventDrainAfterBusy(): Boolean = synchronized(retryLock) {
+        if (!pendingSyncEventDrainAfterBusy) {
+            false
+        } else {
+            pendingSyncEventDrainAfterBusy = false
+            true
         }
     }
 
@@ -373,9 +422,15 @@ class CatalogAutoSyncCoordinator(
         }
         if (!ensureDeviceActiveForSync("catalog_bootstrap", reason)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
-            logger("cycle=catalog_bootstrap outcome=skip reason=sync_busy")
+            logger(
+                "cycle=catalog_bootstrap outcome=queued_after_busy " +
+                    "reason=sync_busy originalReason=$reason"
+            )
             scheduleBootstrapAfterBusy(reason)
             return
+        }
+        if (consumePendingCatalogBootstrapAfterBusy()) {
+            logger("cycle=catalog_bootstrap outcome=drained_after_busy reason=$reason")
         }
         var ok = false
         val startedAt = System.currentTimeMillis()
@@ -426,9 +481,11 @@ class CatalogAutoSyncCoordinator(
         reason == "auth_signed_in" ||
             reason == "foreground" ||
             reason == "network_available" ||
+            reason == "device_active" ||
             reason.startsWith("auth_signed_in_") ||
             reason.startsWith("foreground_") ||
-            reason.startsWith("network_available_")
+            reason.startsWith("network_available_") ||
+            reason.startsWith("device_active_")
 
     internal suspend fun runSyncEventDrainCycle(reason: String) {
         val auth = authFlow.value
@@ -454,9 +511,15 @@ class CatalogAutoSyncCoordinator(
         }
         if (!ensureDeviceActiveForSync("sync_events_drain", reason)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
-            logger("cycle=sync_events_drain outcome=skip reason=sync_busy")
+            logger(
+                "cycle=sync_events_drain outcome=queued_after_busy " +
+                    "reason=sync_busy originalReason=$reason"
+            )
             scheduleSyncEventDrainAfterBusy(reason)
             return
+        }
+        if (consumePendingSyncEventDrainAfterBusy()) {
+            logger("cycle=sync_events_drain outcome=drained_after_busy reason=$reason")
         }
         var ok = false
         val startedAt = System.currentTimeMillis()

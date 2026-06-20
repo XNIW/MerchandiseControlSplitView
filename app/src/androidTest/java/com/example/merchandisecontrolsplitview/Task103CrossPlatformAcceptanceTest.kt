@@ -662,6 +662,7 @@ class Task103CrossPlatformAcceptanceTest {
             prefix.startsWith("TASK133_") ||
             prefix.startsWith("TASK134_") ||
             prefix.startsWith("TASK135_") ||
+            prefix.startsWith("TASK136_") ||
             prefix.startsWith("TASK072D_")
         require(allowedCleanupPrefix && prefix.endsWith("_") && !prefix.contains("%")) {
             "TASK-114/TASK-123 cleanup prefix must be explicit, task-scoped and suffix '_'"
@@ -1114,7 +1115,8 @@ class Task103CrossPlatformAcceptanceTest {
                 prefix.startsWith("TASK131_") ||
                 prefix.startsWith("TASK133_") ||
                 prefix.startsWith("TASK134_") ||
-                prefix.startsWith("TASK135_")
+                prefix.startsWith("TASK135_") ||
+                prefix.startsWith("TASK136_")
         )
         assertTrue(prefix.endsWith("_"))
         return Fixture(prefix)
@@ -1478,6 +1480,7 @@ class Task103CrossPlatformAcceptanceTest {
             prefix.startsWith("TASK133_") -> "TASK133"
             prefix.startsWith("TASK134_") -> "TASK134"
             prefix.startsWith("TASK135_") -> "TASK135"
+            prefix.startsWith("TASK136_") -> "TASK136"
             prefix.startsWith("TASK131_") -> "TASK131"
             prefix.startsWith("TASK124_") -> "TASK124"
             prefix.startsWith("TASK125_") -> "TASK125"

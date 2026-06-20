@@ -455,6 +455,8 @@ class MerchandiseControlApplication : Application() {
                 )
                 if (!response.canWrite) {
                     catalogSyncStateTracker.update(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
+                } else {
+                    catalogAutoSyncCoordinator.onDeviceStatusActive()
                 }
             }
         }
@@ -481,6 +483,8 @@ class MerchandiseControlApplication : Application() {
                                 TAG,
                                 "Shop device foreground poll blocked status=${snapshot.status} code=${snapshot.code}"
                             )
+                        } else {
+                            catalogAutoSyncCoordinator.onDeviceStatusActive()
                         }
                     }
                 }
