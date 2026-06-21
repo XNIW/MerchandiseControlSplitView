@@ -7,6 +7,7 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinator
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.CatalogSyncFlightOwner
+import com.example.merchandisecontrolsplitview.data.CatalogSyncOutcomeState
 import com.example.merchandisecontrolsplitview.data.CatalogSyncSummary
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressReporter
 import com.example.merchandisecontrolsplitview.data.CatalogTombstonePatch
@@ -218,13 +219,18 @@ class Task103CrossPlatformAcceptanceTest {
             retailPrice = 57.20,
             stockQuantity = 8.0
         )
+        val createPreviousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         for (product in listOf(createProduct, updateProduct, tombstoneProduct)) {
             runtime.repository.findProductByBarcode(product.barcode)?.let { runtime.repository.deleteProduct(it) }
             runtime.repository.addProduct(product)
         }
         val localCatalogSaveFinishedMs = System.currentTimeMillis()
         val catalogPushStartedMs = System.currentTimeMillis()
-        val createSummary = waitForCatalogAutoPush(runtime, "android matrix create") {
+        val createSummary = waitForCatalogAutoPush(
+            runtime,
+            "android matrix create",
+            previousOutcome = createPreviousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             activeProducts(
                 catalog,
@@ -238,13 +244,18 @@ class Task103CrossPlatformAcceptanceTest {
 
         val updateLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidUpdate)
             ?: throw AssertionError("TASK-114 Android update product missing locally")
+        val updatePreviousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         runtime.repository.updateProduct(
             updateLocal.copy(
                 productName = fixture.matrixProductAndroidUpdateFinal,
                 purchasePrice = 47.15
             )
         )
-        val updateSummary = waitForCatalogAutoPush(runtime, "android matrix update") {
+        val updateSummary = waitForCatalogAutoPush(
+            runtime,
+            "android matrix update",
+            previousOutcome = updatePreviousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             singleActiveProduct(catalog, fixture.matrixBarcodeAndroidUpdate)?.productName ==
                 fixture.matrixProductAndroidUpdateFinal
@@ -252,8 +263,13 @@ class Task103CrossPlatformAcceptanceTest {
 
         val tombstoneLocal = runtime.repository.findProductByBarcode(fixture.matrixBarcodeAndroidTombstone)
             ?: throw AssertionError("TASK-114 Android tombstone product missing locally")
+        val tombstonePreviousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         runtime.repository.deleteProduct(tombstoneLocal)
-        val tombstoneSummary = waitForCatalogAutoPush(runtime, "android matrix tombstone") {
+        val tombstoneSummary = waitForCatalogAutoPush(
+            runtime,
+            "android matrix tombstone",
+            previousOutcome = tombstonePreviousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             productByBarcode(catalog, fixture.matrixBarcodeAndroidTombstone)?.deletedAt != null
         }
@@ -369,6 +385,7 @@ class Task103CrossPlatformAcceptanceTest {
         val category = runtime.repository.addCategory("${fixture.prefix}SINGLE_CAT_ANDROID")
             ?: runtime.repository.findCategoryByName("${fixture.prefix}SINGLE_CAT_ANDROID")
             ?: throw AssertionError("TASK-123 Android single category unavailable")
+        val previousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         runtime.repository.findProductByBarcode("${fixture.prefix}SINGLE_ANDROID_CREATE")
             ?.let { runtime.repository.deleteProduct(it) }
         runtime.repository.addProduct(
@@ -385,7 +402,11 @@ class Task103CrossPlatformAcceptanceTest {
         )
         val localSaveMs = System.currentTimeMillis() - localSaveStartedMs
         val pushStartedMs = System.currentTimeMillis()
-        val summary = waitForCatalogAutoPush(runtime, "task123 android single catalog create") {
+        val summary = waitForCatalogAutoPush(
+            runtime,
+            "task123 android single catalog create",
+            previousOutcome = previousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             singleActiveProduct(catalog, "${fixture.prefix}SINGLE_ANDROID_CREATE")?.productName ==
                 "${fixture.prefix}SINGLE_ANDROID_PRODUCT_CREATE"
@@ -443,11 +464,16 @@ class Task103CrossPlatformAcceptanceTest {
             retailPrice = 72.20,
             stockQuantity = 8.0
         )
+        val seedPreviousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         for (product in listOf(seedUpdate, seedTombstone)) {
             runtime.repository.findProductByBarcode(product.barcode)?.let { runtime.repository.deleteProduct(it) }
             runtime.repository.addProduct(product)
         }
-        val seedSummary = waitForCatalogAutoPush(runtime, "android offline seed") {
+        val seedSummary = waitForCatalogAutoPush(
+            runtime,
+            "android offline seed",
+            previousOutcome = seedPreviousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             activeProducts(
                 catalog,
@@ -520,12 +546,17 @@ class Task103CrossPlatformAcceptanceTest {
         assertTrue("Expected offline history pending", pendingHistoryBefore >= 1)
 
         val reconnectStartedMs = System.currentTimeMillis()
+        val reconnectPreviousOutcome = runtime.app.catalogSyncStateTracker.lastOutcome.value
         runtime.app.catalogAutoSyncCoordinator.onNetworkAvailable()
         runtime.app.catalogAutoSyncCoordinator.onAppForeground()
         runtime.app.historySessionPushCoordinator.onNetworkAvailable()
         runtime.app.historySessionPushCoordinator.onAppForeground()
         val reconnectDetectedMs = System.currentTimeMillis() - reconnectStartedMs
-        val reconnectSummary = waitForCatalogAutoPush(runtime, "android offline reconnect") {
+        val reconnectSummary = waitForCatalogAutoPush(
+            runtime,
+            "android offline reconnect",
+            previousOutcome = reconnectPreviousOutcome
+        ) {
             val catalog = runtime.catalogRemote.fetchCatalog().getOrThrow()
             singleActiveProduct(catalog, "${fixture.prefix}OFFLINE_ANDROID_CREATE")?.productName ==
                 "${fixture.prefix}OFFLINE_ANDROID_CREATE_PRODUCT" &&
@@ -700,14 +731,14 @@ class Task103CrossPlatformAcceptanceTest {
                     DELETE FROM history_entry_remote_refs
                     WHERE historyEntryUid IN (
                         SELECT uid FROM history_entries
-                        WHERE displayName LIKE ? OR id LIKE ?
+                        WHERE displayName LIKE ? OR id LIKE ? OR supplier LIKE ? OR category LIKE ?
                     )
                     """.trimIndent(),
-                    arrayOf(likePrefix, likePrefix)
+                    arrayOf(likePrefix, likePrefix, likePrefix, likePrefix)
                 )
                 db.execSQL(
-                    "DELETE FROM history_entries WHERE displayName LIKE ? OR id LIKE ?",
-                    arrayOf(likePrefix, likePrefix)
+                    "DELETE FROM history_entries WHERE displayName LIKE ? OR id LIKE ? OR supplier LIKE ? OR category LIKE ?",
+                    arrayOf(likePrefix, likePrefix, likePrefix, likePrefix)
                 )
                 db.execSQL(
                     """
@@ -905,13 +936,13 @@ class Task103CrossPlatformAcceptanceTest {
     private suspend fun waitForCatalogAutoPush(
         runtime: Runtime,
         label: String,
+        previousOutcome: CatalogSyncOutcomeState? = runtime.app.catalogSyncStateTracker.lastOutcome.value,
         remoteCondition: suspend () -> Boolean
     ): CatalogSyncSummary {
-        val previous = runtime.app.catalogSyncStateTracker.lastOutcome.value
         val outcome = withTimeoutOrNull(35_000) {
             runtime.app.catalogSyncStateTracker.lastOutcome.first { next ->
                 next != null &&
-                    next !== previous &&
+                    next !== previousOutcome &&
                     next.source == CatalogSyncFlightOwner.AUTO_PUSH &&
                     next.ownerUserId == runtime.ownerUserId &&
                     next.summary.recordSyncEventAvailable &&
@@ -1273,8 +1304,8 @@ class Task103CrossPlatformAcceptanceTest {
         likePrefix: String
     ): Int {
         val cursor = db.query(
-            "SELECT COUNT(*) FROM history_entries WHERE displayName LIKE ? OR id LIKE ?",
-            arrayOf(likePrefix, likePrefix)
+            "SELECT COUNT(*) FROM history_entries WHERE displayName LIKE ? OR id LIKE ? OR supplier LIKE ? OR category LIKE ?",
+            arrayOf(likePrefix, likePrefix, likePrefix, likePrefix)
         )
         cursor.use {
             return if (it.moveToFirst()) it.getInt(0) else 0
@@ -1292,10 +1323,10 @@ class Task103CrossPlatformAcceptanceTest {
             FROM history_entry_remote_refs
             WHERE historyEntryUid IN (
                 SELECT uid FROM history_entries
-                WHERE displayName LIKE ? OR id LIKE ?
+                WHERE displayName LIKE ? OR id LIKE ? OR supplier LIKE ? OR category LIKE ?
             )
             """.trimIndent(),
-            arrayOf(likePrefix, likePrefix)
+            arrayOf(likePrefix, likePrefix, likePrefix, likePrefix)
         )
     }
 

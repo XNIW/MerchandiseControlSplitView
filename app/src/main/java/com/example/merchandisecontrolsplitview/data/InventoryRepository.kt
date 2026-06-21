@@ -621,6 +621,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 productDao.delete(product)
             }
         }
+        notifyProductCatalogChanged(product.id)
         notifyCatalogChanged()
     }
     override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =

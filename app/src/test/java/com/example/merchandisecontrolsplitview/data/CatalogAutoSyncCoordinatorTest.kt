@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -54,6 +55,7 @@ class CatalogAutoSyncCoordinatorTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = false
             hasPendingWork = true
+            clearPendingOnPush = true
         }
         val tracker = CatalogSyncStateTracker()
         val logs = mutableListOf<String>()
@@ -78,6 +80,113 @@ class CatalogAutoSyncCoordinatorTest {
         assertEquals(CatalogSyncStage.DEVICE_STATUS, tracker.state.value.stage)
         assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
         assertTrue(logs.any { it.contains("blocked_by_device_status") && it.contains("status=revoked") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `136 local push retries after transient device status cancellation`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val deviceRemote = FakeShopDeviceRegistrationRemote072(status = "active").apply {
+            nextStatus = Result.failure(CancellationException("cancelled"))
+        }
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("local_commit")
+
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("blocked_by_device_status") && it.contains("status=network_error") })
+        assertTrue(logs.any { it.contains("queued_after_device_status") })
+
+        advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `136 local push suppresses persistent retryable device status loop`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(
+                FakeShopDeviceRegistrationRemote072(status = "network_error")
+            ),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("local_commit")
+        repeat(CatalogAutoSyncCoordinator.RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS + 2) {
+            advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_DEVICE_STATUS_MAX_MS + 10L)
+            runCurrent()
+        }
+
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("cycle=catalog_push outcome=device_status_retry_suppressed") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `136 local push retries after guarded write cancellation inside push`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            failQuickOnce = CancellationException("cancelled")
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("local_commit")
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("queued_after_retryable_cancellation") })
+
+        advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
+        advanceUntilIdle()
+
+        assertEquals(2, repository.quickWithEventsCalls)
         coordinator.shutdown()
     }
 
@@ -134,7 +243,41 @@ class CatalogAutoSyncCoordinatorTest {
         advanceUntilIdle()
 
         assertEquals(1, repository.quickWithEventsCalls)
-        assertEquals(CatalogSyncFlightOwner.AUTO_PUSH, tracker.lastOutcome.value?.source)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `136 generic local catalog change waits while sync event drain owns tracker then retries`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS))
+        coordinator.onLocalCatalogChanged()
+        coordinator.runPushCycle("local_catalog_commit")
+
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("cycle=catalog_push outcome=skip reason=sync_busy") })
+
+        tracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
+        advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
         coordinator.shutdown()
     }
 
@@ -357,6 +500,70 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
+    fun `136 automatic bootstrap yields to pending local catalog push`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = { logs += it }
+        )
+
+        coordinator.onLocalProductChanged(42L)
+        coordinator.runBootstrapCycle("device_active_direct")
+
+        assertEquals(0, repository.bootstrapCalls)
+        assertTrue(logs.any { it.contains("yield_to_local_push") })
+
+        advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `136 automatic bootstrap defers during local push quiet window`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            clearPendingOnPush = true
+        }
+        val tracker = CatalogSyncStateTracker()
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 10_000L,
+            logger = { logs += it }
+        )
+
+        coordinator.runPushCycle("local_catalog_commit")
+        coordinator.runBootstrapCycle("auth_signed_in_retry_after_busy")
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(0, repository.bootstrapCalls)
+        assertTrue(logs.any { it.contains("deferred_after_recent_local_push") })
+        coordinator.shutdown()
+    }
+
+    @Test
     fun `132 guarded auto push failure path does not touch repository or publish outcome`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             failQuick = IllegalStateException("quick failed")
@@ -538,6 +745,8 @@ class CatalogAutoSyncCoordinatorTest {
         var nextQuickSummary: CatalogSyncSummary = emptySummary(pushedProducts = 1, pushedProductPrices = 1)
         var nextDrainSummary: CatalogSyncSummary = emptySummary(pulledProducts = 1)
         var failQuick: Throwable? = null
+        var failQuickOnce: Throwable? = null
+        var clearPendingOnPush = false
 
         override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = shouldBootstrap
 
@@ -551,6 +760,7 @@ class CatalogAutoSyncCoordinatorTest {
         ): Result<CatalogSyncSummary> {
             pushCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
+            if (clearPendingOnPush) hasPendingWork = false
             return Result.success(emptySummary(pushedProducts = 1, pushedProductPrices = 1))
         }
 
@@ -564,7 +774,12 @@ class CatalogAutoSyncCoordinatorTest {
         ): Result<CatalogSyncSummary> {
             quickWithEventsCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
+            failQuickOnce?.let {
+                failQuickOnce = null
+                return Result.failure(it)
+            }
             failQuick?.let { return Result.failure(it) }
+            if (clearPendingOnPush) hasPendingWork = false
             return Result.success(nextQuickSummary)
         }
 
@@ -648,12 +863,13 @@ class CatalogAutoSyncCoordinatorTest {
         private val status: String
     ) : ShopDeviceRegistrationRemote {
         override val isConfigured: Boolean = true
+        var nextStatus: Result<ShopDeviceAuthorizationSnapshot>? = null
 
         override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
             Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
 
         override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
-            Result.success(
+            nextStatus?.also { nextStatus = null } ?: Result.success(
                 ShopDeviceAuthorizationSnapshot(
                     status = status,
                     code = if (status == "active") "success" else status,

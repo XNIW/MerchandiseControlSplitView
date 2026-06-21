@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -34,6 +35,9 @@ class HistorySessionPushCoordinator(
 ) {
     companion object {
         const val DEBOUNCE_MS = 500L
+        const val RETRY_AFTER_BUSY_MS = 250L
+        const val RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS = 4
+        const val RETRY_AFTER_DEVICE_STATUS_MAX_MS = 2_000L
         private const val LOG_SAMPLE_LIMIT = 5
         private const val REASON_LOGIN_FRESH_TICK = "login_fresh_tick"
         private const val HISTORY_SYNC_EVENT_RECORD_ATTEMPTS = 3
@@ -47,6 +51,19 @@ class HistorySessionPushCoordinator(
 
     private val dirtyHints = LinkedHashSet<Long>()
     private val dirtyLock = Any()
+    private val retryLock = Any()
+
+    @Volatile
+    private var pushRetryAfterBusyScheduled = false
+
+    @Volatile
+    private var deviceStatusPushRetryScheduled = false
+
+    @Volatile
+    private var deviceStatusPushRetryAttempts = 0
+
+    @Volatile
+    private var pendingLocalHistoryPushSignal = false
 
     @Volatile
     private var isForeground = true
@@ -62,6 +79,8 @@ class HistorySessionPushCoordinator(
             authFlow.collect { state ->
                 if (state !is AuthState.SignedIn) {
                     synchronized(dirtyLock) { dirtyHints.clear() }
+                    pendingLocalHistoryPushSignal = false
+                    resetDeviceStatusPushRetry()
                     logger("cycle=push outcome=skip reason=skipped_signed_out")
                 } else {
                     schedule(REASON_LOGIN_FRESH_TICK)
@@ -73,7 +92,9 @@ class HistorySessionPushCoordinator(
     fun onLocalHistorySessionChanged(uid: Long) {
         if (uid <= 0L) return
         synchronized(dirtyLock) { dirtyHints.add(uid) }
+        pendingLocalHistoryPushSignal = true
         schedule("local_commit")
+        schedulePushAfterBusy("local_commit")
     }
 
     fun onAppForeground() {
@@ -86,7 +107,13 @@ class HistorySessionPushCoordinator(
     }
 
     fun onNetworkAvailable() {
+        resetDeviceStatusPushRetry()
         schedule("network_available")
+    }
+
+    fun onDeviceStatusActive() {
+        resetDeviceStatusPushRetry()
+        schedule("device_active")
     }
 
     fun shutdown() {
@@ -95,6 +122,79 @@ class HistorySessionPushCoordinator(
 
     private fun schedule(reason: String) {
         tickle.tryEmit(reason)
+    }
+
+    private fun schedulePushAfterBusy(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
+        val shouldSchedule = synchronized(retryLock) {
+            if (pushRetryAfterBusyScheduled) {
+                false
+            } else {
+                pushRetryAfterBusyScheduled = true
+                true
+            }
+        }
+        if (!shouldSchedule) return
+        scope.launch {
+            delay(RETRY_AFTER_BUSY_MS)
+            synchronized(retryLock) {
+                pushRetryAfterBusyScheduled = false
+            }
+            runPushCycle(retryReason)
+        }
+    }
+
+    private fun schedulePushAfterRetryableDeviceStatus(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
+        val retry = synchronized(retryLock) {
+            if (deviceStatusPushRetryScheduled) {
+                null
+            } else if (deviceStatusPushRetryAttempts >= RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS) {
+                DeviceStatusRetryPlan.Suppressed(deviceStatusPushRetryAttempts)
+            } else {
+                deviceStatusPushRetryScheduled = true
+                deviceStatusPushRetryAttempts += 1
+                DeviceStatusRetryPlan.Scheduled(
+                    attempt = deviceStatusPushRetryAttempts,
+                    delayMs = deviceStatusRetryDelayMs(deviceStatusPushRetryAttempts)
+                )
+            }
+        }
+        when (retry) {
+            null -> return
+            is DeviceStatusRetryPlan.Suppressed -> {
+                logger(
+                    "cycle=push outcome=device_status_retry_suppressed reason=$reason " +
+                        "attempts=${retry.attempts} nextSignal=network_or_device_active"
+                )
+                return
+            }
+            is DeviceStatusRetryPlan.Scheduled -> {
+                logger(
+                    "cycle=push outcome=queued_after_device_status reason=$reason " +
+                        "retryDelayMs=${retry.delayMs} retryAttempt=${retry.attempt}"
+                )
+                scope.launch {
+                    delay(retry.delayMs)
+                    synchronized(retryLock) {
+                        deviceStatusPushRetryScheduled = false
+                    }
+                    runPushCycle(retryReason)
+                }
+            }
+        }
+    }
+
+    private fun resetDeviceStatusPushRetry() {
+        synchronized(retryLock) {
+            deviceStatusPushRetryScheduled = false
+            deviceStatusPushRetryAttempts = 0
+        }
+    }
+
+    private fun deviceStatusRetryDelayMs(attempt: Int): Long {
+        val multiplier = 1L shl (attempt - 1).coerceAtMost(8)
+        return minOf(RETRY_AFTER_BUSY_MS * multiplier, RETRY_AFTER_DEVICE_STATUS_MAX_MS)
     }
 
     @OptIn(FlowPreview::class)
@@ -130,7 +230,7 @@ class HistorySessionPushCoordinator(
         var pendingSize = 0
         var pendingUidSample = ""
         var coalesced = hinted.size > 1
-        val fullReconciliation = reason == REASON_LOGIN_FRESH_TICK
+        val fullReconciliation = isFullReconciliationReason(reason)
         val dirtySetMode = if (fullReconciliation) "full_reconcile" else "precise"
         try {
             var summary: HistorySessionBackupPushSummary? = null
@@ -147,6 +247,7 @@ class HistorySessionPushCoordinator(
                         coalesced = coalesced || pending.size > 1
                         if (pending.isEmpty()) {
                             emptyPending = true
+                            pendingLocalHistoryPushSignal = false
                         } else {
                             summary = repository
                                 .pushHistorySessionsToRemote(remote, auth.userId, pending)
@@ -159,6 +260,7 @@ class HistorySessionPushCoordinator(
                         coalesced = coalesced || pending.size > 1
                         if (pending.isEmpty()) {
                             emptyPending = true
+                            pendingLocalHistoryPushSignal = false
                         } else {
                             summary = repository
                                 .pushHistorySessionsToRemote(remote, auth.userId, pending)
@@ -184,6 +286,7 @@ class HistorySessionPushCoordinator(
             }
             val s = summary
             recordHistorySyncEventIfNeeded(auth.userId, s)
+            pendingLocalHistoryPushSignal = false
             logger(
                 "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
                     "sessionsAttempted=${s?.attempted ?: pendingSize} sessionsUploaded=${s?.uploaded ?: 0} " +
@@ -191,9 +294,34 @@ class HistorySessionPushCoordinator(
                     bootstrapSummary
             )
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            if (scope.coroutineContext[Job]?.isActive != true) {
+                throw cancelled
+            }
+            synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
+            if (isLocalMutationPushReason(reason) || pendingLocalHistoryPushSignal) {
+                pendingLocalHistoryPushSignal = true
+                logger(
+                    "cycle=push outcome=queued_after_retryable_cancellation reason=$reason " +
+                        "durationMs=0 dirtyHints=${hinted.size} errClass=${cancelled::class.java.simpleName} " +
+                        "retryDelayMs=$RETRY_AFTER_BUSY_MS"
+                )
+                schedulePushAfterBusy(reason)
+            } else {
+                logger(
+                    "cycle=push outcome=cancelled reason=$reason dirtyHints=${hinted.size} " +
+                        "errClass=${cancelled::class.java.simpleName}"
+                )
+            }
         } catch (t: Throwable) {
             val classification = SyncErrorClassifier.classify(t)
+            if (
+                isLocalMutationPushReason(reason) &&
+                classification.category == SyncErrorCategory.NetworkOfflineOrTimeout
+            ) {
+                synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
+                pendingLocalHistoryPushSignal = true
+                schedulePushAfterBusy(reason)
+            }
             logger(
                 "cycle=push outcome=fail reason=$reason durationMs=0 sessionsAttempted=$pendingSize " +
                     "sessionsUploaded=0 skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode " +
@@ -288,7 +416,10 @@ class HistorySessionPushCoordinator(
     private suspend fun ensureDeviceActiveForSync(reason: String): Boolean {
         val authorization = deviceAuthorization ?: return true
         val result = authorization.ensureActiveForCloudWrite("history_push:$reason")
-        if (result.isSuccess) return true
+        if (result.isSuccess) {
+            resetDeviceStatusPushRetry()
+            return true
+        }
 
         val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
         logger(
@@ -296,6 +427,35 @@ class HistorySessionPushCoordinator(
                 "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"} " +
                 "recommendedAction=${snapshot?.recommendedAction ?: "contact_shop_admin"}"
         )
+        if (isLocalMutationPushReason(reason) && snapshot.isRetryableDeviceStatus()) {
+            pendingLocalHistoryPushSignal = true
+            schedulePushAfterRetryableDeviceStatus(reason)
+        }
         return false
     }
+
+    private sealed interface DeviceStatusRetryPlan {
+        data class Scheduled(val attempt: Int, val delayMs: Long) : DeviceStatusRetryPlan
+        data class Suppressed(val attempts: Int) : DeviceStatusRetryPlan
+    }
+
+    private fun isFullReconciliationReason(reason: String): Boolean =
+        reason == REASON_LOGIN_FRESH_TICK ||
+            reason == "retry_after_busy_$REASON_LOGIN_FRESH_TICK"
+
+    private fun isLocalMutationPushReason(reason: String): Boolean =
+        reason == "local_commit" ||
+            reason.startsWith("local_commit_") ||
+            reason.startsWith("retry_after_busy_local_commit")
+
+    private fun compactBusyRetryReason(reason: String): String =
+        if (reason.startsWith("retry_after_busy_")) reason else "retry_after_busy_$reason"
+
+    private fun ShopDeviceAuthorizationSnapshot?.isRetryableDeviceStatus(): Boolean =
+        this != null &&
+            (
+                status == "network_error" ||
+                    reasonCode == "network_error" ||
+                    recommendedAction == "retry_when_online"
+                )
 }

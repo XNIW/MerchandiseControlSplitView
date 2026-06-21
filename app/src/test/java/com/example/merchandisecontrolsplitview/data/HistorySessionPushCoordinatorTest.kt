@@ -3,8 +3,12 @@ package com.example.merchandisecontrolsplitview.data
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -318,6 +322,169 @@ class HistorySessionPushCoordinatorTest {
             }
         )
     }
+
+    @Test
+    fun `136 local history push retries after transient cancellation`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000136"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        var attempts = 0
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(136L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(136L))
+        } coAnswers {
+            attempts++
+            if (attempts == 1) {
+                Result.failure(CancellationException("transient device status refresh"))
+            } else {
+                Result.success(
+                    HistorySessionBackupPushSummary(
+                        uploaded = 1,
+                        skippedAlreadySynced = 0,
+                        attempted = 1,
+                        remoteIds = listOf("SESSION-136")
+                    )
+                )
+            }
+        }
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 10_000L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("local_commit")
+        advanceTimeBy(HistorySessionPushCoordinator.RETRY_AFTER_BUSY_MS)
+        runCurrent()
+
+        assertEquals(2, attempts)
+        assertTrue(logs.any { it.contains("cycle=push outcome=queued_after_retryable_cancellation") })
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=ok") &&
+                    it.contains("reason=retry_after_busy_local_commit") &&
+                    it.contains("sessionsUploaded=1")
+            }
+        )
+    }
+
+    @Test
+    fun `136 local history push retries after retryable device status`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000236"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        var attempts = 0
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(236L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(236L))
+        } coAnswers {
+            attempts++
+            Result.success(
+                HistorySessionBackupPushSummary(
+                    uploaded = 1,
+                    skippedAlreadySynced = 0,
+                    attempted = 1,
+                    remoteIds = listOf("SESSION-236")
+                )
+            )
+        }
+        val deviceRemote = SequencedShopDeviceRegistrationRemote136(
+            listOf(
+                snapshot136(
+                    status = "network_error",
+                    code = "JobCancellationException",
+                    canWrite = false,
+                    reasonCode = "network_error",
+                    recommendedAction = "retry_when_online"
+                ),
+                snapshot136(status = "active")
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote, cacheTtlMs = 0L),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 10_000L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("local_commit")
+        advanceTimeBy(HistorySessionPushCoordinator.RETRY_AFTER_BUSY_MS)
+        runCurrent()
+
+        assertEquals(1, attempts)
+        assertTrue(logs.any { it.contains("cycle=push outcome=queued_after_device_status") })
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=ok") &&
+                    it.contains("reason=retry_after_busy_local_commit") &&
+                    it.contains("sessionsUploaded=1")
+            }
+        )
+    }
+
+    @Test
+    fun `136 local history push suppresses persistent retryable device status loop`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000336"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        val deviceRemote = SequencedShopDeviceRegistrationRemote136(
+            List(8) {
+                snapshot136(
+                    status = "network_error",
+                    code = "JobCancellationException",
+                    canWrite = false,
+                    reasonCode = "network_error",
+                    recommendedAction = "retry_when_online"
+                )
+            }
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote, cacheTtlMs = 0L),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 10_000L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("local_commit")
+        repeat(HistorySessionPushCoordinator.RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS + 2) {
+            advanceTimeBy(HistorySessionPushCoordinator.RETRY_AFTER_DEVICE_STATUS_MAX_MS + 10L)
+            runCurrent()
+        }
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
+        assertTrue(logs.any { it.contains("cycle=push outcome=device_status_retry_suppressed") })
+    }
 }
 
 private class FakeConfiguredSessionRemote040 : SessionBackupRemoteDataSource {
@@ -385,3 +552,34 @@ private class FailingSyncEventRemote131 : SyncEventRemoteDataSource {
         limit: Long
     ): Result<List<SyncEventRemoteRow>> = Result.success(emptyList())
 }
+
+private class SequencedShopDeviceRegistrationRemote136(
+    snapshots: List<ShopDeviceAuthorizationSnapshot>
+) : ShopDeviceRegistrationRemote {
+    override val isConfigured: Boolean = true
+    private val remaining = ArrayDeque(snapshots)
+
+    override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
+        Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
+
+    override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
+        Result.success(remaining.removeFirstOrNull() ?: snapshot136(status = "active"))
+}
+
+private fun snapshot136(
+    status: String,
+    code: String = if (status == "active") "success" else status,
+    canWrite: Boolean = status == "active",
+    reasonCode: String = status,
+    recommendedAction: String = if (status == "active") "allow" else "contact_shop_admin"
+): ShopDeviceAuthorizationSnapshot =
+    ShopDeviceAuthorizationSnapshot(
+        status = status,
+        code = code,
+        canWrite = canWrite,
+        serverTime = "2026-06-20T00:00:00Z",
+        lastSeenAt = "2026-06-20T00:00:00Z",
+        reasonCode = reasonCode,
+        recommendedAction = recommendedAction,
+        checkedAtMs = System.currentTimeMillis()
+    )

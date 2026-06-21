@@ -35,6 +35,9 @@ class CatalogAutoSyncCoordinator(
         const val BOOTSTRAP_RETRY_GUARD_MS = 5L * 60L * 1_000L
         const val FOREGROUND_SYNC_EVENT_INTERVAL_MS = 15_000L
         const val RETRY_AFTER_BUSY_MS = 250L
+        const val RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS = 4
+        const val RETRY_AFTER_DEVICE_STATUS_MAX_MS = 2_000L
+        const val LOCAL_PUSH_BOOTSTRAP_QUIET_MS = 5_000L
         private const val LOG_SAMPLE_LIMIT = 8
         private const val BOOTSTRAP_REASON_SYNC_EVENT_GAP = "sync_event_gap"
     }
@@ -53,10 +56,22 @@ class CatalogAutoSyncCoordinator(
     private var syncEventRetryAfterBusyScheduled = false
 
     @Volatile
+    private var deviceStatusPushRetryScheduled = false
+
+    @Volatile
+    private var deviceStatusPushRetryAttempts = 0
+
+    @Volatile
     private var pendingCatalogBootstrapAfterBusy = false
 
     @Volatile
     private var pendingSyncEventDrainAfterBusy = false
+
+    @Volatile
+    private var pendingLocalCatalogPushSignal = false
+
+    @Volatile
+    private var lastLocalPushCompletedAtMs: Long = 0L
 
     @Volatile
     private var isForeground = true
@@ -91,6 +106,8 @@ class CatalogAutoSyncCoordinator(
                     scheduleSyncEventDrain("auth_signed_in")
                 } else {
                     synchronized(dirtyLock) { dirtyHints.clear() }
+                    pendingLocalCatalogPushSignal = false
+                    resetDeviceStatusPushRetry()
                     lastBootstrapUserId = null
                     logger("cycle=catalog_auto outcome=skip reason=signed_out")
                 }
@@ -101,11 +118,15 @@ class CatalogAutoSyncCoordinator(
     fun onLocalProductChanged(productId: Long) {
         if (productId <= 0L) return
         synchronized(dirtyLock) { dirtyHints.add(productId) }
+        pendingLocalCatalogPushSignal = true
         schedulePush("local_commit")
+        schedulePushAfterBusy("local_commit")
     }
 
     fun onLocalCatalogChanged() {
+        pendingLocalCatalogPushSignal = true
         schedulePush("local_catalog_commit")
+        schedulePushAfterBusy("local_catalog_commit")
     }
 
     fun onAppForeground() {
@@ -123,6 +144,7 @@ class CatalogAutoSyncCoordinator(
     }
 
     fun onNetworkAvailable() {
+        resetDeviceStatusPushRetry()
         scheduleBootstrap("network_available")
         schedulePush("network_available")
         scheduleSyncEventDrain("network_available")
@@ -130,6 +152,7 @@ class CatalogAutoSyncCoordinator(
 
     fun onDeviceStatusActive() {
         logger("cycle=device_status_active outcome=schedule")
+        resetDeviceStatusPushRetry()
         scheduleBootstrap("device_active")
         scheduleSyncEventDrain("device_active")
         scope.launch {
@@ -160,6 +183,7 @@ class CatalogAutoSyncCoordinator(
     }
 
     private fun schedulePushAfterBusy(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
         val shouldSchedule = synchronized(retryLock) {
             if (pushRetryAfterBusyScheduled) {
                 false
@@ -172,8 +196,59 @@ class CatalogAutoSyncCoordinator(
         scope.launch {
             delay(RETRY_AFTER_BUSY_MS)
             synchronized(retryLock) { pushRetryAfterBusyScheduled = false }
-            schedulePush("${reason}_retry_after_busy")
+            runPushCycle(retryReason)
         }
+    }
+
+    private fun schedulePushAfterRetryableDeviceStatus(reason: String) {
+        val retryReason = compactBusyRetryReason(reason)
+        val retry = synchronized(retryLock) {
+            if (deviceStatusPushRetryScheduled) {
+                null
+            } else if (deviceStatusPushRetryAttempts >= RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS) {
+                DeviceStatusRetryPlan.Suppressed(deviceStatusPushRetryAttempts)
+            } else {
+                deviceStatusPushRetryScheduled = true
+                deviceStatusPushRetryAttempts += 1
+                DeviceStatusRetryPlan.Scheduled(
+                    attempt = deviceStatusPushRetryAttempts,
+                    delayMs = deviceStatusRetryDelayMs(deviceStatusPushRetryAttempts)
+                )
+            }
+        }
+        when (retry) {
+            null -> return
+            is DeviceStatusRetryPlan.Suppressed -> {
+                logger(
+                    "cycle=catalog_push outcome=device_status_retry_suppressed reason=$reason " +
+                        "attempts=${retry.attempts} nextSignal=network_or_device_active"
+                )
+                return
+            }
+            is DeviceStatusRetryPlan.Scheduled -> {
+                logger(
+                    "cycle=catalog_push outcome=queued_after_device_status reason=$reason " +
+                        "retryDelayMs=${retry.delayMs} retryAttempt=${retry.attempt}"
+                )
+                scope.launch {
+                    delay(retry.delayMs)
+                    synchronized(retryLock) { deviceStatusPushRetryScheduled = false }
+                    runPushCycle(retryReason)
+                }
+            }
+        }
+    }
+
+    private fun resetDeviceStatusPushRetry() {
+        synchronized(retryLock) {
+            deviceStatusPushRetryScheduled = false
+            deviceStatusPushRetryAttempts = 0
+        }
+    }
+
+    private fun deviceStatusRetryDelayMs(attempt: Int): Long {
+        val multiplier = 1L shl (attempt - 1).coerceAtMost(8)
+        return minOf(RETRY_AFTER_BUSY_MS * multiplier, RETRY_AFTER_DEVICE_STATUS_MAX_MS)
     }
 
     private fun scheduleBootstrapAfterBusy(reason: String) {
@@ -303,6 +378,7 @@ class CatalogAutoSyncCoordinator(
             return
         }
         if (!repository.hasCatalogCloudPendingWorkInclusive()) {
+            pendingLocalCatalogPushSignal = false
             logger(
                 "cycle=catalog_push outcome=skip reason=no_pending_catalog_work " +
                     "originalReason=$reason debounceMs=$debounceMs"
@@ -317,6 +393,7 @@ class CatalogAutoSyncCoordinator(
         }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH)) {
             synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
+            pendingLocalCatalogPushSignal = true
             logger("cycle=catalog_push outcome=skip reason=sync_busy dirtyHints=${hinted.size}")
             schedulePushAfterBusy(reason)
             return
@@ -351,6 +428,8 @@ class CatalogAutoSyncCoordinator(
                     .getOrThrow()
             }
             ok = true
+            pendingLocalCatalogPushSignal = false
+            lastLocalPushCompletedAtMs = System.currentTimeMillis()
             val s = summary
             s?.let {
                 syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
@@ -369,7 +448,17 @@ class CatalogAutoSyncCoordinator(
             )
             scheduleSyncEventDrain("local_push_completed")
         } catch (cancelled: CancellationException) {
-            throw cancelled
+            if (scope.coroutineContext[Job]?.isActive != true || !isLocalMutationPushReason(reason)) {
+                throw cancelled
+            }
+            synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
+            pendingLocalCatalogPushSignal = true
+            logger(
+                "cycle=catalog_push outcome=queued_after_retryable_cancellation reason=$reason " +
+                    "durationMs=${System.currentTimeMillis() - startedAt} dirtyHints=${hinted.size} " +
+                    "errClass=${cancelled::class.java.simpleName} retryDelayMs=$RETRY_AFTER_BUSY_MS"
+            )
+            schedulePushAfterBusy(reason)
         } catch (t: Throwable) {
             val classification = SyncErrorClassifier.classify(t)
             logger(
@@ -418,6 +507,32 @@ class CatalogAutoSyncCoordinator(
             now - lastBootstrapOkAtMs < bootstrapRetryGuardMs
         if (!forcedByRemoteGap && recentlyBootstrappedForUser) {
             logger("cycle=catalog_bootstrap outcome=skip reason=bootstrap_retry_guard")
+            return
+        }
+        if (
+            !forcedByRemoteGap &&
+            !bootstrapRequired &&
+            hasPendingLocalPushSignal()
+        ) {
+            logger(
+                "cycle=catalog_bootstrap outcome=yield_to_local_push " +
+                    "reason=pending_local_catalog_work originalReason=$reason"
+            )
+            schedulePushAfterBusy("local_catalog_commit")
+            scheduleBootstrapAfterBusy(reason)
+            return
+        }
+        val localPushQuietRemainingMs = localPushBootstrapQuietRemainingMs(now)
+        if (
+            !forcedByRemoteGap &&
+            !bootstrapRequired &&
+            localPushQuietRemainingMs > 0L
+        ) {
+            logger(
+                "cycle=catalog_bootstrap outcome=deferred_after_recent_local_push " +
+                    "quietRemainingMs=$localPushQuietRemainingMs originalReason=$reason"
+            )
+            scheduleBootstrapAfterBusy(reason)
             return
         }
         if (!ensureDeviceActiveForSync("catalog_bootstrap", reason)) return
@@ -486,6 +601,18 @@ class CatalogAutoSyncCoordinator(
             reason.startsWith("foreground_") ||
             reason.startsWith("network_available_") ||
             reason.startsWith("device_active_")
+
+    private fun hasPendingLocalPushSignal(): Boolean =
+        pendingLocalCatalogPushSignal ||
+            pushRetryAfterBusyScheduled ||
+            synchronized(dirtyLock) { dirtyHints.isNotEmpty() }
+
+    private fun localPushBootstrapQuietRemainingMs(now: Long): Long {
+        val completedAt = lastLocalPushCompletedAtMs
+        if (completedAt <= 0L) return 0L
+        val elapsed = now - completedAt
+        return (LOCAL_PUSH_BOOTSTRAP_QUIET_MS - elapsed).coerceAtLeast(0L)
+    }
 
     internal suspend fun runSyncEventDrainCycle(reason: String) {
         val auth = authFlow.value
@@ -580,7 +707,12 @@ class CatalogAutoSyncCoordinator(
     private suspend fun ensureDeviceActiveForSync(cycle: String, reason: String): Boolean {
         val authorization = deviceAuthorization ?: return true
         val result = authorization.ensureActiveForCloudWrite("$cycle:$reason")
-        if (result.isSuccess) return true
+        if (result.isSuccess) {
+            if (cycle == "catalog_push") {
+                resetDeviceStatusPushRetry()
+            }
+            return true
+        }
 
         val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
         logger(
@@ -588,7 +720,28 @@ class CatalogAutoSyncCoordinator(
                 "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"} " +
                 "recommendedAction=${snapshot?.recommendedAction ?: "contact_shop_admin"}"
         )
+        if (
+            cycle == "catalog_push" &&
+            isLocalMutationPushReason(reason) &&
+            snapshot.isRetryableDeviceStatus()
+        ) {
+            pendingLocalCatalogPushSignal = true
+            schedulePushAfterRetryableDeviceStatus(reason)
+        }
         syncStateTracker.update(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
         return false
     }
+
+    private sealed interface DeviceStatusRetryPlan {
+        data class Scheduled(val attempt: Int, val delayMs: Long) : DeviceStatusRetryPlan
+        data class Suppressed(val attempts: Int) : DeviceStatusRetryPlan
+    }
+
+    private fun ShopDeviceAuthorizationSnapshot?.isRetryableDeviceStatus(): Boolean =
+        this != null &&
+            (
+                status == "network_error" ||
+                    reasonCode == "network_error" ||
+                    recommendedAction == "retry_when_online"
+                )
 }

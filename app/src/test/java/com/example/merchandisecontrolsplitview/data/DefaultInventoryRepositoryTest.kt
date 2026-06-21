@@ -5392,9 +5392,15 @@ class DefaultInventoryRepositoryTest {
         val product = repository.findProductByBarcode("task135-fallback-delete")!!
         db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId = ${product.id}")
         db.productRemoteRefDao().insert(ProductRemoteRef(productId = product.id, remoteId = remoteId))
+        val productCatalogChanged = mutableListOf<Long>()
+        var genericCatalogChanged = 0
+        repository.onProductCatalogChanged = { productCatalogChanged += it }
+        repository.onCatalogChanged = { genericCatalogChanged++ }
         repository.deleteProduct(product)
         assertNull(repository.findProductByBarcode("task135-fallback-delete"))
         assertEquals(1, db.pendingCatalogTombstoneDao().count())
+        assertEquals(listOf(product.id), productCatalogChanged)
+        assertEquals(1, genericCatalogChanged)
 
         val remote = FakeCatalogRemote016()
         val priceRemote = RecordingPriceRemote016(configured = false)
