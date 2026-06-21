@@ -73,6 +73,7 @@ Nota: i report in `app/build/` sono output generati e non sono stati pensati com
 - Controlli `discount` / `discountedPrice` / `totalPrice` ancora parziali.
 - Corpus Drive completo dipende dai file materializzati localmente in `/tmp/excel-supplier-audit/combined-corpus-by-name`.
 - File Desktop e test resources possono avere hash diversi: documentare sempre quali file fisici sono stati usati.
+- I file Excel binari in `app/src/test/resources/excel/` sono rimasti locali/non versionati in questo checkpoint; per esecuzioni riproducibili usare i path Desktop o passare `-PexcelOracle.*`.
 - `app/src/main/java/com/example/merchandisecontrolsplitview/util/ExcelUtils.kt` risulta dirty da lavoro precedente/pre-existing e non appartiene al checkpoint harness-only.
 - `.idea/deploymentTargetSelector.xml` risulta cancellato nel worktree ed e' fuori scope harness.
 - `/Users/minxiang/Desktop/File testing/` e `/Users/minxiang/Desktop/File testing v2/` sono fuori repo e non vanno versionati.

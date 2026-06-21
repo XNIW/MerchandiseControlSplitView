@@ -6,6 +6,7 @@ import com.google.gson.GsonBuilder
 import java.io.File
 import org.apache.poi.ss.usermodel.WorkbookFactory
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -49,14 +50,26 @@ class ExcelRecognitionAuditTest {
             ?.filter { it.isNotEmpty() }
             .orEmpty()
 
-        return if (externalFiles.isNotEmpty()) {
+        val files = if (externalFiles.isNotEmpty()) {
             externalFiles.map(::File)
         } else {
-            listOf(
-                resourceFile("excel/Vs20260529-ModaLina.xlsx"),
-                resourceFile("excel/20260620-Pinmark.xlsx")
+            listOfNotNull(
+                optionalInputFile(
+                    desktopPath = "/Users/minxiang/Desktop/Vs20260529-ModaLina.xlsx",
+                    resourcePath = "excel/Vs20260529-ModaLina.xlsx"
+                ),
+                optionalInputFile(
+                    desktopPath = "/Users/minxiang/Desktop/20260620-Pinmark.xlsx",
+                    resourcePath = "excel/20260620-Pinmark.xlsx"
+                )
             )
         }
+
+        assumeTrue(
+            "No Excel audit golden fixtures found. Provide -DexcelAudit.files or local Desktop fixture files.",
+            files.isNotEmpty()
+        )
+        return files
     }
 
     private fun auditFile(file: File): AuditFileReport {
@@ -277,9 +290,10 @@ class ExcelRecognitionAuditTest {
         }
     }
 
-    private fun resourceFile(path: String): File {
-        val resource = javaClass.classLoader?.getResource(path)
-            ?: error("Missing test resource: $path")
+    private fun optionalInputFile(desktopPath: String, resourcePath: String): File? {
+        val desktop = File(desktopPath)
+        if (desktop.exists()) return desktop
+        val resource = javaClass.classLoader?.getResource(resourcePath) ?: return null
         return File(resource.toURI())
     }
 
