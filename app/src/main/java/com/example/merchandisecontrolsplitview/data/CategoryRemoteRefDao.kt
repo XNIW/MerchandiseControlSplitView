@@ -67,6 +67,9 @@ interface CategoryRemoteRefDao {
     @Query("SELECT COUNT(*) FROM category_remote_refs")
     suspend fun countRows(): Int
 
+    @Query("DELETE FROM category_remote_refs")
+    suspend fun deleteAll()
+
     @Query(
         """
         SELECT COUNT(*)

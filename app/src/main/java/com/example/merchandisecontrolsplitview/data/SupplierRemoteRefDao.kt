@@ -67,6 +67,9 @@ interface SupplierRemoteRefDao {
     @Query("SELECT COUNT(*) FROM supplier_remote_refs")
     suspend fun countRows(): Int
 
+    @Query("DELETE FROM supplier_remote_refs")
+    suspend fun deleteAll()
+
     @Query(
         """
         SELECT COUNT(*)

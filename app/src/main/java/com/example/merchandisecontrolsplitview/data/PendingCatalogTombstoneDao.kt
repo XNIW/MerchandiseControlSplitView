@@ -20,6 +20,9 @@ interface PendingCatalogTombstoneDao {
     @Query("DELETE FROM pending_catalog_tombstones WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM pending_catalog_tombstones")
+    suspend fun deleteAll()
+
     @Query("UPDATE pending_catalog_tombstones SET attemptCount = attemptCount + 1 WHERE id = :id")
     suspend fun incrementAttempt(id: Long)
 }

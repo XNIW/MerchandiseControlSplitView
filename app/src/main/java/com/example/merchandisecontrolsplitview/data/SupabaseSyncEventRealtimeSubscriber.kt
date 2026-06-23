@@ -39,25 +39,33 @@ class SupabaseSyncEventRealtimeSubscriber(
     @Volatile
     private var startedForOwner: String? = null
 
+    @Volatile
+    private var startedForShop: String? = null
+
     private var channel: RealtimeChannel? = null
     private var collectorJob: Job? = null
     private var subscribeJob: Job? = null
 
-    fun start(ownerUserId: String) {
+    fun start(ownerUserId: String, shopId: String? = null) {
         if (client == null) {
             Log.i(TAG, "sync_events realtime disabled: client missing")
             return
         }
         synchronized(stateLock) {
-            if (startedForOwner == ownerUserId) return
+            if (startedForOwner == ownerUserId && startedForShop == shopId) return
         }
         stop()
         synchronized(stateLock) {
-            val realtimeChannel = client.channel("$CHANNEL_PREFIX-$ownerUserId")
+            val channelScope = shopId?.let { "$ownerUserId-$it" } ?: ownerUserId
+            val realtimeChannel = client.channel("$CHANNEL_PREFIX-$channelScope")
             collectorJob = realtimeChannel
                 .postgresChangeFlow<PostgresAction.Insert>(schema = SCHEMA) {
                     table = TABLE_NAME
-                    filter("owner_user_id", FilterOperator.EQ, ownerUserId)
+                    if (shopId.isNullOrBlank()) {
+                        filter("owner_user_id", FilterOperator.EQ, ownerUserId)
+                    } else {
+                        filter("shop_id", FilterOperator.EQ, shopId)
+                    }
                 }
                 .onEach {
                     coordinator.onRemoteSyncEventSignal()
@@ -68,6 +76,7 @@ class SupabaseSyncEventRealtimeSubscriber(
             }
             channel = realtimeChannel
             startedForOwner = ownerUserId
+            startedForShop = shopId
         }
     }
 
@@ -83,6 +92,7 @@ class SupabaseSyncEventRealtimeSubscriber(
         val realtimeChannel = synchronized(stateLock) {
             if (startedForOwner == null) return
             startedForOwner = null
+            startedForShop = null
             collectorJob?.cancel()
             subscribeJob?.cancel()
             channel.also { channel = null }

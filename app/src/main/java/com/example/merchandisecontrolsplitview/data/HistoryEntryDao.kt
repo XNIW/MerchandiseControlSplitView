@@ -165,4 +165,7 @@ interface HistoryEntryDao {
             USER_VISIBLE_HISTORY_WHERE_CLAUSE
     )
     suspend fun countUserVisible(): Int
+
+    @Query("DELETE FROM history_entries")
+    suspend fun deleteAll()
 }

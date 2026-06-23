@@ -100,6 +100,9 @@ interface SupplierDao {
     @Query("DELETE FROM suppliers WHERE id = :id")
     suspend fun deleteById(id: Long): Int
 
+    @Query("DELETE FROM suppliers")
+    suspend fun deleteAll()
+
     @Query("SELECT COUNT(*) FROM suppliers")
     suspend fun count(): Int
 

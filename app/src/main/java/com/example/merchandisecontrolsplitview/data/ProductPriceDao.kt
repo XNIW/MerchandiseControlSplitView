@@ -61,6 +61,9 @@ interface ProductPriceDao {
     @Query("SELECT COUNT(*) FROM product_prices")
     suspend fun countAll(): Int
 
+    @Query("DELETE FROM product_prices")
+    suspend fun deleteAll()
+
     /**
      * Candidati push: solo righe con `product_remote_refs` gia' noto (INNER JOIN) e **senza** bridge prezzo.
      * Lo storico prezzi e' immutabile per design (`insertIfChanged` crea righe nuove, non aggiorna), quindi

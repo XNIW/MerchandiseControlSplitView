@@ -127,6 +127,15 @@ interface CatalogSyncProgressRepository {
         ownerUserId: String,
         progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary>
+
+    suspend fun syncCatalogWithRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        selectedShop: SelectedShop?
+    ): Result<CatalogSyncSummary> =
+        syncCatalogWithRemote(remote, priceRemote, ownerUserId, progressReporter)
 }
 
 interface CatalogAutoSyncRepository {
@@ -141,6 +150,15 @@ interface CatalogAutoSyncRepository {
         progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary>
 
+    suspend fun pushDirtyCatalogDeltaToRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        selectedShop: SelectedShop?
+    ): Result<CatalogSyncSummary> =
+        pushDirtyCatalogDeltaToRemote(remote, priceRemote, ownerUserId, progressReporter)
+
     suspend fun syncCatalogQuickWithEvents(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
@@ -152,6 +170,17 @@ interface CatalogAutoSyncRepository {
         pushDirtyCatalogDeltaToRemote(remote, priceRemote, ownerUserId, progressReporter).map {
             it.copy(syncEventsDisabled = true, syncEventsFallback044 = true)
         }
+
+    suspend fun syncCatalogQuickWithEvents(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource? = null,
+        selectedShop: SelectedShop?
+    ): Result<CatalogSyncSummary> =
+        syncCatalogQuickWithEvents(remote, priceRemote, syncEventRemote, ownerUserId, progressReporter, sessionRemote)
 
     suspend fun drainSyncEventsFromRemote(
         remote: CatalogRemoteDataSource,
@@ -174,11 +203,30 @@ interface CatalogAutoSyncRepository {
             )
         )
 
+    suspend fun drainSyncEventsFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        syncEventRemote: SyncEventRemoteDataSource,
+        ownerUserId: String,
+        progressReporter: CatalogSyncProgressReporter,
+        sessionRemote: SessionBackupRemoteDataSource? = null,
+        selectedShop: SelectedShop?
+    ): Result<CatalogSyncSummary> =
+        drainSyncEventsFromRemote(remote, priceRemote, syncEventRemote, ownerUserId, progressReporter, sessionRemote)
+
     suspend fun pullCatalogBootstrapFromRemote(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
         progressReporter: CatalogSyncProgressReporter
     ): Result<CatalogSyncSummary>
+
+    suspend fun pullCatalogBootstrapFromRemote(
+        remote: CatalogRemoteDataSource,
+        priceRemote: ProductPriceRemoteDataSource,
+        progressReporter: CatalogSyncProgressReporter,
+        selectedShop: SelectedShop?
+    ): Result<CatalogSyncSummary> =
+        pullCatalogBootstrapFromRemote(remote, priceRemote, progressReporter)
 }
 
 /**

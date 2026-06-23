@@ -1,0 +1,81 @@
+{
+  "caseName": "Modalina",
+  "fileName": "Vs20260529-ModaLina.xlsx",
+  "sheetIndex": 0,
+  "expectedHeaderRow": 10,
+  "expectedFirstDataRow": 11,
+  "requiredFields": [
+    "rowNumber",
+    "itemNumber",
+    "barcode",
+    "productName",
+    "secondProductName",
+    "quantity",
+    "discount",
+    "purchasePrice",
+    "totalPrice"
+  ],
+  "fields": {
+    "rowNumber": {
+      "colIndex": 0,
+      "colLetter": "A",
+      "originalHeader": "NO",
+      "source": "alias"
+    },
+    "itemNumber": {
+      "colIndex": 1,
+      "colLetter": "B",
+      "originalHeader": "产品货号",
+      "source": "alias"
+    },
+    "barcode": {
+      "colIndex": 2,
+      "colLetter": "C",
+      "originalHeader": "条码",
+      "source": "alias"
+    },
+    "productName": {
+      "colIndex": 3,
+      "colLetter": "D",
+      "originalHeader": "产品名1",
+      "source": "alias"
+    },
+    "secondProductName": {
+      "colIndex": 4,
+      "colLetter": "E",
+      "originalHeader": "产品名2",
+      "source": "alias"
+    },
+    "quantity": {
+      "colIndex": 6,
+      "colLetter": "G",
+      "originalHeader": "数量",
+      "source": "alias"
+    },
+    "discount": {
+      "colIndex": 7,
+      "colLetter": "H",
+      "originalHeader": "折扣",
+      "source": "alias"
+    },
+    "purchasePrice": {
+      "colIndex": 8,
+      "colLetter": "I",
+      "originalHeader": "售价",
+      "source": "alias"
+    },
+    "totalPrice": {
+      "colIndex": 9,
+      "colLetter": "J",
+      "originalHeader": "总价",
+      "source": "alias"
+    }
+  },
+  "ignoredColumns": [
+    {
+      "colIndex": 5,
+      "colLetter": "F",
+      "originalHeader": "箱数"
+    }
+  ]
+}

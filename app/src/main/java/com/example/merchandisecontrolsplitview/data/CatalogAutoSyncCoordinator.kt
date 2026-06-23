@@ -23,6 +23,7 @@ class CatalogAutoSyncCoordinator(
     private val sessionRemote: SessionBackupRemoteDataSource? = null,
     private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null,
     private val authFlow: StateFlow<AuthState>,
+    private val selectedShopProvider: () -> SelectedShop? = { null },
     private val syncStateTracker: CatalogSyncStateTracker,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val debounceMs: Long = DEBOUNCE_MS,
@@ -176,6 +177,11 @@ class CatalogAutoSyncCoordinator(
 
     fun onRemoteSyncEventSignal() {
         scheduleSyncEventDrain("realtime_signal")
+    }
+
+    fun onShopContextChanged() {
+        scheduleBootstrap("shop_context_changed")
+        scheduleSyncEventDrain("shop_context_changed")
     }
 
     private fun scheduleSyncEventDrain(reason: String) {
@@ -385,7 +391,8 @@ class CatalogAutoSyncCoordinator(
             )
             return
         }
-        if (!ensureDeviceActiveForSync("catalog_push", reason)) return
+        val selectedShop = selectedShopProvider()
+        if (!ensureDeviceActiveForSync("catalog_push", reason, selectedShop)) return
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
             dirtyHints.clear()
@@ -405,25 +412,51 @@ class CatalogAutoSyncCoordinator(
             var summary: CatalogSyncSummary? = null
             val durationMs = measureTimeMillis {
                 summary = if (syncEventRemote.isConfigured) {
-                    repository.syncCatalogQuickWithEvents(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        syncEventRemote = syncEventRemote,
-                        sessionRemote = sessionRemote,
-                        ownerUserId = auth.userId,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            syncStateTracker.update(progress)
-                        }
-                    )
+                    if (selectedShop == null) {
+                        repository.syncCatalogQuickWithEvents(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            syncEventRemote = syncEventRemote,
+                            sessionRemote = sessionRemote,
+                            ownerUserId = auth.userId,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    } else {
+                        repository.syncCatalogQuickWithEvents(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            syncEventRemote = syncEventRemote,
+                            sessionRemote = sessionRemote,
+                            ownerUserId = auth.userId,
+                            selectedShop = selectedShop,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    }
                 } else {
-                    repository.pushDirtyCatalogDeltaToRemote(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        ownerUserId = auth.userId,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            syncStateTracker.update(progress)
-                        }
-                    )
+                    if (selectedShop == null) {
+                        repository.pushDirtyCatalogDeltaToRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            ownerUserId = auth.userId,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    } else {
+                        repository.pushDirtyCatalogDeltaToRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            ownerUserId = auth.userId,
+                            selectedShop = selectedShop,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    }
                 }
                     .getOrThrow()
             }
@@ -535,7 +568,8 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrapAfterBusy(reason)
             return
         }
-        if (!ensureDeviceActiveForSync("catalog_bootstrap", reason)) return
+        val selectedShop = selectedShopProvider()
+        if (!ensureDeviceActiveForSync("catalog_bootstrap", reason, selectedShop)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
             logger(
                 "cycle=catalog_bootstrap outcome=queued_after_busy " +
@@ -553,13 +587,24 @@ class CatalogAutoSyncCoordinator(
             syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
             var summary: CatalogSyncSummary? = null
             val durationMs = measureTimeMillis {
-                summary = repository.pullCatalogBootstrapFromRemote(
-                    remote = remote,
-                    priceRemote = priceRemote,
-                    progressReporter = CatalogSyncProgressReporter { progress ->
-                        syncStateTracker.update(progress)
-                    }
-                ).getOrThrow()
+                summary = if (selectedShop == null) {
+                    repository.pullCatalogBootstrapFromRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                } else {
+                    repository.pullCatalogBootstrapFromRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        selectedShop = selectedShop,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                }.getOrThrow()
             }
             ok = true
             lastBootstrapUserId = auth.userId
@@ -636,7 +681,8 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
             return
         }
-        if (!ensureDeviceActiveForSync("sync_events_drain", reason)) return
+        val selectedShop = selectedShopProvider()
+        if (!ensureDeviceActiveForSync("sync_events_drain", reason, selectedShop)) return
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
             logger(
                 "cycle=sync_events_drain outcome=queued_after_busy " +
@@ -654,16 +700,30 @@ class CatalogAutoSyncCoordinator(
             syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
             var summary: CatalogSyncSummary? = null
             val durationMs = measureTimeMillis {
-                summary = repository.drainSyncEventsFromRemote(
-                    remote = remote,
-                    priceRemote = priceRemote,
-                    syncEventRemote = syncEventRemote,
-                    sessionRemote = sessionRemote,
-                    ownerUserId = auth.userId,
-                    progressReporter = CatalogSyncProgressReporter { progress ->
-                        syncStateTracker.update(progress)
-                    }
-                ).getOrThrow()
+                summary = if (selectedShop == null) {
+                    repository.drainSyncEventsFromRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        syncEventRemote = syncEventRemote,
+                        sessionRemote = sessionRemote,
+                        ownerUserId = auth.userId,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                } else {
+                    repository.drainSyncEventsFromRemote(
+                        remote = remote,
+                        priceRemote = priceRemote,
+                        syncEventRemote = syncEventRemote,
+                        sessionRemote = sessionRemote,
+                        ownerUserId = auth.userId,
+                        selectedShop = selectedShop,
+                        progressReporter = CatalogSyncProgressReporter { progress ->
+                            syncStateTracker.update(progress)
+                        }
+                    )
+                }.getOrThrow()
             }
             ok = true
             val s = summary
@@ -704,9 +764,13 @@ class CatalogAutoSyncCoordinator(
         }
     }
 
-    private suspend fun ensureDeviceActiveForSync(cycle: String, reason: String): Boolean {
+    private suspend fun ensureDeviceActiveForSync(
+        cycle: String,
+        reason: String,
+        selectedShop: SelectedShop?
+    ): Boolean {
         val authorization = deviceAuthorization ?: return true
-        val result = authorization.ensureActiveForCloudWrite("$cycle:$reason")
+        val result = authorization.ensureActiveForCloudWrite("$cycle:$reason", selectedShop?.shopId)
         if (result.isSuccess) {
             if (cycle == "catalog_push") {
                 resetDeviceStatusPushRetry()

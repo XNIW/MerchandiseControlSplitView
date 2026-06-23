@@ -55,10 +55,14 @@ data class SharedSheetSessionUpsertRow(
     val data: List<List<String>>,
     @SerialName("session_overlay") val sessionOverlay: SessionOverlay,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     @SerialName("deleted_at") val deletedAt: String? = null
 )
 
-fun SessionRemotePayload.toSharedSheetSessionUpsertRow(ownerUserId: String): SharedSheetSessionUpsertRow =
+fun SessionRemotePayload.toSharedSheetSessionUpsertRow(
+    ownerUserId: String,
+    shopId: String? = null
+): SharedSheetSessionUpsertRow =
     SharedSheetSessionUpsertRow(
         remoteId = canonicalSessionRemoteId(remoteId),
         payloadVersion = payloadVersion,
@@ -72,6 +76,7 @@ fun SessionRemotePayload.toSharedSheetSessionUpsertRow(ownerUserId: String): Sha
             "payload v2 writer requires session_overlay"
         },
         ownerUserId = ownerUserId,
+        shopId = shopId,
         deletedAt = deletedAt
     )
 

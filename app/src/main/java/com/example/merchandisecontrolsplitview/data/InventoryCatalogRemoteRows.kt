@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 data class InventorySupplierRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     val name: String,
     @SerialName("updated_at") val updatedAt: String? = null,
     /** Null = attivo; valorizzato = tombstone remoto (task 019). */
@@ -20,6 +21,7 @@ data class InventorySupplierRow(
 data class InventoryCategoryRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     val name: String,
     @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("deleted_at")
@@ -31,6 +33,7 @@ data class InventoryCategoryRow(
 data class InventoryProductRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     val barcode: String,
     @SerialName("item_number") val itemNumber: String? = null,
     @SerialName("product_name") val productName: String? = null,
@@ -67,6 +70,7 @@ data class InventoryProductPatch(
 data class CatalogTombstonePatch(
     val id: String,
     val ownerUserId: String,
+    val shopId: String? = null,
     val deletedAt: String,
     val updatedAt: String
 )
@@ -82,6 +86,7 @@ data class InventoryCatalogFetchBundle(
 data class InventoryProductPriceRow(
     val id: String,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     @SerialName("product_id") val productId: String,
     val type: String,
     val price: Double,

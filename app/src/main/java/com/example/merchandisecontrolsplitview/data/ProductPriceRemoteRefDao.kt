@@ -24,4 +24,7 @@ interface ProductPriceRemoteRefDao {
 
     @Query("SELECT * FROM product_price_remote_refs WHERE remoteId IN (:remoteIds)")
     suspend fun getByRemoteIds(remoteIds: List<String>): List<ProductPriceRemoteRef>
+
+    @Query("DELETE FROM product_price_remote_refs")
+    suspend fun deleteAll()
 }

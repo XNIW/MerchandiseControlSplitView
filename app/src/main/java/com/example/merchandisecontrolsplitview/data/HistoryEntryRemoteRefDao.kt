@@ -25,6 +25,9 @@ interface HistoryEntryRemoteRefDao {
     @Query("DELETE FROM history_entry_remote_refs WHERE historyEntryUid = :uid")
     suspend fun deleteByHistoryEntryUid(uid: Long)
 
+    @Query("DELETE FROM history_entry_remote_refs")
+    suspend fun deleteAll()
+
     @Query("UPDATE history_entry_remote_refs SET remoteId = :remoteId WHERE historyEntryUid = :uid")
     suspend fun updateRemoteId(uid: Long, remoteId: String): Int
 

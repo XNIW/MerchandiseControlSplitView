@@ -1,0 +1,86 @@
+{
+  "caseName": "Pinmark",
+  "fileName": "20260620-Pinmark.xlsx",
+  "sheetIndex": 0,
+  "expectedHeaderRow": 9,
+  "expectedFirstDataRow": 10,
+  "requiredFields": [
+    "itemNumber",
+    "barcode",
+    "productName",
+    "secondProductName",
+    "quantity",
+    "purchasePrice",
+    "discount",
+    "discountedPrice",
+    "totalPrice"
+  ],
+  "fields": {
+    "itemNumber": {
+      "colIndex": 0,
+      "colLetter": "A",
+      "originalHeader": "REF\n货号",
+      "source": "alias"
+    },
+    "barcode": {
+      "colIndex": 1,
+      "colLetter": "B",
+      "originalHeader": "EAN\n条码",
+      "source": "alias"
+    },
+    "productName": {
+      "colIndex": 2,
+      "colLetter": "C",
+      "originalHeader": "DESCRIPCION\n品名",
+      "source": "alias"
+    },
+    "secondProductName": {
+      "colIndex": 4,
+      "colLetter": "E",
+      "originalHeader": "SECUNDARIO\n第二名称",
+      "source": "alias"
+    },
+    "quantity": {
+      "colIndex": 6,
+      "colLetter": "G",
+      "originalHeader": "CANT\n数量",
+      "source": "alias"
+    },
+    "purchasePrice": {
+      "colIndex": 7,
+      "colLetter": "H",
+      "originalHeader": "PRE\n批发价",
+      "source": "alias"
+    },
+    "discount": {
+      "colIndex": 8,
+      "colLetter": "I",
+      "originalHeader": "D.%\n折扣",
+      "source": "alias"
+    },
+    "discountedPrice": {
+      "colIndex": 9,
+      "colLetter": "J",
+      "originalHeader": "P.desc\n折后价",
+      "source": "alias"
+    },
+    "totalPrice": {
+      "colIndex": 10,
+      "colLetter": "K",
+      "originalHeader": "SUM\n折后合计",
+      "source": "alias"
+    }
+  },
+  "ignoredColumns": [
+    {
+      "colIndex": 3,
+      "colLetter": "D",
+      "originalHeader": ""
+    },
+    {
+      "colIndex": 5,
+      "colLetter": "F",
+      "originalHeader": "IMAGEN\n图片"
+    }
+  ]
+}

@@ -68,13 +68,30 @@ class SupabaseSyncEventRemoteDataSource(
         afterId: Long,
         limit: Long
     ): Result<List<SyncEventRemoteRow>> =
+        fetchSyncEventsAfter(
+            ownerUserId = ownerUserId,
+            storeId = storeId,
+            shopId = null,
+            afterId = afterId,
+            limit = limit
+        )
+
+    override suspend fun fetchSyncEventsAfter(
+        ownerUserId: String,
+        storeId: String?,
+        shopId: String?,
+        afterId: Long,
+        limit: Long
+    ): Result<List<SyncEventRemoteRow>> =
         runCatching {
             require(limit in 1L..500L) { "sync event fetch limit out of range" }
             requireClient().postgrest[SYNC_EVENTS_TABLE].select {
                 filter {
                     eq("owner_user_id", ownerUserId)
                     gt("id", afterId)
-                    if (storeId == null) {
+                    if (!shopId.isNullOrBlank()) {
+                        eq("shop_id", shopId)
+                    } else if (storeId == null) {
                         filter("store_id", FilterOperator.IS, "null")
                     } else {
                         eq("store_id", storeId)

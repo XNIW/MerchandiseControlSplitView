@@ -28,6 +28,7 @@ class HistorySessionPushCoordinator(
     private val syncEventOutboxDao: SyncEventOutboxDao? = null,
     private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null,
     private val authFlow: StateFlow<AuthState>,
+    private val selectedShopProvider: () -> SelectedShop? = { null },
     private val flightOwner: SessionCloudSessionFlightOwner,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val debounceMs: Long = DEBOUNCE_MS,
@@ -109,6 +110,10 @@ class HistorySessionPushCoordinator(
     fun onNetworkAvailable() {
         resetDeviceStatusPushRetry()
         schedule("network_available")
+    }
+
+    fun onShopContextChanged() {
+        schedule("shop_context_changed")
     }
 
     fun onDeviceStatusActive() {
@@ -220,7 +225,8 @@ class HistorySessionPushCoordinator(
             logger("cycle=push outcome=skip reason=skipped_background_policy debounceMs=$debounceMs dirtySetMode=precise")
             return
         }
-        if (!ensureDeviceActiveForSync(reason)) return
+        val selectedShop = selectedShopProvider()
+        if (!ensureDeviceActiveForSync(reason, selectedShop)) return
 
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
@@ -240,7 +246,11 @@ class HistorySessionPushCoordinator(
             flightOwner.withSessionFlight(SessionCloudFlightOwner.AutoPush) {
                 durationMs = measureTimeMillis {
                     if (fullReconciliation) {
-                        bootstrap = repository.bootstrapHistorySessionsFromRemote(remote).getOrThrow()
+                        bootstrap = if (selectedShop == null) {
+                            repository.bootstrapHistorySessionsFromRemote(remote)
+                        } else {
+                            repository.bootstrapHistorySessionsFromRemote(remote, selectedShop)
+                        }.getOrThrow()
                         val pending = repository.getPendingHistorySessionPushUids().toSet()
                         pendingSize = pending.size
                         pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
@@ -249,9 +259,11 @@ class HistorySessionPushCoordinator(
                             emptyPending = true
                             pendingLocalHistoryPushSignal = false
                         } else {
-                            summary = repository
-                                .pushHistorySessionsToRemote(remote, auth.userId, pending)
-                                .getOrThrow()
+                            summary = if (selectedShop == null) {
+                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+                            } else {
+                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
+                            }.getOrThrow()
                         }
                     } else {
                         val pending = repository.getPendingHistorySessionPushUids().toSet()
@@ -262,9 +274,11 @@ class HistorySessionPushCoordinator(
                             emptyPending = true
                             pendingLocalHistoryPushSignal = false
                         } else {
-                            summary = repository
-                                .pushHistorySessionsToRemote(remote, auth.userId, pending)
-                                .getOrThrow()
+                            summary = if (selectedShop == null) {
+                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+                            } else {
+                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
+                            }.getOrThrow()
                         }
                     }
                 }
@@ -285,7 +299,7 @@ class HistorySessionPushCoordinator(
                 return
             }
             val s = summary
-            recordHistorySyncEventIfNeeded(auth.userId, s)
+            recordHistorySyncEventIfNeeded(auth.userId, selectedShop, s)
             pendingLocalHistoryPushSignal = false
             logger(
                 "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
@@ -333,6 +347,7 @@ class HistorySessionPushCoordinator(
 
     private suspend fun recordHistorySyncEventIfNeeded(
         ownerUserId: String,
+        selectedShop: SelectedShop?,
         summary: HistorySessionBackupPushSummary?
     ) {
         val remoteIds = summary?.remoteIds.orEmpty()
@@ -346,11 +361,12 @@ class HistorySessionPushCoordinator(
             eventType = SyncEventTypes.HISTORY_CHANGED,
             changedCount = remoteIds.size,
             entityIds = SyncEventEntityIds(sessionIds = remoteIds),
-            storeId = null,
+            storeId = shopScopedStoreScope(selectedShop).ifBlank { null },
             source = "android_history_session_push",
             sourceDeviceId = null,
             batchId = batchId,
-            clientEventId = "android-$batchId-history-${remoteIds.joinToString(",").hashCode().toUInt().toString(16)}"
+            clientEventId = "android-$batchId-history-${remoteIds.joinToString(",").hashCode().toUInt().toString(16)}",
+            shopId = selectedShop?.shopId
         )
         withContext(NonCancellable) {
             var recorded: Result<SyncEventRemoteRow>? = null
@@ -413,9 +429,12 @@ class HistorySessionPushCoordinator(
         return if (inserted != -1L) 1 else 0
     }
 
-    private suspend fun ensureDeviceActiveForSync(reason: String): Boolean {
+    private suspend fun ensureDeviceActiveForSync(
+        reason: String,
+        selectedShop: SelectedShop?
+    ): Boolean {
         val authorization = deviceAuthorization ?: return true
-        val result = authorization.ensureActiveForCloudWrite("history_push:$reason")
+        val result = authorization.ensureActiveForCloudWrite("history_push:$reason", selectedShop?.shopId)
         if (result.isSuccess) {
             resetDeviceStatusPushRetry()
             return true

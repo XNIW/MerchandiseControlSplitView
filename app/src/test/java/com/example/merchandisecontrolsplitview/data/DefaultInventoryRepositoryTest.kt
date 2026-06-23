@@ -87,6 +87,116 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `shop context reset clears business cache and remote bridges`() = runTest {
+        val supplierId = db.supplierDao().insert(Supplier(name = "Scope Supplier"))
+        val categoryId = db.categoryDao().insert(Category(name = "Scope Category"))
+        db.productDao().insert(
+            Product(
+                barcode = "scope-product",
+                productName = "Scope Product",
+                supplierId = supplierId,
+                categoryId = categoryId,
+                purchasePrice = 10.0,
+                retailPrice = 15.0
+            )
+        )
+        val product = db.productDao().findByBarcode("scope-product")!!
+        val priceId = db.productPriceDao().insert(
+            ProductPrice(
+                productId = product.id,
+                type = "PURCHASE",
+                price = 10.0,
+                effectiveAt = "2026-06-22 10:00:00",
+                source = "MANUAL"
+            )
+        )
+        val historyUid = db.historyEntryDao().insert(
+            HistoryEntry(
+                id = "scope-session",
+                timestamp = "2026-06-22 10:00:00",
+                data = listOf(listOf("barcode", "qty")),
+                editable = listOf(listOf("scope-product", "1")),
+                complete = listOf(true)
+            )
+        )
+        db.supplierRemoteRefDao().insert(
+            SupplierRemoteRef(supplierId = supplierId, remoteId = "00000000-0000-4000-8000-000000001001")
+        )
+        db.categoryRemoteRefDao().insert(
+            CategoryRemoteRef(categoryId = categoryId, remoteId = "00000000-0000-4000-8000-000000001002")
+        )
+        db.productRemoteRefDao().insert(
+            ProductRemoteRef(productId = product.id, remoteId = "00000000-0000-4000-8000-000000001003")
+        )
+        db.productPriceRemoteRefDao().insert(
+            ProductPriceRemoteRef(productPriceId = priceId, remoteId = "00000000-0000-4000-8000-000000001004")
+        )
+        db.historyEntryRemoteRefDao().insert(
+            HistoryEntryRemoteRef(historyEntryUid = historyUid, remoteId = "00000000-0000-4000-8000-000000001005")
+        )
+        db.pendingCatalogTombstoneDao().insert(
+            PendingCatalogTombstone(
+                entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
+                remoteId = "00000000-0000-4000-8000-000000001006",
+                enqueuedAtMs = 1L
+            )
+        )
+
+        repository.resetBusinessDataForShopContextChange()
+
+        assertEquals(0, db.productDao().count())
+        assertEquals(0, db.supplierDao().count())
+        assertEquals(0, db.categoryDao().count())
+        assertEquals(0, db.productPriceDao().countAll())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        assertEquals(0, db.supplierRemoteRefDao().countRows())
+        assertEquals(0, db.categoryRemoteRefDao().countRows())
+        assertEquals(0, db.productRemoteRefDao().countRows())
+        assertNull(db.productPriceRemoteRefDao().getByRemoteId("00000000-0000-4000-8000-000000001004"))
+        assertNull(db.historyEntryRemoteRefDao().getByRemoteId("00000000-0000-4000-8000-000000001005"))
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+    }
+
+    @Test
+    fun `local database snapshot counts only selected shop outbox scope`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000731"
+        val dao = db.syncEventOutboxDao()
+        dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "shop-a-event",
+                createdAtMs = 1L,
+                attemptCount = 0,
+                storeScope = "shop:shop-a"
+            )
+        )
+        dao.insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "shop-b-event",
+                createdAtMs = 2L,
+                attemptCount = 0,
+                storeScope = "shop:shop-b"
+            )
+        )
+
+        val snapshot = repository.getLocalDatabaseStatusSnapshot(
+            ownerUserId = owner,
+            selectedShop = SelectedShop(
+                shopId = "shop-a",
+                code = "SHOP-A",
+                name = "Shop A",
+                role = "shop_owner",
+                status = "active",
+                canWrite = true
+            )
+        )
+
+        assertEquals(1, snapshot.syncEventOutboxPending)
+        assertEquals(1, snapshot.pendingLocalChanges)
+    }
+
+    @Test
     fun `135 backfill cleanup removes only cloud-linked generated price rows`() = runTest {
         val now = LocalDateTime.now().format(timestampFormatter)
         db.productDao().insert(
@@ -2091,7 +2201,8 @@ class DefaultInventoryRepositoryTest {
             source = "android",
             sourceDeviceId = "00000000-0000-4000-8000-000000000115",
             batchId = "00000000-0000-4000-8000-000000000116",
-            clientEventId = "android-00000000-0000-4000-8000-000000000116-catalog-catalog_changed-0-test"
+            clientEventId = "android-00000000-0000-4000-8000-000000000116-catalog-catalog_changed-0-test",
+            shopId = "00000000-0000-4000-8000-000000000117"
         )
 
         val encoded = Json.encodeToJsonElement(
@@ -2103,6 +2214,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals("catalog", encoded["p_domain"]?.jsonPrimitive?.content)
         assertEquals("catalog_changed", encoded["p_event_type"]?.jsonPrimitive?.content)
         assertEquals("android", encoded["p_source"]?.jsonPrimitive?.content)
+        assertEquals("00000000-0000-4000-8000-000000000117", encoded["p_shop_id"]?.jsonPrimitive?.content)
         assertEquals("00000000-0000-4000-8000-000000000114", entityIds["product_ids"]!!.jsonArray.first().jsonPrimitive.content)
         assertFalse(encoded.containsKey("domain"))
         assertFalse(encoded.containsKey("eventType"))
@@ -6234,6 +6346,7 @@ private fun testSyncEventOutboxEntry(
     domain: String = SyncEventDomains.CATALOG,
     eventType: String = SyncEventTypes.CATALOG_CHANGED,
     ids: SyncEventEntityIds = SyncEventEntityIds(productIds = listOf("product-retryable")),
+    storeScope: String = "",
     lastErrorType: String? = null
 ): SyncEventOutboxEntry {
     val json = Json {
@@ -6242,7 +6355,7 @@ private fun testSyncEventOutboxEntry(
     }
     return SyncEventOutboxEntry(
         ownerUserId = ownerUserId,
-        storeScope = "",
+        storeScope = storeScope,
         domain = domain,
         eventType = eventType,
         source = "android",

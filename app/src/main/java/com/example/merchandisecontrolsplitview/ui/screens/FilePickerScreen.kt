@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,23 +19,34 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.ShopContext
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 
 private val filePickerMimeTypes = arrayOf(
@@ -47,6 +59,8 @@ private val filePickerMimeTypes = arrayOf(
 @Composable
 fun FilePickerScreen(
     contentPadding: PaddingValues = PaddingValues(),
+    shopContext: ShopContext = ShopContext.legacy(),
+    onShopSelected: (String) -> Unit = {},
     onFilesPicked: (List<Uri>) -> Unit,
     onManualAdd: () -> Unit
 ) {
@@ -68,11 +82,21 @@ fun FilePickerScreen(
             .padding(horizontal = spacing.xl, vertical = spacing.xl),
         verticalArrangement = Arrangement.spacedBy(spacing.xl)
     ) {
-        Text(
-            text = stringResource(R.string.inventory_title),
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold
-        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ShopContextHeader(
+                shopContext = shopContext,
+                onShopSelected = onShopSelected
+            )
+
+            Text(
+                text = stringResource(R.string.inventory_title),
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -162,5 +186,87 @@ fun FilePickerScreen(
         }
 
         Spacer(modifier = Modifier.height(4.dp))
+    }
+}
+
+internal data class InventoryShopHeaderPresentation(
+    val shopName: String,
+    val showsSwitcher: Boolean
+)
+
+internal fun inventoryShopHeaderPresentation(shopContext: ShopContext): InventoryShopHeaderPresentation? {
+    val selectedShop = shopContext.selectedShop ?: return null
+    return InventoryShopHeaderPresentation(
+        shopName = selectedShop.displayName,
+        showsSwitcher = shopContext.shouldShowSelector
+    )
+}
+
+@Composable
+private fun ShopContextHeader(
+    shopContext: ShopContext,
+    onShopSelected: (String) -> Unit
+) {
+    val presentation = inventoryShopHeaderPresentation(shopContext) ?: return
+    if (!presentation.showsSwitcher) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Storefront,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = presentation.shopName,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        return
+    }
+
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        TextButton(onClick = { expanded = true }) {
+            Icon(
+                imageVector = Icons.Filled.Storefront,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Text(
+                text = presentation.shopName,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = null
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            shopContext.selectableShops.forEach { shop ->
+                DropdownMenuItem(
+                    text = { Text(shop.displayName) },
+                    onClick = {
+                        expanded = false
+                        onShopSelected(shop.shopId)
+                    },
+                    enabled = shop.canBeSelected
+                )
+            }
+        }
     }
 }

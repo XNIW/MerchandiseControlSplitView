@@ -21,6 +21,27 @@ class SupabaseSessionBackupRemoteDataSource(
             requireClient().postgrest.fetchSharedSheetSessionsAllPagesOrderedByRemoteId()
         }
 
+    override suspend fun fetchAllSessionsForOwner(shopId: String?): Result<List<SharedSheetSessionRecord>> =
+        if (shopId.isNullOrBlank()) {
+            fetchAllSessionsForOwner()
+        } else {
+            runCatching {
+                fetchAllPagesByIndexedRange(
+                    pageSize = INVENTORY_REMOTE_PAGE_SIZE,
+                    maxPageIterations = INVENTORY_REMOTE_PAGE_FETCH_MAX_ITERATIONS,
+                    tableLabel = "shared_sheet_sessions shop-scoped"
+                ) { from, to ->
+                    requireClient().postgrest["shared_sheet_sessions"].select {
+                        filter {
+                            eq("shop_id", shopId)
+                        }
+                        order("remote_id", Order.ASCENDING)
+                        range(from, to)
+                    }.decodeList()
+                }
+            }
+        }
+
     override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> =
         runCatching {
             if (remoteIds.isEmpty()) return@runCatching emptyList()
@@ -32,6 +53,25 @@ class SupabaseSessionBackupRemoteDataSource(
             }.decodeList()
         }
 
+    override suspend fun fetchSessionsByRemoteIds(
+        remoteIds: Set<String>,
+        shopId: String?
+    ): Result<List<SharedSheetSessionRecord>> =
+        if (shopId.isNullOrBlank()) {
+            fetchSessionsByRemoteIds(remoteIds)
+        } else {
+            runCatching {
+                if (remoteIds.isEmpty()) return@runCatching emptyList()
+                requireClient().postgrest["shared_sheet_sessions"].select {
+                    filter {
+                        isIn("remote_id", remoteIds.map(::canonicalSessionRemoteId).sorted())
+                        eq("shop_id", shopId)
+                    }
+                    order("remote_id", Order.ASCENDING)
+                }.decodeList()
+            }
+        }
+
     override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> =
         runCatching {
             if (rows.isEmpty()) return@runCatching
@@ -39,4 +79,7 @@ class SupabaseSessionBackupRemoteDataSource(
                 onConflict = "remote_id"
             }
         }
+
+    override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>, shopId: String?): Result<Unit> =
+        upsertSessions(rows.map { it.copy(shopId = shopId) })
 }

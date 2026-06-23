@@ -92,6 +92,32 @@ class ShopDeviceAuthorizationRepositoryTest {
         assertFalse(snapshot?.canWrite ?: true)
     }
 
+    @Test
+    fun `shop scoped device gate does not reuse another shop active status`() = runTest {
+        val fakeDeviceRemote = ScopedDeviceRegistrationRemote(
+            statuses = mutableMapOf(
+                "shop-a" to Result.success(snapshot(status = "active")),
+                "shop-b" to Result.success(snapshot(status = "revoked"))
+            )
+        )
+        val authorization = ShopDeviceAuthorizationRepository(fakeDeviceRemote)
+        val remote = FakeProductPriceRemote072()
+        val guarded = DeviceGuardedProductPriceRemoteDataSource(remote, authorization)
+
+        assertTrue(
+            authorization
+                .checkStatus(reason = "foreground", force = true, shopId = "shop-a")
+                .isSuccess
+        )
+
+        val result = guarded.upsertProductPrices(emptyList(), "shop-b")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ShopDeviceAuthorizationBlockedException)
+        assertEquals(0, remote.upsertCalls)
+        assertEquals(listOf("shop-a", "shop-b"), fakeDeviceRemote.statusShopIds)
+    }
+
     private class FakeDeviceRegistrationRemote072(
         var nextStatus: Result<ShopDeviceAuthorizationSnapshot>
     ) : ShopDeviceRegistrationRemote {
@@ -120,6 +146,27 @@ class ShopDeviceAuthorizationRepositoryTest {
             remoteIds: Set<String>
         ): Result<List<InventoryProductPriceRow>> =
             Result.success(emptyList())
+    }
+
+    private class ScopedDeviceRegistrationRemote(
+        private val statuses: MutableMap<String, Result<ShopDeviceAuthorizationSnapshot>>
+    ) : ShopDeviceRegistrationRemote {
+        override val isConfigured: Boolean = true
+        val statusShopIds = mutableListOf<String>()
+
+        override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
+
+        override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
+            Result.failure(IllegalStateException("legacy status should not be used"))
+
+        override suspend fun shopDeviceStatusForShop(
+            shopId: String,
+            reason: String
+        ): Result<ShopDeviceAuthorizationSnapshot> {
+            statusShopIds.add(shopId)
+            return statuses[shopId] ?: Result.failure(IllegalArgumentException("unknown shop"))
+        }
     }
 
     private companion object {

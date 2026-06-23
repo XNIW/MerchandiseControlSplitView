@@ -32,6 +32,7 @@ import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwn
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationBlockedException
 import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
+import com.example.merchandisecontrolsplitview.data.ShopContext
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
@@ -110,7 +111,8 @@ class CatalogSyncViewModel(
     private val syncStateTracker: CatalogSyncStateTracker? = null,
     private val autoSyncRepository: CatalogAutoSyncRepository? = repository as? CatalogAutoSyncRepository,
     private val syncEventRemote: SyncEventRemoteDataSource? = null,
-    private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null
+    private val deviceAuthorization: ShopDeviceAuthorizationRepository? = null,
+    private val shopContextFlow: StateFlow<ShopContext>? = null
 ) : AndroidViewModel(application) {
 
     private enum class ErrorKind {
@@ -844,7 +846,7 @@ class CatalogSyncViewModel(
             val ownerUserId = (authFlow.value as? AuthState.SignedIn)?.userId
             try {
                 localDatabaseStatusSnapshot.value =
-                    repository.getLocalDatabaseStatusSnapshot(ownerUserId)
+                    repository.getLocalDatabaseStatusSnapshot(ownerUserId, currentSelectedShop())
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
@@ -854,6 +856,8 @@ class CatalogSyncViewModel(
             }
         }
     }
+
+    private fun currentSelectedShop() = shopContextFlow?.value?.selectedShop
 
     private suspend fun applyTrackerOutcome(outcome: CatalogSyncOutcomeState) {
         lastCatalogSyncSummary.value = outcome.summary
@@ -905,17 +909,34 @@ class CatalogSyncViewModel(
 
     private suspend fun syncCatalogRepository(ownerUserId: String): Result<CatalogSyncSummary> {
         val progressAware = repository as? CatalogSyncProgressRepository
+        val selectedShop = currentSelectedShop()
         return if (progressAware != null) {
-            progressAware.syncCatalogWithRemote(
-                remote = remote,
-                priceRemote = priceRemote,
-                ownerUserId = ownerUserId,
-                progressReporter = CatalogSyncProgressReporter { progress ->
-                    setSyncProgress(progress)
-                }
-            )
+            if (selectedShop == null) {
+                progressAware.syncCatalogWithRemote(
+                    remote = remote,
+                    priceRemote = priceRemote,
+                    ownerUserId = ownerUserId,
+                    progressReporter = CatalogSyncProgressReporter { progress ->
+                        setSyncProgress(progress)
+                    }
+                )
+            } else {
+                progressAware.syncCatalogWithRemote(
+                    remote = remote,
+                    priceRemote = priceRemote,
+                    ownerUserId = ownerUserId,
+                    selectedShop = selectedShop,
+                    progressReporter = CatalogSyncProgressReporter { progress ->
+                        setSyncProgress(progress)
+                    }
+                )
+            }
         } else {
-            repository.syncCatalogWithRemote(remote, priceRemote, ownerUserId)
+            if (selectedShop == null) {
+                repository.syncCatalogWithRemote(remote, priceRemote, ownerUserId)
+            } else {
+                repository.syncCatalogWithRemote(remote, priceRemote, ownerUserId, selectedShop)
+            }
         }
     }
 
@@ -1074,25 +1095,51 @@ class CatalogSyncViewModel(
             var logFailureClassification: SyncErrorClassification? = null
             var logPendingAfter = false
             try {
+                val selectedShop = currentSelectedShop()
                 val result = if (syncEventRemote?.isConfigured == true) {
-                    autoRepository.syncCatalogQuickWithEvents(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        syncEventRemote = syncEventRemote,
-                        ownerUserId = auth.userId,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            setSyncProgress(progress)
-                        }
-                    )
+                    if (selectedShop == null) {
+                        autoRepository.syncCatalogQuickWithEvents(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            syncEventRemote = syncEventRemote,
+                            ownerUserId = auth.userId,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                setSyncProgress(progress)
+                            }
+                        )
+                    } else {
+                        autoRepository.syncCatalogQuickWithEvents(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            syncEventRemote = syncEventRemote,
+                            ownerUserId = auth.userId,
+                            selectedShop = selectedShop,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                setSyncProgress(progress)
+                            }
+                        )
+                    }
                 } else {
-                    autoRepository.pushDirtyCatalogDeltaToRemote(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        ownerUserId = auth.userId,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            setSyncProgress(progress)
-                        }
-                    )
+                    if (selectedShop == null) {
+                        autoRepository.pushDirtyCatalogDeltaToRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            ownerUserId = auth.userId,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                setSyncProgress(progress)
+                            }
+                        )
+                    } else {
+                        autoRepository.pushDirtyCatalogDeltaToRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            ownerUserId = auth.userId,
+                            selectedShop = selectedShop,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                setSyncProgress(progress)
+                            }
+                        )
+                    }
                 }
                 result.fold(
                     onSuccess = { summary ->
@@ -1176,9 +1223,18 @@ class CatalogSyncViewModel(
     private suspend fun runHistorySessionCloudRefresh(ownerUserId: String): HistorySessionCloudOutcome? {
         if (!sessionRemote.isConfigured) return null
         return sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
+            val selectedShop = currentSelectedShop()
             val bootstrapOutcome = runHistorySessionBootstrap()
             if (bootstrapOutcome.bootstrap == null) return@withSessionFlight bootstrapOutcome
-            val push = repository.pushHistorySessionsToRemote(sessionRemote, ownerUserId)
+            val push = if (selectedShop == null) {
+                repository.pushHistorySessionsToRemote(sessionRemote, ownerUserId)
+            } else {
+                repository.pushHistorySessionsToRemote(
+                    sessionRemote,
+                    ownerUserId,
+                    selectedShop = selectedShop
+                )
+            }
             val outcome = HistorySessionCloudOutcome(
                 bootstrap = bootstrapOutcome.bootstrap,
                 push = push.getOrNull(),
@@ -1191,7 +1247,15 @@ class CatalogSyncViewModel(
     }
 
     private suspend fun runHistorySessionBootstrap(): HistorySessionCloudOutcome {
-        val bootstrap = repository.bootstrapHistorySessionsFromRemote(sessionRemote)
+        val selectedShop = currentSelectedShop()
+        val bootstrap = if (selectedShop == null) {
+            repository.bootstrapHistorySessionsFromRemote(sessionRemote)
+        } else {
+            repository.bootstrapHistorySessionsFromRemote(
+                sessionRemote,
+                selectedShop = selectedShop
+            )
+        }
         val outcome = HistorySessionCloudOutcome(
             bootstrap = bootstrap.getOrNull(),
             push = null,
@@ -1213,7 +1277,7 @@ class CatalogSyncViewModel(
 
     private suspend fun ensureDeviceActiveForManualSync(reason: String): Boolean {
         val authorization = deviceAuthorization ?: return true
-        val result = authorization.ensureActiveForCloudWrite(reason)
+        val result = authorization.ensureActiveForCloudWrite(reason, currentSelectedShop()?.shopId)
         if (result.isSuccess) return true
 
         val snapshot = (result.exceptionOrNull() as? ShopDeviceAuthorizationBlockedException)?.snapshot
@@ -1258,7 +1322,8 @@ class CatalogSyncViewModel(
                         app.sessionCloudSessionFlightOwner,
                         app.catalogSyncStateTracker,
                         syncEventRemote = app.syncEventRemoteDataSource,
-                        deviceAuthorization = app.shopDeviceAuthorizationRepository
+                        deviceAuthorization = app.shopDeviceAuthorizationRepository,
+                        shopContextFlow = app.shopContextRepository.state
                     ) as T
             }
     }

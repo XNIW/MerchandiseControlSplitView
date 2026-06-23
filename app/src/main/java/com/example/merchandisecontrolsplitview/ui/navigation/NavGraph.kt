@@ -67,6 +67,7 @@ fun AppNavGraph() {
     val repository = app.repository
     // Stato sync globale strutturato: fase corrente + conteggio opzionale.
     val cloudSyncState by app.catalogSyncStateTracker.state.collectAsState()
+    val shopContext by app.shopContextRepository.state.collectAsState()
 
     val excelViewModel: ExcelViewModel = viewModel(
         factory = ExcelViewModel.factory(app, repository)
@@ -175,6 +176,10 @@ fun AppNavGraph() {
             composable(Screen.FilePicker.route) {
                 FilePickerScreen(
                     contentPadding = innerPadding,
+                    shopContext = shopContext,
+                    onShopSelected = { shopId ->
+                        app.shopContextRepository.selectShop(shopId)
+                    },
                     onFilesPicked = { uris ->
                         excelViewModel.resetState()
 

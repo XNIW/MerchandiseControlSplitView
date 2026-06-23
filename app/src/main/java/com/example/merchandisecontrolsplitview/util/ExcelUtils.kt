@@ -210,18 +210,64 @@ internal fun normalizeExcelHeader(s: String) = Normalizer
     .replace(Regex("[^\\p{L}\\p{Nd}]"), "")
     .lowercase()
 
+private fun isCjkHeaderChar(char: Char): Boolean {
+    val block = Character.UnicodeBlock.of(char)
+    return block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS ||
+        block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A ||
+        block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B ||
+        block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS
+}
+
+private fun splitHeaderFragmentByScript(fragment: String): List<String> {
+    if (fragment.isBlank()) return emptyList()
+    val runs = mutableListOf<StringBuilder>()
+    var currentIsCjk: Boolean? = null
+    fragment.forEach { char ->
+        val isCjk = isCjkHeaderChar(char)
+        if (currentIsCjk != null && currentIsCjk != isCjk) {
+            runs += StringBuilder()
+        } else if (runs.isEmpty()) {
+            runs += StringBuilder()
+        }
+        runs.last().append(char)
+        currentIsCjk = isCjk
+    }
+    return runs.map { it.toString() }.filter { it.isNotBlank() }
+}
+
+private fun normalizedHeaderFragments(rawHeader: String): List<String> {
+    val separatorPattern = Regex("[\\r\\n/\\\\:：()（）\\[\\]{}|;]+")
+    val coarseFragments = rawHeader
+        .split(separatorPattern)
+        .flatMap { fragment -> fragment.split(Regex("\\s+")) }
+        .filter { it.isNotBlank() }
+    val scriptFragments = coarseFragments.flatMap(::splitHeaderFragmentByScript)
+    return (listOf(rawHeader) + coarseFragments + scriptFragments)
+        .map(::normalizeExcelHeader)
+        .filter { it.isNotBlank() }
+        .distinct()
+}
+
+private fun headerMatchesAlias(rawHeader: String, alias: String): Boolean {
+    val normalizedAlias = normalizeExcelHeader(alias)
+    if (normalizedAlias.isBlank()) return false
+    return normalizedHeaderFragments(rawHeader).any { fragment ->
+        fragment == normalizedAlias
+    }
+}
+
 internal val KNOWN_EXCEL_HEADER_ALIASES: Map<String, List<String>> = mapOf(
     "barcode" to listOf("barcode", "条码", "ean", "bar code", "codice a barre", "código de barras", "codigo de barras", "código barras", "codigo barras", "co.barra", "条形码", "Código de barras", "cod.barra", "cod barra", "codbarra", "cod.barras", "codbarras"),
-    "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量", "stock", "stockquantity", "giacenza", "scorte", "库存", "库存数量", "Existencias", "Stock Quantity", "cantid"),
-    "purchasePrice" to listOf("销售单价","purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格", "原价", "售价", "新进价", "Nuovo prezzo acquisto", "Nuevo Precio de Compra", "New Purchase Price", "折前单价(含税)", "pre/u"),
-    "totalPrice" to listOf("totalprice", "total_price", "总价", "totale", "importo", "price total", "precio total", "importe", "total", "importe total", "importe final", "subtotal", "subtotal bruto", "合计", "金额", "总计", "importe"),
-    "productName" to listOf("中文名","商品信息","productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "nombre", "产品名1", "产品品名", "商品名1", "Nome prodotto", "Nombre del producto", "Product name", "商品名称", "外文描述", "articulo", "artículo"),
-    "secondProductName" to listOf("外文名","零售名称","productname2", "product_name2", "品名2", "descrizione2", "name2", "nome2", "description2", "nombre del producto2", "nombre producto2", "producto2", "descripción2", "descripcion2", "nombre2", "产品名2", "产品品名2", "商品名2", "Secondo nome prodotto", "Segundo nombre del producto", "Second Product Name", "西语名称", "物料描述", "second name", "secondname", "nombre 2", "nombre2", "nome 2", "nome2", "product name 2", "productname2"),
-    "itemNumber" to listOf("itemnumber", "item_number", "货号", "codice", "code", "articolo", "número de artículo", "numero de artículo", "número de producto", "numero de producto", "código", "referencia", "产品货号", "编号","codice articolo","Código del artículo","Item code", "编码", "短码", "ref.cajas","codice prodotto", "codiceprodotto", "product code", "productcode", "código de producto", "codigodeproducto"),
+    "quantity" to listOf("quantity", "数量", "qty", "quantità", "amount", "cantidad", "cant", "número", "numero", "número de unidades", "numero de unidades", "unds.", "总数量", "stock", "stockquantity", "giacenza", "scorte", "库存", "库存数量", "Existencias", "Stock Quantity", "cantid"),
+    "purchasePrice" to listOf("销售单价","purchaseprice", "New Purchase Price", "purchase_price", "进价", "buy price", "prezzo acquisto", "cost", "unit price", "prezzo", "precio de compra", "precio compra", "costo", "precio unitario", "precio adquisición", "precio", "v. unit. bruto", "单价", "价格", "原价", "售价", "新进价", "Nuovo prezzo acquisto", "Nuevo Precio de Compra", "New Purchase Price", "折前单价(含税)", "pre/u", "pre", "批发价"),
+    "totalPrice" to listOf("totalprice", "total_price", "总价", "totale", "importo", "price total", "precio total", "importe", "total", "importe total", "importe final", "subtotal", "subtotal bruto", "合计", "金额", "总计", "importe", "sum", "折后合计"),
+    "productName" to listOf("中文名","商品信息","productname", "product_name", "品名", "descrizione", "name", "nome", "description", "nombre del producto", "nombre producto", "producto", "descripción", "descripcion", "descripcion", "nombre", "产品名1", "产品品名", "商品名1", "Nome prodotto", "Nombre del producto", "Product name", "商品名称", "外文描述", "articulo", "artículo"),
+    "secondProductName" to listOf("外文名","零售名称","productname2", "product_name2", "品名2", "descrizione2", "name2", "nome2", "description2", "nombre del producto2", "nombre producto2", "producto2", "descripción2", "descripcion2", "nombre2", "产品名2", "产品品名2", "商品名2", "Secondo nome prodotto", "Segundo nombre del producto", "Second Product Name", "西语名称", "物料描述", "second name", "secondname", "nombre 2", "nombre2", "nome 2", "nome2", "product name 2", "productname2", "secundario", "第二名称"),
+    "itemNumber" to listOf("itemnumber", "item_number", "货号", "ref", "codice", "code", "articolo", "número de artículo", "numero de artículo", "número de producto", "numero de producto", "código", "referencia", "产品货号", "编号","codice articolo","Código del artículo","Item code", "编码", "短码", "ref.cajas","codice prodotto", "codiceprodotto", "product code", "productcode", "código de producto", "codigodeproducto"),
     "supplier" to listOf("supplier", "供应商", "fornitore", "vendor", "provider", "fornitore/azienda", "proveedor", "empresa proveedora", "vendedor", "distribuidor", "fabricante", "Proveedor"),
     "rowNumber" to listOf("no", "n.", "№", "row", "rowno", "rownumber", "serial", "serialnumber", "progressivo", "numeroriga", "num. riga", "número de fila", "número", "numero", "序号", "编号", "编号序号", "序列号", "行号", "#"),
-    "discount" to listOf("discount", "sconto", "折扣", "descuento", "rabatt", "sc.", "dcto", "scnto", "scnt.", "rebaja", "remise", "D%", "D.%", "dto%", "折"),
-    "discountedPrice" to listOf("discountedprice", "prezzoscontato", "precio con descuento", "precio descontado", "折后价", "prezzo scontato", "precio rebajado", "rebate price", "after discount price", "final price", "prezzo finale", "售价", "Pre.-D%", "折后单价(含税)"),
+    "discount" to listOf("discount", "sconto", "折扣", "descuento", "rabatt", "sc.", "dcto", "dcto%", "dto", "dto%", "scnto", "scnt.", "rebaja", "remise", "D%", "D.%", "折"),
+    "discountedPrice" to listOf("discountedprice", "prezzoscontato", "precio con descuento", "precio descontado", "折后价", "prezzo scontato", "precio rebajado", "rebate price", "after discount price", "final price", "prezzo finale", "售价", "Pre.-D%", "p.desc", "pdesc", "p desc", "折后单价(含税)"),
     "retailPrice" to listOf("retailprice", "retail_price", "零售价", "prezzo vendita", "prezzo retail", "sale price", "listino", "precio de venta", "precio venta", "precio al público", "precio retail", "precio al por menor", "Nuovo Prezzo vendita", "新零售价", "Nuevo precio de venta", "New retail price"),
     "realQuantity" to listOf("实点数量", "Counted quantity", "Quantità contata", "Cantidad contada"),
     "category" to listOf("category", "categoria", "reparto", "department", "分类", "类别", "categoría"),
@@ -239,9 +285,8 @@ private val NORMALIZED_EXCEL_HEADER_LOOKUP: Map<String, String> = buildMap {
 }
 
 internal fun canonicalExcelHeaderKey(rawHeader: String): String? {
-    val normalized = normalizeExcelHeader(rawHeader)
-    if (normalized.isBlank()) return null
-    return NORMALIZED_EXCEL_HEADER_LOOKUP[normalized]
+    return normalizedHeaderFragments(rawHeader)
+        .firstNotNullOfOrNull { fragment -> NORMALIZED_EXCEL_HEADER_LOOKUP[fragment] }
 }
 
 private fun normalizeHeader(s: String) = normalizeExcelHeader(s)
@@ -399,7 +444,8 @@ private fun pruneTotallyEmptyColumns(
     header: List<String>,
     originalHeaders: List<String>,
     headerSource: List<String>,
-    dataRows: List<List<String>>
+    dataRows: List<List<String>>,
+    preserveHeaderLayout: Boolean
 ): PrunedColumnsResult {
     if (header.isEmpty()) {
         return PrunedColumnsResult(
@@ -410,8 +456,22 @@ private fun pruneTotallyEmptyColumns(
         )
     }
 
-    val nonEmptyCols = header.indices.filter { col ->
-        dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+    val nonEmptyCols = if (preserveHeaderLayout) {
+        val meaningfulCols = header.indices.filter { col ->
+            originalHeaders.getOrNull(col)?.isNotBlank() == true ||
+                dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+        }
+        val first = meaningfulCols.minOrNull()
+        val last = meaningfulCols.maxOrNull()
+        if (first == null || last == null) {
+            emptyList()
+        } else {
+            (first..last).toList()
+        }
+    } else {
+        header.indices.filter { col ->
+            dataRows.any { row -> row.getOrNull(col)?.isNotBlank() == true }
+        }
     }
 
     return PrunedColumnsResult(
@@ -420,6 +480,12 @@ private fun pruneTotallyEmptyColumns(
         headerSource = nonEmptyCols.map { headerSource[it] }.toMutableList(),
         dataRows = dataRows.map { row -> nonEmptyCols.map { idx -> row.getOrNull(idx) ?: "" } }
     )
+}
+
+private fun shouldPreserveExplicitHeaderLayout(originalHeaders: List<String>): Boolean {
+    return originalHeaders.any { header ->
+        header.contains('\n') || header.contains('\r')
+    }
 }
 
 private fun ratio(numerator: Int, denominator: Int): Double {
@@ -477,6 +543,19 @@ private fun detectHeader(rows: List<List<String>>, profiles: List<RowProfile>): 
             hasHeader = false,
             headerRows = emptyList(),
             headerMode = "generated-no-data"
+        )
+    }
+
+    val explicitHeaderIdx = profiles.indices.firstOrNull { idx ->
+        profiles[idx].aliasHits >= LEGACY_HEADER_ALIAS_FAST_PATH &&
+            profiles.getOrNull(idx + 1)?.looksDataLike == true
+    }
+    if (explicitHeaderIdx != null) {
+        return HeaderDetection(
+            dataRowIdx = explicitHeaderIdx + 1,
+            hasHeader = true,
+            headerRows = listOf(explicitHeaderIdx),
+            headerMode = "legacy-fast-path"
         )
     }
 
@@ -987,7 +1066,13 @@ internal fun analyzeRowsDetailed(
     val usedCols = mutableSetOf<Int>()
     val decisionTraces = mutableMapOf<String, ExcelFieldDecisionTrace>()
 
-    val prunedColumns = pruneTotallyEmptyColumns(header, originalHeaders, headerSource, dataRows)
+    val prunedColumns = pruneTotallyEmptyColumns(
+        header = header,
+        originalHeaders = originalHeaders,
+        headerSource = headerSource,
+        dataRows = dataRows,
+        preserveHeaderLayout = hasHeader && shouldPreserveExplicitHeaderLayout(originalHeaders)
+    )
     header = prunedColumns.header
     originalHeaders = prunedColumns.originalHeaders
     headerSource = prunedColumns.headerSource
@@ -1005,10 +1090,8 @@ internal fun analyzeRowsDetailed(
         for (key in prioritizedKeys) {
             val aliases = possibleNames[key] ?: continue
             val foundIdx = rawHeader.indexOfFirst { colName ->
-                if (normalizeHeader(colName).isBlank()) false else {
-                    val normCol = normalizeHeader(colName)
-                    aliases.any { alias -> normCol == normalizeHeader(alias) }
-                }
+                normalizeHeader(colName).isNotBlank() &&
+                    aliases.any { alias -> headerMatchesAlias(colName, alias) }
             }
             if (foundIdx >= 0 && !usedCols.contains(foundIdx)) {
                 if (shouldSkipHeaderAlias(key, rawHeader[foundIdx], columnSamples[foundIdx])) {
@@ -1522,11 +1605,15 @@ internal fun analyzeRowsDetailed(
             sampleSize = dataRows.take(MAX_PATTERN_SAMPLE_ROWS).size,
             fieldDecisions = synthesizeFieldTraces(
                 fields = listOf(
+                    "rowNumber",
                     "itemNumber",
                     "barcode",
                     "productName",
+                    "secondProductName",
                     "quantity",
                     "purchasePrice",
+                    "discount",
+                    "discountedPrice",
                     "totalPrice"
                 ),
                 decisions = decisionTraces

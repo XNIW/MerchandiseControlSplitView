@@ -58,6 +58,7 @@ data class SyncEventEntityIds(
 data class SyncEventRemoteRow(
     val id: Long,
     @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
     @SerialName("store_id") val storeId: String? = null,
     val domain: String,
     @SerialName("event_type") val eventType: String,
@@ -82,7 +83,8 @@ data class SyncEventRecordRpcParams(
     @SerialName("p_source_device_id") val sourceDeviceId: String? = null,
     @SerialName("p_batch_id") val batchId: String? = null,
     @SerialName("p_client_event_id") val clientEventId: String? = null,
-    @SerialName("p_metadata") val metadata: JsonObject = buildJsonObject { }
+    @SerialName("p_metadata") val metadata: JsonObject = buildJsonObject { },
+    @SerialName("p_shop_id") val shopId: String? = null
 )
 
 data class SyncEventRemoteCapabilities(
@@ -115,6 +117,15 @@ interface SyncEventRemoteDataSource {
         afterId: Long,
         limit: Long
     ): Result<List<SyncEventRemoteRow>>
+
+    suspend fun fetchSyncEventsAfter(
+        ownerUserId: String,
+        storeId: String?,
+        shopId: String?,
+        afterId: Long,
+        limit: Long
+    ): Result<List<SyncEventRemoteRow>> =
+        fetchSyncEventsAfter(ownerUserId, storeId, afterId, limit)
 }
 
 object DisabledSyncEventRemoteDataSource : SyncEventRemoteDataSource {
@@ -235,8 +246,33 @@ interface SyncEventOutboxDao {
         limit: Int
     ): List<SyncEventOutboxEntry>
 
+    @Query(
+        """
+        SELECT * FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId
+          AND storeScope = :storeScope
+          AND attemptCount < :maxAttempts
+        ORDER BY createdAtMs ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun listPendingRetryableForScope(
+        ownerUserId: String,
+        storeScope: String,
+        maxAttempts: Int,
+        limit: Int
+    ): List<SyncEventOutboxEntry>
+
     @Query("SELECT COUNT(*) FROM sync_event_outbox WHERE ownerUserId = :ownerUserId")
     suspend fun countPending(ownerUserId: String): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId AND storeScope = :storeScope
+        """
+    )
+    suspend fun countPendingForScope(ownerUserId: String, storeScope: String): Int
 
     @Query(
         """
@@ -246,6 +282,20 @@ interface SyncEventOutboxDao {
         """
     )
     suspend fun countPendingAtOrAboveAttempts(ownerUserId: String, maxAttempts: Int): Int
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId
+          AND storeScope = :storeScope
+          AND attemptCount >= :maxAttempts
+        """
+    )
+    suspend fun countPendingAtOrAboveAttemptsForScope(
+        ownerUserId: String,
+        storeScope: String,
+        maxAttempts: Int
+    ): Int
 
     @Query("DELETE FROM sync_event_outbox WHERE id = :id")
     suspend fun deleteById(id: Long)

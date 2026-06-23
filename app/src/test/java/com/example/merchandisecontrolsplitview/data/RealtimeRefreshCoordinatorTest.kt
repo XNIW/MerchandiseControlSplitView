@@ -240,7 +240,10 @@ class RealtimeRefreshCoordinatorTest {
 
         override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = false
 
-        override suspend fun getLocalDatabaseStatusSnapshot(ownerUserId: String?): LocalDatabaseStatusSnapshot =
+        override suspend fun getLocalDatabaseStatusSnapshot(
+            ownerUserId: String?,
+            selectedShop: SelectedShop?
+        ): LocalDatabaseStatusSnapshot =
             LocalDatabaseStatusSnapshot(0, 0, 0, 0, 0, 0, 0)
 
         override suspend fun getCatalogCloudPendingBreakdown(): CatalogCloudPendingBreakdown =

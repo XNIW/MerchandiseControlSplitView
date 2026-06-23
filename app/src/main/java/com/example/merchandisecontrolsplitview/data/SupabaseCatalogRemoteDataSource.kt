@@ -2,7 +2,9 @@ package com.example.merchandisecontrolsplitview.data
 
 import com.example.merchandisecontrolsplitview.BuildConfig
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 
 /**
@@ -26,6 +28,9 @@ class SupabaseCatalogRemoteDataSource(
             }
         }
 
+    override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>, shopId: String?): Result<Unit> =
+        upsertSuppliers(rows.map { it.copy(shopId = shopId) })
+
     override suspend fun upsertCategories(rows: List<InventoryCategoryRow>): Result<Unit> =
         runCatching {
             if (rows.isEmpty()) return@runCatching
@@ -34,6 +39,9 @@ class SupabaseCatalogRemoteDataSource(
             }
         }
 
+    override suspend fun upsertCategories(rows: List<InventoryCategoryRow>, shopId: String?): Result<Unit> =
+        upsertCategories(rows.map { it.copy(shopId = shopId) })
+
     override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> =
         runCatching {
             if (rows.isEmpty()) return@runCatching
@@ -41,6 +49,9 @@ class SupabaseCatalogRemoteDataSource(
                 onConflict = "id"
             }
         }
+
+    override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> =
+        upsertProducts(rows.map { it.copy(shopId = shopId) })
 
     override suspend fun patchProduct(
         id: String,
@@ -71,6 +82,39 @@ class SupabaseCatalogRemoteDataSource(
             )
         }
 
+    override suspend fun patchProduct(
+        id: String,
+        ownerUserId: String,
+        shopId: String?,
+        patch: InventoryProductPatch
+    ): Result<Unit> =
+        runCatching {
+            if (patch.isEmpty) return@runCatching
+            requireClient().postgrest["inventory_products"].update(
+                update = {
+                    if (patch.includes("barcode")) set("barcode", patch.barcode)
+                    if (patch.includes("itemnumber")) set("item_number", patch.itemNumber)
+                    if (patch.includes("productname")) set("product_name", patch.productName)
+                    if (patch.includes("secondproductname")) set("second_product_name", patch.secondProductName)
+                    if (patch.includes("purchaseprice")) set("purchase_price", patch.purchasePrice)
+                    if (patch.includes("retailprice")) set("retail_price", patch.retailPrice)
+                    if (patch.includes("supplier")) set("supplier_id", patch.supplierId)
+                    if (patch.includes("category")) set("category_id", patch.categoryId)
+                    if (patch.includes("stockquantity")) set("stock_quantity", patch.stockQuantity)
+                    if (patch.includes("tombstone")) set("deleted_at", patch.deletedAt)
+                },
+                request = {
+                    filter {
+                        eq("id", id)
+                        eq("owner_user_id", ownerUserId)
+                        if (!shopId.isNullOrBlank()) {
+                            eq("shop_id", shopId)
+                        }
+                    }
+                }
+            )
+        }
+
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         runCatching {
             val pg = requireClient().postgrest
@@ -78,6 +122,28 @@ class SupabaseCatalogRemoteDataSource(
             val categories = pg.fetchInventoryTableAllPagesOrderedById<InventoryCategoryRow>("inventory_categories")
             val products = pg.fetchInventoryTableAllPagesOrderedById<InventoryProductRow>("inventory_products")
             InventoryCatalogFetchBundle(suppliers, categories, products)
+        }
+
+    override suspend fun fetchCatalog(shopId: String?): Result<InventoryCatalogFetchBundle> =
+        if (shopId.isNullOrBlank()) {
+            fetchCatalog()
+        } else {
+            runCatching {
+                val pg = requireClient().postgrest
+                val suppliers = pg.fetchInventoryTableAllPagesOrderedById<InventorySupplierRow>(
+                    "inventory_suppliers",
+                    shopId
+                )
+                val categories = pg.fetchInventoryTableAllPagesOrderedById<InventoryCategoryRow>(
+                    "inventory_categories",
+                    shopId
+                )
+                val products = pg.fetchInventoryTableAllPagesOrderedById<InventoryProductRow>(
+                    "inventory_products",
+                    shopId
+                )
+                InventoryCatalogFetchBundle(suppliers, categories, products)
+            }
         }
 
     override suspend fun fetchCatalogByIds(
@@ -93,6 +159,26 @@ class SupabaseCatalogRemoteDataSource(
                 products = pg.fetchInventoryRowsByIds("inventory_products", productIds),
                 isCompleteSnapshot = false
             )
+        }
+
+    override suspend fun fetchCatalogByIds(
+        supplierIds: Set<String>,
+        categoryIds: Set<String>,
+        productIds: Set<String>,
+        shopId: String?
+    ): Result<InventoryCatalogFetchBundle> =
+        if (shopId.isNullOrBlank()) {
+            fetchCatalogByIds(supplierIds, categoryIds, productIds)
+        } else {
+            runCatching {
+                val pg = requireClient().postgrest
+                InventoryCatalogFetchBundle(
+                    suppliers = pg.fetchInventoryRowsByIds("inventory_suppliers", supplierIds, shopId),
+                    categories = pg.fetchInventoryRowsByIds("inventory_categories", categoryIds, shopId),
+                    products = pg.fetchInventoryRowsByIds("inventory_products", productIds, shopId),
+                    isCompleteSnapshot = false
+                )
+            }
         }
 
     internal suspend fun fetchTask087CatalogByBarcodes(barcodes: Set<String>): Result<InventoryCatalogFetchBundle> =
@@ -172,15 +258,37 @@ class SupabaseCatalogRemoteDataSource(
                     filter {
                         eq("id", patch.id)
                         eq("owner_user_id", patch.ownerUserId)
+                        if (!patch.shopId.isNullOrBlank()) {
+                            eq("shop_id", patch.shopId)
+                        }
                         filter("deleted_at", FilterOperator.IS, "null")
                     }
                 }
             )
         }
 
+    private suspend inline fun <reified T : Any> Postgrest.fetchInventoryTableAllPagesOrderedById(
+        table: String,
+        shopId: String
+    ): List<T> =
+        fetchAllPagesByIndexedRange(
+            pageSize = INVENTORY_REMOTE_PAGE_SIZE,
+            maxPageIterations = INVENTORY_REMOTE_PAGE_FETCH_MAX_ITERATIONS,
+            tableLabel = "$table shop-scoped"
+        ) { from, to ->
+            this[table].select {
+                filter {
+                    eq("shop_id", shopId)
+                }
+                order("id", Order.ASCENDING)
+                range(from, to)
+            }.decodeList()
+        }
+
     private suspend inline fun <reified T : Any> io.github.jan.supabase.postgrest.Postgrest.fetchInventoryRowsByIds(
         table: String,
-        remoteIds: Set<String>
+        remoteIds: Set<String>,
+        shopId: String? = null
     ): List<T> {
         if (remoteIds.isEmpty()) return emptyList()
         val rows = mutableListOf<T>()
@@ -188,6 +296,9 @@ class SupabaseCatalogRemoteDataSource(
             rows += this[table].select {
                 filter {
                     isIn("id", chunk)
+                    if (!shopId.isNullOrBlank()) {
+                        eq("shop_id", shopId)
+                    }
                 }
             }.decodeList<T>()
         }

@@ -40,6 +40,38 @@ interface ShopDeviceRegistrationRemote {
     suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult>
 
     suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot>
+
+    suspend fun registerShopDeviceForShop(
+        shopId: String,
+        reason: String
+    ): Result<ShopDeviceRegistrationResult> =
+        registerCurrentOwnerDevice(reason)
+
+    suspend fun shopDeviceStatusForShop(
+        shopId: String,
+        reason: String
+    ): Result<ShopDeviceAuthorizationSnapshot> =
+        currentOwnerDeviceStatus(reason)
+
+    suspend fun registerDevice(
+        reason: String,
+        shopId: String?
+    ): Result<ShopDeviceRegistrationResult> =
+        if (shopId.isNullOrBlank()) {
+            registerCurrentOwnerDevice(reason)
+        } else {
+            registerShopDeviceForShop(shopId, reason)
+        }
+
+    suspend fun deviceStatus(
+        reason: String,
+        shopId: String?
+    ): Result<ShopDeviceAuthorizationSnapshot> =
+        if (shopId.isNullOrBlank()) {
+            currentOwnerDeviceStatus(reason)
+        } else {
+            shopDeviceStatusForShop(shopId, reason)
+        }
 }
 
 class ShopDeviceRegistrationRemoteDataSource(
@@ -88,10 +120,71 @@ class ShopDeviceRegistrationRemoteDataSource(
                 "device status skipped reason=$reason errClass=${error::class.java.simpleName}"
             )
         }
+
+    override suspend fun registerShopDeviceForShop(
+        shopId: String,
+        reason: String
+    ): Result<ShopDeviceRegistrationResult> =
+        runCatching {
+            val resolvedClient = client ?: error("Supabase non configurato")
+            val installId = installIdProvider.getOrCreate()
+            val params = ShopDeviceScopedRegistrationRpcParams(
+                shopId = shopId,
+                appVersion = BuildConfig.VERSION_NAME,
+                deviceIdentifier = installId,
+                deviceType = "mobile",
+                displayName = androidDisplayName(),
+                metadata = redactedDeviceMetadata(reason)
+            )
+
+            resolvedClient
+                .postgrest
+                .rpc("shop_device_register_for_shop", params)
+                .decodeAs<ShopDeviceRegistrationResult>()
+        }.onFailure { error ->
+            Log.i(
+                TAG,
+                "device register skipped reason=$reason shopScoped=true errClass=${error::class.java.simpleName}"
+            )
+        }
+
+    override suspend fun shopDeviceStatusForShop(
+        shopId: String,
+        reason: String
+    ): Result<ShopDeviceAuthorizationSnapshot> =
+        runCatching {
+            val resolvedClient = client ?: error("Supabase non configurato")
+            val installId = installIdProvider.getOrCreate()
+            val params = ShopDeviceScopedStatusRpcParams(
+                shopId = shopId,
+                deviceIdentifier = installId
+            )
+
+            resolvedClient
+                .postgrest
+                .rpc("shop_device_status_for_shop", params)
+                .decodeAs<ShopDeviceStatusRpcResult>()
+                .toSnapshot()
+        }.onFailure { error ->
+            Log.i(
+                TAG,
+                "device status skipped reason=$reason shopScoped=true errClass=${error::class.java.simpleName}"
+            )
+        }
 }
 
 @Serializable
 data class ShopDeviceRegistrationRpcParams(
+    @SerialName("p_device_identifier") val deviceIdentifier: String,
+    @SerialName("p_device_type") val deviceType: String = "mobile",
+    @SerialName("p_display_name") val displayName: String,
+    @SerialName("p_app_version") val appVersion: String,
+    @SerialName("p_metadata") val metadata: JsonObject
+)
+
+@Serializable
+data class ShopDeviceScopedRegistrationRpcParams(
+    @SerialName("p_shop_id") val shopId: String,
     @SerialName("p_device_identifier") val deviceIdentifier: String,
     @SerialName("p_device_type") val deviceType: String = "mobile",
     @SerialName("p_display_name") val displayName: String,
@@ -109,6 +202,12 @@ data class ShopDeviceRegistrationResult(
 
 @Serializable
 data class ShopDeviceStatusRpcParams(
+    @SerialName("p_device_identifier") val deviceIdentifier: String
+)
+
+@Serializable
+data class ShopDeviceScopedStatusRpcParams(
+    @SerialName("p_shop_id") val shopId: String,
     @SerialName("p_device_identifier") val deviceIdentifier: String
 )
 
@@ -158,47 +257,56 @@ class ShopDeviceAuthorizationRepository(
     private val cacheTtlMs: Long = DEVICE_STATUS_CACHE_TTL_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() }
 ) {
-    @Volatile
-    private var lastSnapshot: ShopDeviceAuthorizationSnapshot? = null
+    private val snapshotCache = mutableMapOf<String?, ShopDeviceAuthorizationSnapshot>()
     private val statusCheckMutex = Mutex()
 
-    suspend fun registerHeartbeatAndCheck(reason: String): Result<ShopDeviceAuthorizationSnapshot> {
-        remote.registerCurrentOwnerDevice(reason)
-        return checkStatus(reason = reason, force = true)
+    suspend fun registerHeartbeatAndCheck(
+        reason: String,
+        shopId: String? = null
+    ): Result<ShopDeviceAuthorizationSnapshot> {
+        val normalizedShopId = normalizeShopId(shopId)
+        remote.registerDevice(reason, normalizedShopId)
+        return checkStatus(reason = reason, force = true, shopId = normalizedShopId)
     }
 
     suspend fun checkStatus(
         reason: String,
-        force: Boolean = false
+        force: Boolean = false,
+        shopId: String? = null
     ): Result<ShopDeviceAuthorizationSnapshot> {
+        val normalizedShopId = normalizeShopId(shopId)
         val now = clockMs()
-        val cached = lastSnapshot
+        val cached = cachedSnapshot(normalizedShopId)
         if (!force && cached != null && now - cached.checkedAtMs < cacheTtlMs) {
             return Result.success(cached)
         }
 
         return statusCheckMutex.withLock {
             val lockedNow = clockMs()
-            val lockedCached = lastSnapshot
+            val lockedCached = cachedSnapshot(normalizedShopId)
             if (!force && lockedCached != null && lockedNow - lockedCached.checkedAtMs < cacheTtlMs) {
                 return@withLock Result.success(lockedCached)
             }
 
-            remote.currentOwnerDeviceStatus(reason)
+            remote.deviceStatus(reason, normalizedShopId)
                 .onSuccess { snapshot ->
-                    lastSnapshot = snapshot.copy(checkedAtMs = lockedNow)
+                    cacheSnapshot(normalizedShopId, snapshot.copy(checkedAtMs = lockedNow))
                 }
                 .recoverCatching { error ->
-                    cachedActiveSnapshotForTransientCancellation(reason, error, lockedNow)
-                        ?: return@recoverCatching networkErrorSnapshot(error, lockedNow)
+                    cachedActiveSnapshotForTransientCancellation(reason, error, lockedNow, lockedCached)
+                        ?: return@recoverCatching networkErrorSnapshot(error, lockedNow, lockedCached)
                 }
         }
     }
 
-    suspend fun ensureActiveForCloudWrite(reason: String): Result<ShopDeviceAuthorizationSnapshot> {
-        val snapshot = checkStatus(reason = reason, force = true)
+    suspend fun ensureActiveForCloudWrite(
+        reason: String,
+        shopId: String? = null
+    ): Result<ShopDeviceAuthorizationSnapshot> {
+        val normalizedShopId = normalizeShopId(shopId)
+        val snapshot = checkStatus(reason = reason, force = true, shopId = normalizedShopId)
             .getOrElse { error ->
-                networkErrorSnapshot(error, clockMs())
+                networkErrorSnapshot(error, clockMs(), cachedSnapshot(normalizedShopId))
             }
 
         return if (snapshot.status == "active" && snapshot.canWrite) {
@@ -211,29 +319,46 @@ class ShopDeviceAuthorizationRepository(
     private fun cachedActiveSnapshotForTransientCancellation(
         reason: String,
         error: Throwable,
-        checkedAtMs: Long
+        checkedAtMs: Long,
+        cached: ShopDeviceAuthorizationSnapshot?
     ): ShopDeviceAuthorizationSnapshot? {
         if (error !is CancellationException) return null
         if (reason.startsWith("manual_", ignoreCase = true)) return null
 
-        val cached = lastSnapshot ?: return null
+        cached ?: return null
         if (checkedAtMs - cached.checkedAtMs >= cacheTtlMs) return null
         if (cached.status != "active" || !cached.canWrite) return null
 
         return cached.copy(checkedAtMs = checkedAtMs)
     }
 
-    private fun networkErrorSnapshot(error: Throwable, checkedAtMs: Long): ShopDeviceAuthorizationSnapshot =
+    private fun networkErrorSnapshot(
+        error: Throwable,
+        checkedAtMs: Long,
+        cached: ShopDeviceAuthorizationSnapshot?
+    ): ShopDeviceAuthorizationSnapshot =
         ShopDeviceAuthorizationSnapshot(
             status = "network_error",
             code = error::class.java.simpleName.ifBlank { "network_error" },
             canWrite = false,
             serverTime = null,
-            lastSeenAt = lastSnapshot?.lastSeenAt,
+            lastSeenAt = cached?.lastSeenAt,
             reasonCode = "network_error",
             recommendedAction = "retry_when_online",
             checkedAtMs = checkedAtMs
         )
+
+    private fun normalizeShopId(shopId: String?): String? =
+        shopId?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun cachedSnapshot(shopId: String?): ShopDeviceAuthorizationSnapshot? =
+        synchronized(snapshotCache) { snapshotCache[shopId] }
+
+    private fun cacheSnapshot(shopId: String?, snapshot: ShopDeviceAuthorizationSnapshot) {
+        synchronized(snapshotCache) {
+            snapshotCache[shopId] = snapshot
+        }
+    }
 }
 
 private fun androidDisplayName(): String =

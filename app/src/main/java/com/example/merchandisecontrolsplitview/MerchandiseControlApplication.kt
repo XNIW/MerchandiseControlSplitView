@@ -27,8 +27,11 @@ import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinator
 import com.example.merchandisecontrolsplitview.data.SessionCloudSessionFlightOwner
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SharedPreferencesSelectedShopStore
+import com.example.merchandisecontrolsplitview.data.ShopContextRepository
 import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
 import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseLinkedShopRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSyncEventRemoteDataSource
@@ -86,6 +89,8 @@ class MerchandiseControlApplication : Application() {
 
     companion object {
         private const val TAG = "MerchandiseApp"
+        private const val SHOP_DATA_SCOPE_PREFS = "mobile_shop_context_data_scope"
+        private const val KEY_LAST_BUSINESS_DATA_SCOPE = "last_business_data_scope"
     }
 
     /** Scope applicativo per osservatori lifecycle (auth → componenti remoti). */
@@ -93,9 +98,13 @@ class MerchandiseControlApplication : Application() {
     private val validatedNetworks = mutableSetOf<Network>()
     private val networkLock = Any()
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var lastShopDeviceRegistrationUserId: String? = null
+    private var lastShopDeviceRegistrationScope: String? = null
     private var lastShopDeviceRegistrationAtMs: Long = 0L
     private var shopDeviceStatusPollingJob: Job? = null
+
+    private val shopDataScopePreferences by lazy {
+        getSharedPreferences(SHOP_DATA_SCOPE_PREFS, Context.MODE_PRIVATE)
+    }
 
     private val processLifecycleObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
@@ -237,6 +246,15 @@ class MerchandiseControlApplication : Application() {
         ShopDeviceAuthorizationRepository(shopDeviceRegistrationRemoteDataSource)
     }
 
+    val shopContextRepository: ShopContextRepository by lazy {
+        ShopContextRepository(
+            remote = SupabaseLinkedShopRemoteDataSource(supabaseClient),
+            selectedShopStore = SharedPreferencesSelectedShopStore(
+                getSharedPreferences("mobile_shop_context", Context.MODE_PRIVATE)
+            )
+        )
+    }
+
     /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */
     private val rawSessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
         SupabaseSessionBackupRemoteDataSource(supabaseClient)
@@ -257,6 +275,7 @@ class MerchandiseControlApplication : Application() {
             syncEventOutboxDao = database.syncEventOutboxDao(),
             deviceAuthorization = shopDeviceAuthorizationRepository,
             authFlow = authManager.state,
+            selectedShopProvider = { shopContextRepository.state.value.selectedShop },
             flightOwner = sessionCloudSessionFlightOwner,
             logger = { message -> Log.i("HistorySessionSyncV2", message) }
         ).also { coordinator ->
@@ -275,6 +294,7 @@ class MerchandiseControlApplication : Application() {
             sessionRemote = sessionBackupRemoteDataSource,
             deviceAuthorization = shopDeviceAuthorizationRepository,
             authFlow = authManager.state,
+            selectedShopProvider = { shopContextRepository.state.value.selectedShop },
             syncStateTracker = catalogSyncStateTracker,
             logger = { message -> Log.i("CatalogCloudSync", message) }
         ).also { coordinator ->
@@ -300,6 +320,7 @@ class MerchandiseControlApplication : Application() {
         // Subscriber lifecycle gestito dall'auth observer (task 011 patch 5).
         // Punto unico architetturale per il wiring auth → componenti remoti.
         observeAuthForRemoteComponents()
+        observeShopContextForRemoteComponents()
     }
 
     override fun onTerminate() {
@@ -338,6 +359,16 @@ class MerchandiseControlApplication : Application() {
                     }
                     is AuthState.SignedIn -> {
                         Log.i(TAG, "Auth: sessione attiva")
+                        withContext(Dispatchers.IO) {
+                            shopContextRepository.refresh(state.userId)
+                        }
+                        if (!currentShopContextAllowsSync()) {
+                            Log.w(TAG, "Shop context: sync cloud sospesa per errore linked-shops")
+                            realtimeSessionSubscriber.stop()
+                            syncEventRealtimeSubscriber.stop()
+                            stopShopDeviceStatusPolling()
+                            return@collect
+                        }
                         registerShopDeviceBestEffort(state, "auth")
                         startShopDeviceStatusPolling()
                         realtimeSessionSubscriber.start()
@@ -345,7 +376,10 @@ class MerchandiseControlApplication : Application() {
                             .checkCapabilities(state.userId)
                             .getOrNull()
                         if (syncEventCapabilities?.realtimeSyncEventsAvailable == true) {
-                            syncEventRealtimeSubscriber.start(state.userId)
+                            syncEventRealtimeSubscriber.start(
+                                ownerUserId = state.userId,
+                                shopId = shopContextRepository.state.value.activeShopId
+                            )
                         } else {
                             Log.i(TAG, "sync_events realtime non disponibile: fallback catch-up watermark")
                             syncEventRealtimeSubscriber.stop()
@@ -355,18 +389,79 @@ class MerchandiseControlApplication : Application() {
                         Log.i(TAG, "Auth: nessuna sessione, fermo realtime")
                         realtimeSessionSubscriber.stop()
                         syncEventRealtimeSubscriber.stop()
+                        shopContextRepository.clear()
                         stopShopDeviceStatusPolling()
                     }
                     is AuthState.ErrorRecoverable -> {
                         Log.w(TAG, "Auth: errore recuperabile, fermo realtime prudenzialmente")
                         realtimeSessionSubscriber.stop()
                         syncEventRealtimeSubscriber.stop()
+                        shopContextRepository.clear()
                         stopShopDeviceStatusPolling()
                     }
                 }
             }
         }
     }
+
+    private fun observeShopContextForRemoteComponents() {
+        appScope.launch {
+            shopContextRepository.state.collect { context ->
+                val signedIn = authManager.state.value as? AuthState.SignedIn ?: return@collect
+                if (context.isLoading || !context.syncAllowed) {
+                    Log.w(TAG, "Shop context: sync cloud sospesa finche il contesto non torna valido")
+                    realtimeSessionSubscriber.stop()
+                    syncEventRealtimeSubscriber.stop()
+                    stopShopDeviceStatusPolling()
+                    return@collect
+                }
+                if (!alignBusinessDataScope(signedIn.userId, context.activeShopId)) {
+                    return@collect
+                }
+                val capabilities = syncEventRemoteDataSource.checkCapabilities(signedIn.userId).getOrNull()
+                if (capabilities?.realtimeSyncEventsAvailable == true) {
+                    syncEventRealtimeSubscriber.start(
+                        ownerUserId = signedIn.userId,
+                        shopId = context.activeShopId
+                    )
+                }
+                registerShopDeviceBestEffort(signedIn, "shop_context")
+                catalogAutoSyncCoordinator.onShopContextChanged()
+                historySessionPushCoordinator.onShopContextChanged()
+            }
+        }
+    }
+
+    private suspend fun alignBusinessDataScope(ownerUserId: String, activeShopId: String?): Boolean {
+        val nextScope = businessDataScope(ownerUserId, activeShopId)
+        val previousScope = shopDataScopePreferences.getString(KEY_LAST_BUSINESS_DATA_SCOPE, null)
+        val shouldReset =
+            previousScope != null && previousScope != nextScope ||
+                previousScope == null && activeShopId != null
+        if (shouldReset) {
+            val error = runCatching {
+                repository.resetBusinessDataForShopContextChange()
+            }.exceptionOrNull()
+            if (error != null) {
+                Log.w(
+                    TAG,
+                    "Shop context: reset cache business fallito previous=$previousScope next=$nextScope",
+                    error
+                )
+                return false
+            }
+            Log.i(TAG, "Shop context: cache business riallineata previous=$previousScope next=$nextScope")
+        }
+        if (previousScope != nextScope) {
+            shopDataScopePreferences.edit()
+                .putString(KEY_LAST_BUSINESS_DATA_SCOPE, nextScope)
+                .apply()
+        }
+        return true
+    }
+
+    private fun businessDataScope(ownerUserId: String, activeShopId: String?): String =
+        "${ownerUserId.trim()}:${activeShopId?.lowercase() ?: "legacy"}"
 
     private fun registerNetworkAutoSyncTrigger() {
         val connectivityManager =
@@ -390,6 +485,7 @@ class MerchandiseControlApplication : Application() {
                 }
                 if (becameOnline) {
                     Log.i(TAG, "Network: internet validato disponibile, pianifico sync cloud pending")
+                    if (!currentShopContextAllowsSync()) return
                     registerShopDeviceBestEffort(authManager.state.value, "network")
                     catalogAutoSyncCoordinator.onNetworkAvailable()
                     historySessionPushCoordinator.onNetworkAvailable()
@@ -434,19 +530,22 @@ class MerchandiseControlApplication : Application() {
     private fun registerShopDeviceBestEffort(state: AuthState, reason: String) {
         val signedIn = state as? AuthState.SignedIn ?: return
         if (!shopDeviceRegistrationRemoteDataSource.isConfigured) return
+        if (!currentShopContextAllowsSync()) return
 
         val now = System.currentTimeMillis()
+        val shopId = shopContextRepository.state.value.activeShopId
+        val registrationScope = "${signedIn.userId}:${shopId ?: "legacy"}"
         val sameRecentUser =
-            lastShopDeviceRegistrationUserId == signedIn.userId &&
+            lastShopDeviceRegistrationScope == registrationScope &&
                 now - lastShopDeviceRegistrationAtMs < 60_000L
         if (sameRecentUser) return
 
-        lastShopDeviceRegistrationUserId = signedIn.userId
+        lastShopDeviceRegistrationScope = registrationScope
         lastShopDeviceRegistrationAtMs = now
 
         appScope.launch {
             val result = withContext(Dispatchers.IO) {
-                shopDeviceAuthorizationRepository.registerHeartbeatAndCheck(reason)
+                shopDeviceAuthorizationRepository.registerHeartbeatAndCheck(reason, shopId)
             }
             result.getOrNull()?.let { response ->
                 Log.i(
@@ -467,11 +566,17 @@ class MerchandiseControlApplication : Application() {
         shopDeviceStatusPollingJob = appScope.launch {
             while (true) {
                 val signedIn = authManager.state.value as? AuthState.SignedIn
-                if (signedIn != null && shopDeviceRegistrationRemoteDataSource.isConfigured) {
+                if (
+                    signedIn != null &&
+                    shopDeviceRegistrationRemoteDataSource.isConfigured &&
+                    currentShopContextAllowsSync()
+                ) {
+                    val shopId = shopContextRepository.state.value.activeShopId
                     val result = withContext(Dispatchers.IO) {
                         shopDeviceAuthorizationRepository.checkStatus(
                             reason = "foreground_poll",
-                            force = false
+                            force = false,
+                            shopId = shopId
                         )
                     }
                     result.getOrNull()?.let { snapshot ->
@@ -492,6 +597,11 @@ class MerchandiseControlApplication : Application() {
             }
         }
     }
+
+    private fun currentShopContextAllowsSync(): Boolean =
+        shopContextRepository.state.value.let { context ->
+            !context.isLoading && context.syncAllowed
+        }
 
     private fun stopShopDeviceStatusPolling() {
         shopDeviceStatusPollingJob?.cancel()
