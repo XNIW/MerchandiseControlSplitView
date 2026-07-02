@@ -22,6 +22,7 @@ object ImportAnalyzer {
         "secondProductName",
         "supplier",
         "category",
+        "rowNumber",
         "quantity",
         "realQuantity",
         "purchasePrice",
@@ -29,9 +30,7 @@ object ImportAnalyzer {
         "discount",
         "discountedPrice",
         "oldPurchasePrice",
-        "oldRetailPrice",
-        "prevPurchase",
-        "prevRetail"
+        "oldRetailPrice"
     )
 
     data class DeferredRelationImportAnalysis(
@@ -74,12 +73,12 @@ object ImportAnalyzer {
 
     private fun validateRow(
         rowIndex: Int, row: Map<String, String>, barcode: String,
-        productName: String?, secondProductName: String?,
+        itemNumber: String?, productName: String?, secondProductName: String?,
         purchasePrice: Double?
     ): RowImportError? {
         return when {
             barcode.isBlank() -> RowImportError(rowIndex + 1, row, R.string.error_barcode_required)
-            productName.isNullOrBlank() && secondProductName.isNullOrBlank() -> RowImportError(rowIndex + 1, row, R.string.error_productname_required_at_least_one)
+            itemNumber.isNullOrBlank() && productName.isNullOrBlank() && secondProductName.isNullOrBlank() -> RowImportError(rowIndex + 1, row, R.string.error_productname_required_at_least_one)
             purchasePrice != null && purchasePrice < 0 -> RowImportError(rowIndex + 1, row, R.string.error_negative_prices)
             else -> null
         }
@@ -189,8 +188,7 @@ object ImportAnalyzer {
             val lastRow: MutableMap<String, String>,
             val sampledRowNumbers: MutableList<Int>,
             var totalOccurrences: Int,
-            var lastRowNumber: Int,
-            var qtySum: Double
+            var lastRowNumber: Int
         )
 
         fun appendSampleRowNumber(sampledRowNumbers: MutableList<Int>, rowNumber: Int) {
@@ -207,38 +205,32 @@ object ImportAnalyzer {
 
         rowProducer { row ->
             rowIndex++
+            val sourceRowNumber = parseDouble(row["rowNumber"])?.toInt() ?: rowIndex
             val barcode = row["barcode"]?.trim().orEmpty()
             if (barcode.isBlank()) {
-                errors += RowImportError(rowIndex, row, R.string.error_barcode_required)
+                errors += RowImportError(sourceRowNumber, row, R.string.error_barcode_required)
                 return@rowProducer
             }
-
-            val supplierQty = parseDouble(row["quantity"]) ?: 0.0
-            val realQty = parseDouble(row["realQuantity"]) ?: 0.0
-            val qtyForRow = if (realQty > 0) realQty else supplierQty
 
             val pending = pendingByBarcode[barcode]
             if (pending == null) {
                 pendingByBarcode[barcode] = Pending(
                     lastRow = compactDeferredRelationRow(row, barcode),
-                    sampledRowNumbers = mutableListOf(rowIndex),
+                    sampledRowNumbers = mutableListOf(sourceRowNumber),
                     totalOccurrences = 1,
-                    lastRowNumber = rowIndex,
-                    qtySum = qtyForRow
+                    lastRowNumber = sourceRowNumber
                 )
             } else {
                 pending.lastRow.clear()
                 pending.lastRow.putAll(compactDeferredRelationRow(row, barcode))
                 pending.totalOccurrences += 1
-                pending.lastRowNumber = rowIndex
-                appendSampleRowNumber(pending.sampledRowNumbers, rowIndex)
-                pending.qtySum += qtyForRow
+                pending.lastRowNumber = sourceRowNumber
+                appendSampleRowNumber(pending.sampledRowNumbers, sourceRowNumber)
             }
         }
 
         for ((barcode, pending) in pendingByBarcode) {
             val finalRow = pending.lastRow
-            finalRow["quantity"] = pending.qtySum.toString()
             if (pending.totalOccurrences > 1) {
                 warnings += DuplicateWarning(
                     barcode = barcode,
@@ -254,7 +246,7 @@ object ImportAnalyzer {
                 val supplierName = finalRow["supplier"]?.trim()?.takeIf { it.isNotBlank() }
                 val categoryName = finalRow["category"]?.trim()?.takeIf { it.isNotBlank() }
 
-                val quantityToUse = parseDouble(finalRow["quantity"])
+                val quantityToUse = parseDouble(finalRow["realQuantity"]) ?: parseDouble(finalRow["quantity"])
                 val purchasePriceFromFile = parseDouble(finalRow["purchasePrice"])
                 val retailPriceFromFile = round3(parseDouble(finalRow["retailPrice"]))
                 val discountFromFile = parseDouble(finalRow["discount"])
@@ -274,13 +266,14 @@ object ImportAnalyzer {
                     }
                 )
 
-                val prevPurchaseFromFile = round3(parseDouble(finalRow["oldPurchasePrice"] ?: finalRow["prevPurchase"]))
-                val prevRetailFromFile = round3(parseDouble(finalRow["oldRetailPrice"] ?: finalRow["prevRetail"]))
+                val prevPurchaseFromFile = round3(parseDouble(finalRow["oldPurchasePrice"]))
+                val prevRetailFromFile = round3(parseDouble(finalRow["oldRetailPrice"]))
 
                 val validationError = validateRow(
                     pending.lastRowNumber - 1,
                     finalRow,
                     barcode,
+                    itemNumber,
                     productName,
                     secondProductName,
                     finalPurchasePrice
@@ -310,7 +303,7 @@ object ImportAnalyzer {
                     newProducts += Product(
                         barcode = barcode,
                         itemNumber = itemNumber,
-                        productName = productName ?: secondProductName!!,
+                        productName = productName ?: secondProductName ?: itemNumber.orEmpty(),
                         secondProductName = secondProductName,
                         purchasePrice = finalPurchasePrice,
                         retailPrice = retailPriceFromFile,

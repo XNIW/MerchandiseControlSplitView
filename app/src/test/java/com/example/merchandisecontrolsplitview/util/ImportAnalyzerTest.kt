@@ -22,9 +22,12 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONArray
+import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.io.File
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -279,7 +282,7 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyze merges duplicate rows with last row wins and aggregated quantity`() = runTest {
+    fun `analyze merges duplicate rows with last row wins without summing quantity`() = runTest {
         val analysis = analyze(
             importedRows = listOf(
                 importedRow(barcode = "11111111", productName = "Other", itemNumber = "O-1"),
@@ -297,7 +300,7 @@ class ImportAnalyzerTest {
         assertEquals("A-2", merged.itemNumber)
         assertEquals(5.0, merged.purchasePrice!!, 0.0001)
         assertEquals(7.0, merged.retailPrice!!, 0.0001)
-        assertEquals(12.0, merged.stockQuantity!!, 0.0001)
+        assertEquals(10.0, merged.stockQuantity!!, 0.0001)
         assertEquals(listOf(2, 5), warning.rowNumbers)
     }
 
@@ -335,12 +338,12 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyze maps prev purchase and retail aliases into old prices`() = runTest {
+    fun `analyze maps old purchase and retail canonical keys into old prices`() = runTest {
         val analysis = analyze(
             importedRows = listOf(
                 importedRow(
-                    prevPurchase = "2",
-                    prevRetail = "5"
+                    oldPurchasePrice = "2",
+                    oldRetailPrice = "5"
                 )
             )
         )
@@ -410,7 +413,7 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyzeStreaming merges cross chunk duplicates with last row wins and aggregated quantity`() = runTest {
+    fun `analyzeStreaming merges cross chunk duplicates with last row wins without summing quantity`() = runTest {
         val analysis = analyzeStreaming(
             chunks = sequenceOf(
                 listOf(
@@ -429,7 +432,7 @@ class ImportAnalyzerTest {
 
         assertEquals("Last", merged.productName)
         assertEquals("A-2", merged.itemNumber)
-        assertEquals(9.0, merged.stockQuantity!!, 0.0001)
+        assertEquals(7.0, merged.stockQuantity!!, 0.0001)
         assertEquals(5.0, merged.purchasePrice!!, 0.0001)
         assertEquals(listOf(2, 4), warning.rowNumbers)
     }
@@ -478,7 +481,137 @@ class ImportAnalyzerTest {
         assertEquals(52, warning.rowNumbers.last())
         assertEquals("ITEM-52", merged.itemNumber)
         assertEquals("Product 52", merged.productName)
-        assertEquals(52.0, merged.stockQuantity!!, 0.0001)
+        assertEquals(1.0, merged.stockQuantity!!, 0.0001)
+    }
+
+    @Test
+    fun `golden supplier import fixture matches Android analyzer contract`() = runTest {
+        val fixture = JSONObject(
+            supplierImportFixtureFile().readText()
+        )
+        val rows = fixture.getJSONArray("sampleRows").toStringRows()
+        val result = analyzeRowsDetailed(context, rows)
+
+        assertEquals(fixture.getJSONArray("normalizedHeader").toStringList(), result.header)
+        assertEquals(fixture.getInt("dataRowsCount"), result.dataRows.size)
+
+        val sheetRows = fixture.getJSONArray("sheetRows").toStringRows()
+        val sheetResult = analyzeRowsDetailed(context, sheetRows)
+        assertEquals(fixture.getJSONArray("normalizedHeader").toStringList(), sheetResult.header)
+        assertEquals(fixture.getInt("dataRowsCount"), sheetResult.dataRows.size)
+        assertTrue(fixture.getJSONArray("metadataRowsBeforeHeader").length() > 0)
+
+        val aliasSamples = fixture.getJSONObject("aliasSamples")
+        val aliasSampleKeys = aliasSamples.keys()
+        while (aliasSampleKeys.hasNext()) {
+            val aliasRows = aliasSamples.getJSONArray(aliasSampleKeys.next()).toStringRows()
+            val aliasResult = analyzeRowsDetailed(context, aliasRows)
+            assertEquals(fixture.getJSONArray("normalizedHeader").toStringList(), aliasResult.header)
+        }
+
+        val headerlessSample = fixture.getJSONObject("headerlessSample")
+        val headerlessResult = analyzeRowsDetailed(context, headerlessSample.getJSONArray("rows").toStringRows())
+        assertEquals(headerlessSample.getJSONArray("normalizedHeader").toStringList(), headerlessResult.header)
+        assertEquals(headerlessSample.getJSONArray("headerSource").toStringList(), headerlessResult.headerSource)
+
+        val headerSource = fixture.getJSONObject("headerSource")
+        assertEquals(
+            result.header.map { headerSource.getString(it) },
+            result.headerSource
+        )
+        assertEquals(
+            listOf(
+                "barcode",
+                "productName",
+                "itemNumber",
+                "purchasePrice",
+                "retailPrice",
+                "quantity",
+                "supplier",
+                "category",
+                "secondProductName",
+                "totalPrice",
+                "rowNumber",
+                "discount",
+                "discountedPrice",
+                "oldPurchasePrice",
+                "oldRetailPrice",
+                "realQuantity",
+                "complete"
+            ),
+            fixture.getJSONObject("publicKeysAudit").getJSONArray("allowed").toStringList()
+        )
+
+        val parseNumberCases = fixture.getJSONObject("parseNumberResults")
+        parseNumberCases.keys().forEach { raw ->
+            assertEquals(parseNumberCases.getDouble(raw), parseNumber(raw)!!, 0.0001)
+        }
+
+        val importedRows = result.dataRows.mapIndexed { index, row ->
+            result.header.mapIndexed { columnIndex, key ->
+                key to row.getOrElse(columnIndex) { "" }
+            }.toMap().toMutableMap().apply {
+                put("rowNumber", (index + 2).toString())
+            }
+        }
+
+        val analysis = analyze(
+            importedRows = importedRows,
+            currentDbProducts = listOf(
+                existingProduct(
+                    barcode = "9999999900001",
+                    itemNumber = "EX-001",
+                    productName = "Existing old",
+                    purchasePrice = 90.0,
+                    retailPrice = 140.0,
+                    stockQuantity = null
+                )
+            )
+        )
+
+        assertEquals(fixture.getInt("newProducts"), analysis.newProducts.size)
+        assertEquals(fixture.getInt("updatedProducts"), analysis.updatedProducts.size)
+        assertEquals(fixture.getJSONArray("errors").length(), analysis.errors.size)
+        assertEquals(fixture.getBoolean("canApply"), analysis.errors.isEmpty())
+        assertTrue(
+            analysis.newProducts.any {
+                it.barcode == fixture.getString("itemNumberOnlyAcceptedBarcode")
+            }
+        )
+
+        val duplicateWarning = fixture.getJSONObject("duplicateWarning")
+        val warning = duplicateWarningFor(analysis, duplicateWarning.getString("barcode"))
+        assertEquals(duplicateWarning.getJSONArray("rows").toIntList(), warning.rowNumbers)
+
+        val missingRetail = fixture.getJSONObject("newProductMissingRetail")
+        val blockedAnalysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    barcode = missingRetail.getString("barcode"),
+                    itemNumber = missingRetail.getString("itemNumber"),
+                    productName = "",
+                    purchasePrice = missingRetail.getDouble("purchasePrice").toString(),
+                    quantity = missingRetail.getDouble("quantity").toString(),
+                    retailPrice = null
+                )
+            ),
+            currentDbProducts = emptyList()
+        )
+        assertTrue(blockedAnalysis.errors.isNotEmpty())
+
+        val forbiddenKeys = fixture.getJSONArray("forbiddenPublicKeys").toStringList()
+        forbiddenKeys.forEach { key ->
+            assertFalse(result.header.contains(key))
+            importedRows.forEach { row -> assertFalse(row.containsKey(key)) }
+        }
+        val auditForbiddenKeys = fixture.getJSONObject("publicKeysAudit").getJSONArray("forbidden").toStringList()
+        fixture.getJSONArray("previewRows").let { previewRows ->
+            auditForbiddenKeys.forEach { key ->
+                for (index in 0 until previewRows.length()) {
+                    assertFalse(previewRows.getJSONObject(index).has(key))
+                }
+            }
+        }
     }
 
     @Test
@@ -576,8 +709,8 @@ class ImportAnalyzerTest {
         retailPrice: String? = "6",
         discount: String? = null,
         discountedPrice: String? = null,
-        prevPurchase: String? = null,
-        prevRetail: String? = null
+        oldPurchasePrice: String? = null,
+        oldRetailPrice: String? = null
     ): Map<String, String> = linkedMapOf<String, String>().apply {
         put("barcode", barcode)
         itemNumber?.let { put("itemNumber", it) }
@@ -591,8 +724,8 @@ class ImportAnalyzerTest {
         retailPrice?.let { put("retailPrice", it) }
         discount?.let { put("discount", it) }
         discountedPrice?.let { put("discountedPrice", it) }
-        prevPurchase?.let { put("prevPurchase", it) }
-        prevRetail?.let { put("prevRetail", it) }
+        oldPurchasePrice?.let { put("oldPurchasePrice", it) }
+        oldRetailPrice?.let { put("oldRetailPrice", it) }
     }
 
     private fun duplicateWarningFor(analysis: ImportAnalysis, barcode: String): DuplicateWarning =
@@ -600,4 +733,21 @@ class ImportAnalyzerTest {
 
     private fun rowErrorFor(analysis: ImportAnalysis, errorReasonResId: Int): RowImportError =
         analysis.errors.single { it.errorReasonResId == errorReasonResId }
+
+    private fun JSONArray.toStringList(): List<String> =
+        (0 until length()).map { getString(it) }
+
+    private fun JSONArray.toIntList(): List<Int> =
+        (0 until length()).map { getInt(it) }
+
+    private fun JSONArray.toStringRows(): List<List<String>> =
+        (0 until length()).map { rowIndex ->
+            getJSONArray(rowIndex).toStringList()
+        }
+
+    private fun supplierImportFixtureFile(): File =
+        listOf(
+            File("tests/fixtures/supplier-import/android-canonical-sample.json"),
+            File("../tests/fixtures/supplier-import/android-canonical-sample.json")
+        ).first { it.isFile }
 }
