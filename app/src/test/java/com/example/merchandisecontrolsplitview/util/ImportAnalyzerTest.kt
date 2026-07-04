@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.util
 
 import android.content.Context
+import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.DuplicateWarning
@@ -24,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.json.JSONArray
 import org.json.JSONObject
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
@@ -108,6 +110,41 @@ class ImportAnalyzerTest {
 
         assertTrue(analysis.updatedProducts.isEmpty())
         assertTrue(analysis.errors.isEmpty())
+    }
+
+    @Test
+    fun `xlsx numeric barcode display format preserves leading zeroes`() {
+        val temp = File.createTempFile("task090-leading-zero", ".xlsx")
+        try {
+            XSSFWorkbook().use { workbook ->
+                val sheet = workbook.createSheet("Products")
+                val header = sheet.createRow(0)
+                header.createCell(0).setCellValue("barcode")
+                header.createCell(1).setCellValue("productName")
+                header.createCell(2).setCellValue("retailPrice")
+                val barcodeStyle = workbook.createCellStyle()
+                barcodeStyle.dataFormat = workbook.creationHelper
+                    .createDataFormat()
+                    .getFormat("0000000000000")
+                val row = sheet.createRow(1)
+                row.createCell(0).apply {
+                    setCellValue(123456789.0)
+                    cellStyle = barcodeStyle
+                }
+                row.createCell(1).setCellValue("Leading Zero Product")
+                row.createCell(2).setCellValue(10.0)
+
+                temp.outputStream().use { output -> workbook.write(output) }
+            }
+
+            val result = readAndAnalyzeExcelDetailed(context, Uri.fromFile(temp))
+            val parsedValues = result.dataRows.flatten()
+
+            assertTrue(parsedValues.contains("0000123456789"))
+            assertFalse(parsedValues.contains("123456789"))
+        } finally {
+            temp.delete()
+        }
     }
 
     @Test

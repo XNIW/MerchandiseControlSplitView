@@ -413,6 +413,7 @@ private fun normalizeTabularRows(rows: List<List<String>>): List<List<String>> {
 
 private fun readPoiRows(sheet: Sheet): List<List<String>> {
     val rows = mutableListOf<List<String>>()
+    val formatter = DataFormatter()
     sheet.forEach { row ->
         val temp = mutableListOf<String>()
         val last = row.lastCellNum.toInt().coerceAtLeast(0)
@@ -427,6 +428,8 @@ private fun readPoiRows(sheet: Sheet): List<List<String>> {
                         cleanedValue.toDoubleOrNull()?.roundToLong()?.toString() ?: rawValue
                     } else rawValue
                 }
+                cell.cellType == CellType.NUMERIC && isZeroPaddingFormat(cell.cellStyle.dataFormatString) ->
+                    formatter.formatCellValue(cell)
                 cell.cellType == CellType.NUMERIC -> {
                     val n = cell.numericCellValue
                     if (n == n.toLong().toDouble()) n.toLong().toString() else n.toString()
@@ -438,6 +441,11 @@ private fun readPoiRows(sheet: Sheet): List<List<String>> {
         rows.add(temp)
     }
     return normalizeTabularRows(rows)
+}
+
+private fun isZeroPaddingFormat(format: String?): Boolean {
+    val clean = format?.trim()?.substringBefore(";").orEmpty()
+    return clean.isNotEmpty() && clean.all { it == '0' }
 }
 
 private fun pruneTotallyEmptyColumns(
