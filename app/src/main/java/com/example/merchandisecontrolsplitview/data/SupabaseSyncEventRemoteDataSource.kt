@@ -87,13 +87,14 @@ class SupabaseSyncEventRemoteDataSource(
             require(limit in 1L..500L) { "sync event fetch limit out of range" }
             requireClient().postgrest[SYNC_EVENTS_TABLE].select {
                 filter {
-                    eq("owner_user_id", ownerUserId)
                     gt("id", afterId)
                     if (!shopId.isNullOrBlank()) {
                         eq("shop_id", shopId)
                     } else if (storeId == null) {
+                        eq("owner_user_id", ownerUserId)
                         filter("store_id", FilterOperator.IS, "null")
                     } else {
+                        eq("owner_user_id", ownerUserId)
                         eq("store_id", storeId)
                     }
                 }

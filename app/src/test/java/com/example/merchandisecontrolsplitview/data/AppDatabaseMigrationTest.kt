@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("18", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1682,6 +1682,26 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 18 to 19 adds sync event apply status table`() = runTest {
+        val dbName = "task114-migration-18-19-sync-event-apply-status.db"
+        createLegacyDatabase(dbName, version = 18) { }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 19) { database, oldVersion, newVersion ->
+            assertEquals(18, oldVersion)
+            assertEquals(19, newVersion)
+            AppDatabase.MIGRATION_18_19.migrate(database)
+        }
+
+        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "sync_event_apply_status"))
+        assertTrue(indexExists(migrated, "index_sync_event_apply_status_owner_user_id_store_scope_status"))
+        assertTrue(indexExists(migrated, "index_sync_event_apply_status_owner_user_id_store_scope_next_retry_at_ms"))
+        assertTrue(columnExists(migrated, "sync_event_apply_status", "attempt_count"))
+        assertTrue(columnExists(migrated, "sync_event_apply_status", "next_retry_at_ms"))
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1701,7 +1721,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_14_15,
                 AppDatabase.MIGRATION_15_16,
                 AppDatabase.MIGRATION_16_17,
-                AppDatabase.MIGRATION_17_18
+                AppDatabase.MIGRATION_17_18,
+                AppDatabase.MIGRATION_18_19
             )
         }
 

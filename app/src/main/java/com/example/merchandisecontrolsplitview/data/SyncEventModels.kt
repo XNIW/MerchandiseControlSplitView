@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.Insert
@@ -27,6 +28,24 @@ object SyncEventTypes {
     const val PRICES_TOMBSTONE = "prices_tombstone"
     const val HISTORY_CHANGED = "history_changed"
     const val HISTORY_TOMBSTONE = "history_tombstone"
+}
+
+object SyncEventApplyStatusValues {
+    const val APPLIED = "applied"
+    const val BLOCKED = "blocked"
+    const val SKIPPED = "skipped"
+    const val RETRYING = "retrying"
+}
+
+object SyncEventApplyStatusReasons {
+    const val APPLIED = "applied"
+    const val SELF_ORIGIN = "self_origin"
+    const val PROTECTED_LOCAL_COMMIT = "protected_local_commit"
+    const val DIRTY_LOCAL = "dirty_local"
+    const val MISSING_ENTITY_IDS = "missing_entity_ids"
+    const val ENTITY_IDS_TOO_LARGE = "entity_ids_too_large"
+    const val MISSING_REMOTE = "missing_remote"
+    const val UNSUPPORTED_DOMAIN = "unsupported_domain"
 }
 
 @Serializable
@@ -299,4 +318,72 @@ interface SyncEventOutboxDao {
 
     @Query("DELETE FROM sync_event_outbox WHERE id = :id")
     suspend fun deleteById(id: Long)
+}
+
+@Entity(
+    tableName = "sync_event_apply_status",
+    primaryKeys = ["owner_user_id", "store_scope", "event_id"],
+    indices = [
+        Index(value = ["owner_user_id", "store_scope", "status"]),
+        Index(value = ["owner_user_id", "store_scope", "next_retry_at_ms"])
+    ]
+)
+data class SyncEventApplyStatus(
+    @ColumnInfo(name = "owner_user_id") val ownerUserId: String,
+    @ColumnInfo(name = "store_scope") val storeScope: String,
+    @ColumnInfo(name = "event_id") val eventId: Long,
+    @ColumnInfo(name = "shop_id") val shopId: String?,
+    @ColumnInfo(name = "domain") val domain: String,
+    @ColumnInfo(name = "entity_type") val entityType: String?,
+    @ColumnInfo(name = "entity_ids_json") val entityIdsJson: String,
+    @ColumnInfo(name = "status") val status: String,
+    @ColumnInfo(name = "reason") val reason: String?,
+    @ColumnInfo(name = "attempt_count") val attemptCount: Int,
+    @ColumnInfo(name = "last_attempt_at_ms") val lastAttemptAtMs: Long,
+    @ColumnInfo(name = "next_retry_at_ms") val nextRetryAtMs: Long?,
+    @ColumnInfo(name = "correlation_id") val correlationId: String?,
+    @ColumnInfo(name = "client_event_id") val clientEventId: String?,
+    @ColumnInfo(name = "remote_created_at") val remoteCreatedAt: String?
+)
+
+@Dao
+interface SyncEventApplyStatusDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(row: SyncEventApplyStatus)
+
+    @Query(
+        """
+        SELECT * FROM sync_event_apply_status
+        WHERE owner_user_id = :ownerUserId
+          AND store_scope = :storeScope
+          AND event_id = :eventId
+        LIMIT 1
+        """
+    )
+    suspend fun get(ownerUserId: String, storeScope: String, eventId: Long): SyncEventApplyStatus?
+
+    @Query(
+        """
+        SELECT * FROM sync_event_apply_status
+        WHERE owner_user_id = :ownerUserId
+          AND store_scope = :storeScope
+          AND status = :status
+        ORDER BY event_id ASC
+        """
+    )
+    suspend fun listByStatus(
+        ownerUserId: String,
+        storeScope: String,
+        status: String
+    ): List<SyncEventApplyStatus>
+
+    @Query(
+        """
+        SELECT COUNT(*) FROM sync_event_apply_status
+        WHERE owner_user_id = :ownerUserId
+          AND store_scope = :storeScope
+          AND status = :status
+        """
+    )
+    suspend fun countByStatus(ownerUserId: String, storeScope: String, status: String): Int
 }

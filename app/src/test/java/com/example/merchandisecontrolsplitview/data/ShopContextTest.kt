@@ -40,6 +40,14 @@ class ShopContextTest {
     }
 
     @Test
+    fun shopScopedStoreScopeKeepsLocalPrefixButRemoteStoreIdUsesShopId() {
+        assertEquals("shop-a", remoteStoreIdFromStoreScope("shop:shop-a"))
+        assertEquals("legacy-store", remoteStoreIdFromStoreScope("legacy-store"))
+        assertNull(remoteStoreIdFromStoreScope(""))
+        assertNull(remoteStoreIdFromStoreScope(null))
+    }
+
+    @Test
     fun multipleShopsRestoreValidSelectionAndShowSelector() {
         val resolution = ShopContextResolver.resolve(
             ownerUserId = OWNER_A,

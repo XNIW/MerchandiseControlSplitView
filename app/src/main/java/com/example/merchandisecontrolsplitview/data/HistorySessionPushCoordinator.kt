@@ -329,7 +329,7 @@ class HistorySessionPushCoordinator(
         } catch (t: Throwable) {
             val classification = SyncErrorClassifier.classify(t)
             if (
-                isLocalMutationPushReason(reason) &&
+                (isLocalMutationPushReason(reason) || pendingLocalHistoryPushSignal) &&
                 classification.category == SyncErrorCategory.NetworkOfflineOrTimeout
             ) {
                 synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
@@ -356,12 +356,13 @@ class HistorySessionPushCoordinator(
             .sorted()
         if (remoteIds.isEmpty() || !syncEventRemote.isConfigured) return
         val batchId = java.util.UUID.randomUUID().toString()
+        val storeScope = shopScopedStoreScope(selectedShop)
         val params = SyncEventRecordRpcParams(
             domain = SyncEventDomains.HISTORY,
             eventType = SyncEventTypes.HISTORY_CHANGED,
             changedCount = remoteIds.size,
             entityIds = SyncEventEntityIds(sessionIds = remoteIds),
-            storeId = shopScopedStoreScope(selectedShop).ifBlank { null },
+            storeId = remoteStoreIdFromStoreScope(storeScope),
             source = "android_history_session_push",
             sourceDeviceId = null,
             batchId = batchId,
@@ -384,7 +385,7 @@ class HistorySessionPushCoordinator(
             val outboxInserted = if (recordedResult?.isSuccess == true) {
                 0
             } else {
-                enqueueHistorySyncEvent(ownerUserId, params, recordedResult?.exceptionOrNull())
+                enqueueHistorySyncEvent(ownerUserId, storeScope, params, recordedResult?.exceptionOrNull())
             }
             val outcome = when {
                 recordedResult?.isSuccess == true -> "ok"
@@ -400,6 +401,7 @@ class HistorySessionPushCoordinator(
 
     private suspend fun enqueueHistorySyncEvent(
         ownerUserId: String,
+        storeScope: String,
         params: SyncEventRecordRpcParams,
         error: Throwable?
     ): Int {
@@ -410,7 +412,7 @@ class HistorySessionPushCoordinator(
         val inserted = outboxDao.insert(
             SyncEventOutboxEntry(
                 ownerUserId = ownerUserId,
-                storeScope = params.storeId.orEmpty(),
+                storeScope = storeScope,
                 domain = params.domain,
                 eventType = params.eventType,
                 source = params.source,
@@ -446,7 +448,7 @@ class HistorySessionPushCoordinator(
                 "status=${snapshot?.status ?: "unknown"} code=${snapshot?.code ?: "unknown"} " +
                 "recommendedAction=${snapshot?.recommendedAction ?: "contact_shop_admin"}"
         )
-        if (isLocalMutationPushReason(reason) && snapshot.isRetryableDeviceStatus()) {
+        if ((isLocalMutationPushReason(reason) || pendingLocalHistoryPushSignal) && snapshot.isRetryableDeviceStatus()) {
             pendingLocalHistoryPushSignal = true
             schedulePushAfterRetryableDeviceStatus(reason)
         }

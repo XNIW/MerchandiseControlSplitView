@@ -222,6 +222,7 @@ class HistorySessionPushCoordinatorTest {
         val repository = mockk<InventoryRepository>()
         val logs = mutableListOf<String>()
         val owner = "00000000-0000-4000-8000-000000000131"
+        val shop = selectedShop("00000000-0000-4000-8000-000000000731")
         val syncEvents = CapturingSyncEventRemote131()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(
@@ -231,7 +232,7 @@ class HistorySessionPushCoordinatorTest {
         )
         coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(131L, 132L)
         coEvery {
-            repository.pushHistorySessionsToRemote(any(), owner, setOf(131L, 132L))
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(131L, 132L), shop)
         } returns Result.success(
             HistorySessionBackupPushSummary(
                 uploaded = 2,
@@ -245,6 +246,7 @@ class HistorySessionPushCoordinatorTest {
             remote = FakeConfiguredSessionRemote040(),
             syncEventRemote = syncEvents,
             authFlow = auth,
+            selectedShopProvider = { shop },
             flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
             scope = backgroundScope,
             debounceMs = 1L,
@@ -259,6 +261,8 @@ class HistorySessionPushCoordinatorTest {
         assertEquals(SyncEventTypes.HISTORY_CHANGED, event.eventType)
         assertEquals(2, event.changedCount)
         assertEquals(listOf("session-a", "session-b"), event.entityIds?.sessionIds)
+        assertEquals(shop.shopId, event.storeId)
+        assertEquals(shop.shopId, event.shopId)
         assertTrue(logs.any { it.contains("cycle=push syncEvent=history outcome=ok") })
     }
 
@@ -268,6 +272,7 @@ class HistorySessionPushCoordinatorTest {
         val outbox = mockk<SyncEventOutboxDao>()
         val logs = mutableListOf<String>()
         val owner = "00000000-0000-4000-8000-000000000231"
+        val shop = selectedShop("00000000-0000-4000-8000-000000000732")
         val syncEvents = FailingSyncEventRemote131()
         val auth = MutableStateFlow<AuthState>(
             AuthState.SignedIn(
@@ -277,7 +282,7 @@ class HistorySessionPushCoordinatorTest {
         )
         coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(231L)
         coEvery {
-            repository.pushHistorySessionsToRemote(any(), owner, setOf(231L))
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(231L), shop)
         } returns Result.success(
             HistorySessionBackupPushSummary(
                 uploaded = 1,
@@ -293,6 +298,7 @@ class HistorySessionPushCoordinatorTest {
             syncEventRemote = syncEvents,
             syncEventOutboxDao = outbox,
             authFlow = auth,
+            selectedShopProvider = { shop },
             flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
             scope = backgroundScope,
             debounceMs = 1L,
@@ -308,6 +314,7 @@ class HistorySessionPushCoordinatorTest {
                     it.ownerUserId == owner &&
                         it.domain == SyncEventDomains.HISTORY &&
                         it.eventType == SyncEventTypes.HISTORY_CHANGED &&
+                        it.storeScope == "shop:${shop.shopId}" &&
                         it.changedCount == 1 &&
                         it.entityIdsJson.contains("session-a") &&
                         it.lastErrorType != null
@@ -437,6 +444,75 @@ class HistorySessionPushCoordinatorTest {
             logs.any {
                 it.contains("cycle=push outcome=ok") &&
                     it.contains("reason=retry_after_busy_local_commit") &&
+                    it.contains("sessionsUploaded=1")
+            }
+        )
+    }
+
+    @Test
+    fun `114 resume tick retries pending history after retryable device status`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000114"
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = owner,
+                email = "user@example.test"
+            )
+        )
+        var attempts = 0
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(114L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, setOf(114L))
+        } coAnswers {
+            attempts++
+            Result.success(
+                HistorySessionBackupPushSummary(
+                    uploaded = 1,
+                    skippedAlreadySynced = 0,
+                    attempted = 1,
+                    remoteIds = listOf("SESSION-114")
+                )
+            )
+        }
+        val deviceRemote = SequencedShopDeviceRegistrationRemote136(
+            listOf(
+                snapshot136(
+                    status = "network_error",
+                    code = "JobCancellationException",
+                    canWrite = false,
+                    reasonCode = "network_error",
+                    recommendedAction = "retry_when_online"
+                ),
+                snapshot136(status = "active")
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote, cacheTtlMs = 0L),
+            authFlow = auth,
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 10_000L,
+            logger = logs::add
+        )
+
+        coordinator.onAppBackground()
+        coordinator.onLocalHistorySessionChanged(114L)
+        advanceTimeBy(HistorySessionPushCoordinator.RETRY_AFTER_BUSY_MS)
+        runCurrent()
+        coordinator.onAppForeground()
+        coordinator.runPushCycle("resume_tick")
+        advanceTimeBy(HistorySessionPushCoordinator.RETRY_AFTER_BUSY_MS)
+        runCurrent()
+
+        assertEquals(1, attempts)
+        assertTrue(logs.any { it.contains("cycle=push outcome=queued_after_device_status") })
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=ok") &&
+                    it.contains("reason=retry_after_busy_resume_tick") &&
                     it.contains("sessionsUploaded=1")
             }
         )
@@ -582,4 +658,14 @@ private fun snapshot136(
         reasonCode = reasonCode,
         recommendedAction = recommendedAction,
         checkedAtMs = System.currentTimeMillis()
+    )
+
+private fun selectedShop(shopId: String): SelectedShop =
+    SelectedShop(
+        shopId = shopId,
+        code = "SHOP",
+        name = "Shop",
+        role = "shop_owner",
+        status = "active",
+        canWrite = true
     )

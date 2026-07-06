@@ -332,7 +332,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val prunedCategories: Int = 0,
         val prunedProducts: Int = 0,
         val completeSnapshot: Boolean = true,
-        val appliedProductIds: Set<Long> = emptySet()
+        val appliedProductIds: Set<Long> = emptySet(),
+        val targetedMissingRemote: Boolean = false
     )
 
     private data class PricePullApplyResult(
@@ -511,6 +512,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private val syncEventWatermarkDao: SyncEventWatermarkDao = db.syncEventWatermarkDao()
     private val syncEventDeviceStateDao: SyncEventDeviceStateDao = db.syncEventDeviceStateDao()
     private val syncEventOutboxDao: SyncEventOutboxDao = db.syncEventOutboxDao()
+    private val syncEventApplyStatusDao: SyncEventApplyStatusDao = db.syncEventApplyStatusDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     private val syncEventJson = Json {
@@ -3634,11 +3636,12 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var skippedProtectedLocalCommit = 0
         val remoteAppliedProductIds = linkedSetOf<Long>()
         var iterations = 0
+        var checkpointBlockedByUnappliedEvent = false
 
         while (iterations < SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
             val events = syncEventRemote.fetchSyncEventsAfter(
                 ownerUserId = ownerUserId,
-                storeId = storeScope.ifBlank { null },
+                storeId = remoteStoreIdFromStoreScope(storeScope),
                 shopId = shopId,
                 afterId = watermark,
                 limit = SYNC_EVENT_FETCH_LIMIT
@@ -3650,7 +3653,17 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 val ids = event.entityIds
                 if (event.sourceDeviceId == deviceId) {
                     skippedSelf++
-                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = ids,
+                        status = SyncEventApplyStatusValues.SKIPPED,
+                        reason = SyncEventApplyStatusReasons.SELF_ORIGIN
+                    )
+                    if (!checkpointBlockedByUnappliedEvent) {
+                        watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    }
                     continue
                 }
                 val effectiveIds = ids?.withoutProtected(protectedLocalCommitIds)
@@ -3659,29 +3672,74 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     else -> ids.totalIds - effectiveIds.totalIds
                 }
                 if (ids != null && ids.totalIds > 0 && effectiveIds != null && effectiveIds.isEmpty) {
-                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = ids,
+                        status = SyncEventApplyStatusValues.SKIPPED,
+                        reason = SyncEventApplyStatusReasons.PROTECTED_LOCAL_COMMIT
+                    )
+                    if (!checkpointBlockedByUnappliedEvent) {
+                        watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    }
                     continue
                 }
                 val idsForApply = effectiveIds
                 val eventDirty = idsForApply?.let { countDirtyLocalRefsForEvent(it) } ?: 0
                 skippedDirty += eventDirty
+                if (eventDirty > 0) {
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = idsForApply,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.DIRTY_LOCAL
+                    )
+                    continue
+                }
                 if (idsForApply == null || (idsForApply.isEmpty && event.changedCount > 0)) {
                     gapDetected = true
                     manualFullSyncRequired = true
-                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = idsForApply,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.MISSING_ENTITY_IDS
+                    )
                     continue
                 }
                 if (idsForApply.totalIds > SYNC_EVENT_ENTITY_ID_BUDGET) {
                     tooLarge = true
                     manualFullSyncRequired = true
-                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = idsForApply,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.ENTITY_IDS_TOO_LARGE
+                    )
                     continue
                 }
+                var blockedReason: String? = null
                 val applied = when (event.domain) {
                     SyncEventDomains.CATALOG -> {
                         val counts = applyCatalogEventByIds(remote, idsForApply, progressReporter, shopId)
                         targetedProductsFetched += counts.remoteProductRows
                         remoteAppliedProductIds += counts.appliedProductIds
+                        if (counts.targetedMissingRemote) {
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                            checkpointBlockedByUnappliedEvent = true
+                            blockedReason = SyncEventApplyStatusReasons.MISSING_REMOTE
+                        }
                         var applied = counts.suppliers + counts.categories + counts.products
                         if (idsForApply.productIds.isNotEmpty() && priceRemote.isConfigured) {
                             val priceOutcome = applyPriceRowsForProductIds(
@@ -3701,21 +3759,54 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         targetedProductsFetched += outcome.first
                         targetedPricesFetched += outcome.second.remoteRowsEvaluated
                         remoteAppliedProductIds += outcome.second.appliedProductIds
+                        if (idsForApply.priceIds.isNotEmpty() && outcome.second.remoteRowsEvaluated < idsForApply.priceIds.size) {
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                            checkpointBlockedByUnappliedEvent = true
+                            blockedReason = SyncEventApplyStatusReasons.MISSING_REMOTE
+                        }
                         outcome.second.pulled
                     }
                     SyncEventDomains.HISTORY -> {
                         val outcome = applyHistoryEventByIds(sessionRemote, idsForApply, shopId)
                         targetedHistoryFetched += outcome.first
                         remoteHistoryUpdatesApplied += outcome.second
+                        if (idsForApply.sessionIds.isNotEmpty() && outcome.first < idsForApply.sessionIds.size) {
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                            checkpointBlockedByUnappliedEvent = true
+                            blockedReason = SyncEventApplyStatusReasons.MISSING_REMOTE
+                        }
                         outcome.second
                     }
-                    else -> 0
+                    else -> {
+                        gapDetected = true
+                        manualFullSyncRequired = true
+                        checkpointBlockedByUnappliedEvent = true
+                        blockedReason = SyncEventApplyStatusReasons.UNSUPPORTED_DOMAIN
+                        0
+                    }
                 }
                 remoteUpdatesApplied += applied
                 processed++
-                watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                recordSyncEventApplyStatus(
+                    ownerUserId = ownerUserId,
+                    storeScope = storeScope,
+                    event = event,
+                    ids = idsForApply,
+                    status = if (blockedReason == null) {
+                        SyncEventApplyStatusValues.APPLIED
+                    } else {
+                        SyncEventApplyStatusValues.BLOCKED
+                    },
+                    reason = blockedReason ?: SyncEventApplyStatusReasons.APPLIED
+                )
+                if (!checkpointBlockedByUnappliedEvent) {
+                    watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                }
             }
             iterations++
+            if (checkpointBlockedByUnappliedEvent) break
             if (events.size < SYNC_EVENT_FETCH_LIMIT) break
         }
         if (iterations >= SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
@@ -3771,6 +3862,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             productIds = ids.productIds.toSet(),
             shopId = shopId
         ).getOrThrow()
+        val directlyMissingRemote =
+            first.suppliers.map { it.id }.toSet().containsAll(ids.supplierIds).not() ||
+                first.categories.map { it.id }.toSet().containsAll(ids.categoryIds).not() ||
+                first.products.map { it.id }.toSet().containsAll(ids.productIds).not()
         val missingSupplierIds = first.products
             .mapNotNull { it.supplierId }
             .filter { supplierRemoteRefDao.getByRemoteId(it) == null }
@@ -3789,6 +3884,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         } else {
             InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList())
         }
+        val missingParentRemote =
+            parentBundle.suppliers.map { it.id }.toSet().containsAll(missingSupplierIds).not() ||
+                parentBundle.categories.map { it.id }.toSet().containsAll(missingCategoryIds).not()
         val merged = mergeCatalogBundles(parentBundle, first)
         val counts = applyCatalogBundleInbound(merged)
         Log.i(
@@ -3797,7 +3895,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "remoteCategories=${merged.categories.size} remoteProducts=${merged.products.size} " +
                 "applied=${counts.suppliers + counts.categories + counts.products}"
         )
-        return counts
+        return counts.copy(targetedMissingRemote = directlyMissingRemote || missingParentRemote)
     }
 
     private suspend fun applyPriceEventByIds(
@@ -4052,6 +4150,43 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         return id
     }
 
+    private suspend fun recordSyncEventApplyStatus(
+        ownerUserId: String,
+        storeScope: String,
+        event: SyncEventRemoteRow,
+        ids: SyncEventEntityIds?,
+        status: String,
+        reason: String?
+    ) {
+        val previous = syncEventApplyStatusDao.get(ownerUserId, storeScope, event.id)
+        val attemptCount = (previous?.attemptCount ?: 0) + 1
+        val nowMs = System.currentTimeMillis()
+        val nextRetryAtMs = when (status) {
+            SyncEventApplyStatusValues.BLOCKED,
+            SyncEventApplyStatusValues.RETRYING -> nowMs + SYNC_EVENT_APPLY_STATUS_RETRY_MS
+            else -> null
+        }
+        syncEventApplyStatusDao.upsert(
+            SyncEventApplyStatus(
+                ownerUserId = ownerUserId,
+                storeScope = storeScope,
+                eventId = event.id,
+                shopId = event.shopId,
+                domain = event.domain,
+                entityType = event.metadata["entity_type"]?.toString()?.trim('"'),
+                entityIdsJson = syncEventJson.encodeToString(ids ?: SyncEventEntityIds()),
+                status = status,
+                reason = reason,
+                attemptCount = attemptCount,
+                lastAttemptAtMs = nowMs,
+                nextRetryAtMs = nextRetryAtMs,
+                correlationId = event.clientEventId ?: event.batchId,
+                clientEventId = event.clientEventId,
+                remoteCreatedAt = event.createdAt
+            )
+        )
+    }
+
     private suspend fun retrySyncEventOutbox(
         remote: SyncEventRemoteDataSource,
         ownerUserId: String,
@@ -4082,7 +4217,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 eventType = entry.eventType,
                 changedCount = entry.changedCount,
                 entityIds = ids,
-                storeId = entry.storeScope.ifBlank { null },
+                storeId = remoteStoreIdFromStoreScope(entry.storeScope),
                 source = entry.source,
                 sourceDeviceId = entry.sourceDeviceId,
                 batchId = entry.batchId,
@@ -4193,7 +4328,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 eventType = eventType,
                 changedCount = chunkChangedCount,
                 entityIds = chunk,
-                storeId = storeScope.ifBlank { null },
+                storeId = remoteStoreIdFromStoreScope(storeScope),
                 source = "android",
                 sourceDeviceId = deviceId,
                 batchId = batchId,
@@ -4429,6 +4564,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val SYNC_EVENT_ENTITY_ID_BUDGET = 250
         const val SYNC_EVENT_OUTBOX_RETRY_LIMIT = 20
         const val SYNC_EVENT_OUTBOX_MAX_ATTEMPTS = 5
+        const val SYNC_EVENT_APPLY_STATUS_RETRY_MS = 30_000L
         const val SESSION_BACKUP_PUSH_CHUNK = 80
         const val LOG_SAMPLE_LIMIT = 5
         const val POSTGREST_UNIQUE_VIOLATION = "23505"

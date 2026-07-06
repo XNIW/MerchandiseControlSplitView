@@ -106,9 +106,8 @@ class SupabaseCatalogRemoteDataSource(
                 request = {
                     filter {
                         eq("id", id)
-                        eq("owner_user_id", ownerUserId)
-                        if (!shopId.isNullOrBlank()) {
-                            eq("shop_id", shopId)
+                        if (shopId.isNullOrBlank()) {
+                            eq("owner_user_id", ownerUserId)
                         }
                     }
                 }
@@ -257,9 +256,8 @@ class SupabaseCatalogRemoteDataSource(
                 request = {
                     filter {
                         eq("id", patch.id)
-                        eq("owner_user_id", patch.ownerUserId)
-                        if (!patch.shopId.isNullOrBlank()) {
-                            eq("shop_id", patch.shopId)
+                        if (patch.shopId.isNullOrBlank()) {
+                            eq("owner_user_id", patch.ownerUserId)
                         }
                         filter("deleted_at", FilterOperator.IS, "null")
                     }
