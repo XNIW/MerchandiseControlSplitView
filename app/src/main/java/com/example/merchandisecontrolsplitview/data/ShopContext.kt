@@ -236,6 +236,11 @@ fun shopIdFromStoreScope(storeScope: String?): String? =
         ?.removePrefix(SHOP_SCOPE_PREFIX)
         ?.takeIf { it.isNotBlank() }
 
+fun remoteStoreIdFromStoreScope(storeScope: String?): String? =
+    shopIdFromStoreScope(storeScope)
+        ?: storeScope
+            ?.takeIf { it.isNotBlank() }
+
 private fun String?.isShopStatusDisabled(): Boolean =
     when (this?.trim()?.lowercase()) {
         "revoked", "suspended", "disabled", "inactive", "blocked" -> true

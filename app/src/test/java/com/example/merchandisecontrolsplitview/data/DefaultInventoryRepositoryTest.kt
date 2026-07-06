@@ -4720,6 +4720,69 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `114 dirty local catalog event does not advance watermark before retryable apply`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001148"
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "114-dirty-checkpoint",
+            productName = "Local Original",
+            purchasePrice = 9.0,
+            retailPrice = 19.0
+        )
+        val productRemoteId = stableUuid("product-${product.barcode}")
+        db.productDao().update(product.copy(productName = "Local Pending"))
+        db.productRemoteRefDao().incrementLocalRevision(product.id)
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = productRemoteId,
+                        ownerUserId = owner,
+                        barcode = product.barcode,
+                        productName = "Remote Update",
+                        purchasePrice = 9.0,
+                        retailPrice = 19.0
+                    )
+                )
+            )
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1148L,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+                createdAt = "2026-07-06T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.syncEventsSkippedDirtyLocal)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+        assertEquals("Local Pending", repository.findProductByBarcode(product.barcode)!!.productName)
+        assertEquals(0, remote.targetedFetchCount)
+
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1148L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.DIRTY_LOCAL, applyStatus.reason)
+        assertEquals(1, applyStatus.attemptCount)
+        assertNotNull(applyStatus.nextRetryAtMs)
+        assertTrue(applyStatus.entityIdsJson.contains(productRemoteId))
+    }
+
+    @Test
     fun `045 capability false keeps quick sync push-only without hidden full pull`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000453"
         repository.addProduct(
@@ -4827,6 +4890,14 @@ class DefaultInventoryRepositoryTest {
         assertEquals(setOf(priceRemoteId), priceRemote.targetedPriceIds.single())
         assertEquals(2, summary.syncEventsProcessed)
         assertEquals(2, summary.syncEventsWatermarkAfter)
+        val firstStatus = db.syncEventApplyStatusDao().get(owner, "", 1L)!!
+        val secondStatus = db.syncEventApplyStatusDao().get(owner, "", 2L)!!
+        assertEquals(SyncEventApplyStatusValues.APPLIED, firstStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.APPLIED, firstStatus.reason)
+        assertEquals(SyncEventApplyStatusValues.APPLIED, secondStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.APPLIED, secondStatus.reason)
+        assertNull(firstStatus.nextRetryAtMs)
+        assertNull(secondStatus.nextRetryAtMs)
         val product = repository.findProductByBarcode("sync-event-045-target")!!
         assertEquals("Target", product.productName)
         assertEquals(1, repository.getPriceSeries(product.id, "RETAIL").first().size)
@@ -5110,6 +5181,73 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `shop scoped catalog event sends remote store id without local scope prefix`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000725"
+        val shopId = "00000000-0000-4000-8000-000000000726"
+        repository.addProduct(
+            Product(
+                barcode = "shop-scope-record",
+                productName = "Shop Scope Record",
+                purchasePrice = 4.0,
+                retailPrice = 6.0
+            )
+        )
+        val syncEvents = FakeSyncEventRemote()
+
+        repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            sessionRemote = null,
+            selectedShop = selectedShop(shopId)
+        ).getOrThrow()
+
+        val catalogEvent = syncEvents.recordedParams.single { it.domain == SyncEventDomains.CATALOG }
+        assertEquals(shopId, catalogEvent.storeId)
+        assertEquals(shopId, catalogEvent.shopId)
+        assertFalse(catalogEvent.storeId.orEmpty().startsWith("shop:"))
+        assertTrue(db.syncEventOutboxDao().listPending(owner, 10).isEmpty())
+    }
+
+    @Test
+    fun `shop scoped outbox retry sends remote store id while retaining local scope row`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000727"
+        val shopId = "00000000-0000-4000-8000-000000000728"
+        val storeScope = "shop:$shopId"
+        db.syncEventOutboxDao().insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "shop-scope-retry",
+                createdAtMs = 1L,
+                attemptCount = 0,
+                storeScope = storeScope,
+                ids = SyncEventEntityIds(productIds = listOf("00000000-0000-4000-8000-000000000729"))
+            )
+        )
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            sessionRemote = null,
+            selectedShop = selectedShop(shopId)
+        ).getOrThrow()
+
+        val retryEvent = syncEvents.recordedParams.single()
+        assertEquals(1, summary.syncEventOutboxRetried)
+        assertEquals(0, summary.syncEventOutboxPending)
+        assertEquals(shopId, retryEvent.storeId)
+        assertEquals(shopId, retryEvent.shopId)
+        assertFalse(retryEvent.storeId.orEmpty().startsWith("shop:"))
+        assertTrue(db.syncEventOutboxDao().listPending(owner, 10).isEmpty())
+    }
+
+    @Test
     fun `070 rpc failure enqueues event and logs privacy safe lifecycle fields`() = runTest {
         ShadowLog.clear()
         val owner = "00000000-0000-4000-8000-000000000705"
@@ -5279,12 +5417,16 @@ class DefaultInventoryRepositoryTest {
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsGapDetected)
         assertFalse(summary.syncEventsTooLarge)
-        assertEquals(11, summary.syncEventsWatermarkAfter)
-        assertEquals(11, db.syncEventWatermarkDao().get(owner, "")!!.lastSyncEventId)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
         assertEquals(0, remote.fetchCount)
         assertEquals(0, remote.targetedFetchCount)
         assertFalse(summary.fullCatalogFetch)
         assertFalse(summary.fullPriceFetch)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 11L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, applyStatus.reason)
+        assertNotNull(applyStatus.nextRetryAtMs)
     }
 
     @Test
@@ -5314,9 +5456,68 @@ class DefaultInventoryRepositoryTest {
 
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsGapDetected)
-        assertEquals(12, summary.syncEventsWatermarkAfter)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
         assertEquals(0, remote.fetchCount)
         assertEquals(0, remote.targetedFetchCount)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 12L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, applyStatus.reason)
+    }
+
+    @Test
+    fun `114 drain stops after current full page when unapplied event blocks checkpoint`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001147"
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = "self-device-114-gap", createdAtMs = 1L)
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = null,
+                createdAt = "2026-07-06T10:00:00Z"
+            )
+            for (index in 2..100) {
+                externalEvents += SyncEventRemoteRow(
+                    id = index.toLong(),
+                    ownerUserId = owner,
+                    domain = SyncEventDomains.CATALOG,
+                    eventType = SyncEventTypes.CATALOG_CHANGED,
+                    sourceDeviceId = "self-device-114-gap",
+                    changedCount = 1,
+                    entityIds = SyncEventEntityIds(productIds = listOf("remote-$index")),
+                    createdAt = "2026-07-06T10:00:00Z"
+                )
+            }
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(100, summary.syncEventsFetched)
+        assertEquals(99, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+        assertEquals(1, syncEvents.fetchCalls)
+        assertEquals(
+            SyncEventApplyStatusReasons.MISSING_ENTITY_IDS,
+            db.syncEventApplyStatusDao().get(owner, "", 1L)!!.reason
+        )
+        assertEquals(
+            SyncEventApplyStatusReasons.SELF_ORIGIN,
+            db.syncEventApplyStatusDao().get(owner, "", 2L)!!.reason
+        )
     }
 
     @Test
@@ -5348,6 +5549,9 @@ class DefaultInventoryRepositoryTest {
         assertFalse(summary.syncEventsGapDetected)
         assertFalse(summary.syncEventsTooLarge)
         assertEquals(13, summary.syncEventsWatermarkAfter)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 13L)!!
+        assertEquals(SyncEventApplyStatusValues.APPLIED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.APPLIED, applyStatus.reason)
     }
 
     @Test
@@ -5379,9 +5583,119 @@ class DefaultInventoryRepositoryTest {
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsTooLarge)
         assertFalse(summary.syncEventsGapDetected)
-        assertEquals(14, summary.syncEventsWatermarkAfter)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
         assertEquals(0, remote.fetchCount)
         assertEquals(0, remote.targetedFetchCount)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 14L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.ENTITY_IDS_TOO_LARGE, applyStatus.reason)
+    }
+
+    @Test
+    fun `114 drain flags missing targeted catalog row without advancing watermark`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001141"
+        val missingProductId = "00000000-0000-4000-8000-000000001142"
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1141,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(missingProductId)),
+                createdAt = "2026-07-06T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+        assertEquals(1, remote.targetedFetchCount)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1141L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_REMOTE, applyStatus.reason)
+        assertNotNull(applyStatus.nextRetryAtMs)
+    }
+
+    @Test
+    fun `114 drain flags missing targeted price row without advancing watermark`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001143"
+        val missingPriceId = "00000000-0000-4000-8000-000000001144"
+        val priceRemote = RecordingPriceRemote016(configured = true)
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1142,
+                ownerUserId = owner,
+                domain = SyncEventDomains.PRICES,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(priceIds = listOf(missingPriceId)),
+                createdAt = "2026-07-06T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = priceRemote,
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertEquals(1, priceRemote.targetedFetchCount)
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1142L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_REMOTE, applyStatus.reason)
+    }
+
+    @Test
+    fun `114 drain flags missing targeted history row without advancing watermark`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001145"
+        val missingSessionId = "00000000-0000-4000-8000-000000001146"
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1143,
+                ownerUserId = owner,
+                domain = SyncEventDomains.HISTORY,
+                eventType = SyncEventTypes.HISTORY_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(sessionIds = listOf(missingSessionId)),
+                createdAt = "2026-07-06T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            sessionRemote = FakeSessionBackupRemote023()
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1143L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_REMOTE, applyStatus.reason)
     }
 
     @Test
@@ -6686,6 +7000,8 @@ private class FakeSyncEventRemote(
     val emittedRows = mutableListOf<SyncEventRemoteRow>()
     val externalEvents = mutableListOf<SyncEventRemoteRow>()
     val failRecordForDomains = mutableSetOf<String>()
+    var fetchCalls = 0
+        private set
     private var nextId = 1L
 
     override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
@@ -6724,14 +7040,26 @@ private class FakeSyncEventRemote(
         storeId: String?,
         afterId: Long,
         limit: Long
-    ): Result<List<SyncEventRemoteRow>> =
-        Result.success(
+    ): Result<List<SyncEventRemoteRow>> {
+        fetchCalls++
+        return Result.success(
             (externalEvents + emittedRows)
                 .filter { it.id > afterId }
                 .sortedBy { it.id }
                 .take(limit.toInt())
         )
+    }
 }
+
+private fun selectedShop(shopId: String): SelectedShop =
+    SelectedShop(
+        shopId = shopId,
+        code = "SHOP",
+        name = "Shop",
+        role = "shop_owner",
+        status = "active",
+        canWrite = true
+    )
 
 private const val OWNER_021 = "00000000-0000-4000-8000-000000000210"
 private const val BOOTSTRAP_SUPPLIER_REMOTE_021 = "00000000-0000-4000-8000-000000000211"

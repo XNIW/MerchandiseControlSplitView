@@ -30,6 +30,8 @@ import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
 import com.example.merchandisecontrolsplitview.data.SyncEventDomains
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteRow
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.data.remoteStoreIdFromStoreScope
+import com.example.merchandisecontrolsplitview.data.shopScopedStoreScope
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
@@ -983,11 +985,14 @@ class Task103CrossPlatformAcceptanceTest {
     ): Long {
         var lastHistoryEvents: List<SyncEventRemoteRow> = emptyList()
         var completed = false
+        val selectedShop = runtime.app.shopContextRepository.state.value.selectedShop
+        val storeScope = shopScopedStoreScope(selectedShop)
         withTimeoutOrNull(35_000) {
             while (!completed) {
                 val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
                     ownerUserId = runtime.ownerUserId,
-                    storeId = null,
+                    storeId = remoteStoreIdFromStoreScope(storeScope),
+                    shopId = selectedShop?.shopId,
                     afterId = watermarkBefore,
                     limit = 100
                 ).getOrThrow()
@@ -1025,9 +1030,12 @@ class Task103CrossPlatformAcceptanceTest {
             fixture.matrixBarcodeAndroidTombstone
         )
     ) {
+        val selectedShop = runtime.app.shopContextRepository.state.value.selectedShop
+        val storeScope = shopScopedStoreScope(selectedShop)
         val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
             ownerUserId = runtime.ownerUserId,
-            storeId = null,
+            storeId = remoteStoreIdFromStoreScope(storeScope),
+            shopId = selectedShop?.shopId,
             afterId = watermarkBefore,
             limit = 50
         ).getOrThrow()
@@ -1057,9 +1065,12 @@ class Task103CrossPlatformAcceptanceTest {
         runtime: Runtime,
         watermarkBefore: Long
     ) {
+        val selectedShop = runtime.app.shopContextRepository.state.value.selectedShop
+        val storeScope = shopScopedStoreScope(selectedShop)
         val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
             ownerUserId = runtime.ownerUserId,
-            storeId = null,
+            storeId = remoteStoreIdFromStoreScope(storeScope),
+            shopId = selectedShop?.shopId,
             afterId = watermarkBefore,
             limit = 100
         ).getOrThrow()
@@ -1624,11 +1635,20 @@ class Task103CrossPlatformAcceptanceTest {
         override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> =
             delegate.upsertSuppliers(rows)
 
+        override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>, shopId: String?): Result<Unit> =
+            delegate.upsertSuppliers(rows, shopId)
+
         override suspend fun upsertCategories(rows: List<InventoryCategoryRow>): Result<Unit> =
             delegate.upsertCategories(rows)
 
+        override suspend fun upsertCategories(rows: List<InventoryCategoryRow>, shopId: String?): Result<Unit> =
+            delegate.upsertCategories(rows, shopId)
+
         override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> =
             delegate.upsertProducts(rows)
+
+        override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> =
+            delegate.upsertProducts(rows, shopId)
 
         override suspend fun patchProduct(
             id: String,
@@ -1636,6 +1656,14 @@ class Task103CrossPlatformAcceptanceTest {
             patch: InventoryProductPatch
         ): Result<Unit> =
             delegate.patchProduct(id, ownerUserId, patch)
+
+        override suspend fun patchProduct(
+            id: String,
+            ownerUserId: String,
+            shopId: String?,
+            patch: InventoryProductPatch
+        ): Result<Unit> =
+            delegate.patchProduct(id, ownerUserId, shopId, patch)
 
         override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> = runCatching {
             val products = fetchProductsByBarcodes(fixture.allBarcodes)
@@ -1667,14 +1695,31 @@ class Task103CrossPlatformAcceptanceTest {
         ): Result<InventoryCatalogFetchBundle> =
             delegate.fetchCatalogByIds(supplierIds, categoryIds, productIds)
 
+        override suspend fun fetchCatalogByIds(
+            supplierIds: Set<String>,
+            categoryIds: Set<String>,
+            productIds: Set<String>,
+            shopId: String?
+        ): Result<InventoryCatalogFetchBundle> =
+            delegate.fetchCatalogByIds(supplierIds, categoryIds, productIds, shopId)
+
         override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
             delegate.markSupplierTombstoned(patch)
+
+        override suspend fun markSupplierTombstoned(patch: CatalogTombstonePatch, shopId: String?): Result<Unit> =
+            delegate.markSupplierTombstoned(patch, shopId)
 
         override suspend fun markCategoryTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
             delegate.markCategoryTombstoned(patch)
 
+        override suspend fun markCategoryTombstoned(patch: CatalogTombstonePatch, shopId: String?): Result<Unit> =
+            delegate.markCategoryTombstoned(patch, shopId)
+
         override suspend fun markProductTombstoned(patch: CatalogTombstonePatch): Result<Unit> =
             delegate.markProductTombstoned(patch)
+
+        override suspend fun markProductTombstoned(patch: CatalogTombstonePatch, shopId: String?): Result<Unit> =
+            delegate.markProductTombstoned(patch, shopId)
 
         private suspend fun fetchProductsByBarcodes(barcodes: List<String>): List<InventoryProductRow> =
             client.postgrest["inventory_products"].select {

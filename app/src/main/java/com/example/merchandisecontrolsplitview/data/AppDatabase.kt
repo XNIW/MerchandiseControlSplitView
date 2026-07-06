@@ -25,10 +25,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PendingCatalogTombstone::class,
         SyncEventWatermark::class,
         SyncEventDeviceState::class,
-        SyncEventOutboxEntry::class
+        SyncEventOutboxEntry::class,
+        SyncEventApplyStatus::class
     ],
     views = [ProductPriceSummary::class],
-    version = 18,
+    version = 19,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -47,6 +48,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncEventWatermarkDao(): SyncEventWatermarkDao
     abstract fun syncEventDeviceStateDao(): SyncEventDeviceStateDao
     abstract fun syncEventOutboxDao(): SyncEventOutboxDao
+    abstract fun syncEventApplyStatusDao(): SyncEventApplyStatusDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -372,6 +374,46 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 18 -> 19: stato persistente apply/dead-letter per sync_events inbound.
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_event_apply_status` (
+                        `owner_user_id` TEXT NOT NULL,
+                        `store_scope` TEXT NOT NULL,
+                        `event_id` INTEGER NOT NULL,
+                        `shop_id` TEXT,
+                        `domain` TEXT NOT NULL,
+                        `entity_type` TEXT,
+                        `entity_ids_json` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `reason` TEXT,
+                        `attempt_count` INTEGER NOT NULL,
+                        `last_attempt_at_ms` INTEGER NOT NULL,
+                        `next_retry_at_ms` INTEGER,
+                        `correlation_id` TEXT,
+                        `client_event_id` TEXT,
+                        `remote_created_at` TEXT,
+                        PRIMARY KEY(`owner_user_id`, `store_scope`, `event_id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sync_event_apply_status_owner_user_id_store_scope_status`
+                    ON `sync_event_apply_status` (`owner_user_id`, `store_scope`, `status`)
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS `index_sync_event_apply_status_owner_user_id_store_scope_next_retry_at_ms`
+                    ON `sync_event_apply_status` (`owner_user_id`, `store_scope`, `next_retry_at_ms`)
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -396,7 +438,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_14_15,
                         MIGRATION_15_16,
                         MIGRATION_16_17,
-                        MIGRATION_17_18
+                        MIGRATION_17_18,
+                        MIGRATION_18_19
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

@@ -21,6 +21,8 @@ import com.example.merchandisecontrolsplitview.data.SyncEventDomains
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteRow
 import com.example.merchandisecontrolsplitview.data.SyncEventWatermark
 import com.example.merchandisecontrolsplitview.data.SyncStatus
+import com.example.merchandisecontrolsplitview.data.remoteStoreIdFromStoreScope
+import com.example.merchandisecontrolsplitview.data.shopScopedStoreScope
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.postgrest
@@ -358,7 +360,10 @@ class Task072DAndroidReceiverHarnessTest {
     private fun fixture(prefix: String?): Fixture {
         val cleanPrefix = prefix
             ?: throw AssertionError("task072DRunPrefix must be explicit, e.g. TASK072D_ANDROID_R20260619_")
-        assertTrue(cleanPrefix.startsWith("TASK072D_ANDROID_"))
+        assertTrue(
+            cleanPrefix.startsWith("TASK072D_ANDROID_") ||
+                cleanPrefix.startsWith("SYNC_TEST_")
+        )
         assertTrue(cleanPrefix.endsWith("_"))
         return Fixture(cleanPrefix)
     }
@@ -457,13 +462,16 @@ class Task072DAndroidReceiverHarnessTest {
         withTimeoutOrNull(120_000) {
             runtime.app.historySessionPushCoordinator.runPushCycle("local_commit")
         } ?: throw AssertionError("TASK-072D $label direct history push did not complete within 120s")
+        val selectedShop = runtime.app.shopContextRepository.state.value.selectedShop
+        val storeScope = shopScopedStoreScope(selectedShop)
         var lastHistoryEvents: List<SyncEventRemoteRow> = emptyList()
         var completed = false
         withTimeoutOrNull(30_000) {
             while (!completed) {
                 val rows = runtime.app.syncEventRemoteDataSource.fetchSyncEventsAfter(
                     ownerUserId = runtime.ownerUserId,
-                    storeId = null,
+                    storeId = remoteStoreIdFromStoreScope(storeScope),
+                    shopId = selectedShop?.shopId,
                     afterId = watermarkBefore,
                     limit = 100
                 ).getOrThrow()
@@ -534,8 +542,8 @@ class Task072DAndroidReceiverHarnessTest {
         prefix: String?
     ): ExternalReceiverResult {
         if (prefix.isNullOrBlank()) return ExternalReceiverResult(status = "not_configured")
-        require(prefix.startsWith("TASK072D_") && prefix.endsWith("_")) {
-            "TASK-072D external prefix for $label must start with TASK072D_ and end with _"
+        require((prefix.startsWith("TASK072D_") || prefix.startsWith("SYNC_TEST_")) && prefix.endsWith("_")) {
+            "TASK-072D external prefix for $label must start with TASK072D_ or SYNC_TEST_ and end with _"
         }
         val external = ExternalFixture(prefix)
         val beforeCatalog = remoteCatalog(runtime.client, external)
