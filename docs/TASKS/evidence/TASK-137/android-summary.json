@@ -1,0 +1,45 @@
+{
+  "task": "TASK-137",
+  "target": "Medium_Phone_API_35(AVD) API 35",
+  "runtime_kind": "emulator-loopback-contract",
+  "unit_tests": {
+    "tests": 25,
+    "passed": 25,
+    "failed": 0,
+    "skipped": 0
+  },
+  "instrumentation": {
+    "tests": 3,
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0
+  },
+  "post_hardening_instrumentation_rerun": {
+    "test": "imageClientRunsUploadReadAndRemoveAgainstLoopback",
+    "tests": 1,
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "build": "SUCCESSFUL"
+  },
+  "build": "PASS assembleDebug",
+  "lint": "PASS lintDebug",
+  "metrics": {
+    "input_bytes": 1258536,
+    "input_width": 8000,
+    "input_height": 6000,
+    "input_megapixels": 48,
+    "elapsed_milliseconds": 41,
+    "pss_before_kb": 256222,
+    "pss_after_kb": 264103,
+    "pss_delta_kb": 7881,
+    "main_bytes": 165769,
+    "main_width": 1600,
+    "main_height": 1200,
+    "thumb_bytes": 17517,
+    "thumb_width": 384,
+    "thumb_height": 288
+  },
+  "supabase_live": "NOT_RUN",
+  "physical_device": "NOT_RUN"
+}

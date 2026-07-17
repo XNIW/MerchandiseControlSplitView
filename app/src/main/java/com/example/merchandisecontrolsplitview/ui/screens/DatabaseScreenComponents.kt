@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
@@ -24,6 +27,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.Image as ProductImageIcon
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,9 +51,16 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -64,11 +76,15 @@ import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
 import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSectionUiState
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseHubTab
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
 
 private val DatabaseListContentPadding = PaddingValues(
     start = 20.dp,
@@ -426,7 +442,9 @@ internal fun DatabaseProductListSection(
     onDeleteRequest: (Product) -> Unit,
     onShowHistory: (Product) -> Unit,
     modifier: Modifier = Modifier,
-    productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap()
+    productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
+    productImageStates: Map<ProductImageUiKey, ProductImageUiState> = emptyMap(),
+    onLoadProductImage: (Product) -> Unit = {}
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
@@ -501,6 +519,13 @@ internal fun DatabaseProductListSection(
                             content = {
                                 ProductRow(
                                     productDetails = effectiveDetails,
+                                    imageState = productImageStates[
+                                        ProductImageUiKey(
+                                            currentProduct.id,
+                                            ProductImageVariant.THUMB
+                                        )
+                                    ],
+                                    onLoadImage = { onLoadProductImage(currentProduct) },
                                     onClick = { onProductClick(currentProduct) },
                                     onShowHistory = { onShowHistory(currentProduct) }
                                 )
@@ -611,10 +636,15 @@ private fun CatalogEntityKind.searchHintRes(): Int = when (this) {
 @Composable
 internal fun ProductRow(
     productDetails: ProductWithDetails,
+    imageState: ProductImageUiState? = null,
+    onLoadImage: () -> Unit = {},
     onClick: () -> Unit,
     onShowHistory: () -> Unit = {}
 ) {
     val product = productDetails.product
+    LaunchedEffect(product.id, product.primaryImageVersionId) {
+        onLoadImage()
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -623,18 +653,29 @@ internal fun ProductRow(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = product.productName ?: stringResource(R.string.unnamed_product),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ProductImagePreview(
+                    state = imageState,
+                    contentDescription = stringResource(R.string.product_image_thumbnail),
+                    modifier = Modifier.size(64.dp)
                 )
-                product.secondProductName?.takeIf { it.isNotBlank() }?.let { second ->
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = second,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = product.productName ?: stringResource(R.string.unnamed_product),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
+                    product.secondProductName?.takeIf { it.isNotBlank() }?.let { second ->
+                        Text(
+                            text = second,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -751,6 +792,64 @@ internal fun ProductRow(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+internal fun ProductImagePreview(
+    state: ProductImageUiState?,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    val bytes = state?.bytes
+    val bitmap = remember(bytes) {
+        bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap()
+    }
+    val semanticState = when {
+        state?.status == ProductImageUiStatus.ERROR ->
+            stringResource(R.string.product_image_state_error)
+        state?.status in setOf(
+            ProductImageUiStatus.LOADING,
+            ProductImageUiStatus.UPLOADING,
+            ProductImageUiStatus.REMOVING
+        ) -> stringResource(R.string.product_image_state_loading)
+        bitmap != null -> stringResource(R.string.product_image_state_ready)
+        else -> stringResource(R.string.product_image_state_empty)
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .semantics { stateDescription = semanticState },
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = if (state?.status == ProductImageUiStatus.ERROR) {
+                    Icons.Default.BrokenImage
+                } else {
+                    Icons.Default.ProductImageIcon
+                },
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+        if (state?.status in setOf(
+                ProductImageUiStatus.LOADING,
+                ProductImageUiStatus.UPLOADING,
+                ProductImageUiStatus.REMOVING
+            )
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
         }
     }
 }

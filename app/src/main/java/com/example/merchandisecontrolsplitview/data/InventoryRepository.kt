@@ -6344,6 +6344,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val existingRef = productRemoteRefDao.getByRemoteId(row.id)
         if (existingRef != null) {
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
+                // L'immagine e' un sottodominio remoto-autoritativo: applicarla non
+                // deve sovrascrivere i campi prodotto dirty ne' marcare la revisione synced.
+                productDao.updateRemoteImageReference(
+                    existingRef.productId,
+                    row.primaryImageVersionId,
+                    row.primaryImageUpdatedAt
+                )
                 return null
             }
             if (existingRef.lastRemotePayloadFingerprint == fp &&
@@ -6363,7 +6370,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 retailPrice = row.retailPrice,
                 supplierId = supLocal,
                 categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: cur.stockQuantity
+                stockQuantity = row.stockQuantity ?: cur.stockQuantity,
+                primaryImageVersionId = row.primaryImageVersionId,
+                primaryImageUpdatedAt = row.primaryImageUpdatedAt
             )
             try {
                 productDao.update(merged)
@@ -6397,7 +6406,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 retailPrice = row.retailPrice,
                 supplierId = supLocal,
                 categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: localByBarcode.stockQuantity
+                stockQuantity = row.stockQuantity ?: localByBarcode.stockQuantity,
+                primaryImageVersionId = row.primaryImageVersionId,
+                primaryImageUpdatedAt = row.primaryImageUpdatedAt
             )
             try {
                 productDao.update(merged)
@@ -6414,7 +6425,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 retailPrice = row.retailPrice,
                 supplierId = supLocal,
                 categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: 0.0
+                stockQuantity = row.stockQuantity ?: 0.0,
+                primaryImageVersionId = row.primaryImageVersionId,
+                primaryImageUpdatedAt = row.primaryImageUpdatedAt
             )
             try {
                 productDao.insert(inserted)

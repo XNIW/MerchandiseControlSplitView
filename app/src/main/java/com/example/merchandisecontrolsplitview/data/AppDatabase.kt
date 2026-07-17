@@ -29,7 +29,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncEventApplyStatus::class
     ],
     views = [ProductPriceSummary::class],
-    version = 19,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -414,6 +414,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 19 -> 20: solo UUID/timestamp dell'immagine primaria; nessun byte, path o URL.
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE products ADD COLUMN primaryImageVersionId TEXT")
+                db.execSQL("ALTER TABLE products ADD COLUMN primaryImageUpdatedAt TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -439,7 +447,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_15_16,
                         MIGRATION_16_17,
                         MIGRATION_17_18,
-                        MIGRATION_18_19
+                        MIGRATION_18_19,
+                        MIGRATION_19_20
                     )
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }

@@ -40,8 +40,11 @@ import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
+import com.example.merchandisecontrolsplitview.productimage.ProductImageApiClient
+import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
@@ -178,6 +181,23 @@ class MerchandiseControlApplication : Application() {
         SupabaseAuthManager(
             client = supabaseClient,
             googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
+        )
+    }
+
+    val productImageService: ProductImageService by lazy {
+        ProductImageService(
+            context = this,
+            database = database,
+            api = ProductImageApiClient(
+                apiBaseUrl = BuildConfig.PRODUCT_IMAGE_API_BASE_URL,
+                storageBaseUrl = BuildConfig.SUPABASE_URL,
+                debugBuild = BuildConfig.DEBUG
+            ),
+            accountIdProvider = {
+                (authManager.state.value as? AuthState.SignedIn)?.userId
+            },
+            selectedShopProvider = { shopContextRepository.state.value.selectedShop },
+            accessTokenProvider = { supabaseClient?.auth?.currentAccessTokenOrNull() }
         )
     }
 
@@ -332,6 +352,7 @@ class MerchandiseControlApplication : Application() {
         realtimeRefreshCoordinator.shutdown()
         historySessionPushCoordinator.shutdown()
         catalogAutoSyncCoordinator.shutdown()
+        productImageService.close()
         authManager.shutdown()
         super.onTerminate()
     }

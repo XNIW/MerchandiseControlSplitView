@@ -650,4 +650,22 @@
     <string name="task126_conflict_delete_edit_message">一端删除了记录，另一端编辑了记录。必须显式审核。</string>
     <string name="task126_conflict_price_stale_title">同一价格槽位</string>
     <string name="task126_conflict_price_stale_message">同一价格槽位有不同值。同步前应用 stale/review policy。</string>
+    <string name="product_image_title">商品图片</string>
+    <string name="product_image_thumbnail">商品缩略图</string>
+    <string name="product_image_main">商品主图</string>
+    <string name="product_image_choose">图库</string>
+    <string name="product_image_camera">相机</string>
+    <string name="product_image_remove">移除图片</string>
+    <string name="product_image_save_first">请先保存商品，然后再添加图片。</string>
+    <string name="product_image_not_configured">此设备尚未配置图片服务。</string>
+    <string name="product_image_operation_failed">图片操作失败，商品修改不受影响。</string>
+    <string name="product_image_offline_cache">正在显示私有本地缓存中的图片。</string>
+    <string name="product_image_retry">重试图片</string>
+    <string name="product_image_remove_confirm_title">移除图片？</string>
+    <string name="product_image_remove_confirm_body">只会移除主图，商品的其他数据不会改变。</string>
+    <string name="product_image_remove_confirm_action">移除图片</string>
+    <string name="product_image_state_empty">暂无图片</string>
+    <string name="product_image_state_loading">正在加载图片</string>
+    <string name="product_image_state_ready">图片可用</string>
+    <string name="product_image_state_error">图片不可用</string>
 </resources>

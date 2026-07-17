@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -25,6 +28,8 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -50,6 +55,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -59,11 +65,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.Supplier
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityInput
@@ -72,11 +81,15 @@ import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 @Composable
 internal fun EditProductDialog(
@@ -116,7 +129,70 @@ internal fun EditProductDialog(
     var showPriceHistorySheet by remember { mutableStateOf(false) }
     val retailFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
     var askedKeyboard by remember { mutableStateOf(false) }
+    val productImageStates by viewModel.productImageStates.collectAsState()
+    val mainImageState = productImageStates[
+        ProductImageUiKey(product.id, ProductImageVariant.MAIN)
+    ]
+    var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
+    var pendingCaptureUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var confirmImageRemoval by remember { mutableStateOf(false) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null && product.id != 0L) {
+            viewModel.uploadProductImage(product.id, uri)
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { captured ->
+        val file = pendingCaptureFile
+        val uri = pendingCaptureUri
+        pendingCaptureFile = null
+        pendingCaptureUri = null
+        if (captured && uri != null && product.id != 0L) {
+            viewModel.uploadProductImage(product.id, uri) {
+                file?.delete()
+            }
+        } else {
+            file?.delete()
+        }
+    }
+
+    LaunchedEffect(product.id, product.primaryImageVersionId) {
+        if (product.id != 0L) {
+            viewModel.loadProductImage(
+                productId = product.id,
+                variant = ProductImageVariant.MAIN,
+                expectedVersionId = product.primaryImageVersionId
+            )
+        }
+    }
+
+    fun launchProductCamera() {
+        if (product.id == 0L) return
+        val directory = File(context.cacheDir, "product-image-capture")
+        if (!directory.exists() && !directory.mkdirs()) return
+        val file = runCatching {
+            File.createTempFile("product-", ".jpg", directory)
+        }.getOrNull() ?: return
+        val uri = runCatching {
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+        }.getOrElse {
+            file.delete()
+            return
+        }
+        pendingCaptureFile = file
+        pendingCaptureUri = uri
+        cameraLauncher.launch(uri)
+    }
 
     var retailPriceTf by remember(product) {
         mutableStateOf(TextFieldValue(retailPrice, TextRange(retailPrice.length)))
@@ -290,6 +366,27 @@ internal fun EditProductDialog(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
+
+                    ProductImageEditorSection(
+                        product = product,
+                        state = mainImageState,
+                        apiConfigured = viewModel.productImagesConfigured(),
+                        canManage = viewModel.canManageProductImages(),
+                        onChoosePhoto = {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        onTakePhoto = ::launchProductCamera,
+                        onRetry = {
+                            viewModel.loadProductImage(
+                                productId = product.id,
+                                variant = ProductImageVariant.MAIN,
+                                expectedVersionId = product.primaryImageVersionId
+                            )
+                        },
+                        onRemove = { confirmImageRemoval = true }
+                    )
 
                     OutlinedTextField(
                         value = barcode,
@@ -512,6 +609,132 @@ internal fun EditProductDialog(
                     }
                 )
             }
+            if (confirmImageRemoval) {
+                AlertDialog(
+                    onDismissRequest = { confirmImageRemoval = false },
+                    title = { Text(stringResource(R.string.product_image_remove_confirm_title)) },
+                    text = { Text(stringResource(R.string.product_image_remove_confirm_body)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmImageRemoval = false
+                            viewModel.removeProductImage(product.id)
+                        }) {
+                            Text(stringResource(R.string.product_image_remove_confirm_action))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmImageRemoval = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
+                )
+            }
+    }
+}
+
+@Composable
+private fun ProductImageEditorSection(
+    product: Product,
+    state: ProductImageUiState?,
+    apiConfigured: Boolean,
+    canManage: Boolean,
+    onChoosePhoto: () -> Unit,
+    onTakePhoto: () -> Unit,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val working = state?.status in setOf(
+        ProductImageUiStatus.LOADING,
+        ProductImageUiStatus.UPLOADING,
+        ProductImageUiStatus.REMOVING
+    )
+    val hasImage = product.primaryImageVersionId != null || state?.versionId != null
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.product_image_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            ProductImagePreview(
+                state = state,
+                contentDescription = stringResource(R.string.product_image_main),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+            )
+            when {
+                product.id == 0L -> Text(
+                    text = stringResource(R.string.product_image_save_first),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                !apiConfigured -> Text(
+                    text = stringResource(R.string.product_image_not_configured),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+
+                state?.status == ProductImageUiStatus.ERROR -> Text(
+                    text = stringResource(R.string.product_image_operation_failed),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+
+                state?.source == ProductImageLoadSource.CACHE -> Text(
+                    text = stringResource(R.string.product_image_offline_cache),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (state?.status == ProductImageUiStatus.ERROR) {
+                TextButton(
+                    enabled = !working,
+                    onClick = onRetry,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.product_image_retry))
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                TextButton(
+                    enabled = product.id != 0L && canManage && !working,
+                    onClick = onChoosePhoto,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.product_image_choose))
+                }
+                TextButton(
+                    enabled = product.id != 0L && canManage && !working,
+                    onClick = onTakePhoto,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.CameraAlt, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.product_image_camera))
+                }
+            }
+            if (hasImage) {
+                TextButton(
+                    enabled = canManage && !working,
+                    onClick = onRemove,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.product_image_remove))
+                }
+            }
+        }
     }
 }
 
