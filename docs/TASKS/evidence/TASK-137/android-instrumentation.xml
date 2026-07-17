@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<testsuites tests="3" failures="0" errors="0" skipped="0" time="0.976" timestamp="2026-07-17T10:06:44" hostname="localhost">
+  <testsuite name="com.example.merchandisecontrolsplitview.productimage.ProductImageDeviceTest" tests="3" failures="0" errors="0" skipped="0" time="0.304" timestamp="2026-07-17T10:06:44" hostname="localhost">
+    <properties>
+      <property name="device" value="Medium_Phone_API_35(AVD) - 15" />
+      <property name="flavor" value="" />
+      <property name="project" value=":app" />
+    </properties>
+    <testcase name="highResolutionPreprocessAndCacheRunOnDeviceWithScopedIsolation" classname="com.example.merchandisecontrolsplitview.productimage.ProductImageDeviceTest" time="0.247" />
+    <testcase name="pickerAndCameraContractsStayImageOnlyAndAppScoped" classname="com.example.merchandisecontrolsplitview.productimage.ProductImageDeviceTest" time="0.001" />
+    <testcase name="uploadClientRunsIntentTwoDirectPutsAndFinalizeAgainstLoopback" classname="com.example.merchandisecontrolsplitview.productimage.ProductImageDeviceTest" time="0.056" />
+  </testsuite>
+</testsuites>
