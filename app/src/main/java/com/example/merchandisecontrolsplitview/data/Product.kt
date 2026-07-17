@@ -39,5 +39,7 @@ data class Product(
     val oldRetailPrice: Double? = null,
     val supplierId: Long? = null,
     val categoryId: Long? = null,
-    val stockQuantity: Double? = 0.0
+    val stockQuantity: Double? = 0.0,
+    val primaryImageVersionId: String? = null,
+    val primaryImageUpdatedAt: String? = null
 )

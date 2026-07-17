@@ -29,6 +29,11 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
+import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.productimage.ProductImageException
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadResult
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
@@ -60,6 +65,28 @@ data class ExportUiState(
     val inProgress: Boolean = false,
     val message: String? = null,
     val progress: Int? = null
+)
+
+data class ProductImageUiKey(
+    val productId: Long,
+    val variant: ProductImageVariant
+)
+
+enum class ProductImageUiStatus {
+    ABSENT,
+    LOADING,
+    READY,
+    UPLOADING,
+    REMOVING,
+    ERROR
+}
+
+data class ProductImageUiState(
+    val status: ProductImageUiStatus,
+    val bytes: ByteArray? = null,
+    val versionId: String? = null,
+    val source: ProductImageLoadSource? = null,
+    val errorCode: String? = null
 )
 
 private data class FullImportDbSnapshot(
@@ -159,6 +186,13 @@ class DatabaseViewModel(
         _productDetailsOverrides.asStateFlow()
 
     private val appContext = getApplication<Application>().applicationContext
+    private val merchandiseApplication =
+        getApplication<Application>() as MerchandiseControlApplication
+    private val productImageService = merchandiseApplication.productImageService
+    private var productImageScopeGeneration = 0L
+    private val _productImageStates = MutableStateFlow<Map<ProductImageUiKey, ProductImageUiState>>(emptyMap())
+    val productImageStates: StateFlow<Map<ProductImageUiKey, ProductImageUiState>> =
+        _productImageStates.asStateFlow()
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
     private val _supplierCatalogQuery = MutableStateFlow("")
@@ -187,6 +221,194 @@ class DatabaseViewModel(
 
     init {
         observeRemoteAppliedProductIds()
+        observeProductImageScope()
+    }
+
+    fun canManageProductImages(): Boolean = productImageService.canWriteNow()
+
+    fun productImagesConfigured(): Boolean = productImageService.isConfigured
+
+    fun loadProductImage(
+        productId: Long,
+        variant: ProductImageVariant,
+        expectedVersionId: String?,
+        force: Boolean = false
+    ) {
+        val key = ProductImageUiKey(productId, variant)
+        if (expectedVersionId == null && !force) {
+            updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
+            val generation = productImageScopeGeneration
+            viewModelScope.launch {
+                loadProductImageNow(key, generation)
+            }
+            return
+        }
+        val current = _productImageStates.value[key]
+        if (!force &&
+            (current?.status == ProductImageUiStatus.LOADING ||
+                (current?.status == ProductImageUiStatus.READY && current.versionId == expectedVersionId))
+        ) {
+            return
+        }
+        updateProductImageState(
+            key,
+            ProductImageUiState(
+                status = ProductImageUiStatus.LOADING,
+                bytes = current?.bytes,
+                versionId = expectedVersionId ?: current?.versionId
+            )
+        )
+        val generation = productImageScopeGeneration
+        viewModelScope.launch {
+            loadProductImageNow(key, generation)
+        }
+    }
+
+    fun uploadProductImage(
+        productId: Long,
+        sourceUri: Uri,
+        onFinished: () -> Unit = {}
+    ) {
+        val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        keys.forEach { key ->
+            val current = _productImageStates.value[key]
+            updateProductImageState(
+                key,
+                ProductImageUiState(
+                    status = ProductImageUiStatus.UPLOADING,
+                    bytes = current?.bytes,
+                    versionId = current?.versionId
+                )
+            )
+        }
+        viewModelScope.launch {
+            val generation = productImageScopeGeneration
+            try {
+                val result = productImageService.upload(productId, sourceUri)
+                if (generation != productImageScopeGeneration) return@launch
+                keys.forEach { key ->
+                    updateProductImageState(
+                        key,
+                        ProductImageUiState(
+                            status = ProductImageUiStatus.LOADING,
+                            versionId = result.versionId
+                        )
+                    )
+                    loadProductImageNow(key, generation)
+                }
+            } catch (error: ProductImageException) {
+                if (generation != productImageScopeGeneration) return@launch
+                keys.forEach { key ->
+                    val current = _productImageStates.value[key]
+                    updateProductImageState(
+                        key,
+                        ProductImageUiState(
+                            status = ProductImageUiStatus.ERROR,
+                            bytes = current?.bytes,
+                            versionId = current?.versionId,
+                            errorCode = error.code
+                        )
+                    )
+                }
+            } finally {
+                onFinished()
+            }
+        }
+    }
+
+    fun removeProductImage(productId: Long) {
+        val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        keys.forEach { key ->
+            val current = _productImageStates.value[key]
+            updateProductImageState(
+                key,
+                ProductImageUiState(
+                    status = ProductImageUiStatus.REMOVING,
+                    bytes = current?.bytes,
+                    versionId = current?.versionId
+                )
+            )
+        }
+        viewModelScope.launch {
+            val generation = productImageScopeGeneration
+            try {
+                productImageService.remove(productId)
+                if (generation != productImageScopeGeneration) return@launch
+                keys.forEach { key ->
+                    updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
+                }
+            } catch (error: ProductImageException) {
+                if (generation != productImageScopeGeneration) return@launch
+                keys.forEach { key ->
+                    val current = _productImageStates.value[key]
+                    updateProductImageState(
+                        key,
+                        ProductImageUiState(
+                            status = ProductImageUiStatus.ERROR,
+                            bytes = current?.bytes,
+                            versionId = current?.versionId,
+                            errorCode = error.code
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun loadProductImageNow(key: ProductImageUiKey, generation: Long) {
+        try {
+            when (val result = productImageService.load(key.productId, key.variant)) {
+                ProductImageLoadResult.Absent -> if (generation == productImageScopeGeneration) {
+                    updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
+                }
+
+                is ProductImageLoadResult.Ready -> if (generation == productImageScopeGeneration) {
+                    updateProductImageState(
+                        key,
+                        ProductImageUiState(
+                            status = ProductImageUiStatus.READY,
+                            bytes = result.bytes,
+                            versionId = result.versionId,
+                            source = result.source
+                        )
+                    )
+                }
+            }
+        } catch (error: ProductImageException) {
+            if (generation != productImageScopeGeneration) return
+            val current = _productImageStates.value[key]
+            updateProductImageState(
+                key,
+                ProductImageUiState(
+                    status = ProductImageUiStatus.ERROR,
+                    bytes = current?.bytes,
+                    versionId = current?.versionId,
+                    errorCode = error.code
+                )
+            )
+        }
+    }
+
+    private fun observeProductImageScope() {
+        viewModelScope.launch {
+            combine(
+                merchandiseApplication.authManager.state,
+                merchandiseApplication.shopContextRepository.state
+            ) { auth, shopContext ->
+                val accountId = (auth as? AuthState.SignedIn)?.userId.orEmpty()
+                "$accountId:${shopContext.activeShopId.orEmpty()}"
+            }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    productImageScopeGeneration += 1
+                    _productImageStates.value = emptyMap()
+                }
+        }
+    }
+
+    private fun updateProductImageState(key: ProductImageUiKey, state: ProductImageUiState) {
+        _productImageStates.update { current -> current + (key to state) }
     }
 
     private val _supplierInputText = MutableStateFlow("")

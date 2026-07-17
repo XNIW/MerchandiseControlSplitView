@@ -53,6 +53,11 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
             "GOOGLE_WEB_CLIENT_ID",
             readLocalOrEnv("GOOGLE_WEB_CLIENT_ID").toBuildConfigLiteral()
         )
+        buildConfigField(
+            "String",
+            "PRODUCT_IMAGE_API_BASE_URL",
+            readLocalOrEnv("PRODUCT_IMAGE_API_BASE_URL").toBuildConfigLiteral()
+        )
     }
 
     buildTypes {
