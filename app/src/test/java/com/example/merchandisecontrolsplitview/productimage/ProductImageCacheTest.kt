@@ -3,7 +3,9 @@ package com.example.merchandisecontrolsplitview.productimage
 import android.graphics.Bitmap
 import android.graphics.Color
 import java.io.ByteArrayOutputStream
+import java.io.File
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -64,6 +66,31 @@ class ProductImageCacheTest {
         assertArrayEquals(bytes, cache.read(otherAccountReference))
     }
 
+    @Test
+    fun `shop and account purge remove only the requested scope`() {
+        val cache = ProductImageCache(temporaryFolder.newFolder("cache-scope-purge"), Unit)
+        val bytes = jpegBytes()
+        val accountOneScope = cache.accountScope(accountOne)
+        val accountTwoScope = cache.accountScope(accountTwo)
+        val firstShop = reference(accountOneScope, shopOne, versionOne)
+        val secondShop = reference(accountOneScope, shopTwo, versionOne)
+        val secondAccount = reference(accountTwoScope, shopOne, versionOne)
+        cache.write(firstShop, bytes)
+        cache.write(secondShop, bytes)
+        cache.write(secondAccount, bytes)
+
+        cache.purgeShop(accountOneScope, shopOne)
+
+        assertNull(cache.read(firstShop))
+        assertArrayEquals(bytes, cache.read(secondShop))
+        assertArrayEquals(bytes, cache.read(secondAccount))
+
+        cache.purgeAccount(accountOneScope)
+
+        assertNull(cache.read(secondShop))
+        assertArrayEquals(bytes, cache.read(secondAccount))
+    }
+
     @Test(expected = ProductImageException::class)
     fun `cache rejects non uuid path components`() {
         val cache = ProductImageCache(temporaryFolder.newFolder("cache-invalid"), Unit)
@@ -87,6 +114,82 @@ class ProductImageCacheTest {
         file.writeBytes(jpegWithApp1(jpegBytes()))
 
         assertNull(cache.read(reference))
+    }
+
+    @Test
+    fun `memory cache uses real byte cost and evicts least recently used entry`() {
+        val bytes = jpegBytes()
+        val cache = ProductImageCache(
+            testRoot = temporaryFolder.newFolder("cache-memory-lru"),
+            memoryMaxBytes = bytes.size.toLong() + 1L,
+            diskMaxBytes = 10L * 1024L * 1024L
+        )
+        val scope = cache.accountScope(accountOne)
+        val first = reference(scope, shopOne, versionOne)
+        val second = reference(scope, shopOne, versionTwo)
+
+        cache.write(first, bytes)
+        cache.write(second, bytes)
+
+        assertEquals(1, cache.snapshot().memoryEntries)
+        assertEquals(bytes.size.toLong(), cache.snapshot().memoryBytes)
+        assertArrayEquals(bytes, cache.read(first))
+        assertEquals(1, cache.snapshot().memoryEntries)
+        assertEquals(bytes.size.toLong(), cache.snapshot().memoryBytes)
+    }
+
+    @Test
+    fun `disk cache evicts oldest files by real byte budget`() {
+        var now = 1_000L
+        val bytes = jpegBytes()
+        val root = temporaryFolder.newFolder("cache-disk-lru")
+        val cache = ProductImageCache(
+            testRoot = root,
+            memoryMaxBytes = 10L * 1024L * 1024L,
+            diskMaxBytes = bytes.size.toLong() + 1L,
+            nowEpochMillis = { now }
+        )
+        val scope = cache.accountScope(accountOne)
+        val first = reference(scope, shopOne, versionOne)
+        val second = reference(scope, shopOne, versionTwo)
+
+        cache.write(first, bytes)
+        now += 1_000L
+        cache.write(second, bytes)
+
+        assertFalse(cache.fileFor(first).exists())
+        assertTrue(cache.fileFor(second).isFile)
+        assertEquals(1, cache.snapshot().diskEntries)
+        assertEquals(bytes.size.toLong(), cache.snapshot().diskBytes)
+    }
+
+    @Test
+    fun `invalid decode is deleted instead of entering cache`() {
+        val cache = ProductImageCache(temporaryFolder.newFolder("cache-invalid-decode"), Unit)
+        val reference = reference(cache.accountScope(accountOne), shopOne, versionOne)
+        val file = cache.fileFor(reference)
+        assertTrue(file.parentFile!!.mkdirs())
+        file.writeBytes(
+            byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xd9.toByte())
+        )
+
+        assertNull(cache.read(reference))
+        assertFalse(file.exists())
+        assertEquals(0, cache.snapshot().memoryEntries)
+        assertEquals(0, cache.snapshot().diskEntries)
+    }
+
+    @Test
+    fun `startup removes abandoned atomic temporary files`() {
+        val root = temporaryFolder.newFolder("cache-temp-cleanup")
+        val directory = File(root, "stale")
+        assertTrue(directory.mkdirs())
+        val temporary = File(directory, ".thumb-abandoned.tmp")
+        temporary.writeBytes(byteArrayOf(1, 2, 3))
+
+        ProductImageCache(root, Unit)
+
+        assertFalse(temporary.exists())
     }
 
     private fun reference(scope: String, shop: String, version: String) = ProductImageReference(

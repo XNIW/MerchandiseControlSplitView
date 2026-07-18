@@ -5,7 +5,9 @@ import android.database.sqlite.SQLiteConstraintException
 import android.net.Uri
 import android.os.Looper
 import app.cash.turbine.test
+import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogBlankNameException
 import com.example.merchandisecontrolsplitview.data.CatalogDeleteResult
 import com.example.merchandisecontrolsplitview.data.CatalogDeleteStrategy
@@ -16,7 +18,18 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
+import com.example.merchandisecontrolsplitview.data.SelectedShop
+import com.example.merchandisecontrolsplitview.data.ShopContext
+import com.example.merchandisecontrolsplitview.data.ShopContextRepository
 import com.example.merchandisecontrolsplitview.data.Supplier
+import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
+import com.example.merchandisecontrolsplitview.productimage.ProductImageBatchItem
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadRequest
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadResult
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
+import com.example.merchandisecontrolsplitview.productimage.ProductImageService
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
@@ -32,12 +45,17 @@ import io.mockk.runs
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -312,6 +330,236 @@ class DatabaseViewModelTest {
         advanceUntilIdle()
 
         assertFalse(viewModel.productDetailsOverrides.value.containsKey(product.id))
+    }
+
+    @Test
+    fun `visible product without image stays absent without image service request`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val key = ProductImageUiKey(51L, ProductImageVariant.THUMB)
+
+        imageViewModel.setProductImageVisible(
+            productId = key.productId,
+            expectedVersionId = null,
+            visible = true
+        )
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.ABSENT, imageViewModel.productImageStates.value[key]?.status)
+        assertNull(imageViewModel.productImageStates.value[key]?.bytes)
+        coVerify(exactly = 0) { imageService.loadBatch(any()) }
+    }
+
+    @Test
+    fun `two hundred rows load only composed thumbnails and release offscreen bytes`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val requestedBatches = mutableListOf<List<ProductImageLoadRequest>>()
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val requests = firstArg<List<ProductImageLoadRequest>>()
+            requestedBatches += requests
+            requests.map { request ->
+                ProductImageBatchItem(
+                    request = request,
+                    result = ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(request.localProductId.toByte()),
+                        source = ProductImageLoadSource.NETWORK,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            }
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+
+        (1L..200L).forEach { productId ->
+            imageViewModel.setProductImageVisible(productId, "version-$productId", visible = true)
+        }
+        (1L..188L).forEach { productId ->
+            imageViewModel.setProductImageVisible(productId, "version-$productId", visible = false)
+        }
+        advanceTimeBy(17L)
+        advanceUntilIdle()
+
+        assertEquals(1, requestedBatches.size)
+        assertEquals((189L..200L).toList(), requestedBatches.single().map { it.localProductId })
+        assertEquals(12, imageViewModel.productImageStates.value.size)
+        assertTrue(imageViewModel.productImageStates.value.values.all {
+            it.status == ProductImageUiStatus.READY && it.bytes != null
+        })
+
+        (189L..200L).forEach { productId ->
+            imageViewModel.setProductImageVisible(productId, "version-$productId", visible = false)
+        }
+
+        assertTrue(imageViewModel.productImageStates.value.isEmpty())
+    }
+
+    @Test
+    fun `stale main image completion cannot replace latest version`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val firstResult = CompletableDeferred<List<ProductImageBatchItem>>()
+        val secondResult = CompletableDeferred<List<ProductImageBatchItem>>()
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val request = firstArg<List<ProductImageLoadRequest>>().single()
+            if (request.expectedVersionId == "version-old") {
+                withContext(NonCancellable) { firstResult.await() }
+            } else {
+                secondResult.await()
+            }
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val key = ProductImageUiKey(71L, ProductImageVariant.MAIN)
+        val oldRequest = ProductImageLoadRequest(key.productId, key.variant, "version-old")
+        val newRequest = ProductImageLoadRequest(key.productId, key.variant, "version-new")
+
+        imageViewModel.loadProductImage(key.productId, key.variant, oldRequest.expectedVersionId)
+        runCurrent()
+        imageViewModel.loadProductImage(key.productId, key.variant, newRequest.expectedVersionId)
+        runCurrent()
+        secondResult.complete(
+            listOf(
+                ProductImageBatchItem(
+                    newRequest,
+                    ProductImageLoadResult.Ready(
+                        byteArrayOf(2),
+                        ProductImageLoadSource.NETWORK,
+                        requireNotNull(newRequest.expectedVersionId)
+                    )
+                )
+            )
+        )
+        runCurrent()
+        firstResult.complete(
+            listOf(
+                ProductImageBatchItem(
+                    oldRequest,
+                    ProductImageLoadResult.Ready(
+                        byteArrayOf(1),
+                        ProductImageLoadSource.NETWORK,
+                        requireNotNull(oldRequest.expectedVersionId)
+                    )
+                )
+            )
+        )
+        advanceUntilIdle()
+
+        val state = requireNotNull(imageViewModel.productImageStates.value[key])
+        assertEquals(ProductImageUiStatus.READY, state.status)
+        assertEquals("version-new", state.versionId)
+        assertTrue(state.bytes!!.contentEquals(byteArrayOf(2)))
+    }
+
+    @Test
+    fun `detail loads thumbnail before main and ignores duplicate recomposition`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val mainGate = CompletableDeferred<Unit>()
+        val requestedVariants = mutableListOf<ProductImageVariant>()
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val request = firstArg<List<ProductImageLoadRequest>>().single()
+            requestedVariants += request.variant
+            if (request.variant == ProductImageVariant.MAIN) mainGate.await()
+            listOf(
+                ProductImageBatchItem(
+                    request = request,
+                    result = ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(
+                            if (request.variant == ProductImageVariant.THUMB) 1 else 2
+                        ),
+                        source = ProductImageLoadSource.NETWORK,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            )
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val thumbKey = ProductImageUiKey(76L, ProductImageVariant.THUMB)
+        val mainKey = ProductImageUiKey(76L, ProductImageVariant.MAIN)
+
+        imageViewModel.loadProductImageProgressively(76L, "version-progressive")
+        runCurrent()
+
+        assertEquals(listOf(ProductImageVariant.THUMB, ProductImageVariant.MAIN), requestedVariants)
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[thumbKey]?.status)
+        assertTrue(
+            imageViewModel.productImageStates.value[thumbKey]?.bytes?.contentEquals(byteArrayOf(1)) == true
+        )
+        assertEquals(ProductImageUiStatus.LOADING, imageViewModel.productImageStates.value[mainKey]?.status)
+
+        imageViewModel.loadProductImageProgressively(76L, "version-progressive")
+        runCurrent()
+        assertEquals(2, requestedVariants.size)
+
+        mainGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertTrue(
+            imageViewModel.productImageStates.value[mainKey]?.bytes?.contentEquals(byteArrayOf(2)) == true
+        )
+    }
+
+    @Test
+    fun `shop switch and logout purge the previous image cache scope`() = runTest {
+        val accountId = "account-one"
+        val firstShopId = "shop-one"
+        val secondShopId = "shop-two"
+        val authStates = MutableStateFlow<AuthState>(AuthState.SignedIn(accountId, null))
+        val shopStates = MutableStateFlow(shopContext(accountId, firstShopId))
+        val authManager = mockk<SupabaseAuthManager>()
+        val shopContextRepository = mockk<ShopContextRepository>()
+        val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        every { authManager.state } returns authStates
+        every { shopContextRepository.state } returns shopStates
+        every { scopedApp.authManager } returns authManager
+        every { scopedApp.shopContextRepository } returns shopContextRepository
+        val imageViewModel = DatabaseViewModel(scopedApp, repository, imageService)
+        runCurrent()
+        imageViewModel.setProductImageVisible(81L, null, visible = true)
+        assertFalse(imageViewModel.productImageStates.value.isEmpty())
+
+        shopStates.value = shopContext(accountId, secondShopId)
+        runCurrent()
+
+        assertTrue(imageViewModel.productImageStates.value.isEmpty())
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, firstShopId) }
+
+        authStates.value = AuthState.SignedOut
+        runCurrent()
+
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
+    }
+
+    @Test
+    fun `upload progress is exposed and cancel restores previous image state`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val uploadGate = CompletableDeferred<Unit>()
+        coEvery { imageService.upload(91L, any(), any()) } coAnswers {
+            thirdArg<(ProductImageMutationPhase) -> Unit>()(
+                ProductImageMutationPhase.UPLOAD_MAIN
+            )
+            uploadGate.await()
+            error("Cancelled upload must not continue")
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val mainKey = ProductImageUiKey(91L, ProductImageVariant.MAIN)
+        val thumbKey = ProductImageUiKey(91L, ProductImageVariant.THUMB)
+        imageViewModel.loadProductImage(91L, ProductImageVariant.MAIN, null)
+
+        imageViewModel.uploadProductImage(91L, Uri.EMPTY)
+        runCurrent()
+
+        assertEquals(ProductImageUiStatus.UPLOADING, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(
+            ProductImageMutationPhase.UPLOAD_MAIN,
+            imageViewModel.productImageStates.value[mainKey]?.mutationPhase
+        )
+
+        imageViewModel.cancelProductImageOperation(91L)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.ABSENT, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertFalse(imageViewModel.productImageStates.value.containsKey(thumbKey))
+        coVerify(exactly = 1) { imageService.upload(91L, Uri.EMPTY, any()) }
     }
 
     @Test
@@ -1008,6 +1256,19 @@ class DatabaseViewModelTest {
         prevPurchase = prevPurchase,
         lastRetail = lastRetail,
         prevRetail = prevRetail
+    )
+
+    private fun shopContext(accountId: String, shopId: String) = ShopContext(
+        ownerUserId = accountId,
+        linkedShops = emptyList(),
+        selectedShop = SelectedShop(
+            shopId = shopId,
+            code = null,
+            name = shopId,
+            role = "owner",
+            status = "active",
+            canWrite = true
+        )
     )
 
     private suspend fun preparePreview(): Long {

@@ -19,6 +19,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
 import java.net.URI
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -28,7 +29,7 @@ internal class ProductImageApiClient(
     storageBaseUrl: String,
     private val debugBuild: Boolean,
     private val http: HttpClient = defaultHttpClient()
-) {
+) : ProductImageRemoteGateway {
     private val baseUrl = validateBaseUrl(apiBaseUrl)
     private val storageRoot = validateBaseUrl(storageBaseUrl)?.let(::URI)
     private val json = Json {
@@ -36,29 +37,29 @@ internal class ProductImageApiClient(
         explicitNulls = false
     }
 
-    val isConfigured: Boolean get() = baseUrl != null && storageRoot != null
+    override val isConfigured: Boolean get() = baseUrl != null && storageRoot != null
 
-    suspend fun createIntent(
+    override suspend fun createIntent(
         accessToken: String,
         body: ProductImageIntentBody
     ): ProductImageIntentResponse = postJson("intent", accessToken, body)
 
-    suspend fun finalizeImage(
+    override suspend fun finalizeImage(
         accessToken: String,
         body: ProductImageFinalizeBody
     ): ProductImageFinalizeResponse = postJson("finalize", accessToken, body)
 
-    suspend fun removeImage(
+    override suspend fun removeImage(
         accessToken: String,
         body: ProductImageRemoveBody
     ): ProductImageRemoveResponse = postJson("remove", accessToken, body)
 
-    suspend fun readUrls(
+    override suspend fun readUrls(
         accessToken: String,
         body: ProductImageReadBody
     ): ProductImageReadResponse = postJson("read-urls", accessToken, body)
 
-    suspend fun putSignedJpeg(signedUrl: String, bytes: ByteArray) {
+    override suspend fun putSignedJpeg(signedUrl: String, bytes: ByteArray) {
         if (bytes.isEmpty() ||
             bytes.size > PRODUCT_IMAGE_MAIN_MAX_BYTES ||
             !isJpeg(bytes) ||
@@ -85,6 +86,8 @@ internal class ProductImageApiClient(
                 method = HttpMethod.Put
                 header("x-upsert", "false")
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Throwable) {
             throw ProductImageException("image_upload_failed")
         }
@@ -93,7 +96,7 @@ internal class ProductImageApiClient(
         }
     }
 
-    suspend fun downloadSignedJpeg(
+    override suspend fun downloadSignedJpeg(
         signedUrl: String,
         variant: ProductImageVariant
     ): ByteArray {
@@ -102,6 +105,8 @@ internal class ProductImageApiClient(
             http.get(safeUrl) {
                 accept(ContentType.Image.JPEG)
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Throwable) {
             throw ProductImageException("image_download_failed")
         }
@@ -121,6 +126,8 @@ internal class ProductImageApiClient(
         }
         val bytes = try {
             response.bodyAsBytes()
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Throwable) {
             throw ProductImageException("image_download_failed")
         }
@@ -134,7 +141,7 @@ internal class ProductImageApiClient(
         return bytes
     }
 
-    fun close() {
+    override fun close() {
         http.close()
     }
 
@@ -152,6 +159,8 @@ internal class ProductImageApiClient(
                 contentType(ContentType.Application.Json)
                 setBody(json.encodeToString(body))
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Throwable) {
             throw ProductImageException("image_request_failed")
         }
@@ -160,6 +169,8 @@ internal class ProductImageApiClient(
         }
         val text = try {
             response.bodyAsText()
+        } catch (error: CancellationException) {
+            throw error
         } catch (_: Throwable) {
             throw ProductImageException("image_response_invalid")
         }

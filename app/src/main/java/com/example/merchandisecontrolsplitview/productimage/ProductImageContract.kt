@@ -49,6 +49,18 @@ data class ProductImageReference(
     val variant: ProductImageVariant
 )
 
+data class ProductImageLoadRequest(
+    val localProductId: Long,
+    val variant: ProductImageVariant,
+    val expectedVersionId: String?
+)
+
+data class ProductImageBatchItem(
+    val request: ProductImageLoadRequest,
+    val result: ProductImageLoadResult? = null,
+    val errorCode: String? = null
+)
+
 enum class ProductImageLoadSource { CACHE, NETWORK }
 
 sealed interface ProductImageLoadResult {
@@ -66,13 +78,21 @@ data class ProductImageMutationResult(
     val imageUpdatedAt: String?
 )
 
+enum class ProductImageMutationPhase {
+    PREPROCESSING,
+    UPLOAD_MAIN,
+    UPLOAD_THUMB,
+    FINALIZING,
+    COMPLETED
+}
+
 class ProductImageException(val code: String) : Exception(code)
 
 @Serializable
 internal data class ProductImageUploadMetadataBody(
     val bytes: Int,
     val height: Int,
-    val mimeType: String = "image/jpeg",
+    val mimeType: String,
     val sha256: String,
     val width: Int
 )
@@ -162,6 +182,39 @@ internal data class ProductImageReadItemResponse(
     val variant: String,
     val versionId: String
 )
+
+internal interface ProductImageRemoteGateway {
+    val isConfigured: Boolean
+
+    suspend fun createIntent(
+        accessToken: String,
+        body: ProductImageIntentBody
+    ): ProductImageIntentResponse
+
+    suspend fun finalizeImage(
+        accessToken: String,
+        body: ProductImageFinalizeBody
+    ): ProductImageFinalizeResponse
+
+    suspend fun removeImage(
+        accessToken: String,
+        body: ProductImageRemoveBody
+    ): ProductImageRemoveResponse
+
+    suspend fun readUrls(
+        accessToken: String,
+        body: ProductImageReadBody
+    ): ProductImageReadResponse
+
+    suspend fun putSignedJpeg(signedUrl: String, bytes: ByteArray)
+
+    suspend fun downloadSignedJpeg(
+        signedUrl: String,
+        variant: ProductImageVariant
+    ): ByteArray
+
+    fun close()
+}
 
 internal fun ProductImageMetadata.toBody() = ProductImageUploadMetadataBody(
     bytes = bytes,

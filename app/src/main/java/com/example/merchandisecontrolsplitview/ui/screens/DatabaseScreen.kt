@@ -36,7 +36,6 @@ import com.example.merchandisecontrolsplitview.data.CatalogDeleteStrategy
 import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
 import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.Product
-import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportDisplayName
@@ -308,11 +307,11 @@ fun DatabaseScreen(
                             productDetailsOverrides = productDetailsOverrides,
                             productImageStates = productImageStates,
                             listState = productListState,
-                            onLoadProductImage = { product ->
-                                viewModel.loadProductImage(
+                            onProductImageVisibilityChanged = { product, visible ->
+                                viewModel.setProductImageVisible(
                                     productId = product.id,
-                                    variant = ProductImageVariant.THUMB,
-                                    expectedVersionId = product.primaryImageVersionId
+                                    expectedVersionId = product.primaryImageVersionId,
+                                    visible = visible
                                 )
                             },
                             onProductClick = { itemToEdit = it },

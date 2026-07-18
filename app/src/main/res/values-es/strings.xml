@@ -689,4 +689,10 @@
     <string name="product_image_state_loading">Cargando imagen</string>
     <string name="product_image_state_ready">Imagen disponible</string>
     <string name="product_image_state_error">Imagen no disponible</string>
+    <string name="product_image_progress_preprocessing">Preparando imagen…</string>
+    <string name="product_image_progress_upload_main">Subiendo imagen principal…</string>
+    <string name="product_image_progress_upload_thumb">Subiendo miniatura…</string>
+    <string name="product_image_progress_finalize">Finalizando…</string>
+    <string name="product_image_progress_completed">Imagen actualizada</string>
+    <string name="product_image_cancel_operation">Cancelar carga</string>
 </resources>

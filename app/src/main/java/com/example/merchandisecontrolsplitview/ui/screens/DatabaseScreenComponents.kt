@@ -51,8 +51,9 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -85,6 +86,9 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseHubTab
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.animation.Crossfade
 
 private val DatabaseListContentPadding = PaddingValues(
     start = 20.dp,
@@ -444,7 +448,7 @@ internal fun DatabaseProductListSection(
     modifier: Modifier = Modifier,
     productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
     productImageStates: Map<ProductImageUiKey, ProductImageUiState> = emptyMap(),
-    onLoadProductImage: (Product) -> Unit = {}
+    onProductImageVisibilityChanged: (Product, Boolean) -> Unit = { _, _ -> }
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
@@ -525,7 +529,9 @@ internal fun DatabaseProductListSection(
                                             ProductImageVariant.THUMB
                                         )
                                     ],
-                                    onLoadImage = { onLoadProductImage(currentProduct) },
+                                    onImageVisibilityChanged = { visible ->
+                                        onProductImageVisibilityChanged(currentProduct, visible)
+                                    },
                                     onClick = { onProductClick(currentProduct) },
                                     onShowHistory = { onShowHistory(currentProduct) }
                                 )
@@ -637,13 +643,14 @@ private fun CatalogEntityKind.searchHintRes(): Int = when (this) {
 internal fun ProductRow(
     productDetails: ProductWithDetails,
     imageState: ProductImageUiState? = null,
-    onLoadImage: () -> Unit = {},
+    onImageVisibilityChanged: (Boolean) -> Unit = {},
     onClick: () -> Unit,
     onShowHistory: () -> Unit = {}
 ) {
     val product = productDetails.product
-    LaunchedEffect(product.id, product.primaryImageVersionId) {
-        onLoadImage()
+    DisposableEffect(product.id, product.primaryImageVersionId) {
+        onImageVisibilityChanged(true)
+        onDispose { onImageVisibilityChanged(false) }
     }
     Card(
         modifier = Modifier
@@ -800,12 +807,10 @@ internal fun ProductRow(
 internal fun ProductImagePreview(
     state: ProductImageUiState?,
     contentDescription: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop
 ) {
     val bytes = state?.bytes
-    val bitmap = remember(bytes) {
-        bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap()
-    }
     val semanticState = when {
         state?.status == ProductImageUiStatus.ERROR ->
             stringResource(R.string.product_image_state_error)
@@ -814,7 +819,7 @@ internal fun ProductImagePreview(
             ProductImageUiStatus.UPLOADING,
             ProductImageUiStatus.REMOVING
         ) -> stringResource(R.string.product_image_state_loading)
-        bitmap != null -> stringResource(R.string.product_image_state_ready)
+        bytes != null -> stringResource(R.string.product_image_state_ready)
         else -> stringResource(R.string.product_image_state_empty)
     }
     Box(
@@ -824,13 +829,14 @@ internal fun ProductImagePreview(
             .semantics { stateDescription = semanticState },
         contentAlignment = Alignment.Center
     ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = contentDescription,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+        if (bytes != null) {
+            Crossfade(targetState = bytes, label = "product-image") { imageBytes ->
+                DecodedProductImage(
+                    bytes = imageBytes,
+                    contentDescription = contentDescription,
+                    contentScale = contentScale
+                )
+            }
         } else {
             Icon(
                 imageVector = if (state?.status == ProductImageUiStatus.ERROR) {
@@ -851,6 +857,31 @@ internal fun ProductImagePreview(
         ) {
             CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
         }
+    }
+}
+
+@Composable
+private fun DecodedProductImage(
+    bytes: ByteArray,
+    contentDescription: String,
+    contentScale: ContentScale
+) {
+    val bitmapState = produceState<android.graphics.Bitmap?>(initialValue = null, bytes) {
+        value = withContext(Dispatchers.Default) {
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }
+    }
+    val bitmap = bitmapState.value
+    DisposableEffect(bitmap) {
+        onDispose { bitmap?.recycle() }
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = contentScale,
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 

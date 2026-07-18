@@ -184,7 +184,7 @@ class MerchandiseControlApplication : Application() {
         )
     }
 
-    val productImageService: ProductImageService by lazy {
+    private val productImageServiceDelegate = lazy {
         ProductImageService(
             context = this,
             database = database,
@@ -200,6 +200,7 @@ class MerchandiseControlApplication : Application() {
             accessTokenProvider = { supabaseClient?.auth?.currentAccessTokenOrNull() }
         )
     }
+    val productImageService: ProductImageService by productImageServiceDelegate
 
     val realtimeSessionSubscriber: SupabaseRealtimeSessionSubscriber by lazy {
         SupabaseRealtimeSessionSubscriber(
@@ -352,9 +353,14 @@ class MerchandiseControlApplication : Application() {
         realtimeRefreshCoordinator.shutdown()
         historySessionPushCoordinator.shutdown()
         catalogAutoSyncCoordinator.shutdown()
-        productImageService.close()
+        if (productImageServiceDelegate.isInitialized()) productImageService.close()
         authManager.shutdown()
         super.onTerminate()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (productImageServiceDelegate.isInitialized()) productImageService.trimMemory()
     }
 
     // --- Wiring auth → componenti remoti (task 011, patch 5) ---

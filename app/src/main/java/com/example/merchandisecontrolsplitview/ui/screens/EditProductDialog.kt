@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,6 +58,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -72,6 +74,7 @@ import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
@@ -135,6 +138,9 @@ internal fun EditProductDialog(
     val mainImageState = productImageStates[
         ProductImageUiKey(product.id, ProductImageVariant.MAIN)
     ]
+    val thumbImageState = productImageStates[
+        ProductImageUiKey(product.id, ProductImageVariant.THUMB)
+    ]
     var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
     var pendingCaptureUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var confirmImageRemoval by remember { mutableStateOf(false) }
@@ -164,11 +170,18 @@ internal fun EditProductDialog(
 
     LaunchedEffect(product.id, product.primaryImageVersionId) {
         if (product.id != 0L) {
-            viewModel.loadProductImage(
+            viewModel.loadProductImageProgressively(
                 productId = product.id,
-                variant = ProductImageVariant.MAIN,
                 expectedVersionId = product.primaryImageVersionId
             )
+        }
+    }
+    DisposableEffect(product.id) {
+        onDispose {
+            if (product.id != 0L) {
+                viewModel.cancelProductImageLoad(product.id, ProductImageVariant.MAIN)
+                viewModel.cancelProductImageOperation(product.id)
+            }
         }
     }
 
@@ -369,7 +382,8 @@ internal fun EditProductDialog(
 
                     ProductImageEditorSection(
                         product = product,
-                        state = mainImageState,
+                        mainState = mainImageState,
+                        thumbState = thumbImageState,
                         apiConfigured = viewModel.productImagesConfigured(),
                         canManage = viewModel.canManageProductImages(),
                         onChoosePhoto = {
@@ -379,11 +393,14 @@ internal fun EditProductDialog(
                         },
                         onTakePhoto = ::launchProductCamera,
                         onRetry = {
-                            viewModel.loadProductImage(
+                            viewModel.loadProductImageProgressively(
                                 productId = product.id,
-                                variant = ProductImageVariant.MAIN,
-                                expectedVersionId = product.primaryImageVersionId
+                                expectedVersionId = product.primaryImageVersionId,
+                                force = true
                             )
+                        },
+                        onCancelOperation = {
+                            viewModel.cancelProductImageOperation(product.id)
                         },
                         onRemove = { confirmImageRemoval = true }
                     )
@@ -633,22 +650,44 @@ internal fun EditProductDialog(
 }
 
 @Composable
-private fun ProductImageEditorSection(
+internal fun ProductImageEditorSection(
     product: Product,
-    state: ProductImageUiState?,
+    mainState: ProductImageUiState?,
+    thumbState: ProductImageUiState?,
     apiConfigured: Boolean,
     canManage: Boolean,
     onChoosePhoto: () -> Unit,
     onTakePhoto: () -> Unit,
     onRetry: () -> Unit,
+    onCancelOperation: () -> Unit,
     onRemove: () -> Unit
 ) {
-    val working = state?.status in setOf(
+    val working = mainState?.status in setOf(
+        ProductImageUiStatus.LOADING,
+        ProductImageUiStatus.UPLOADING,
+        ProductImageUiStatus.REMOVING
+    ) || thumbState?.status in setOf(
         ProductImageUiStatus.LOADING,
         ProductImageUiStatus.UPLOADING,
         ProductImageUiStatus.REMOVING
     )
-    val hasImage = product.primaryImageVersionId != null || state?.versionId != null
+    val hasImage = product.primaryImageVersionId != null ||
+        mainState?.versionId != null || thumbState?.versionId != null
+    val mutationPhase = mainState?.mutationPhase ?: thumbState?.mutationPhase
+    val cancellable = mutationPhase in setOf(
+        ProductImageMutationPhase.PREPROCESSING,
+        ProductImageMutationPhase.UPLOAD_MAIN,
+        ProductImageMutationPhase.UPLOAD_THUMB
+    )
+    val previewState = when {
+        mainState?.bytes != null -> mainState
+        thumbState?.bytes != null -> thumbState.copy(
+            status = mainState?.status ?: thumbState.status,
+            errorCode = mainState?.errorCode,
+            mutationPhase = mutationPhase
+        )
+        else -> mainState ?: thumbState
+    }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -660,8 +699,9 @@ private fun ProductImageEditorSection(
                 fontWeight = FontWeight.SemiBold
             )
             ProductImagePreview(
-                state = state,
+                state = previewState,
                 contentDescription = stringResource(R.string.product_image_main),
+                contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(200.dp)
@@ -679,19 +719,34 @@ private fun ProductImageEditorSection(
                     color = MaterialTheme.colorScheme.error
                 )
 
-                state?.status == ProductImageUiStatus.ERROR -> Text(
+                mainState?.status == ProductImageUiStatus.ERROR -> Text(
                     text = stringResource(R.string.product_image_operation_failed),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
 
-                state?.source == ProductImageLoadSource.CACHE -> Text(
+                previewState?.source == ProductImageLoadSource.CACHE -> Text(
                     text = stringResource(R.string.product_image_offline_cache),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            if (state?.status == ProductImageUiStatus.ERROR) {
+            mutationPhase?.let { phase ->
+                Text(
+                    text = stringResource(phase.productImageProgressLabel()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (cancellable) {
+                TextButton(
+                    onClick = onCancelOperation,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.product_image_cancel_operation))
+                }
+            }
+            if (mainState?.status == ProductImageUiStatus.ERROR) {
                 TextButton(
                     enabled = !working,
                     onClick = onRetry,
@@ -736,6 +791,14 @@ private fun ProductImageEditorSection(
             }
         }
     }
+}
+
+private fun ProductImageMutationPhase.productImageProgressLabel(): Int = when (this) {
+    ProductImageMutationPhase.PREPROCESSING -> R.string.product_image_progress_preprocessing
+    ProductImageMutationPhase.UPLOAD_MAIN -> R.string.product_image_progress_upload_main
+    ProductImageMutationPhase.UPLOAD_THUMB -> R.string.product_image_progress_upload_thumb
+    ProductImageMutationPhase.FINALIZING -> R.string.product_image_progress_finalize
+    ProductImageMutationPhase.COMPLETED -> R.string.product_image_progress_completed
 }
 
 @Composable

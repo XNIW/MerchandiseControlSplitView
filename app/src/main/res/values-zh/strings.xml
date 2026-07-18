@@ -668,4 +668,10 @@
     <string name="product_image_state_loading">正在加载图片</string>
     <string name="product_image_state_ready">图片可用</string>
     <string name="product_image_state_error">图片不可用</string>
+    <string name="product_image_progress_preprocessing">正在处理图片…</string>
+    <string name="product_image_progress_upload_main">正在上传主图…</string>
+    <string name="product_image_progress_upload_thumb">正在上传缩略图…</string>
+    <string name="product_image_progress_finalize">正在完成…</string>
+    <string name="product_image_progress_completed">图片已更新</string>
+    <string name="product_image_cancel_operation">取消上传</string>
 </resources>

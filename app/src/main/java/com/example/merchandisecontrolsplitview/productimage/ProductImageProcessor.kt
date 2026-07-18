@@ -5,21 +5,38 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorSpace
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import androidx.core.graphics.createBitmap
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
+import java.io.File
+import java.io.FileInputStream
+import java.io.InputStream
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 class ProductImageProcessor {
     suspend fun prepare(context: Context, uri: Uri): PreparedProductImage =
         withContext(Dispatchers.IO) {
-            val inputBytes = readValidatedInput(context.contentResolver, uri)
+            val operationContext = currentCoroutineContext()
+            val checkCancelled = { operationContext.ensureActive() }
+            val resolver = context.contentResolver
+            validateInput(resolver, uri, checkCancelled)
+            val bounds = readBounds(resolver, uri)
+            validateDimensions(bounds.width, bounds.height)
+            checkCancelled()
             val source = try {
-                ImageDecoder.createSource(ByteBuffer.wrap(inputBytes))
+                if (uri.scheme == ContentResolver.SCHEME_FILE) {
+                    ImageDecoder.createSource(File(requireNotNull(uri.path)))
+                } else {
+                    ImageDecoder.createSource(resolver, uri)
+                }
             } catch (_: Throwable) {
                 throw ProductImageException("image_decode_failed")
             }
@@ -33,44 +50,72 @@ class ProductImageProcessor {
                         decoder.setTargetSize(target.width, target.height)
                     }
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: ProductImageException) {
                 throw error
             } catch (_: Throwable) {
                 throw ProductImageException("image_decode_failed")
             }
             try {
-                prepareBitmap(decoded)
+                checkCancelled()
+                prepareBitmap(decoded, checkCancelled)
             } finally {
                 decoded.recycle()
             }
         }
 
-    internal fun prepareBitmap(source: Bitmap): PreparedProductImage {
+    internal fun prepareBitmap(
+        source: Bitmap,
+        checkCancelled: () -> Unit = {}
+    ): PreparedProductImage {
+        checkCancelled()
         validateDimensions(source.width, source.height)
-        val main = encodeWithinBudget(
-            source = source,
-            initialMaxSide = PRODUCT_IMAGE_MAIN_MAX_SIDE,
-            minimumSide = 640,
-            qualities = intArrayOf(82, 76, 70),
-            targetBytes = PRODUCT_IMAGE_MAIN_TARGET_BYTES,
-            hardMaxBytes = PRODUCT_IMAGE_MAIN_MAX_BYTES
-        )
-        val thumb = encodeWithinBudget(
-            source = source,
-            initialMaxSide = PRODUCT_IMAGE_THUMB_MAX_SIDE,
-            minimumSide = 128,
-            qualities = intArrayOf(75, 68, 60, 52),
-            targetBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES,
-            hardMaxBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES
-        )
-        if (jpegContainsApp1(main.bytes) || jpegContainsApp1(thumb.bytes)) {
-            throw ProductImageException("image_metadata_strip_failed")
+        val canUseSourceDirectly = !source.hasAlpha() &&
+            maxOf(source.width, source.height) <= PRODUCT_IMAGE_MAIN_MAX_SIDE
+        val normalizedMain = if (canUseSourceDirectly) {
+            source
+        } else {
+            renderOpaque(source, PRODUCT_IMAGE_MAIN_MAX_SIDE)
         }
-        return PreparedProductImage(main = main, thumb = thumb)
+        return try {
+            checkCancelled()
+            val main = encodeWithinBudget(
+                source = normalizedMain,
+                initialMaxSide = PRODUCT_IMAGE_MAIN_MAX_SIDE,
+                minimumSide = 640,
+                qualities = intArrayOf(82, 76, 70),
+                targetBytes = PRODUCT_IMAGE_MAIN_TARGET_BYTES,
+                hardMaxBytes = PRODUCT_IMAGE_MAIN_MAX_BYTES,
+                checkCancelled = checkCancelled
+            )
+            checkCancelled()
+            // La thumb deriva sempre dal bitmap main normalizzato, mai dalla sorgente originale.
+            val thumb = encodeWithinBudget(
+                source = normalizedMain,
+                initialMaxSide = PRODUCT_IMAGE_THUMB_MAX_SIDE,
+                minimumSide = 128,
+                qualities = intArrayOf(75, 68, 60, 52),
+                targetBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES,
+                hardMaxBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES,
+                checkCancelled = checkCancelled
+            )
+            if (jpegContainsApp1(main.bytes) || jpegContainsApp1(thumb.bytes)) {
+                throw ProductImageException("image_metadata_strip_failed")
+            }
+            PreparedProductImage(main = main, thumb = thumb)
+        } finally {
+            if (!canUseSourceDirectly) normalizedMain.recycle()
+        }
     }
 
-    private fun readValidatedInput(resolver: ContentResolver, uri: Uri): ByteArray {
+    private fun validateInput(
+        resolver: ContentResolver,
+        uri: Uri,
+        checkCancelled: () -> Unit
+    ) {
         val declaredLength = try {
             resolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
         } catch (_: Throwable) {
@@ -82,37 +127,45 @@ class ProductImageProcessor {
             throw ProductImageException("image_input_size_invalid")
         }
 
-        val bytes = try {
-            resolver.openInputStream(uri)?.use { input ->
-                val output = ByteArrayOutputStream()
+        val countEntireStream = declaredLength == null || declaredLength < 0L
+        var total = if (countEntireStream) 0L else declaredLength
+        val header = ByteArray(16)
+        var headerSize = 0
+        try {
+            openInputStream(resolver, uri)?.use { input ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var total = 0
                 while (true) {
+                    checkCancelled()
                     val count = input.read(buffer)
                     if (count < 0) break
                     if (count == 0) continue
-                    total += count
+                    if (countEntireStream) total += count
                     if (total > PRODUCT_IMAGE_INPUT_MAX_BYTES) {
                         throw ProductImageException("image_input_size_invalid")
                     }
-                    output.write(buffer, 0, count)
+                    if (headerSize < header.size) {
+                        val copyCount = minOf(count, header.size - headerSize)
+                        buffer.copyInto(header, headerSize, 0, copyCount)
+                        headerSize += copyCount
+                    }
+                    if (!countEntireStream && headerSize == header.size) break
                 }
-                output.toByteArray()
-            }
+            } ?: throw ProductImageException("image_input_unreadable")
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: ProductImageException) {
             throw error
         } catch (_: Throwable) {
-            null
-        } ?: throw ProductImageException("image_input_unreadable")
+            throw ProductImageException("image_input_unreadable")
+        }
 
-        if (bytes.isEmpty()) throw ProductImageException("image_input_size_invalid")
-        val header = bytes.copyOf(minOf(16, bytes.size))
+        if (total < 1L) throw ProductImageException("image_input_size_invalid")
 
-        val jpeg = header.size >= 3 &&
+        val jpeg = headerSize >= 3 &&
             header[0] == 0xff.toByte() &&
             header[1] == 0xd8.toByte() &&
             header[2] == 0xff.toByte()
-        val png = header.size >= 8 &&
+        val png = headerSize >= 8 &&
             header[0] == 0x89.toByte() &&
             header[1] == 0x50.toByte() &&
             header[2] == 0x4e.toByte() &&
@@ -124,8 +177,33 @@ class ProductImageProcessor {
         if (!jpeg && !png) {
             throw ProductImageException("image_input_format_unsupported")
         }
-        return bytes
     }
+
+    private fun readBounds(resolver: ContentResolver, uri: Uri): Dimensions {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            val input = openInputStream(resolver, uri)
+                ?: throw ProductImageException("image_input_unreadable")
+            input.use {
+                BitmapFactory.decodeStream(input, null, options)
+            }
+        } catch (error: ProductImageException) {
+            throw error
+        } catch (_: Throwable) {
+            throw ProductImageException("image_decode_failed")
+        }
+        if (options.outWidth < 1 || options.outHeight < 1) {
+            throw ProductImageException("image_decode_failed")
+        }
+        return Dimensions(options.outWidth, options.outHeight)
+    }
+
+    private fun openInputStream(resolver: ContentResolver, uri: Uri): InputStream? =
+        if (uri.scheme == ContentResolver.SCHEME_FILE) {
+            uri.path?.let { path -> FileInputStream(File(path)) }
+        } else {
+            resolver.openInputStream(uri)
+        }
 
     private fun preparedVariant(bytes: ByteArray, bitmap: Bitmap): PreparedProductImageVariant {
         if (!isJpeg(bytes)) throw ProductImageException("image_encode_failed")
@@ -146,16 +224,20 @@ class ProductImageProcessor {
         minimumSide: Int,
         qualities: IntArray,
         targetBytes: Int,
-        hardMaxBytes: Int
+        hardMaxBytes: Int,
+        checkCancelled: () -> Unit
     ): PreparedProductImageVariant {
         val sourceLongestSide = maxOf(source.width, source.height)
         var maximumSide = minOf(initialMaxSide, sourceLongestSide)
         var fallback: PreparedProductImageVariant? = null
 
         while (maximumSide > 0) {
-            val bitmap = renderOpaque(source, maximumSide)
+            checkCancelled()
+            val useSourceDirectly = maximumSide >= sourceLongestSide && !source.hasAlpha()
+            val bitmap = if (useSourceDirectly) source else renderOpaque(source, maximumSide)
             try {
                 for (quality in qualities) {
+                    checkCancelled()
                     val output = ByteArrayOutputStream()
                     if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
                         throw ProductImageException("image_encode_failed")
@@ -169,7 +251,7 @@ class ProductImageProcessor {
                     if (variant.bytes.size <= targetBytes) return variant
                 }
             } finally {
-                bitmap.recycle()
+                if (!useSourceDirectly) bitmap.recycle()
             }
 
             if (maximumSide <= minimumSide ||

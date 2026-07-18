@@ -1,0 +1,13 @@
+{
+  "products": 200,
+  "editorOpens": 20,
+  "elapsedMilliseconds": 19817,
+  "pssBeforeKb": 164431,
+  "pssMaxKb": 194988,
+  "pssAfterKb": 184228,
+  "maxComposedImages": 12,
+  "cacheMemoryBytes": 8385570,
+  "cacheMemoryEntries": 138,
+  "cacheDiskBytes": 12153000,
+  "cacheDiskEntries": 200
+}

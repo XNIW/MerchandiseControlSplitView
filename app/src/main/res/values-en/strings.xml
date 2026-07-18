@@ -680,4 +680,10 @@
     <string name="product_image_state_loading">Loading image</string>
     <string name="product_image_state_ready">Image available</string>
     <string name="product_image_state_error">Image unavailable</string>
+    <string name="product_image_progress_preprocessing">Preparing image…</string>
+    <string name="product_image_progress_upload_main">Uploading main image…</string>
+    <string name="product_image_progress_upload_thumb">Uploading thumbnail…</string>
+    <string name="product_image_progress_finalize">Finalizing…</string>
+    <string name="product_image_progress_completed">Image updated</string>
+    <string name="product_image_cancel_operation">Cancel upload</string>
 </resources>

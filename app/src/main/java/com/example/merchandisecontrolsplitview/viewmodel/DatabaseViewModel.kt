@@ -9,6 +9,7 @@ import androidx.paging.*
 import com.example.merchandisecontrolsplitview.data.*
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import com.example.merchandisecontrolsplitview.R
@@ -30,10 +31,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.productimage.ProductImageBatchItem
 import com.example.merchandisecontrolsplitview.productimage.ProductImageException
+import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadRequest
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadResult
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
+import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
@@ -86,7 +95,8 @@ data class ProductImageUiState(
     val bytes: ByteArray? = null,
     val versionId: String? = null,
     val source: ProductImageLoadSource? = null,
-    val errorCode: String? = null
+    val errorCode: String? = null,
+    val mutationPhase: ProductImageMutationPhase? = null
 )
 
 private data class FullImportDbSnapshot(
@@ -158,13 +168,16 @@ private class ExportProgressTracker(
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 private const val PRODUCT_DETAILS_OVERRIDE_LIMIT = 100
+private const val PRODUCT_IMAGE_VISIBLE_BATCH_WINDOW_MS = 16L
 private val PRICE_HISTORY_MANUAL_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(
     app: Application,
-    private val repository: InventoryRepository
+    private val repository: InventoryRepository,
+    private val productImageService: ProductImageService =
+        (app as MerchandiseControlApplication).productImageService
 ) : AndroidViewModel(app) {
     private val importMutex = Mutex()
     private val exportMutex = Mutex()
@@ -188,11 +201,16 @@ class DatabaseViewModel(
     private val appContext = getApplication<Application>().applicationContext
     private val merchandiseApplication =
         getApplication<Application>() as MerchandiseControlApplication
-    private val productImageService = merchandiseApplication.productImageService
     private var productImageScopeGeneration = 0L
     private val _productImageStates = MutableStateFlow<Map<ProductImageUiKey, ProductImageUiState>>(emptyMap())
     val productImageStates: StateFlow<Map<ProductImageUiKey, ProductImageUiState>> =
         _productImageStates.asStateFlow()
+    private val desiredProductImageVersions = mutableMapOf<ProductImageUiKey, String?>()
+    private val productImageLoadJobs = mutableMapOf<ProductImageUiKey, Job>()
+    private val productImageMutationJobs = mutableMapOf<Long, Job>()
+    private val visibleThumbVersions = linkedMapOf<Long, String?>()
+    private val pendingVisibleThumbs = linkedMapOf<Long, String?>()
+    private var visibleThumbBatchJob: Job? = null
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
     private val _supplierCatalogQuery = MutableStateFlow("")
@@ -228,6 +246,47 @@ class DatabaseViewModel(
 
     fun productImagesConfigured(): Boolean = productImageService.isConfigured
 
+    fun setProductImageVisible(
+        productId: Long,
+        expectedVersionId: String?,
+        visible: Boolean
+    ) {
+        val key = ProductImageUiKey(productId, ProductImageVariant.THUMB)
+        if (!visible) {
+            visibleThumbVersions.remove(productId)
+            pendingVisibleThumbs.remove(productId)
+            desiredProductImageVersions.remove(key)
+            productImageLoadJobs.remove(key)?.cancel()
+            _productImageStates.update { current -> current - key }
+            return
+        }
+
+        visibleThumbVersions[productId] = expectedVersionId
+        desiredProductImageVersions[key] = expectedVersionId
+        if (expectedVersionId == null) {
+            pendingVisibleThumbs.remove(productId)
+            updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
+            return
+        }
+        val current = _productImageStates.value[key]
+        if (current?.status == ProductImageUiStatus.READY &&
+            current.versionId == expectedVersionId
+        ) {
+            return
+        }
+        if (current?.versionId != expectedVersionId) {
+            updateProductImageState(
+                key,
+                ProductImageUiState(
+                    status = ProductImageUiStatus.LOADING,
+                    versionId = expectedVersionId
+                )
+            )
+        }
+        pendingVisibleThumbs[productId] = expectedVersionId
+        scheduleVisibleThumbBatch()
+    }
+
     fun loadProductImage(
         productId: Long,
         variant: ProductImageVariant,
@@ -235,33 +294,125 @@ class DatabaseViewModel(
         force: Boolean = false
     ) {
         val key = ProductImageUiKey(productId, variant)
-        if (expectedVersionId == null && !force) {
+        desiredProductImageVersions[key] = expectedVersionId
+        if (expectedVersionId == null) {
+            productImageLoadJobs.remove(key)?.cancel()
             updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
-            val generation = productImageScopeGeneration
-            viewModelScope.launch {
-                loadProductImageNow(key, generation)
-            }
             return
         }
         val current = _productImageStates.value[key]
         if (!force &&
-            (current?.status == ProductImageUiStatus.LOADING ||
+            ((current?.status == ProductImageUiStatus.LOADING &&
+                current.versionId == expectedVersionId) ||
                 (current?.status == ProductImageUiStatus.READY && current.versionId == expectedVersionId))
         ) {
             return
         }
+        productImageLoadJobs.remove(key)?.cancel()
+        val keepCurrentBytes = current?.versionId == expectedVersionId
         updateProductImageState(
             key,
             ProductImageUiState(
                 status = ProductImageUiStatus.LOADING,
-                bytes = current?.bytes,
-                versionId = expectedVersionId ?: current?.versionId
+                bytes = current?.bytes.takeIf { keepCurrentBytes },
+                versionId = expectedVersionId
             )
         )
         val generation = productImageScopeGeneration
-        viewModelScope.launch {
-            loadProductImageNow(key, generation)
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                loadProductImageNow(key, expectedVersionId, generation)
+            } finally {
+                val runningJob = currentCoroutineContext()[Job]
+                if (productImageLoadJobs[key] === runningJob) {
+                    productImageLoadJobs.remove(key)
+                }
+            }
         }
+        productImageLoadJobs[key] = job
+        job.start()
+    }
+
+    fun loadProductImageProgressively(
+        productId: Long,
+        expectedVersionId: String?,
+        force: Boolean = false
+    ) {
+        val thumbKey = ProductImageUiKey(productId, ProductImageVariant.THUMB)
+        val mainKey = ProductImageUiKey(productId, ProductImageVariant.MAIN)
+        val keys = listOf(thumbKey, mainKey)
+        keys.forEach { desiredProductImageVersions[it] = expectedVersionId }
+        if (expectedVersionId == null) {
+            keys.mapNotNull(productImageLoadJobs::remove).toSet().forEach(Job::cancel)
+            keys.forEach { key ->
+                updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
+            }
+            return
+        }
+
+        val mainState = _productImageStates.value[mainKey]
+        if (!force &&
+            ((mainState?.status == ProductImageUiStatus.READY &&
+                mainState.versionId == expectedVersionId) ||
+                (productImageLoadJobs[mainKey]?.isActive == true &&
+                    mainState?.versionId == expectedVersionId))
+        ) {
+            return
+        }
+
+        keys.mapNotNull(productImageLoadJobs::remove).toSet().forEach(Job::cancel)
+        val thumbState = _productImageStates.value[thumbKey]
+        val thumbReady = thumbState?.status == ProductImageUiStatus.READY &&
+            thumbState.versionId == expectedVersionId
+        if (!thumbReady) {
+            updateProductImageState(
+                thumbKey,
+                ProductImageUiState(
+                    status = ProductImageUiStatus.LOADING,
+                    bytes = thumbState?.takeIf { it.versionId == expectedVersionId }?.bytes,
+                    versionId = expectedVersionId
+                )
+            )
+        }
+        updateProductImageState(
+            mainKey,
+            ProductImageUiState(
+                status = ProductImageUiStatus.LOADING,
+                bytes = mainState?.takeIf { it.versionId == expectedVersionId }?.bytes,
+                versionId = expectedVersionId
+            )
+        )
+
+        val generation = productImageScopeGeneration
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                if (!thumbReady) {
+                    loadProductImageNow(thumbKey, expectedVersionId, generation)
+                }
+                currentCoroutineContext().ensureActive()
+                loadProductImageNow(mainKey, expectedVersionId, generation)
+            } finally {
+                val runningJob = currentCoroutineContext()[Job]
+                keys.forEach { key ->
+                    if (productImageLoadJobs[key] === runningJob) {
+                        productImageLoadJobs.remove(key)
+                    }
+                }
+            }
+        }
+        keys.forEach { key -> productImageLoadJobs[key] = job }
+        job.start()
+    }
+
+    fun cancelProductImageLoad(productId: Long, variant: ProductImageVariant) {
+        val key = ProductImageUiKey(productId, variant)
+        desiredProductImageVersions.remove(key)
+        productImageLoadJobs.remove(key)?.cancel()
+        if (variant == ProductImageVariant.THUMB) {
+            visibleThumbVersions.remove(productId)
+            pendingVisibleThumbs.remove(productId)
+        }
+        _productImageStates.update { current -> current - key }
     }
 
     fun uploadProductImage(
@@ -269,7 +420,9 @@ class DatabaseViewModel(
         sourceUri: Uri,
         onFinished: () -> Unit = {}
     ) {
+        if (productImageMutationJobs[productId]?.isActive == true) return
         val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        val previousStates = keys.associateWith { key -> _productImageStates.value[key] }
         keys.forEach { key ->
             val current = _productImageStates.value[key]
             updateProductImageState(
@@ -277,25 +430,59 @@ class DatabaseViewModel(
                 ProductImageUiState(
                     status = ProductImageUiStatus.UPLOADING,
                     bytes = current?.bytes,
-                    versionId = current?.versionId
+                    versionId = current?.versionId,
+                    mutationPhase = ProductImageMutationPhase.PREPROCESSING
                 )
             )
         }
-        viewModelScope.launch {
+        val job = viewModelScope.launch {
             val generation = productImageScopeGeneration
             try {
-                val result = productImageService.upload(productId, sourceUri)
+                val result = productImageService.upload(productId, sourceUri) { phase ->
+                    if (generation == productImageScopeGeneration) {
+                        keys.forEach { key ->
+                            val current = _productImageStates.value[key]
+                            updateProductImageState(
+                                key,
+                                ProductImageUiState(
+                                    status = ProductImageUiStatus.UPLOADING,
+                                    bytes = current?.bytes,
+                                    versionId = current?.versionId,
+                                    mutationPhase = phase
+                                )
+                            )
+                        }
+                    }
+                }
                 if (generation != productImageScopeGeneration) return@launch
                 keys.forEach { key ->
+                    desiredProductImageVersions[key] = result.versionId
                     updateProductImageState(
                         key,
                         ProductImageUiState(
                             status = ProductImageUiStatus.LOADING,
-                            versionId = result.versionId
+                            versionId = result.versionId,
+                            mutationPhase = ProductImageMutationPhase.COMPLETED
                         )
                     )
-                    loadProductImageNow(key, generation)
+                    loadProductImageNow(
+                        key = key,
+                        expectedVersionId = result.versionId,
+                        generation = generation,
+                        completedMutation = true
+                    )
                 }
+            } catch (error: CancellationException) {
+                if (generation == productImageScopeGeneration) {
+                    previousStates.forEach { (key, previous) ->
+                        if (previous == null) {
+                            _productImageStates.update { current -> current - key }
+                        } else {
+                            updateProductImageState(key, previous)
+                        }
+                    }
+                }
+                throw error
             } catch (error: ProductImageException) {
                 if (generation != productImageScopeGeneration) return@launch
                 keys.forEach { key ->
@@ -312,11 +499,31 @@ class DatabaseViewModel(
                 }
             } finally {
                 onFinished()
+                val runningJob = currentCoroutineContext()[Job]
+                if (productImageMutationJobs[productId] === runningJob) {
+                    productImageMutationJobs.remove(productId)
+                }
             }
+        }
+        productImageMutationJobs[productId] = job
+    }
+
+    fun cancelProductImageOperation(productId: Long) {
+        val phase = _productImageStates.value[
+            ProductImageUiKey(productId, ProductImageVariant.MAIN)
+        ]?.mutationPhase
+        if (phase in setOf(
+                ProductImageMutationPhase.PREPROCESSING,
+                ProductImageMutationPhase.UPLOAD_MAIN,
+                ProductImageMutationPhase.UPLOAD_THUMB
+            )
+        ) {
+            productImageMutationJobs.remove(productId)?.cancel()
         }
     }
 
     fun removeProductImage(productId: Long) {
+        if (productImageMutationJobs[productId]?.isActive == true) return
         val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
         keys.forEach { key ->
             val current = _productImageStates.value[key]
@@ -329,12 +536,13 @@ class DatabaseViewModel(
                 )
             )
         }
-        viewModelScope.launch {
+        val job = viewModelScope.launch {
             val generation = productImageScopeGeneration
             try {
                 productImageService.remove(productId)
                 if (generation != productImageScopeGeneration) return@launch
                 keys.forEach { key ->
+                    desiredProductImageVersions[key] = null
                     updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
                 }
             } catch (error: ProductImageException) {
@@ -351,58 +559,181 @@ class DatabaseViewModel(
                         )
                     )
                 }
+            } finally {
+                val runningJob = currentCoroutineContext()[Job]
+                if (productImageMutationJobs[productId] === runningJob) {
+                    productImageMutationJobs.remove(productId)
+                }
+            }
+        }
+        productImageMutationJobs[productId] = job
+    }
+
+    private suspend fun loadProductImageNow(
+        key: ProductImageUiKey,
+        expectedVersionId: String?,
+        generation: Long,
+        completedMutation: Boolean = false
+    ) {
+        val request = ProductImageLoadRequest(key.productId, key.variant, expectedVersionId)
+        val item = try {
+            productImageService.loadBatch(listOf(request)).single()
+        } catch (error: ProductImageException) {
+            ProductImageBatchItem(request, errorCode = error.code)
+        }
+        applyProductImageBatchItem(key, expectedVersionId, generation, item, completedMutation)
+    }
+
+    private fun scheduleVisibleThumbBatch() {
+        if (visibleThumbBatchJob?.isActive == true) return
+        visibleThumbBatchJob = viewModelScope.launch {
+            try {
+                while (pendingVisibleThumbs.isNotEmpty()) {
+                    delay(PRODUCT_IMAGE_VISIBLE_BATCH_WINDOW_MS)
+                    val snapshot = pendingVisibleThumbs.toMap()
+                    pendingVisibleThumbs.keys.removeAll(snapshot.keys)
+                    val requests = snapshot.mapNotNull { (productId, versionId) ->
+                        if (visibleThumbVersions[productId] == versionId && versionId != null) {
+                            ProductImageLoadRequest(
+                                localProductId = productId,
+                                variant = ProductImageVariant.THUMB,
+                                expectedVersionId = versionId
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                    if (requests.isEmpty()) continue
+                    requests.forEach { request ->
+                        val key = ProductImageUiKey(request.localProductId, request.variant)
+                        val current = _productImageStates.value[key]
+                        updateProductImageState(
+                            key,
+                            ProductImageUiState(
+                                status = ProductImageUiStatus.LOADING,
+                                bytes = current
+                                    ?.takeIf { it.versionId == request.expectedVersionId }
+                                    ?.bytes,
+                                versionId = request.expectedVersionId
+                            )
+                        )
+                    }
+                    val generation = productImageScopeGeneration
+                    val items = try {
+                        productImageService.loadBatch(requests)
+                    } catch (error: ProductImageException) {
+                        requests.map { request ->
+                            ProductImageBatchItem(request, errorCode = error.code)
+                        }
+                    }
+                    items.forEach { item ->
+                        val key = ProductImageUiKey(
+                            item.request.localProductId,
+                            item.request.variant
+                        )
+                        if (visibleThumbVersions[item.request.localProductId] ==
+                            item.request.expectedVersionId
+                        ) {
+                            applyProductImageBatchItem(
+                                key,
+                                item.request.expectedVersionId,
+                                generation,
+                                item
+                            )
+                        }
+                    }
+                }
+            } finally {
+                visibleThumbBatchJob = null
+                if (pendingVisibleThumbs.isNotEmpty()) scheduleVisibleThumbBatch()
             }
         }
     }
 
-    private suspend fun loadProductImageNow(key: ProductImageUiKey, generation: Long) {
-        try {
-            when (val result = productImageService.load(key.productId, key.variant)) {
-                ProductImageLoadResult.Absent -> if (generation == productImageScopeGeneration) {
-                    updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
-                }
+    private fun applyProductImageBatchItem(
+        key: ProductImageUiKey,
+        expectedVersionId: String?,
+        generation: Long,
+        item: ProductImageBatchItem,
+        completedMutation: Boolean = false
+    ) {
+        if (generation != productImageScopeGeneration ||
+            !desiredProductImageVersions.containsKey(key) ||
+            desiredProductImageVersions[key] != expectedVersionId
+        ) {
+            return
+        }
+        when (val result = item.result) {
+            ProductImageLoadResult.Absent ->
+                updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
 
-                is ProductImageLoadResult.Ready -> if (generation == productImageScopeGeneration) {
-                    updateProductImageState(
-                        key,
-                        ProductImageUiState(
-                            status = ProductImageUiStatus.READY,
-                            bytes = result.bytes,
-                            versionId = result.versionId,
-                            source = result.source
-                        )
-                    )
-                }
-            }
-        } catch (error: ProductImageException) {
-            if (generation != productImageScopeGeneration) return
-            val current = _productImageStates.value[key]
-            updateProductImageState(
+            is ProductImageLoadResult.Ready -> updateProductImageState(
                 key,
                 ProductImageUiState(
-                    status = ProductImageUiStatus.ERROR,
-                    bytes = current?.bytes,
-                    versionId = current?.versionId,
-                    errorCode = error.code
+                    status = ProductImageUiStatus.READY,
+                    bytes = result.bytes,
+                    versionId = result.versionId,
+                    source = result.source,
+                    mutationPhase = ProductImageMutationPhase.COMPLETED.takeIf {
+                        completedMutation
+                    }
                 )
             )
+
+            null -> {
+                val current = _productImageStates.value[key]
+                updateProductImageState(
+                    key,
+                    ProductImageUiState(
+                        status = ProductImageUiStatus.ERROR,
+                        bytes = current?.takeIf { it.versionId == expectedVersionId }?.bytes,
+                        versionId = expectedVersionId,
+                        errorCode = item.errorCode ?: "image_request_failed"
+                    )
+                )
+            }
         }
     }
 
     private fun observeProductImageScope() {
         viewModelScope.launch {
+            var previousScope: Pair<String, String?>? = null
             combine(
                 merchandiseApplication.authManager.state,
                 merchandiseApplication.shopContextRepository.state
             ) { auth, shopContext ->
                 val accountId = (auth as? AuthState.SignedIn)?.userId.orEmpty()
-                "$accountId:${shopContext.activeShopId.orEmpty()}"
+                accountId to shopContext.activeShopId
             }
                 .distinctUntilChanged()
-                .drop(1)
-                .collect {
+                .collect { currentScope ->
+                    val oldScope = previousScope
+                    previousScope = currentScope
+                    if (oldScope == null || oldScope == currentScope) return@collect
+
                     productImageScopeGeneration += 1
+                    productImageLoadJobs.values.forEach(Job::cancel)
+                    productImageLoadJobs.clear()
+                    productImageMutationJobs.values.forEach(Job::cancel)
+                    productImageMutationJobs.clear()
+                    visibleThumbBatchJob?.cancel()
+                    visibleThumbBatchJob = null
+                    desiredProductImageVersions.clear()
+                    visibleThumbVersions.clear()
+                    pendingVisibleThumbs.clear()
                     _productImageStates.value = emptyMap()
+
+                    val oldAccountId = oldScope.first
+                    if (oldAccountId.isNotBlank()) {
+                        try {
+                            val oldShopOnly = oldScope.second.takeIf {
+                                currentScope.first == oldAccountId && currentScope.first.isNotBlank()
+                            }
+                            productImageService.purgeScope(oldAccountId, oldShopOnly)
+                        } catch (_: ProductImageException) {
+                            // Separazione memoria immediata; purge disco best-effort.
+                        }
+                    }
                 }
         }
     }

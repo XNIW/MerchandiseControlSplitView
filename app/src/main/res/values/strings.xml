@@ -695,4 +695,10 @@
     <string name="product_image_state_loading">Caricamento immagine</string>
     <string name="product_image_state_ready">Immagine disponibile</string>
     <string name="product_image_state_error">Immagine non disponibile</string>
+    <string name="product_image_progress_preprocessing">Preparazione immagine…</string>
+    <string name="product_image_progress_upload_main">Caricamento immagine principale…</string>
+    <string name="product_image_progress_upload_thumb">Caricamento miniatura…</string>
+    <string name="product_image_progress_finalize">Finalizzazione…</string>
+    <string name="product_image_progress_completed">Immagine aggiornata</string>
+    <string name="product_image_cancel_operation">Annulla caricamento</string>
 </resources>
