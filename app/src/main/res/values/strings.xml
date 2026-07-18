@@ -677,4 +677,22 @@
     <string name="task126_conflict_delete_edit_message">Una parte ha eliminato il record mentre l altra lo ha modificato. Serve review esplicita.</string>
     <string name="task126_conflict_price_stale_title">Prezzo nello stesso slot</string>
     <string name="task126_conflict_price_stale_message">Lo stesso slot prezzo ha valori diversi. Applica la policy stale/review prima del sync.</string>
+    <string name="product_image_title">Immagine prodotto</string>
+    <string name="product_image_thumbnail">Miniatura del prodotto</string>
+    <string name="product_image_main">Immagine principale del prodotto</string>
+    <string name="product_image_choose">Libreria</string>
+    <string name="product_image_camera">Fotocamera</string>
+    <string name="product_image_remove">Rimuovi immagine</string>
+    <string name="product_image_save_first">Salva prima il prodotto, poi aggiungi l’immagine.</string>
+    <string name="product_image_not_configured">Il servizio immagini non è configurato su questo dispositivo.</string>
+    <string name="product_image_operation_failed">Operazione immagine non riuscita. Il prodotto non è stato modificato.</string>
+    <string name="product_image_offline_cache">Immagine mostrata dalla cache privata locale.</string>
+    <string name="product_image_retry">Riprova immagine</string>
+    <string name="product_image_remove_confirm_title">Rimuovere l’immagine?</string>
+    <string name="product_image_remove_confirm_body">Verrà rimossa solo l’immagine principale. Gli altri dati del prodotto non cambieranno.</string>
+    <string name="product_image_remove_confirm_action">Rimuovi immagine</string>
+    <string name="product_image_state_empty">Nessuna immagine</string>
+    <string name="product_image_state_loading">Caricamento immagine</string>
+    <string name="product_image_state_ready">Immagine disponibile</string>
+    <string name="product_image_state_error">Immagine non disponibile</string>
 </resources>

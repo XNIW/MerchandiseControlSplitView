@@ -4821,6 +4821,7 @@ class DefaultInventoryRepositoryTest {
         val owner = "00000000-0000-4000-8000-000000000454"
         val productRemoteId = "00000000-0000-4000-8000-000000000455"
         val priceRemoteId = "00000000-0000-4000-8000-000000000456"
+        val imageVersionId = "00000000-0000-4000-8000-000000000457"
         val remote = FakeCatalogRemote016(
             InventoryCatalogFetchBundle(
                 suppliers = emptyList(),
@@ -4831,7 +4832,9 @@ class DefaultInventoryRepositoryTest {
                         ownerUserId = owner,
                         barcode = "sync-event-045-target",
                         productName = "Target",
-                        retailPrice = 9.0
+                        retailPrice = 9.0,
+                        primaryImageVersionId = imageVersionId,
+                        primaryImageUpdatedAt = "2026-04-24T10:00:00Z"
                     )
                 )
             )
@@ -4884,6 +4887,8 @@ class DefaultInventoryRepositoryTest {
         ).getOrThrow()
 
         assertEquals(0, remote.fetchCount)
+        assertFalse(summary.fullCatalogFetch)
+        assertFalse(summary.fullPriceFetch)
         assertEquals(1, remote.targetedFetchCount)
         assertEquals(setOf(productRemoteId), remote.targetedProductIds.first())
         assertEquals(1, priceRemote.targetedFetchCount)
@@ -4900,6 +4905,8 @@ class DefaultInventoryRepositoryTest {
         assertNull(secondStatus.nextRetryAtMs)
         val product = repository.findProductByBarcode("sync-event-045-target")!!
         assertEquals("Target", product.productName)
+        assertEquals(imageVersionId, product.primaryImageVersionId)
+        assertEquals("2026-04-24T10:00:00Z", product.primaryImageUpdatedAt)
         assertEquals(1, repository.getPriceSeries(product.id, "RETAIL").first().size)
         assertEquals(setOf(product.id), remoteAppliedIds.await())
     }
@@ -6030,6 +6037,8 @@ class DefaultInventoryRepositoryTest {
         val supplierRemoteId = "00000000-0000-4000-8000-000000000454"
         val categoryRemoteId = "00000000-0000-4000-8000-000000000455"
         val productRemoteId = "00000000-0000-4000-8000-000000000450"
+        val imageVersionV1 = "00000000-0000-4000-8000-00000000045a"
+        val imageVersionV2 = "00000000-0000-4000-8000-00000000045b"
         val bundleV1 = InventoryCatalogFetchBundle(
             suppliers = listOf(
                 InventorySupplierRow(
@@ -6053,7 +6062,9 @@ class DefaultInventoryRepositoryTest {
                     productName = "Remote V1",
                     retailPrice = 10.0,
                     supplierId = supplierRemoteId,
-                    categoryId = categoryRemoteId
+                    categoryId = categoryRemoteId,
+                    primaryImageVersionId = imageVersionV1,
+                    primaryImageUpdatedAt = "2026-04-23T10:00:00Z"
                 )
             )
         )
@@ -6099,7 +6110,9 @@ class DefaultInventoryRepositoryTest {
                     productName = "Remote V2 overwrite attempt",
                     retailPrice = 99.0,
                     supplierId = supplierRemoteId,
-                    categoryId = categoryRemoteId
+                    categoryId = categoryRemoteId,
+                    primaryImageVersionId = imageVersionV2,
+                    primaryImageUpdatedAt = "2026-04-23T11:00:00Z"
                 )
             )
         )
@@ -6115,6 +6128,8 @@ class DefaultInventoryRepositoryTest {
         val after = repository.findProductByBarcode("044a-dirty")!!
         assertEquals("Local dirty edit", after.productName)
         assertEquals(10.0, after.retailPrice!!, 0.0001)
+        assertEquals(imageVersionV2, after.primaryImageVersionId)
+        assertEquals("2026-04-23T11:00:00Z", after.primaryImageUpdatedAt)
     }
 
     @Test

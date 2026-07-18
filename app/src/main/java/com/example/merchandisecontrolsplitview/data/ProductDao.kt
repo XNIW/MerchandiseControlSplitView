@@ -161,6 +161,24 @@ interface ProductDao {
     suspend fun clearCategoryAssignments(categoryId: Long): Int
 
     /**
+     * Riferimento immagine remoto-autoritativo. Non incrementa la revisione
+     * catalogo locale e non entra nell'outbox prodotto.
+     */
+    @Query(
+        """
+        UPDATE products
+        SET primaryImageVersionId = :versionId,
+            primaryImageUpdatedAt = :updatedAt
+        WHERE id = :productId
+        """
+    )
+    suspend fun updateRemoteImageReference(
+        productId: Long,
+        versionId: String?,
+        updatedAt: String?
+    ): Int
+
+    /**
      * Elimina tutti i prodotti dalla tabella.
      * Utile per operazioni di reset o test.
      */

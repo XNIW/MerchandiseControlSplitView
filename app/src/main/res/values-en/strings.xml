@@ -662,4 +662,22 @@
     <string name="task126_conflict_delete_edit_message">One side deleted the record while the other edited it. Explicit review is required.</string>
     <string name="task126_conflict_price_stale_title">Price in the same slot</string>
     <string name="task126_conflict_price_stale_message">The same price slot has different values. Apply the stale/review policy before sync.</string>
+    <string name="product_image_title">Product image</string>
+    <string name="product_image_thumbnail">Product thumbnail</string>
+    <string name="product_image_main">Main product image</string>
+    <string name="product_image_choose">Library</string>
+    <string name="product_image_camera">Camera</string>
+    <string name="product_image_remove">Remove image</string>
+    <string name="product_image_save_first">Save the product first, then add its image.</string>
+    <string name="product_image_not_configured">The image service is not configured on this device.</string>
+    <string name="product_image_operation_failed">The image operation failed. Product changes were not affected.</string>
+    <string name="product_image_offline_cache">Image displayed from the private local cache.</string>
+    <string name="product_image_retry">Retry image</string>
+    <string name="product_image_remove_confirm_title">Remove image?</string>
+    <string name="product_image_remove_confirm_body">Only the primary image will be removed. Other product data will not change.</string>
+    <string name="product_image_remove_confirm_action">Remove image</string>
+    <string name="product_image_state_empty">No image</string>
+    <string name="product_image_state_loading">Loading image</string>
+    <string name="product_image_state_ready">Image available</string>
+    <string name="product_image_state_error">Image unavailable</string>
 </resources>

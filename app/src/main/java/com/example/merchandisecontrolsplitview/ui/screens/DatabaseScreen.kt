@@ -36,6 +36,7 @@ import com.example.merchandisecontrolsplitview.data.CatalogDeleteStrategy
 import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
 import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.Product
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportDisplayName
@@ -95,6 +96,7 @@ fun DatabaseScreen(
     val supplierOptions by viewModel.suppliers.collectAsState()
     val categoryOptions by viewModel.categories.collectAsState()
     val productDetailsOverrides by viewModel.productDetailsOverrides.collectAsState()
+    val productImageStates by viewModel.productImageStates.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val productListState = key(filter.orEmpty()) { rememberLazyListState() }
     val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
@@ -304,7 +306,15 @@ fun DatabaseScreen(
                             filter = filter.orEmpty(),
                             products = products,
                             productDetailsOverrides = productDetailsOverrides,
+                            productImageStates = productImageStates,
                             listState = productListState,
+                            onLoadProductImage = { product ->
+                                viewModel.loadProductImage(
+                                    productId = product.id,
+                                    variant = ProductImageVariant.THUMB,
+                                    expectedVersionId = product.primaryImageVersionId
+                                )
+                            },
                             onProductClick = { itemToEdit = it },
                             onDeleteRequest = {
                                 itemToDelete = it

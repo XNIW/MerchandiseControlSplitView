@@ -43,6 +43,12 @@ data class InventoryProductRow(
     @SerialName("supplier_id") val supplierId: String? = null,
     @SerialName("category_id") val categoryId: String? = null,
     @SerialName("stock_quantity") val stockQuantity: Double? = null,
+    @SerialName("primary_image_version_id")
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val primaryImageVersionId: String? = null,
+    @SerialName("primary_image_updated_at")
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val primaryImageUpdatedAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
     @SerialName("deleted_at")
     @EncodeDefault(EncodeDefault.Mode.ALWAYS)
@@ -298,6 +304,10 @@ internal fun fingerprintProductInbound(row: InventoryProductRow): String =
         append(row.categoryId)
         append('|')
         append(row.stockQuantity)
+        append("|iv:")
+        append(row.primaryImageVersionId)
+        append("|iu:")
+        append(row.primaryImageUpdatedAt)
         append("|u:")
         append(row.updatedAt)
         append("|d:")

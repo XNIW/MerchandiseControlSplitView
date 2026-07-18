@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("19", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1702,6 +1702,42 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 19 to 20 adds nullable product image reference without changing product data`() = runTest {
+        val dbName = "task137-migration-19-20-product-image.db"
+        createLegacyDatabase(dbName, version = 19) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    productName TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL("INSERT INTO products(id, barcode, productName) VALUES (1, 'task137', 'Baseline')")
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 20) { database, oldVersion, newVersion ->
+            assertEquals(19, oldVersion)
+            assertEquals(20, newVersion)
+            AppDatabase.MIGRATION_19_20.migrate(database)
+        }
+
+        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(columnExists(migrated, "products", "primaryImageVersionId"))
+        assertTrue(columnExists(migrated, "products", "primaryImageUpdatedAt"))
+        assertEquals("Baseline", querySingleValue(migrated, "SELECT productName FROM products WHERE id = 1"))
+        assertEquals(
+            null,
+            queryNullableSingleValue(
+                migrated,
+                "SELECT primaryImageVersionId FROM products WHERE id = 1"
+            )
+        )
+        migrated.close()
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
             addMigrations(
@@ -1722,7 +1758,8 @@ class AppDatabaseMigrationTest {
                 AppDatabase.MIGRATION_15_16,
                 AppDatabase.MIGRATION_16_17,
                 AppDatabase.MIGRATION_17_18,
-                AppDatabase.MIGRATION_18_19
+                AppDatabase.MIGRATION_18_19,
+                AppDatabase.MIGRATION_19_20
             )
         }
 
