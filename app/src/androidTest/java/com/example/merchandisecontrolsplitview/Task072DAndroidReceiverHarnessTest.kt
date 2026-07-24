@@ -45,8 +45,8 @@ class Task072DAndroidReceiverHarnessTest {
     @Test
     fun androidReceiverCatalogHistoryMatrixDbSnapshotAndOutbox() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
-        val fixture = fixture(args.getString("task072DRunPrefix"))
         val runtime = runtime()
+        val fixture = fixture(args.getString("task072DRunPrefix"))
         val startedAt = System.currentTimeMillis()
 
         runtime.app.catalogAutoSyncCoordinator.onAppBackground()

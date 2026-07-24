@@ -36,8 +36,8 @@ class Task072CAndroidBidirectionalHarnessTest {
 
     @Test
     fun androidCatalogAndHistoryPushMatrixWithTask072CPrefix() = runBlocking {
-        val fixture = fixture()
         val runtime = runtime()
+        val fixture = fixture()
         val startedAt = System.currentTimeMillis()
 
         runtime.app.catalogAutoSyncCoordinator.onAppBackground()

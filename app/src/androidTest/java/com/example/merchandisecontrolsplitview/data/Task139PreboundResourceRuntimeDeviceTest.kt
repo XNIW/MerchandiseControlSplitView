@@ -49,6 +49,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -314,6 +315,7 @@ class Task139PreboundResourceRuntimeDeviceTest {
 
     @Test
     fun prepareRelaunchFixtureUnderScopeA(): Unit = runBlocking {
+        requireExternalRelaunchHarness()
         context.deleteDatabase(RELAUNCH_DATABASE)
         relaunchCacheRoot().deleteRecursively()
         relaunchStateRoot().deleteRecursively()
@@ -373,6 +375,7 @@ class Task139PreboundResourceRuntimeDeviceTest {
 
     @Test
     fun verifyRelaunchRejectsScopeAGenerationUnderScopeB(): Unit = runBlocking {
+        requireExternalRelaunchHarness()
         val preparePid = relaunchPreferences().getInt(PREF_PREPARE_PID, -1)
         assertTrue("prepare process marker missing", preparePid > 0)
         assertNotEquals("verification must run after a real process restart", preparePid, Process.myPid())
@@ -423,6 +426,14 @@ class Task139PreboundResourceRuntimeDeviceTest {
 
     private fun relaunchPreferences() =
         context.getSharedPreferences("task139-prebound-runtime", Context.MODE_PRIVATE)
+
+    private fun requireExternalRelaunchHarness() {
+        val selectedTest = InstrumentationRegistry.getArguments().getString("class")
+        assumeTrue(
+            "TASK-139 relaunch proof requires the external single-method ADB harness",
+            selectedTest?.startsWith("${javaClass.name}#") == true
+        )
+    }
 
     private fun scope(ownerUserId: String, shopId: String): Task126OwnerStoreScope =
         Task126OwnerStoreScope(
