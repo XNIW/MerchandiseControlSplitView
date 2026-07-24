@@ -61,8 +61,8 @@ dall'utente. Nessuna identità account/shop, credenziale o token è riportata.
 
 Screenshot privacy-safe aperti e verificati:
 
-- `/tmp/task139-android-cold-offline-cache-reconnect-final.png`;
-- `/tmp/task139-android-options-auto-reconnect-final.png`.
+- artifact esterno `task139-android-cold-offline-cache-reconnect-final.png`;
+- artifact esterno `task139-android-options-auto-reconnect-final.png`.
 
 Logcat del ciclo finale, ripulito prima del cold launch:
 
