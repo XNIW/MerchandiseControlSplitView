@@ -62,22 +62,62 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **NESSUNO — TASK-138 DONE / DONE_RECONCILED** |
-| Fase task attivo     | **IDLE** — TASK-138 `RELEASE_READY_WITH_MEASURED_GATES`; device fisico/staging restano note esterne |
+| Task attivo          | **TASK-139 — Product Image Production Hardening e Cross-Platform Contract Parity** |
+| Fase task attivo     | **READY_FOR_REVIEW / REVIEW** — P0 auth/binding Android, quiescenza flight A→B, ShopContext owner-safe e dialog mismatch Android a due azioni verificati; chiusura cross-platform ancora in review |
 | Backlog documentale  | Audit UX/UI 2026-04-04 (TASK-030 → TASK-041); **TASK-030** `DONE`; **TASK-031** `DONE`; **TASK-032** `DONE`; **TASK-034** `DONE`; **TASK-035** `DONE`; **TASK-037** `DONE`; **TASK-038** `DONE` (review repo-grounded APPROVED senza fix, build/lint verdi, smoke execution e call site audit verificati 2026-04-05); **TASK-039** `DONE` (2026-04-05 — rollback esplicito al dialog precedente con preset + checkbox, review veloce positiva, build/lint verdi); **TASK-040** `DONE` (2026-04-05 — chiusura documentale; review repo-grounded + micro-fix FAB overlay; `assembleDebug` / `lint` / `ExcelViewModelTest` verdi; file `docs/TASKS/TASK-040-pregenerate-supplier-category-e-feedback-qualita.md`); **TASK-041** `DONE` (2026-04-11 — chiusura esplicita utente; review APPROVED; banner completamento + quick export `GeneratedScreen`; rischio residuo non bloccante: build/lint e smoke UI non eseguibili per limite JDK; file `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`); **TASK-042** `DONE` (2026-04-04); **TASK-043** `DONE` (2026-04-10 — esclusione righe footer/totali da `dataRows`; review APPROVED; `docs/TASKS/TASK-043-robustezza-esclusione-righe-totali-footer-preview-import-analysis.md`); **TASK-044** `DONE` (2026-04-11 — History senza entry tecniche `APPLY_IMPORT_*` + `FULL_IMPORT_*`; review planner APPROVED repo-grounded; filtro centralizzato `USER_VISIBLE_HISTORY_WHERE_CLAUSE` DAO + stop insert VM + baseline JVM + build/lint verdi; file `docs/TASKS/TASK-044-history-cronologia-utente-senza-entry-tecniche-apply-import.md`); **TASK-045** `DONE` (2026-04-11); **TASK-046** `DONE` (2026-04-11 — PreGenerateScreen UX full iOS-style; file `docs/TASKS/TASK-046-pregenerate-ios-style-full-ux-rewrite.md`); **TASK-047** `DONE` (2026-04-12 — GeneratedScreen gerarchia iOS-like: progress card, toggle errori, top bar minimale; review planner FIX APPLIED → APPROVED; dead strings rimossi, overflow semplificato, kdoc aggiornato; build/lint verdi; file `docs/TASKS/TASK-047-generated-screen-ios-hierarchy-progress-summary.md`); **TASK-048** `DONE` (2026-04-12 — HistoryScreen UX: inset, card rhythm, display title leggibile; execution non documentata in tempo, ricostruita da review repo-grounded; 21/21 criteri ✅; `HistoryEntryUiFormatters.kt` nuovo file + `HistoryScreen.kt`; build/lint verdi impliciti da TASK-049/TASK-050); **TASK-049** `DONE` (2026-04-12 — filtro Cronologia fornitore/categoria; HistoryFilter, historyDisplayEntries, setHistoryFilter in ViewModel; HistoryFilterSheet + NavGraph wiring; build/lint/test verdi; layer chip UI superseded da TASK-050; file `docs/TASKS/TASK-049-history-filter-supplier-category.md`); **TASK-050** `DONE` (2026-04-12 — picker con ricerca per fornitore/categoria sostituisce FlowRow chip; HistoryFilterSelector + HistoryValuePickerDialog; build/lint verdi; file `docs/TASKS/TASK-050-history-filter-supplier-category-picker-search.md`); **TASK-051** `DONE` (2026-04-12 — Database hub Prodotti/Fornitori/Categorie: CRUD anagrafiche, delete guidata atomica, hub a tre tab, import/export globali header, search field unificato, localizzazione 4 lingue; review planner: fix dead code + stringhe orfane + badge ridondante; build/lint verdi; file `docs/TASKS/TASK-051-database-hub-gestione-fornitori-categorie.md`); **TASK-052** `DONE` (2026-04-12); **TASK-053** `DONE` (2026-04-14 — completion card swipe-dismiss + CTA sync/export + dialog Fine su sync pendente; review planner APPROVED + fix spacing dialog; build/lint non eseguiti per limite env; file task dedicato); **TASK-054** `DONE` (2026-04-14 — progress card compatta/espandibile + grid polish + preview alignment; review planner APPROVED + fix copy/barra; build/lint non eseguibili per limite ambiente; file `docs/TASKS/TASK-054-generated-screen-progress-card-compact-expandable.md`); **TASK-058** `DONE` (2026-04-25 — fix refresh locale prodotto modificato + scroll lista stabile; review planner APPROVED senza fix; build/lint/test JVM verdi; remoto puntuale N/A motivato; file `docs/TASKS/TASK-058-database-screen-refresh-locale-scroll-stabile.md`); **TASK-066** `DONE` (2026-04-27 — fix navigazione `ImportAnalysis` / `DatabaseScreen` / `GeneratedScreen`; resolver + test JVM + NavGraph no-restore + micro UX; build/lint/test/smoke verdi; `docs/TASKS/TASK-066-fix-importanalysis-database-return-navigation.md`); **TASK-067** `DONE ACCEPTABLE` (2026-04-27 — dirty marking delta-safe post full DB import + osservabilità/UX; build/lint/test JVM verdi; smoke live non eseguito per safety; `docs/TASKS/TASK-067-ottimizzazione-sync-cloud-post-full-import.md`); **TASK-068** `PARTIAL` (2026-04-28 — quinta passata: bulk product push batch 100 + fallback 50/25/singolo, sync events compatti, price-aware/fingerprint preservati, full JVM/build/lint verdi; ciclo B live con stesso file pending); **TASK-069** `DONE` (2026-04-27 — audit diagnostico sync residui chiuso dopo review repo-grounded APPROVED senza fix codice; root cause P0 = backlog `PayloadValidation` + blocco FIFO retry head-of-line; nessun cleanup outbox; follow-up TASK-070/TASK-071 creati; file `docs/TASKS/TASK-069-audit-sync-residui-outbox-price-generated-history.md`); **TASK-070** `DONE` (2026-04-28 — review tecnica chiusa; retry outbox head-of-line + logging strutturato app side; file `docs/TASKS/TASK-070-outbox-retry-head-of-line-logging-strutturato.md`); **TASK-071** `DONE` (2026-04-28 — contratto RPC `record_sync_event` / `PayloadValidation` chiarito; follow-up TASK-072 backend separato; file `docs/TASKS/TASK-071-backend-rpc-record-sync-event-payload-validation.md`); **TASK-073** `DONE` (2026-05-17 — review end-to-end APPROVED con fix applicati; file `docs/TASKS/TASK-073-excel-footer-summary-row-filter.md`) |
 | Nota TASK-068       | 2026-04-28 — quinta passata `PARTIAL`: bulk product push client-side implementato e testato su JVM, sync events massivi compatti, no schema/RPC/outbox cleanup; ciclo B live con lo stesso file pending. |
 | Nota TASK-069       | 2026-04-27 — `DONE` dopo review repo-grounded APPROVED senza fix codice; audit diagnostico chiuso, follow-up TASK-070 (app) e TASK-071 (backend) creati in `BACKLOG`. |
 | Nota TASK-070       | 2026-04-28 — `DONE`: retry outbox head-of-line risolto app-side con query retryable, outcome/log privacy-safe e test JVM/build/lint verdi; nessun cleanup outbox, nessuna UI, nessun backend/schema/RPC/RLS/trigger/migration. |
 | Nota TASK-071       | 2026-04-28 — `DONE`: contratto RPC locale vs payload Android chiarito; mismatch su `p_changed_count > 1000` con eventi compatti massivi, follow-up backend separato proposto. |
 | Milestone            | **TASK-055** **`DONE`** (2026-04-26 — audit Supabase/UX chiuso con follow-up principali coperti). **TASK-063** **`DONE`** (2026-04-26 — `ACCEPTABLE`, non `FULL`: S1-S5 PASS, S6 motivato/coperto da TASK-061, S7/S8 non bloccanti). **TASK-065**/**TASK-064**/**TASK-060**/**TASK-062**/**TASK-061**/**TASK-059** `DONE`. **TASK-069** **`DONE`** (2026-04-27 — audit diagnostico repo-grounded). |
-| Prossimo passo operativo | Pubblicazione Git autorizzata; nessun task Android attivo dopo TASK-138. |
-| Ultimo aggiornamento | 2026-07-18 — **TASK-138 DONE / DONE_RECONCILED** su conferma utente: JVM mirati `74/74`, assemble app/androidTest, lint `0` errori, visual/performance `2/2`, parity locale read/replace/remove e cleanup residui `0`; verdict `RELEASE_READY_WITH_MEASURED_GATES`. |
+| Prossimo passo operativo | Review TASK-139 cross-platform; l'eventuale replace mismatch richiede soltanto il tap distruttivo esplicito nella dialog nativa, senza seconda conferma in chat o nell'app. Nessun commit/push/merge o production. |
+| Ultimo aggiornamento | 2026-07-19 — **TASK-139 READY_FOR_REVIEW / REVIEW**; addendum UX Android autorizzato e verificato: dialog Material 3 mismatch a due azioni, no seconda conferma, shop/auth fail-closed e auto-show una volta per identità. Chiuso anche il P1 image cross-scope con la lease TASK-126 esistente e test deferred non cooperativi. Targeted JVM `182/182`; full JVM `697` totali (`692 PASS`, `5` skip opt-in/live); assemble app/test, lint e device UI isolato `4/4` verdi. Nessun replace o clear-data sul DB reale. |
 
 **Promemoria antiambiguità (governance):** **TASK-040** è **`DONE`** (2026-04-05 — file task chiuso, 22/22 criteri con smoke visivo non bloccante documentato). **TASK-016** è **`DONE`** (2026-04-05). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
 
 ---
 
 ## Workflow — task attivo
+
+**Handoff TASK-139 — 2026-07-18:** follow-up production hardening senza
+reimplementare TASK-137/TASK-138. Questa lane consuma il contratto canonico
+cross-platform, allinea la ladder e chiude test processor/cache/camera/file
+picker. Worktree pulito da `origin/main` `141ffa07b...`; nessun commit, push,
+merge, production o Win7POS. File task:
+`docs/TASKS/TASK-139-product-image-production-hardening-android.md`; evidence:
+`docs/TASKS/evidence/TASK-139/README.md`. Execution completata; review richiesta,
+mai `DONE` senza conferma utente.
+
+**Addendum P0 TASK-139 — 2026-07-19:** restore Android valida una sessione
+persistita con un refresh prima di `SignedIn`, logout esplicitamente locale e
+binding account/shop spostato nello stesso Room DB con migration additiva
+`20→21`. Mismatch/unbound dirty bloccano catalogo, history, manual sync,
+realtime e immagini senza reset; Options espone review/conteggi, discard unbound
+con la conferma esistente e replace mismatch come singolo tap distruttivo nella
+dialog Material 3 a due azioni. Il checkpoint host
+iniziale `146/146` è stato superseduto dal rerun finale: suite P0 mirate
+`101/101`, full JVM `674` totali (`669 PASS`, `5` skip solo
+opzionali/live), assemble app/test e lint verdi. Sul simulatore Android
+autenticato l'APK finale è stato installato in-place senza clear/reset: Room
+`user_version=21`, inode e conteggi business preservati, binding account/shop
+presente, immagine prodotto reale visibile online e da disk cache dopo cold
+launch offline. Alla riconnessione è avvenuto un solo retry del contesto shop,
+poi stato `READY`; outbox `0`, nessun upload/replace/remove o duplicato.
+
+**Addendum UX mismatch TASK-139 — 2026-07-19:** per autorizzazione utente la
+lane Android non è più `review-only` esclusivamente per questa patch UI. Account
+e shop mismatch usano una sola dialog Material 3 con `Mantieni dati locali` e
+`Sostituisci con dati cloud`; keep/back/dismiss sono no-op business, la seconda
+conferma è rimossa, il replace resta disabilitato senza auth/shop/snapshot
+verificati e riusa coordinator/transazione owner-safe esistenti. Presentazione
+automatica al massimo una volta per fingerprint mismatch, riapertura manuale da
+`Rivedi`. L'audit P1 ha inoltre registrato upload/remove immagini nella lease
+TASK-126 esistente, con stop pre/post per intent, PUT/retry, finalize, remove e
+apply locale e recovery UI su cancellazione; nessuna nuova policy/coordinator o
+modifica repository/Room. Gate addendum: targeted `182/182`, full JVM `697`
+totali (`692 PASS`, `5` skip opt-in/live), build app/test, lint e device UI effimero
+`4/4` verdi; database autenticato reale intatto. Evidence:
+`docs/TASKS/evidence/TASK-139/android-account-shop-mismatch-dialog-addendum.md`.
 
 **Apertura TASK-138 — 2026-07-18:** follow-up runtime/UX/live parity di
 TASK-137. Il contratto canonico resta nel repository Admin Web; questo mirror

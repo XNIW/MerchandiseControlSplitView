@@ -70,9 +70,13 @@ class SupabaseRealtimeSessionSubscriberLiveTest {
         val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
         val isEnabled = application.supabaseClient != null
         val remoteId = System.getenv(TEST_REMOTE_ID_ENV)?.trim().orEmpty()
+        val ownerUserId = (application.authManager.state.value as? AuthState.SignedIn)
+            ?.userId
+            .orEmpty()
 
         assumeTrue("SUPABASE realtime config assente", isEnabled)
         assumeTrue("SUPABASE_TEST_REMOTE_ID mancante", remoteId.isNotBlank())
+        assumeTrue("Supabase auth owner mancante", ownerUserId.isNotBlank())
 
         val coordinator = RealtimeRefreshCoordinator(
             repository = repository,
@@ -84,7 +88,7 @@ class SupabaseRealtimeSessionSubscriberLiveTest {
         )
 
         try {
-            subscriber.start()
+            subscriber.start(ownerUserId = ownerUserId)
             assertTrue(
                 "Subscription realtime non attiva",
                 subscriber.awaitSubscribed(timeoutMs = 30_000L)

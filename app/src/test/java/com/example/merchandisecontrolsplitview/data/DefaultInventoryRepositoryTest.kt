@@ -15,6 +15,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonArray
@@ -43,6 +44,7 @@ class DefaultInventoryRepositoryTest {
 
     private lateinit var db: AppDatabase
     private lateinit var repository: DefaultInventoryRepository
+    private lateinit var shopSyncReader: FakeShopSyncReadRemote
     private val timestampPattern = Regex("""\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}""")
     private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
@@ -52,7 +54,11 @@ class DefaultInventoryRepositoryTest {
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repository = DefaultInventoryRepository(db)
+        shopSyncReader = FakeShopSyncReadRemote()
+        repository = DefaultInventoryRepository(
+            db = db,
+            shopSyncReadRemoteDataSource = shopSyncReader
+        )
     }
 
     @After
@@ -4477,7 +4483,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `068 bulk product push uses bounded batches and compact catalog event`() = runTest {
+    fun `139 bulk product push chunks complete catalog events at 250 ids`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000681"
         repeat(260) { index ->
             repository.addProduct(
@@ -4505,15 +4511,22 @@ class DefaultInventoryRepositoryTest {
         assertEquals(listOf(100, 100, 60), remote.productUpsertAttemptSizes)
         assertEquals(3, remote.productUpsertCallCount)
         assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
-        assertEquals(1, syncEvents.recordedParams.size)
-        val catalogEvent = syncEvents.recordedParams.single()
-        assertEquals(SyncEventDomains.CATALOG, catalogEvent.domain)
-        assertEquals(260, catalogEvent.changedCount)
-        assertTrue(catalogEvent.entityIds!!.isEmpty)
+        assertEquals(2, syncEvents.recordedParams.size)
+        val catalogEvents = syncEvents.recordedParams
+        assertTrue(catalogEvents.all { it.domain == SyncEventDomains.CATALOG })
+        assertEquals(listOf(250, 10), catalogEvents.map { it.changedCount })
+        assertEquals(listOf(250, 10), catalogEvents.map { it.entityIds!!.productIds.size })
+        assertEquals(
+            260,
+            catalogEvents.flatMap { it.entityIds!!.productIds }.distinct().size
+        )
+        assertTrue(catalogEvents.none { it.entityIds!!.isEmpty })
+        assertEquals(1, catalogEvents.map { it.batchId }.distinct().size)
+        assertEquals(2, catalogEvents.map { it.clientEventId }.distinct().size)
     }
 
     @Test
-    fun `068 compact catalog event remains compact when enqueued offline`() = runTest {
+    fun `139 offline bulk event keeps complete ids in two durable outbox chunks`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000685"
         repeat(260) { index ->
             repository.addProduct(
@@ -4526,7 +4539,7 @@ class DefaultInventoryRepositoryTest {
             )
         }
         val syncEvents = FakeSyncEventRemote().apply {
-            failRecordForDomains += SyncEventDomains.CATALOG
+            alwaysFailRecordForDomains += SyncEventDomains.CATALOG
         }
 
         val summary = repository.syncCatalogQuickWithEvents(
@@ -4538,11 +4551,69 @@ class DefaultInventoryRepositoryTest {
         ).getOrThrow()
 
         assertEquals(260, summary.pushedProducts)
-        assertEquals(1, summary.syncEventOutboxPending)
-        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
-        assertEquals(SyncEventDomains.CATALOG, pending.domain)
-        assertEquals(260, pending.changedCount)
-        assertTrue(pending.entityIdsJson.length < 120)
+        assertEquals(2, summary.syncEventOutboxPending)
+        val pending = db.syncEventOutboxDao().listPending(owner, 10)
+        val syncEventJson = Json { ignoreUnknownKeys = true }
+        val decodedIds = pending.map {
+            syncEventJson.decodeFromString(
+                SyncEventEntityIds.serializer(),
+                it.entityIdsJson
+            )
+        }
+        assertTrue(pending.all { it.domain == SyncEventDomains.CATALOG })
+        assertEquals(listOf(250, 10), pending.map { it.changedCount })
+        assertEquals(listOf(250, 10), decodedIds.map { it.productIds.size })
+        assertEquals(260, decodedIds.flatMap { it.productIds }.distinct().size)
+        assertTrue(decodedIds.none { it.isEmpty })
+        assertEquals(1, pending.map { it.batchId }.distinct().size)
+        assertEquals(2, pending.map { it.clientEventId }.distinct().size)
+
+        syncEvents.alwaysFailRecordForDomains.clear()
+        val retrySummary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(2, retrySummary.syncEventOutboxRetried)
+        assertEquals(0, retrySummary.syncEventOutboxPending)
+        assertEquals(listOf(250, 10), syncEvents.recordedParams.map { it.changedCount })
+        assertTrue(db.syncEventOutboxDao().listPending(owner, 10).isEmpty())
+    }
+
+    @Test
+    fun `139 bulk price push chunks complete price events at 250 ids`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000686"
+        repeat(130) { index ->
+            repository.addProduct(
+                Product(
+                    barcode = "139-price-chunk-${index.toString().padStart(3, '0')}",
+                    productName = "Price chunk $index",
+                    purchasePrice = 10.0 + index,
+                    retailPrice = 20.0 + index
+                )
+            )
+        }
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.syncCatalogQuickWithEvents(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(130, summary.pushedProducts)
+        assertEquals(260, summary.pushedProductPrices)
+        val priceEvents = syncEvents.recordedParams.filter { it.domain == SyncEventDomains.PRICES }
+        assertEquals(listOf(250, 10), priceEvents.map { it.changedCount })
+        assertEquals(listOf(250, 10), priceEvents.map { it.entityIds!!.priceIds.size })
+        assertEquals(260, priceEvents.flatMap { it.entityIds!!.priceIds }.distinct().size)
+        assertTrue(priceEvents.none { it.entityIds!!.isEmpty })
+        assertEquals(1, priceEvents.map { it.batchId }.distinct().size)
     }
 
     @Test
@@ -4780,6 +4851,20 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, applyStatus.attemptCount)
         assertNotNull(applyStatus.nextRetryAtMs)
         assertTrue(applyStatus.entityIdsJson.contains(productRemoteId))
+
+        val immediateRetry = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+        assertEquals(1, immediateRetry.syncEventsSkippedDirtyLocal)
+        assertEquals(0, remote.targetedFetchCount)
+        assertEquals(
+            1,
+            db.syncEventApplyStatusDao().get(owner, "", 1148L)!!.attemptCount
+        )
     }
 
     @Test
@@ -4813,6 +4898,37 @@ class DefaultInventoryRepositoryTest {
         assertFalse(summary.fullPriceFetch)
         assertEquals(0, remote.fetchCount)
         assertEquals(0, priceRemote.fetchCount)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+    }
+
+    @Test
+    fun `139 transient capability failure is fail closed before catalog writes`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001396"
+        repository.addProduct(
+            Product(
+                barcode = "sync-event-139-capability-failure",
+                productName = "Remain local",
+                purchasePrice = 1.0,
+                retailPrice = 2.0
+            )
+        )
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            capabilityFailure = IOException("offline capability probe")
+        }
+
+        val result = repository.syncCatalogQuickWithEvents(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(result.isFailure)
+        assertTrue(remote.upsertedSuppliers.isEmpty())
+        assertTrue(remote.upsertedCategories.isEmpty())
+        assertTrue(remote.upsertedProducts.isEmpty())
         assertTrue(syncEvents.recordedParams.isEmpty())
     }
 
@@ -4853,28 +4969,27 @@ class DefaultInventoryRepositoryTest {
                 )
             )
         }
-        val syncEvents = FakeSyncEventRemote().apply {
-            externalEvents += SyncEventRemoteRow(
-                id = 1,
-                ownerUserId = owner,
-                domain = SyncEventDomains.CATALOG,
-                eventType = SyncEventTypes.CATALOG_CHANGED,
-                sourceDeviceId = "other-device",
-                changedCount = 1,
-                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
-                createdAt = "2026-04-24T10:00:00Z"
-            )
-            externalEvents += SyncEventRemoteRow(
-                id = 2,
-                ownerUserId = owner,
-                domain = SyncEventDomains.PRICES,
-                eventType = SyncEventTypes.PRICES_CHANGED,
-                sourceDeviceId = "other-device",
-                changedCount = 1,
-                entityIds = SyncEventEntityIds(priceIds = listOf(priceRemoteId)),
-                createdAt = "2026-04-24T10:00:01Z"
-            )
-        }
+        val syncEvents = FakeSyncEventRemote()
+        syncEvents.externalEvents += SyncEventRemoteRow(
+            id = 1,
+            ownerUserId = owner,
+            domain = SyncEventDomains.CATALOG,
+            eventType = SyncEventTypes.CATALOG_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = 1,
+            entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+            createdAt = "2026-04-24T10:00:00Z"
+        )
+        syncEvents.externalEvents += SyncEventRemoteRow(
+            id = 2,
+            ownerUserId = owner,
+            domain = SyncEventDomains.PRICES,
+            eventType = SyncEventTypes.PRICES_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = 1,
+            entityIds = SyncEventEntityIds(priceIds = listOf(priceRemoteId)),
+            createdAt = "2026-04-24T10:00:01Z"
+        )
         val remoteAppliedIds = async { repository.remoteAppliedProductIds.first() }
         runCurrent()
 
@@ -4957,18 +5072,17 @@ class DefaultInventoryRepositoryTest {
                 )
             )
         }
-        val syncEvents = FakeSyncEventRemote().apply {
-            externalEvents += SyncEventRemoteRow(
-                id = 1250,
-                ownerUserId = owner,
-                domain = SyncEventDomains.CATALOG,
-                eventType = SyncEventTypes.CATALOG_CHANGED,
-                sourceDeviceId = "ios-device",
-                changedCount = 1,
-                entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
-                createdAt = "2026-05-26T00:00:00Z"
-            )
-        }
+        val syncEvents = FakeSyncEventRemote()
+        syncEvents.externalEvents += SyncEventRemoteRow(
+            id = 1250,
+            ownerUserId = owner,
+            domain = SyncEventDomains.CATALOG,
+            eventType = SyncEventTypes.CATALOG_CHANGED,
+            sourceDeviceId = "ios-device",
+            changedCount = 1,
+            entityIds = SyncEventEntityIds(productIds = listOf(productRemoteId)),
+            createdAt = "2026-05-26T00:00:00Z"
+        )
 
         val summary = repository.drainSyncEventsFromRemote(
             remote = remote,
@@ -5115,7 +5229,9 @@ class DefaultInventoryRepositoryTest {
                 attemptCount = 2,
                 domain = SyncEventDomains.PRICES,
                 eventType = SyncEventTypes.PRICES_CHANGED,
-                ids = SyncEventEntityIds(priceIds = listOf("price-retryable"))
+                ids = SyncEventEntityIds(
+                    priceIds = listOf("00000000-0000-4000-8000-000000000704")
+                )
             )
         )
         val syncEvents = FakeSyncEventRemote()
@@ -5165,6 +5281,37 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, summary.syncEventOutboxPending)
         assertEquals(1, pending.attemptCount)
         assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout.name, pending.lastErrorType)
+        assertTrue(syncEvents.recordedParams.isEmpty())
+    }
+
+    @Test
+    fun `139 retry rejects legacy compact outbox without sending malformed event`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000739"
+        db.syncEventOutboxDao().insert(
+            testSyncEventOutboxEntry(
+                ownerUserId = owner,
+                clientEventId = "legacy-compact-no-ids",
+                createdAtMs = 1L,
+                attemptCount = 0,
+                ids = SyncEventEntityIds(),
+                changedCount = 260
+            )
+        )
+        val syncEvents = FakeSyncEventRemote()
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(0, summary.syncEventOutboxRetried)
+        assertEquals(1, summary.syncEventOutboxPending)
+        assertEquals(1, pending.attemptCount)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, pending.lastErrorType)
         assertTrue(syncEvents.recordedParams.isEmpty())
     }
 
@@ -5434,6 +5581,59 @@ class DefaultInventoryRepositoryTest {
         assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
         assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, applyStatus.reason)
         assertNotNull(applyStatus.nextRetryAtMs)
+        val journal = db.syncRecoveryJournalDao().get()!!
+        assertEquals(task126OwnerHash(owner), journal.ownerHash)
+        assertEquals(Task126SyncPolicy.DEFAULT_STORE_ID, journal.storeScope)
+        assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, journal.reason)
+        assertEquals(11L, journal.blockingEventId)
+        assertTrue(journal.deviceId.isNotBlank())
+        assertNotNull(journal.nextRetryAtMs)
+
+        val relaunchedScope = repository.resolveBusinessDataScope(
+            task126ActiveOwnerStoreScope(owner, selectedShop = null)
+        )
+        assertEquals(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, relaunchedScope.status)
+        assertEquals("sync_recovery_required", relaunchedScope.errorCode)
+    }
+
+    @Test
+    fun `139 repeated missing ids observation does not consume recovery retry budgets`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001399"
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1399,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 1,
+                entityIds = null,
+                createdAt = "2026-07-21T10:00:00Z"
+            )
+        }
+
+        repeat(8) {
+            val summary = repository.drainSyncEventsFromRemote(
+                remote = FakeCatalogRemote016(),
+                priceRemote = RecordingPriceRemote016(configured = false),
+                syncEventRemote = syncEvents,
+                ownerUserId = owner,
+                progressReporter = CatalogSyncProgressReporter { }
+            ).getOrThrow()
+            assertTrue(summary.manualFullSyncRequired)
+            assertEquals(0, summary.syncEventsWatermarkAfter)
+        }
+
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1399L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, applyStatus.reason)
+        assertEquals(1, applyStatus.attemptCount)
+        assertNotNull(applyStatus.nextRetryAtMs)
+        val journal = db.syncRecoveryJournalDao().get()!!
+        assertEquals(0, journal.attemptCount)
+        assertEquals(1399L, journal.blockingEventId)
+        assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
     }
 
     @Test
@@ -5472,7 +5672,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `114 drain stops after current full page when unapplied event blocks checkpoint`() = runTest {
+    fun `114 drain stops immediately when unapplied event blocks checkpoint`() = runTest {
         val owner = "00000000-0000-4000-8000-000000001147"
         db.syncEventDeviceStateDao().insert(
             SyncEventDeviceState(deviceId = "self-device-114-gap", createdAtMs = 1L)
@@ -5496,7 +5696,11 @@ class DefaultInventoryRepositoryTest {
                     eventType = SyncEventTypes.CATALOG_CHANGED,
                     sourceDeviceId = "self-device-114-gap",
                     changedCount = 1,
-                    entityIds = SyncEventEntityIds(productIds = listOf("remote-$index")),
+                    entityIds = SyncEventEntityIds(
+                        productIds = listOf(
+                            "11400000-0000-4000-8000-${index.toString().padStart(12, '0')}"
+                        )
+                    ),
                     createdAt = "2026-07-06T10:00:00Z"
                 )
             }
@@ -5513,7 +5717,7 @@ class DefaultInventoryRepositoryTest {
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsGapDetected)
         assertEquals(100, summary.syncEventsFetched)
-        assertEquals(99, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.syncEventsSkippedSelf)
         assertEquals(0, summary.syncEventsWatermarkAfter)
         assertNull(db.syncEventWatermarkDao().get(owner, ""))
         assertEquals(1, syncEvents.fetchCalls)
@@ -5521,9 +5725,409 @@ class DefaultInventoryRepositoryTest {
             SyncEventApplyStatusReasons.MISSING_ENTITY_IDS,
             db.syncEventApplyStatusDao().get(owner, "", 1L)!!.reason
         )
+        assertNull(db.syncEventApplyStatusDao().get(owner, "", 2L))
+    }
+
+    @Test
+    fun `139 self event with incomplete primary ids blocks before self skip`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001391"
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = "self-device-139", createdAtMs = 1L)
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1391,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "self-device-139",
+                changedCount = 2,
+                entityIds = SyncEventEntityIds(
+                    productIds = listOf("13900000-0000-4000-8000-000000000001")
+                ),
+                createdAt = "2026-07-21T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(0, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        val status = db.syncEventApplyStatusDao().get(owner, "", 1391L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, status.status)
+        assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, status.reason)
+    }
+
+    @Test
+    fun `139 event type mismatched with domain blocks before apply and requires recovery`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001398"
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1398,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 0,
+                entityIds = SyncEventEntityIds(),
+                createdAt = "2026-07-21T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncEventWatermarkDao().get(owner, ""))
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+        val status = db.syncEventApplyStatusDao().get(owner, "", 1398L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, status.status)
+        assertEquals(SyncEventApplyStatusReasons.UNSUPPORTED_EVENT_TYPE, status.reason)
+        val journal = db.syncRecoveryJournalDao().get()!!
+        assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
+        assertEquals(SyncEventApplyStatusReasons.UNSUPPORTED_EVENT_TYPE, journal.reason)
+        assertEquals(1398L, journal.blockingEventId)
+    }
+
+    @Test
+    fun `139 shop events validate shop scope without requiring actor owner equality`() = runTest {
+        val authenticatedOwner = "00000000-0000-4000-8000-000000001392"
+        val actorOwner = "00000000-0000-4000-8000-000000001393"
+        val activeShopId = "00000000-0000-4000-8000-000000001394"
+        val foreignShopId = "00000000-0000-4000-8000-000000001395"
+        val syncEvents = FakeSyncEventRemote()
+        shopSyncReader.eventRows += SyncEventRemoteRow(
+            id = 1,
+            ownerUserId = actorOwner,
+            shopId = activeShopId,
+            domain = SyncEventDomains.CATALOG,
+            eventType = SyncEventTypes.CATALOG_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = 0,
+            entityIds = SyncEventEntityIds(),
+            createdAt = "2026-07-21T10:00:00Z"
+        )
+        shopSyncReader.eventRows += SyncEventRemoteRow(
+            id = 2,
+            ownerUserId = actorOwner,
+            shopId = foreignShopId,
+            domain = SyncEventDomains.CATALOG,
+            eventType = SyncEventTypes.CATALOG_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = 0,
+            entityIds = SyncEventEntityIds(),
+            createdAt = "2026-07-21T10:00:01Z"
+        )
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = authenticatedOwner,
+            progressReporter = CatalogSyncProgressReporter { },
+            selectedShop = selectedShop(activeShopId)
+        ).getOrThrow()
+
+        assertEquals(1, summary.syncEventsProcessed)
+        assertEquals(1, summary.syncEventsWatermarkAfter)
+        assertTrue(summary.manualFullSyncRequired)
         assertEquals(
-            SyncEventApplyStatusReasons.SELF_ORIGIN,
-            db.syncEventApplyStatusDao().get(owner, "", 2L)!!.reason
+            SyncEventApplyStatusReasons.APPLIED,
+            db.syncEventApplyStatusDao()
+                .get(authenticatedOwner, "shop:$activeShopId", 1L)!!.reason
+        )
+        assertEquals(
+            SyncEventApplyStatusReasons.SCOPE_MISMATCH,
+            db.syncEventApplyStatusDao()
+                .get(authenticatedOwner, "shop:$activeShopId", 2L)!!.reason
+        )
+    }
+
+    @Test
+    fun `139 history event chunks V6 maximum twenty five ids into three row shop rpc reads`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001396"
+        val activeShopId = "00000000-0000-4000-8000-000000001397"
+        val sessionIds = (1..25).map { index ->
+            "13920000-0000-4000-8000-${index.toString().padStart(12, '0')}"
+        }
+        shopSyncReader.targetedHistoryRows += sessionIds.mapIndexed { index, remoteId ->
+            SharedSheetSessionRecord(
+                remoteId = remoteId,
+                payloadVersion = 1,
+                displayName = "History $index",
+                timestamp = "2026-07-21 10:00:00",
+                supplier = "Supplier $index",
+                category = "Category $index",
+                isManualEntry = false,
+                data = listOf(listOf("barcode", "quantity")),
+                ownerUserId = owner,
+                shopId = activeShopId,
+                updatedAt = "2026-07-21T10:00:00Z"
+            )
+        }
+        shopSyncReader.eventRows += SyncEventRemoteRow(
+            id = 1396,
+            ownerUserId = owner,
+            shopId = activeShopId,
+            domain = SyncEventDomains.HISTORY,
+            eventType = SyncEventTypes.HISTORY_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = sessionIds.size,
+            entityIds = SyncEventEntityIds(sessionIds = sessionIds),
+            createdAt = "2026-07-21T10:00:01Z"
+        )
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = FakeSyncEventRemote(),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            selectedShop = selectedShop(activeShopId)
+        ).getOrThrow()
+
+        assertEquals(25, summary.targetedHistoryFetched)
+        assertEquals(25, summary.remoteHistoryUpdatesApplied)
+        assertEquals(1396, summary.syncEventsWatermarkAfter)
+        assertEquals(9, shopSyncReader.targetedRequests.size)
+        assertTrue(shopSyncReader.targetedRequests.all { it.first == ShopSyncRowDomain.HISTORY })
+        assertTrue(shopSyncReader.targetedRequests.dropLast(1).all { it.second.size == 3 })
+        assertEquals(1, shopSyncReader.targetedRequests.last().second.size)
+        assertEquals(sessionIds, shopSyncReader.targetedRequests.flatMap { it.second })
+    }
+
+    @Test
+    fun `139 self verifying recovery baseline reaches marker noWork without relatching`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001400"
+        val shopId = "00000000-0000-4000-8000-000000001401"
+        val deviceId = "self-device-139-v6-baseline"
+        val scope = ShopSyncScope(
+            kind = ShopSyncScopeKinds.SHOP_SCOPED,
+            key = "a".repeat(64),
+            historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
+            accountKey = "e".repeat(64),
+            deviceKey = "b".repeat(64)
+        )
+        val domain = ShopSyncDomainCheckpoint(
+            activeCount = 0,
+            tombstoneCount = 0,
+            idSetDigest = "a".repeat(64),
+            versionDigest = "b".repeat(64)
+        )
+        val baselineCheckpoint = ShopSyncRecoveryCheckpoint(
+            schemaVersion = "shop-sync-recovery-checkpoint-v1",
+            status = "ready",
+            shopId = shopId,
+            scope = scope,
+            syncEvents = ShopSyncEventCheckpoint(
+                maxId = "7",
+                verifiedBaselineId = "7",
+                requiresFullRecovery = false,
+                domainMaxIds = mapOf(
+                    SyncEventDomains.CATALOG to "7",
+                    SyncEventDomains.PRICES to "7",
+                    SyncEventDomains.HISTORY to "7"
+                )
+            ),
+            catalog = ShopSyncCatalogCheckpoint(
+                suppliers = domain,
+                categories = domain,
+                products = domain.copy(identityDigest = "c".repeat(64)),
+                digest = "d".repeat(64)
+            ),
+            prices = domain,
+            history = domain,
+            images = domain,
+            integrity = ShopSyncIntegrityCheckpoint(0, 0, 0, 0, 0, 0),
+            checkpointDigest = "f".repeat(64)
+        )
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = deviceId, createdAtMs = 1L)
+        )
+        db.syncEventWatermarkDao().upsert(
+            SyncEventWatermark(owner, "shop:$shopId", 7L)
+        )
+        db.syncRecoveryBaselineDao().upsert(
+            SyncRecoveryBaseline(
+                generationId = "13900000-0000-4000-8000-000000001400",
+                ownerHash = task126OwnerHash(owner),
+                storeScope = "shop:$shopId",
+                shopId = shopId,
+                deviceId = deviceId,
+                scopeKind = scope.kind,
+                scopeKey = scope.key,
+                checkpointJson = Json.encodeToString(baselineCheckpoint),
+                activatedAtMs = 1L
+            )
+        )
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = FakeSyncEventRemote(),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            selectedShop = selectedShop(shopId)
+        ).getOrThrow()
+
+        assertEquals(0, summary.syncEventsFetched)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(7L, summary.syncEventsWatermarkAfter)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertEquals("7", shopSyncReader.eventContexts.single().expectedEventMaxId)
+        assertEquals(scope, shopSyncReader.eventContexts.single().expectedScope)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun `139 post recovery nonzero watermark carries checkpoint fence and retains recovery latch after a changed fence`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001398"
+        val shopId = "00000000-0000-4000-8000-000000001399"
+        val deviceId = "self-device-139-v6-fence"
+        val scope = ShopSyncScope(
+            kind = ShopSyncScopeKinds.SHOP_SCOPED,
+            key = "a".repeat(64),
+            historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
+            accountKey = "e".repeat(64),
+            deviceKey = "b".repeat(64)
+        )
+        val domain = ShopSyncDomainCheckpoint(
+            activeCount = 0,
+            tombstoneCount = 0,
+            idSetDigest = "a".repeat(64),
+            versionDigest = "b".repeat(64)
+        )
+        val baselineCheckpoint = ShopSyncRecoveryCheckpoint(
+            schemaVersion = "shop-sync-recovery-checkpoint-v1",
+            status = "ready",
+            shopId = shopId,
+            scope = scope,
+            syncEvents = ShopSyncEventCheckpoint(
+                maxId = "7",
+                verifiedBaselineId = "7",
+                requiresFullRecovery = false,
+                domainMaxIds = mapOf(
+                    SyncEventDomains.CATALOG to "7",
+                    SyncEventDomains.PRICES to "7",
+                    SyncEventDomains.HISTORY to "7"
+                )
+            ),
+            catalog = ShopSyncCatalogCheckpoint(
+                suppliers = domain,
+                categories = domain,
+                products = domain.copy(identityDigest = "c".repeat(64)),
+                digest = "d".repeat(64)
+            ),
+            prices = domain,
+            history = domain,
+            images = domain,
+            integrity = ShopSyncIntegrityCheckpoint(0, 0, 0, 0, 0, 0),
+            checkpointDigest = "f".repeat(64)
+        )
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = deviceId, createdAtMs = 1L)
+        )
+        db.syncEventWatermarkDao().upsert(
+            SyncEventWatermark(owner, "shop:$shopId", 7L)
+        )
+        db.syncRecoveryBaselineDao().upsert(
+            SyncRecoveryBaseline(
+                generationId = "13900000-0000-4000-8000-000000001398",
+                ownerHash = task126OwnerHash(owner),
+                storeScope = "shop:$shopId",
+                shopId = shopId,
+                deviceId = deviceId,
+                scopeKind = scope.kind,
+                scopeKey = scope.key,
+                checkpointJson = Json.encodeToString(baselineCheckpoint),
+                activatedAtMs = 1L
+            )
+        )
+        shopSyncReader.eventRows += SyncEventRemoteRow(
+            id = 8L,
+            ownerUserId = owner,
+            shopId = shopId,
+            domain = SyncEventDomains.CATALOG,
+            eventType = SyncEventTypes.CATALOG_CHANGED,
+            sourceDeviceId = "other-device",
+            changedCount = 0,
+            entityIds = SyncEventEntityIds(),
+            createdAt = "2026-07-23T07:00:00Z"
+        )
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = FakeSyncEventRemote(),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { },
+            selectedShop = selectedShop(shopId)
+        ).getOrThrow()
+
+        assertEquals(8L, summary.syncEventsWatermarkAfter)
+        assertEquals("8", shopSyncReader.eventContexts.single().expectedEventMaxId)
+        assertEquals(scope, shopSyncReader.eventContexts.single().expectedScope)
+        // The event was safely targeted under the checkpoint fence, but the
+        // immutable activated manifest still describes watermark 7. A server
+        // marker alone cannot prove the new local digest, therefore this must
+        // never be surfaced as idle/no-work.
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(
+            SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED,
+            db.syncRecoveryJournalDao().get()!!.reason
+        )
+    }
+
+    @Test
+    fun `139 legacy event scope rejects foreign owner and store before apply`() = runTest {
+        val authenticatedOwner = "00000000-0000-4000-8000-000000001397"
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1,
+                ownerUserId = "00000000-0000-4000-8000-000000001398",
+                storeId = "foreign-store",
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 0,
+                entityIds = SyncEventEntityIds(),
+                createdAt = "2026-07-21T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = authenticatedOwner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(0, summary.syncEventsWatermarkAfter)
+        assertEquals(
+            SyncEventApplyStatusReasons.SCOPE_MISMATCH,
+            db.syncEventApplyStatusDao().get(authenticatedOwner, "", 1L)!!.reason
         )
     }
 
@@ -5562,6 +6166,42 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `139 null entity ids with zero changed count is an applied no-op`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001398"
+        val remote = FakeCatalogRemote016()
+        val syncEvents = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(
+                id = 1398,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "other-device",
+                changedCount = 0,
+                entityIds = null,
+                createdAt = "2026-07-21T10:00:00Z"
+            )
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertEquals(1398, summary.syncEventsWatermarkAfter)
+        assertEquals(0, remote.fetchCount)
+        assertEquals(0, remote.targetedFetchCount)
+        assertNull(db.syncRecoveryJournalDao().get())
+        val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1398L)!!
+        assertEquals(SyncEventApplyStatusValues.APPLIED, applyStatus.status)
+        assertEquals(SyncEventApplyStatusReasons.APPLIED, applyStatus.reason)
+    }
+
+    @Test
     fun `061 drain marks manual full sync for entity ids over budget`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000614"
         val productIds = (1..251).map { "00000000-0000-4000-8000-${it.toString().padStart(12, '0')}" }
@@ -5589,7 +6229,7 @@ class DefaultInventoryRepositoryTest {
 
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsTooLarge)
-        assertFalse(summary.syncEventsGapDetected)
+        assertTrue(summary.syncEventsGapDetected)
         assertEquals(0, summary.syncEventsWatermarkAfter)
         assertEquals(0, remote.fetchCount)
         assertEquals(0, remote.targetedFetchCount)
@@ -5614,6 +6254,18 @@ class DefaultInventoryRepositoryTest {
                 entityIds = SyncEventEntityIds(productIds = listOf(missingProductId)),
                 createdAt = "2026-07-06T10:00:00Z"
             )
+            externalEvents += SyncEventRemoteRow(
+                id = 1142,
+                ownerUserId = owner,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                sourceDeviceId = "self-device-061",
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(
+                    productIds = listOf("00000000-0000-4000-8000-000000001149")
+                ),
+                createdAt = "2026-07-06T10:00:01Z"
+            )
         }
 
         val summary = repository.drainSyncEventsFromRemote(
@@ -5633,6 +6285,7 @@ class DefaultInventoryRepositoryTest {
         assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
         assertEquals(SyncEventApplyStatusReasons.MISSING_REMOTE, applyStatus.reason)
         assertNotNull(applyStatus.nextRetryAtMs)
+        assertNull(db.syncEventApplyStatusDao().get(owner, "", 1142L))
     }
 
     @Test
@@ -5706,10 +6359,111 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `061 drain marks manual full sync when max iterations reached`() = runTest {
+    fun `139 drain blocks unsupported targeted history payload without advancing watermark`() =
+        runTest {
+            val owner = "00000000-0000-4000-8000-000000001147"
+            val sessionId = "00000000-0000-4000-8000-000000001148"
+            val syncEvents = FakeSyncEventRemote().apply {
+                externalEvents += SyncEventRemoteRow(
+                    id = 1144,
+                    ownerUserId = owner,
+                    domain = SyncEventDomains.HISTORY,
+                    eventType = SyncEventTypes.HISTORY_CHANGED,
+                    sourceDeviceId = "other-device",
+                    changedCount = 1,
+                    entityIds = SyncEventEntityIds(sessionIds = listOf(sessionId)),
+                    createdAt = "2026-07-06T10:00:00Z"
+                )
+            }
+            val sessionRemote = FakeSessionBackupRemote023(
+                records = listOf(
+                    SharedSheetSessionRecord(
+                        remoteId = sessionId,
+                        payloadVersion = 99,
+                        displayName = "Unsupported",
+                        timestamp = "2026-07-06 10:00:00",
+                        supplier = "Supplier",
+                        category = "Category",
+                        isManualEntry = false,
+                        data = listOf(listOf("barcode", "quantity")),
+                        ownerUserId = owner,
+                        updatedAt = "2026-07-06T10:00:00Z"
+                    )
+                )
+            )
+
+            val summary = repository.drainSyncEventsFromRemote(
+                remote = FakeCatalogRemote016(),
+                priceRemote = RecordingPriceRemote016(configured = false),
+                syncEventRemote = syncEvents,
+                ownerUserId = owner,
+                progressReporter = CatalogSyncProgressReporter { },
+                sessionRemote = sessionRemote
+            ).getOrThrow()
+
+            assertTrue(summary.manualFullSyncRequired)
+            assertTrue(summary.syncEventsGapDetected)
+            assertEquals(0, summary.syncEventsWatermarkAfter)
+            val applyStatus = db.syncEventApplyStatusDao().get(owner, "", 1144L)!!
+            assertEquals(SyncEventApplyStatusValues.BLOCKED, applyStatus.status)
+            assertEquals(
+                SyncEventApplyStatusReasons.UNSUPPORTED_PAYLOAD_VERSION,
+                applyStatus.reason
+            )
+        }
+
+    @Test
+    fun `139 drain probes past iteration cap and journals the first unprocessed event`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000615"
         db.syncEventDeviceStateDao().insert(
             SyncEventDeviceState(deviceId = "self-device-061", createdAtMs = 1L)
+        )
+        val syncEvents = FakeSyncEventRemote().apply {
+            repeat(2_001) { index ->
+                externalEvents += SyncEventRemoteRow(
+                    id = (index + 1).toLong(),
+                    ownerUserId = owner,
+                    domain = SyncEventDomains.CATALOG,
+                    eventType = SyncEventTypes.CATALOG_CHANGED,
+                    sourceDeviceId = "self-device-061",
+                    changedCount = 1,
+                    entityIds = SyncEventEntityIds(
+                        productIds = listOf(
+                            "00000000-0000-4000-8000-${(index + 1).toString().padStart(12, '0')}"
+                        )
+                    ),
+                    createdAt = "2026-04-26T10:00:00Z"
+                )
+            }
+        }
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(2_001, summary.syncEventsFetched)
+        assertEquals(2_000, summary.syncEventsSkippedSelf)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(2_000, summary.syncEventsWatermarkAfter)
+        val blocked = db.syncEventApplyStatusDao().get(owner, "", 2_001L)!!
+        assertEquals(SyncEventApplyStatusValues.BLOCKED, blocked.status)
+        assertEquals(SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED, blocked.reason)
+        val journal = db.syncRecoveryJournalDao().get()!!
+        assertEquals(2_001L, journal.blockingEventId)
+        assertEquals(SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED, journal.reason)
+    }
+
+    @Test
+    fun `139 exact full pages do not invent recovery when overflow probe is empty`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000617"
+        db.syncEventDeviceStateDao().insert(
+            SyncEventDeviceState(deviceId = "self-device-061-exact", createdAtMs = 1L)
         )
         val syncEvents = FakeSyncEventRemote().apply {
             repeat(2_000) { index ->
@@ -5718,9 +6472,13 @@ class DefaultInventoryRepositoryTest {
                     ownerUserId = owner,
                     domain = SyncEventDomains.CATALOG,
                     eventType = SyncEventTypes.CATALOG_CHANGED,
-                    sourceDeviceId = "self-device-061",
+                    sourceDeviceId = "self-device-061-exact",
                     changedCount = 1,
-                    entityIds = SyncEventEntityIds(productIds = listOf("remote-$index")),
+                    entityIds = SyncEventEntityIds(
+                        productIds = listOf(
+                            "10000000-0000-4000-8000-${(index + 1).toString().padStart(12, '0')}"
+                        )
+                    ),
                     createdAt = "2026-04-26T10:00:00Z"
                 )
             }
@@ -5736,10 +6494,10 @@ class DefaultInventoryRepositoryTest {
 
         assertEquals(2_000, summary.syncEventsFetched)
         assertEquals(2_000, summary.syncEventsSkippedSelf)
-        assertEquals(0, summary.syncEventsProcessed)
-        assertTrue(summary.manualFullSyncRequired)
-        assertTrue(summary.syncEventsGapDetected)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
         assertEquals(2_000, summary.syncEventsWatermarkAfter)
+        assertNull(db.syncRecoveryJournalDao().get())
     }
 
     @Test
@@ -5768,6 +6526,25 @@ class DefaultInventoryRepositoryTest {
         assertFalse(summary.fullPriceFetch)
         assertEquals(0, remote.fetchCount)
         assertEquals(0, remote.targetedFetchCount)
+    }
+
+    @Test
+    fun `139 transient drain capability failure cannot become no work`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001399"
+        val syncEvents = FakeSyncEventRemote().apply {
+            capabilityFailure = IOException("offline capability probe")
+        }
+
+        val result = repository.drainSyncEventsFromRemote(
+            remote = FakeCatalogRemote016(),
+            priceRemote = RecordingPriceRemote016(configured = false),
+            syncEventRemote = syncEvents,
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        )
+
+        assertTrue(result.isFailure)
+        assertEquals(0, syncEvents.fetchCalls)
     }
 
     @Test
@@ -6674,9 +7451,12 @@ private fun testSyncEventOutboxEntry(
     attemptCount: Int,
     domain: String = SyncEventDomains.CATALOG,
     eventType: String = SyncEventTypes.CATALOG_CHANGED,
-    ids: SyncEventEntityIds = SyncEventEntityIds(productIds = listOf("product-retryable")),
+    ids: SyncEventEntityIds = SyncEventEntityIds(
+        productIds = listOf("00000000-0000-4000-8000-000000000700")
+    ),
     storeScope: String = "",
-    lastErrorType: String? = null
+    lastErrorType: String? = null,
+    changedCount: Int = ids.totalIds
 ): SyncEventOutboxEntry {
     val json = Json {
         encodeDefaults = true
@@ -6691,7 +7471,7 @@ private fun testSyncEventOutboxEntry(
         sourceDeviceId = "test-device",
         batchId = "test-batch",
         clientEventId = clientEventId,
-        changedCount = ids.totalIds,
+        changedCount = changedCount,
         entityIdsJson = json.encodeToString(SyncEventEntityIds.serializer(), ids),
         metadataJson = "{}",
         createdAtMs = createdAtMs,
@@ -7015,16 +7795,24 @@ private class FakeSyncEventRemote(
     val emittedRows = mutableListOf<SyncEventRemoteRow>()
     val externalEvents = mutableListOf<SyncEventRemoteRow>()
     val failRecordForDomains = mutableSetOf<String>()
+    val alwaysFailRecordForDomains = mutableSetOf<String>()
     var fetchCalls = 0
         private set
+    var capabilityFailure: Throwable? = null
+    private var authenticatedOwnerUserId: String = "00000000-0000-4000-8000-000000000000"
     private var nextId = 1L
 
-    override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
-        Result.success(capabilities)
+    override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> {
+        authenticatedOwnerUserId = ownerUserId
+        return capabilityFailure?.let { Result.failure(it) } ?: Result.success(capabilities)
+    }
 
     override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
         if (!capabilities.recordSyncEventAvailable) {
             return Result.failure(IOException("record_sync_event unavailable"))
+        }
+        if (params.domain in alwaysFailRecordForDomains) {
+            return Result.failure(IOException("record_sync_event failed for ${params.domain}"))
         }
         if (failRecordForDomains.remove(params.domain)) {
             return Result.failure(IOException("record_sync_event failed for ${params.domain}"))
@@ -7034,7 +7822,8 @@ private class FakeSyncEventRemote(
         recordedParams += params
         val row = SyncEventRemoteRow(
             id = nextId++,
-            ownerUserId = "00000000-0000-4000-8000-000000000000",
+            ownerUserId = authenticatedOwnerUserId,
+            shopId = params.shopId,
             storeId = params.storeId,
             domain = params.domain,
             eventType = params.eventType,
@@ -7062,6 +7851,169 @@ private class FakeSyncEventRemote(
                 .filter { it.id > afterId }
                 .sortedBy { it.id }
                 .take(limit.toInt())
+        )
+    }
+}
+
+private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
+    override val isConfigured: Boolean = true
+    val eventRows = mutableListOf<SyncEventRemoteRow>()
+    val targetedHistoryRows = mutableListOf<SharedSheetSessionRecord>()
+    val targetedRequests = mutableListOf<Pair<ShopSyncRowDomain, List<String>>>()
+    val eventContexts = mutableListOf<ShopSyncRpcContext>()
+    var eventCalls = 0
+        private set
+
+    override suspend fun checkpoint(
+        context: ShopSyncRpcContext
+    ): Result<ShopSyncRecoveryCheckpoint> = Result.success(checkpointFor(context))
+
+    override suspend fun convergenceMarker(
+        context: ShopSyncRpcContext
+    ): Result<ShopSyncConvergenceMarker> {
+        val checkpoint = checkpointFor(context).copy(
+            syncEvents = checkpointFor(context).syncEvents.copy(
+                maxId = context.verifiedBaselineId,
+                verifiedBaselineId = context.verifiedBaselineId
+            )
+        )
+        return Result.success(
+            ShopSyncConvergenceMarker(
+                schemaVersion = "shop-sync-convergence-marker-v1",
+                status = "ready",
+                shopId = context.shopId,
+                scope = checkpoint.scope,
+                syncEvents = checkpoint.syncEvents,
+                catalog = checkpoint.catalog,
+                prices = checkpoint.prices,
+                history = checkpoint.history,
+                images = checkpoint.images,
+                integrity = ShopSyncMarkerIntegrity(0),
+                // A no-work marker is valid only when it self-verifies the
+                // exact digest of the activated baseline at this watermark.
+                checkpointDigest = checkpoint.checkpointDigest,
+                serverNoWorkEligible = true,
+                markerDigest = "d".repeat(64)
+            )
+        )
+    }
+
+    override suspend fun recoveryPage(
+        context: ShopSyncRpcContext,
+        domain: ShopSyncRowDomain,
+        afterId: String?,
+        limit: Int
+    ): Result<ShopSyncRecoveryPage> =
+        Result.failure(AssertionError("recovery page not expected in incremental fixture"))
+
+    override suspend fun eventPage(
+        context: ShopSyncRpcContext,
+        afterId: Long,
+        limit: Int
+    ): Result<ShopSyncEventPage> {
+        eventCalls++
+        eventContexts += context
+        val scope = context.expectedScope ?: ShopSyncScope(
+            kind = ShopSyncScopeKinds.SHOP_SCOPED,
+            key = "a".repeat(64),
+            historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
+            accountKey = "e".repeat(64),
+            deviceKey = "b".repeat(64)
+        )
+        val candidates = eventRows.filter { it.id > afterId }.sortedBy { it.id }
+        val rows = candidates.take(limit)
+        val hasMore = candidates.size > limit
+        return Result.success(
+            ShopSyncEventPage(
+                schemaVersion = "shop-sync-event-page-v1",
+                shopId = context.shopId,
+                scope = scope,
+                scopeEventMaxId = eventRows.maxOfOrNull { it.id }?.toString() ?: afterId.toString(),
+                asOfEventMaxId = context.expectedEventMaxId
+                    ?: (eventRows.maxOfOrNull { it.id }?.toString() ?: afterId.toString()),
+                asOfDomainEventMaxIds = mapOf(
+                    SyncEventDomains.CATALOG to (context.expectedEventMaxId
+                        ?: (eventRows.maxOfOrNull { it.id }?.toString() ?: afterId.toString())),
+                    SyncEventDomains.PRICES to (context.expectedEventMaxId
+                        ?: (eventRows.maxOfOrNull { it.id }?.toString() ?: afterId.toString())),
+                    SyncEventDomains.HISTORY to (context.expectedEventMaxId
+                        ?: (eventRows.maxOfOrNull { it.id }?.toString() ?: afterId.toString()))
+                ),
+                pageLimit = limit,
+                rows = rows,
+                nextAfterId = rows.lastOrNull()?.id?.takeIf { hasMore },
+                hasMore = hasMore
+            )
+        )
+    }
+
+    override suspend fun rowsByIds(
+        context: ShopSyncRpcContext,
+        domain: ShopSyncRowDomain,
+        ids: List<String>
+    ): Result<ShopSyncTargetedRows> {
+        targetedRequests += domain to ids.toList()
+        if (domain != ShopSyncRowDomain.HISTORY) {
+            return Result.failure(AssertionError("targeted rows not configured for $domain"))
+        }
+        val requestedIds = ids.map { it.lowercase() }.toSet()
+        val rows = targetedHistoryRows.filter { it.remoteId.lowercase() in requestedIds }
+        val returnedIds = rows.map { it.remoteId.lowercase() }.toSet()
+        val scope = context.expectedScope ?: ShopSyncScope(
+            kind = ShopSyncScopeKinds.SHOP_SCOPED,
+            key = "a".repeat(64),
+            historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
+            accountKey = "e".repeat(64),
+            deviceKey = "b".repeat(64)
+        )
+        return Result.success(
+            ShopSyncTargetedRows(
+                schemaVersion = "shop-sync-rows-by-ids-v1",
+                shopId = context.shopId,
+                scope = scope,
+                domain = domain,
+                asOfEventMaxId = requireNotNull(context.expectedEventMaxId),
+                currentScopeEventMaxId = requireNotNull(context.expectedEventMaxId),
+                minimumDomainEventMaxId = requireNotNull(context.expectedDomainEventMaxId),
+                materializedDomainEventMaxId = requireNotNull(context.expectedDomainEventMaxId),
+                domainScope = ShopSyncScopeKinds.SHOP_SCOPED,
+                requestedCount = ids.size,
+                rows = ShopSyncRows.History(rows),
+                missingIds = ids.filter { it.lowercase() !in returnedIds }
+            )
+        )
+    }
+
+    private fun checkpointFor(context: ShopSyncRpcContext): ShopSyncRecoveryCheckpoint {
+        val scope = context.expectedScope ?: ShopSyncScope(
+            kind = ShopSyncScopeKinds.SHOP_SCOPED,
+            key = "a".repeat(64),
+            historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
+            accountKey = "e".repeat(64),
+            deviceKey = "b".repeat(64)
+        )
+        val domain = ShopSyncDomainCheckpoint(0, 0, "a".repeat(64), "b".repeat(64))
+        return ShopSyncRecoveryCheckpoint(
+            schemaVersion = "shop-sync-recovery-checkpoint-v1",
+            status = "ready",
+            shopId = context.shopId,
+            scope = scope,
+            syncEvents = ShopSyncEventCheckpoint(
+                maxId = eventRows.maxOfOrNull { it.id }?.toString() ?: context.verifiedBaselineId,
+                verifiedBaselineId = context.verifiedBaselineId,
+                requiresFullRecovery = false,
+                domainMaxIds = mapOf(
+                    SyncEventDomains.CATALOG to context.verifiedBaselineId,
+                    SyncEventDomains.PRICES to context.verifiedBaselineId,
+                    SyncEventDomains.HISTORY to context.verifiedBaselineId
+                )
+            ),
+            catalog = ShopSyncCatalogCheckpoint(domain, domain, domain.copy(identityDigest = "c".repeat(64)), "d".repeat(64)),
+            prices = domain,
+            history = domain,
+            images = domain,
+            integrity = ShopSyncIntegrityCheckpoint(0, 0, 0, 0, 0, 0),
+            checkpointDigest = "f".repeat(64)
         )
     }
 }

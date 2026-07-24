@@ -23,11 +23,17 @@ import com.example.merchandisecontrolsplitview.data.ShopContext
 import com.example.merchandisecontrolsplitview.data.ShopContextRepository
 import com.example.merchandisecontrolsplitview.data.Supplier
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
 import com.example.merchandisecontrolsplitview.productimage.ProductImageBatchItem
+import com.example.merchandisecontrolsplitview.productimage.PreparedProductImage
+import com.example.merchandisecontrolsplitview.productimage.PreparedProductImageVariant
+import com.example.merchandisecontrolsplitview.productimage.ProductImageException
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadRequest
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadResult
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
+import com.example.merchandisecontrolsplitview.productimage.ProductImageMetadata
 import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
+import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationResult
 import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
@@ -46,6 +52,7 @@ import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -351,6 +358,47 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `image mutation eligibility requires a persisted remote apply`() = runTest {
+        coEvery { repository.hasSyncedProductRemoteRef(61L) } returns true
+        coEvery { repository.hasSyncedProductRemoteRef(62L) } returns false
+
+        assertFalse(viewModel.hasSyncedProductImageReference(0L))
+        assertTrue(viewModel.hasSyncedProductImageReference(61L))
+        assertFalse(viewModel.hasSyncedProductImageReference(62L))
+
+        coVerify(exactly = 0) { repository.hasSyncedProductRemoteRef(0L) }
+        coVerify(exactly = 1) { repository.hasSyncedProductRemoteRef(61L) }
+        coVerify(exactly = 1) { repository.hasSyncedProductRemoteRef(62L) }
+    }
+
+    @Test
+    fun `visible thumbnail batch is cancelled after its last consumer leaves`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val entered = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            entered.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                cancelled.complete(Unit)
+            }
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+
+        imageViewModel.setProductImageVisible(63L, "version-63", visible = true)
+        advanceTimeBy(17L)
+        runCurrent()
+        assertTrue(entered.isCompleted)
+
+        imageViewModel.setProductImageVisible(63L, "version-63", visible = false)
+        runCurrent()
+
+        assertTrue(cancelled.isCompleted)
+        assertTrue(imageViewModel.productImageStates.value.isEmpty())
+    }
+
+    @Test
     fun `two hundred rows load only composed thumbnails and release offscreen bytes`() = runTest {
         val imageService = mockk<ProductImageService>(relaxed = true)
         val requestedBatches = mutableListOf<List<ProductImageLoadRequest>>()
@@ -521,19 +569,133 @@ class DatabaseViewModelTest {
         runCurrent()
 
         assertTrue(imageViewModel.productImageStates.value.isEmpty())
+        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
         coVerify(exactly = 1) { imageService.purgeScope(accountId, firstShopId) }
 
         authStates.value = AuthState.SignedOut
         runCurrent()
 
+        assertEquals(2L, imageViewModel.productImageScopeEpoch.value)
         coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
+    }
+
+    @Test
+    fun `139 restored auth invalidates image scope while shop is unresolved`() = runTest {
+        val accountId = "account-restored"
+        val firstShopId = "shop-restored"
+        val secondShopId = "shop-next"
+        val authStates = MutableStateFlow<AuthState>(AuthState.SignedIn(accountId, null))
+        val shopStates = MutableStateFlow(ShopContext.legacy())
+        val authManager = mockk<SupabaseAuthManager>()
+        val shopContextRepository = mockk<ShopContextRepository>()
+        val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        every { authManager.state } returns authStates
+        every { shopContextRepository.state } returns shopStates
+        every { scopedApp.authManager } returns authManager
+        every { scopedApp.shopContextRepository } returns shopContextRepository
+        val imageViewModel = DatabaseViewModel(scopedApp, repository, imageService)
+        runCurrent()
+
+        shopStates.value = ShopContext(
+            ownerUserId = accountId,
+            linkedShops = emptyList(),
+            selectedShop = null,
+            isLoading = true,
+            syncAllowed = false
+        )
+        runCurrent()
+        shopStates.value = shopContext(accountId, firstShopId)
+        runCurrent()
+
+        coVerify(exactly = 0) { imageService.purgeScope(any(), any()) }
+        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
+
+        imageViewModel.setProductImageVisible(81L, null, visible = true)
+        assertFalse(imageViewModel.productImageStates.value.isEmpty())
+
+        shopStates.value = shopContext(accountId, firstShopId).copy(
+            selectedShop = null,
+            errorMessage = "offline",
+            syncAllowed = false
+        )
+        runCurrent()
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
+        assertTrue(imageViewModel.productImageStates.value.isEmpty())
+        assertEquals(2L, imageViewModel.productImageScopeEpoch.value)
+
+        shopStates.value = shopContext(accountId, secondShopId)
+        runCurrent()
+
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
+        assertEquals(3L, imageViewModel.productImageScopeEpoch.value)
+    }
+
+    @Test
+    fun `prepared preview is immediate and failed replacement preserves current image`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val uploadGate = CompletableDeferred<Unit>()
+        val oldBytes = byteArrayOf(1, 2, 3)
+        val newMainBytes = byteArrayOf(4, 5, 6)
+        val newThumbBytes = byteArrayOf(7, 8)
+        val prepared = PreparedProductImage(
+            main = PreparedProductImageVariant(
+                bytes = newMainBytes,
+                metadata = ProductImageMetadata(3, 1, sha256 = "a".repeat(64), width = 1)
+            ),
+            thumb = PreparedProductImageVariant(
+                bytes = newThumbBytes,
+                metadata = ProductImageMetadata(2, 1, sha256 = "b".repeat(64), width = 1)
+            )
+        )
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val request = firstArg<List<ProductImageLoadRequest>>().single()
+            listOf(
+                ProductImageBatchItem(
+                    request,
+                    ProductImageLoadResult.Ready(
+                        bytes = oldBytes,
+                        source = ProductImageLoadSource.CACHE,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            )
+        }
+        coEvery { imageService.upload(92L, any(), any(), any()) } coAnswers {
+            arg<(PreparedProductImage) -> Unit>(3)(prepared)
+            uploadGate.await()
+            throw ProductImageException("image_request_failed")
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val mainKey = ProductImageUiKey(92L, ProductImageVariant.MAIN)
+        val thumbKey = ProductImageUiKey(92L, ProductImageVariant.THUMB)
+
+        imageViewModel.loadProductImage(92L, ProductImageVariant.MAIN, "version-old")
+        advanceUntilIdle()
+        imageViewModel.uploadProductImage(92L, Uri.EMPTY)
+        runCurrent()
+
+        val uploadingMain = requireNotNull(imageViewModel.productImageStates.value[mainKey])
+        val uploadingThumb = requireNotNull(imageViewModel.productImageStates.value[thumbKey])
+        assertEquals(ProductImageUiStatus.UPLOADING, uploadingMain.status)
+        assertTrue(uploadingMain.bytes?.contentEquals(oldBytes) == true)
+        assertTrue(uploadingMain.pendingPreviewBytes?.contentEquals(newMainBytes) == true)
+        assertTrue(uploadingThumb.pendingPreviewBytes?.contentEquals(newThumbBytes) == true)
+
+        uploadGate.complete(Unit)
+        advanceUntilIdle()
+
+        val failedMain = requireNotNull(imageViewModel.productImageStates.value[mainKey])
+        assertEquals(ProductImageUiStatus.ERROR, failedMain.status)
+        assertTrue(failedMain.bytes?.contentEquals(oldBytes) == true)
+        assertNull(failedMain.pendingPreviewBytes)
     }
 
     @Test
     fun `upload progress is exposed and cancel restores previous image state`() = runTest {
         val imageService = mockk<ProductImageService>(relaxed = true)
         val uploadGate = CompletableDeferred<Unit>()
-        coEvery { imageService.upload(91L, any(), any()) } coAnswers {
+        coEvery { imageService.upload(91L, any(), any(), any()) } coAnswers {
             thirdArg<(ProductImageMutationPhase) -> Unit>()(
                 ProductImageMutationPhase.UPLOAD_MAIN
             )
@@ -559,7 +721,186 @@ class DatabaseViewModelTest {
 
         assertEquals(ProductImageUiStatus.ABSENT, imageViewModel.productImageStates.value[mainKey]?.status)
         assertFalse(imageViewModel.productImageStates.value.containsKey(thumbKey))
-        coVerify(exactly = 1) { imageService.upload(91L, Uri.EMPTY, any()) }
+        coVerify(exactly = 1) { imageService.upload(91L, Uri.EMPTY, any(), any()) }
+    }
+
+    @Test
+    fun `scope cancellation during remove restores previous image and releases mutation job`() =
+        runTest {
+            val imageService = mockk<ProductImageService>(relaxed = true)
+            val previousBytes = byteArrayOf(9, 5, 1)
+            coEvery { imageService.loadBatch(any()) } coAnswers {
+                val request = firstArg<List<ProductImageLoadRequest>>().single()
+                listOf(
+                    ProductImageBatchItem(
+                        request,
+                        ProductImageLoadResult.Ready(
+                            bytes = previousBytes,
+                            source = ProductImageLoadSource.CACHE,
+                            versionId = requireNotNull(request.expectedVersionId)
+                        )
+                    )
+                )
+            }
+            var removeAttempt = 0
+            coEvery { imageService.remove(95L) } coAnswers {
+                removeAttempt += 1
+                if (removeAttempt == 1) {
+                    throw Task126BusinessDataScopeChangedException()
+                }
+                ProductImageMutationResult(
+                    status = "removed",
+                    versionId = null,
+                    imageUpdatedAt = "now"
+                )
+            }
+            val imageViewModel = DatabaseViewModel(app, repository, imageService)
+            val mainKey = ProductImageUiKey(95L, ProductImageVariant.MAIN)
+            val thumbKey = ProductImageUiKey(95L, ProductImageVariant.THUMB)
+
+            imageViewModel.loadProductImage(95L, ProductImageVariant.MAIN, "version-old")
+            advanceUntilIdle()
+            imageViewModel.removeProductImage(95L)
+            advanceUntilIdle()
+
+            val restored = requireNotNull(imageViewModel.productImageStates.value[mainKey])
+            assertEquals(ProductImageUiStatus.READY, restored.status)
+            assertTrue(restored.bytes?.contentEquals(previousBytes) == true)
+            assertFalse(imageViewModel.productImageStates.value.containsKey(thumbKey))
+
+            imageViewModel.removeProductImage(95L)
+            advanceUntilIdle()
+
+            assertEquals(ProductImageUiStatus.ABSENT, imageViewModel.productImageStates.value[mainKey]?.status)
+            assertEquals(ProductImageUiStatus.ABSENT, imageViewModel.productImageStates.value[thumbKey]?.status)
+            coVerify(exactly = 2) { imageService.remove(95L) }
+        }
+
+    @Test
+    fun `failed upload and failed read retry can be discarded before a new selection`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val oldMainBytes = byteArrayOf(1, 2, 3)
+        val oldThumbBytes = byteArrayOf(4, 5)
+        var readsFail = false
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val request = firstArg<List<ProductImageLoadRequest>>().single()
+            if (readsFail) {
+                listOf(ProductImageBatchItem(request, errorCode = "image_request_failed"))
+            } else {
+                listOf(
+                    ProductImageBatchItem(
+                        request,
+                        ProductImageLoadResult.Ready(
+                            bytes = if (request.variant == ProductImageVariant.MAIN) {
+                                oldMainBytes
+                            } else {
+                                oldThumbBytes
+                            },
+                            source = ProductImageLoadSource.CACHE,
+                            versionId = requireNotNull(request.expectedVersionId)
+                        )
+                    )
+                )
+            }
+        }
+        var uploadAttempt = 0
+        coEvery { imageService.upload(93L, any(), any(), any()) } coAnswers {
+            uploadAttempt += 1
+            if (uploadAttempt == 1) {
+                throw ProductImageException("image_request_failed")
+            }
+            thirdArg<(ProductImageMutationPhase) -> Unit>()(
+                ProductImageMutationPhase.UPLOAD_MAIN
+            )
+            awaitCancellation()
+        }
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val mainKey = ProductImageUiKey(93L, ProductImageVariant.MAIN)
+        val thumbKey = ProductImageUiKey(93L, ProductImageVariant.THUMB)
+
+        imageViewModel.loadProductImageProgressively(93L, "version-old")
+        advanceUntilIdle()
+        imageViewModel.uploadProductImage(93L, Uri.EMPTY)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.ERROR, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.ERROR, imageViewModel.productImageStates.value[thumbKey]?.status)
+
+        readsFail = true
+        imageViewModel.loadProductImageProgressively(93L, "version-old", force = true)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.ERROR, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.ERROR, imageViewModel.productImageStates.value[thumbKey]?.status)
+
+        imageViewModel.discardFailedProductImageOperation(93L)
+
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[thumbKey]?.status)
+        assertTrue(imageViewModel.productImageStates.value[mainKey]?.bytes?.contentEquals(oldMainBytes) == true)
+        assertTrue(imageViewModel.productImageStates.value[thumbKey]?.bytes?.contentEquals(oldThumbBytes) == true)
+
+        imageViewModel.uploadProductImage(93L, Uri.EMPTY)
+        runCurrent()
+        assertEquals(ProductImageUiStatus.UPLOADING, imageViewModel.productImageStates.value[mainKey]?.status)
+
+        imageViewModel.cancelProductImageOperation(93L)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[thumbKey]?.status)
+        coVerify(exactly = 2) { imageService.upload(93L, Uri.EMPTY, any(), any()) }
+    }
+
+    @Test
+    fun `closing after a stuck retry restores current image and permits reopen`() = runTest {
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val retryEntered = CompletableDeferred<Unit>()
+        var hangReads = false
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            val request = firstArg<List<ProductImageLoadRequest>>().single()
+            if (hangReads) {
+                retryEntered.complete(Unit)
+                awaitCancellation()
+            }
+            listOf(
+                ProductImageBatchItem(
+                    request,
+                    ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(if (request.variant == ProductImageVariant.MAIN) 7 else 8),
+                        source = ProductImageLoadSource.CACHE,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            )
+        }
+        coEvery { imageService.upload(94L, any(), any(), any()) } throws
+            ProductImageException("image_request_failed")
+        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val mainKey = ProductImageUiKey(94L, ProductImageVariant.MAIN)
+        val thumbKey = ProductImageUiKey(94L, ProductImageVariant.THUMB)
+
+        imageViewModel.loadProductImageProgressively(94L, "version-old")
+        advanceUntilIdle()
+        imageViewModel.uploadProductImage(94L, Uri.EMPTY)
+        advanceUntilIdle()
+        hangReads = true
+        imageViewModel.loadProductImageProgressively(94L, "version-old", force = true)
+        runCurrent()
+        assertTrue(retryEntered.isCompleted)
+
+        imageViewModel.closeProductImageEditor(94L)
+        runCurrent()
+
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[thumbKey]?.status)
+
+        hangReads = false
+        imageViewModel.loadProductImageProgressively(94L, "version-old", force = true)
+        advanceUntilIdle()
+
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[mainKey]?.status)
+        assertEquals(ProductImageUiStatus.READY, imageViewModel.productImageStates.value[thumbKey]?.status)
     }
 
     @Test

@@ -183,10 +183,10 @@ class ProductImageLocalParityDeviceTest {
 
         override suspend fun downloadSignedJpeg(
             signedUrl: String,
-            variant: ProductImageVariant
+            expectedReference: ProductImageReference
         ): ByteArray {
-            events += "download:${variant.wireName}"
-            return delegate.downloadSignedJpeg(signedUrl, variant)
+            events += "download:${expectedReference.variant.wireName}"
+            return delegate.downloadSignedJpeg(signedUrl, expectedReference)
         }
     }
 

@@ -6,25 +6,39 @@ import android.graphics.Color
 import android.net.Uri
 import androidx.room.Room
 import com.example.merchandisecontrolsplitview.data.AppDatabase
+import com.example.merchandisecontrolsplitview.data.BusinessDataScopeBinding
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductRemoteRef
 import com.example.merchandisecontrolsplitview.data.SelectedShop
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuard
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.Task126UnmanagedBusinessDataScopeRuntimeGuard
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -86,6 +100,314 @@ class ProductImageServiceTest {
     }
 
     @Test
+    fun `cache owns written bytes and returns defensive copies`() {
+        val reference = ProductImageReference(
+            accountScope = accountScope,
+            shopId = shopId,
+            productId = uuid(10_139),
+            versionId = uuid(20_139),
+            variant = ProductImageVariant.THUMB
+        )
+        val source = jpegBytes()
+        val expected = source.copyOf()
+
+        cache.write(reference, source)
+        source.fill(0)
+        val firstRead = requireNotNull(cache.read(reference))
+        assertArrayEquals(expected, firstRead)
+
+        firstRead.fill(0)
+        assertArrayEquals(expected, cache.read(reference))
+
+        cache.trimMemory()
+        assertArrayEquals(expected, cache.read(reference))
+    }
+
+    @Test
+    fun `local only product cannot start image preprocessing or remote mutation`() = runTest {
+        val processor = mockk<ProductImageProcessor>()
+        val remote = FakeProductImageRemote(accountScope, jpegBytes())
+        val productId = insertProduct(index = 2, versionId = null, synced = false)
+        val service = service(remote, processor)
+
+        try {
+            service.upload(productId, Uri.EMPTY)
+            fail("Expected an unsynchronised product reference to be rejected")
+        } catch (error: ProductImageException) {
+            assertEquals("image_reference_invalid", error.code)
+        }
+
+        coVerify(exactly = 0) { processor.prepare(any(), any()) }
+        assertEquals(0, remote.intentCalls)
+        assertEquals(0, remote.uploadCalls)
+        assertEquals(0, remote.finalizeCalls)
+    }
+
+    @Test
+    fun `blocked business scope performs zero image network and preprocessing`() = runTest {
+        val processor = mockk<ProductImageProcessor>()
+        val remote = FakeProductImageRemote(accountScope, jpegBytes())
+        val productId = insertProduct(index = 202, versionId = null)
+        val service = service(remote, processor, businessScopeAllowed = false)
+
+        assertFalse(service.canWriteNow())
+        try {
+            service.upload(productId, Uri.EMPTY)
+            fail("Expected a blocked account-shop binding to reject the image mutation")
+        } catch (error: ProductImageException) {
+            assertEquals("image_account_changed", error.code)
+        }
+        try {
+            service.remove(productId)
+            fail("Expected a blocked account-shop binding to reject image removal")
+        } catch (error: ProductImageException) {
+            assertEquals("image_account_changed", error.code)
+        }
+
+        coVerify(exactly = 0) { processor.prepare(any(), any()) }
+        assertEquals(0, remote.intentCalls)
+        assertEquals(0, remote.uploadCalls)
+        assertEquals(0, remote.finalizeCalls)
+        assertEquals(0, remote.removeCalls)
+    }
+
+    @Test
+    fun `scope discovery during create intent stops every later image mutation`() = runTest {
+        val prepared = preparedImage()
+        val processor = mockk<ProductImageProcessor>()
+        coEvery { processor.prepare(any(), any()) } returns prepared
+        val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
+            intentGate = CompletableDeferred()
+            nonCancellableMutationGates = true
+        }
+        var currentShop: SelectedShop? = selectedShop()
+        val tracker = readyBusinessScopeTracker(requireNotNull(currentShop))
+        val productId = insertProduct(2_201, null)
+        val service = service(
+            remote = remote,
+            processor = processor,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val mutation = async { service.upload(productId, Uri.EMPTY) }
+        remote.intentEntered.await()
+        currentShop = null
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+        requireNotNull(remote.intentGate).complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { mutation.await() }.exceptionOrNull())
+        assertEquals(1, remote.intentCalls)
+        assertEquals(0, remote.uploadCalls)
+        assertEquals(0, remote.finalizeCalls)
+        assertNull(database.productDao().getById(productId)?.primaryImageVersionId)
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `139 write capability revoked during intent prevents upload and local publication`() = runTest {
+        val prepared = preparedImage()
+        val processor = mockk<ProductImageProcessor>()
+        coEvery { processor.prepare(any(), any()) } returns prepared
+        val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
+            intentGate = CompletableDeferred()
+            nonCancellableMutationGates = true
+        }
+        var currentShop: SelectedShop? = selectedShop()
+        val productId = insertProduct(2_205, null)
+        val service = service(
+            remote = remote,
+            processor = processor,
+            selectedShopProvider = { currentShop }
+        )
+
+        val mutation = async { runCatching { service.upload(productId, Uri.EMPTY) } }
+        remote.intentEntered.await()
+        currentShop = requireNotNull(currentShop).copy(canWrite = false)
+        requireNotNull(remote.intentGate).complete(Unit)
+
+        val error = mutation.await().exceptionOrNull()
+        assertTrue(error is ProductImageException)
+        assertEquals("image_account_changed", (error as ProductImageException).code)
+        assertEquals(1, remote.intentCalls)
+        assertEquals(0, remote.uploadCalls)
+        assertEquals(0, remote.finalizeCalls)
+        assertNull(database.productDao().getById(productId)?.primaryImageVersionId)
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `scope discovery during main upload stops thumb finalize and local mark`() = runTest {
+        val prepared = preparedImage()
+        val processor = mockk<ProductImageProcessor>()
+        coEvery { processor.prepare(any(), any()) } returns prepared
+        val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
+            uploadGate = CompletableDeferred()
+            nonCancellableMutationGates = true
+        }
+        var currentShop: SelectedShop? = selectedShop()
+        val tracker = readyBusinessScopeTracker(requireNotNull(currentShop))
+        val productId = insertProduct(2_202, null)
+        val service = service(
+            remote = remote,
+            processor = processor,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val mutation = async { service.upload(productId, Uri.EMPTY) }
+        remote.uploadEntered.await()
+        currentShop = null
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+        requireNotNull(remote.uploadGate).complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { mutation.await() }.exceptionOrNull())
+        assertEquals(1, remote.intentCalls)
+        assertEquals(1, remote.uploadCalls)
+        assertEquals(0, remote.finalizeCalls)
+        assertNull(database.productDao().getById(productId)?.primaryImageVersionId)
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `scope transition during finalize waits then prevents stale local mark`() = runTest {
+        val prepared = preparedImage()
+        val processor = mockk<ProductImageProcessor>()
+        coEvery { processor.prepare(any(), any()) } returns prepared
+        val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
+            finalizeGate = CompletableDeferred()
+            nonCancellableMutationGates = true
+        }
+        var currentShop: SelectedShop? = selectedShop()
+        val originalShop = requireNotNull(currentShop)
+        val tracker = readyBusinessScopeTracker(originalShop)
+        val productId = insertProduct(2_203, null)
+        val service = service(
+            remote = remote,
+            processor = processor,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val mutation = async { service.upload(productId, Uri.EMPTY) }
+        remote.finalizeEntered.await()
+        currentShop = null
+        val transition = async {
+            tracker.withBusinessDataScopeTransition {
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            }
+        }
+        awaitBusinessScopeAdmissionClosed(tracker, originalShop)
+        assertFalse(transition.isCompleted)
+        requireNotNull(remote.finalizeGate).complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { mutation.await() }.exceptionOrNull())
+        transition.await()
+        assertEquals(1, remote.intentCalls)
+        assertEquals(2, remote.uploadCalls)
+        assertEquals(1, remote.finalizeCalls)
+        assertNull(database.productDao().getById(productId)?.primaryImageVersionId)
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `scope transition during remove waits then preserves local reference and cache`() = runTest {
+        val initialVersionId = uuid(22_040)
+        val remoteProductId = uuid(12_204)
+        val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
+            removeGate = CompletableDeferred()
+            nonCancellableMutationGates = true
+        }
+        var currentShop: SelectedShop? = selectedShop()
+        val originalShop = requireNotNull(currentShop)
+        val tracker = readyBusinessScopeTracker(originalShop)
+        val productId = insertProduct(2_204, initialVersionId)
+        val cachedReference = ProductImageReference(
+            accountScope = accountScope,
+            shopId = shopId,
+            productId = remoteProductId,
+            versionId = initialVersionId,
+            variant = ProductImageVariant.THUMB
+        )
+        cache.write(cachedReference, jpegBytes())
+        val service = service(
+            remote = remote,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val mutation = async { service.remove(productId) }
+        remote.removeEntered.await()
+        currentShop = null
+        val transition = async {
+            tracker.withBusinessDataScopeTransition {
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            }
+        }
+        awaitBusinessScopeAdmissionClosed(tracker, originalShop)
+        assertFalse(transition.isCompleted)
+        requireNotNull(remote.removeGate).complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { mutation.await() }.exceptionOrNull())
+        transition.await()
+        assertEquals(1, remote.removeCalls)
+        assertEquals(
+            initialVersionId,
+            database.productDao().getById(productId)?.primaryImageVersionId
+        )
+        assertTrue(cache.read(cachedReference)?.isNotEmpty() == true)
+    }
+
+    @Test
+    fun `139 cold offline read uses owner verified Room binding and disk cache only`() = runTest {
+        val remote = FakeProductImageRemote(accountScope, jpegBytes())
+        val versionId = uuid(2_139)
+        val productId = insertProduct(index = 139, versionId = versionId)
+        val request = ProductImageLoadRequest(
+            localProductId = productId,
+            variant = ProductImageVariant.THUMB,
+            expectedVersionId = versionId
+        )
+        val onlineService = service(remote)
+
+        assertTrue(onlineService.loadBatch(listOf(request)).single().result is ProductImageLoadResult.Ready)
+        database.businessDataScopeBindingDao().upsert(
+            BusinessDataScopeBinding.from(
+                task126ActiveOwnerStoreScope(accountId, selectedShop()),
+                boundAtMs = 139L
+            )
+        )
+        cache.trimMemory()
+        val offlineService = service(
+            remote = remote,
+            selectedShop = null,
+            networkAvailable = false,
+            businessScopeAllowed = false,
+            allowBoundCacheRead = true
+        )
+
+        val cached = offlineService.loadBatch(listOf(request)).single()
+
+        assertEquals(ProductImageLoadSource.CACHE, (cached.result as ProductImageLoadResult.Ready).source)
+        assertEquals(1, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+
+        val mismatchedAccountService = service(
+            remote = remote,
+            selectedShop = null,
+            networkAvailable = false,
+            businessScopeAllowed = false,
+            allowBoundCacheRead = true,
+            providedAccountId = uuid(2_140)
+        )
+        val blocked = mismatchedAccountService.loadBatch(listOf(request)).single()
+
+        assertEquals("image_account_changed", blocked.errorCode)
+        assertEquals(1, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+    }
+
+    @Test
     fun `intent metadata includes required mime type with API serializer defaults`() {
         val metadata = ProductImageMetadata(
             bytes = 12_345,
@@ -115,7 +437,7 @@ class ProductImageServiceTest {
     }
 
     @Test
-    fun `two hundred requests are deduplicated chunked to one hundred and bounded to four downloads`() =
+    fun `two hundred requests are deduplicated chunked to the V6 limit and bounded to four downloads`() =
         runTest {
             val remote = FakeProductImageRemote(accountScope, jpegBytes(), downloadDelayMs = 5L)
             val requests = (1..200).map { index ->
@@ -132,10 +454,52 @@ class ProductImageServiceTest {
 
             assertEquals(200, result.size)
             assertTrue(result.all { it.result is ProductImageLoadResult.Ready })
-            assertEquals(listOf(100, 100), remote.readBatchSizes)
+            assertEquals(List(12) { 16 } + listOf(8), remote.readBatchSizes)
             assertEquals(200, remote.downloadCalls.get())
             assertTrue(remote.maxConcurrentDownloads.get() in 2..4)
         }
+
+    @Test
+    fun `read response missing integrity metadata is rejected before download or cache write`() = runTest {
+        val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
+            readItemTransform = { item ->
+                item.copy(metadata = item.metadata?.copy(sha256 = null))
+            }
+        }
+        val versionId = uuid(2_139)
+        val productId = insertProduct(2_139, versionId)
+        val service = service(remote)
+
+        val item = service.loadBatch(
+            listOf(ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId))
+        ).single()
+
+        assertEquals("image_read_contract_invalid", item.errorCode)
+        assertEquals(1, remote.readCalls)
+        assertEquals(0, remote.downloadCalls.get())
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `download whose bytes differ from read metadata is never cached`() = runTest {
+        val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
+            readItemTransform = { item ->
+                item.copy(metadata = item.metadata?.copy(sha256 = "0".repeat(64)))
+            }
+        }
+        val versionId = uuid(2_140)
+        val productId = insertProduct(2_140, versionId)
+        val service = service(remote)
+
+        val item = service.loadBatch(
+            listOf(ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId))
+        ).single()
+
+        assertEquals("image_download_invalid", item.errorCode)
+        assertEquals(1, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
 
     @Test
     fun `concurrent duplicate load coalesces signed read and download`() = runTest {
@@ -160,6 +524,77 @@ class ProductImageServiceTest {
         assertTrue(first.await().single().result is ProductImageLoadResult.Ready)
         assertTrue(second.await().single().result is ProductImageLoadResult.Ready)
         assertEquals(1, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+    }
+
+    @Test
+    fun `cancelling first duplicate waiter does not cancel shared image producer`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val remote = FakeProductImageRemote(
+            accountScope = accountScope,
+            bytes = jpegBytes(),
+            readGate = gate,
+            readEntered = entered
+        )
+        val versionId = uuid(3_002)
+        val productId = insertProduct(302, versionId)
+        val request = ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId)
+        val service = service(remote)
+
+        val first = async { service.loadBatch(listOf(request)) }
+        entered.await()
+        val second = async { service.loadBatch(listOf(request)) }
+        first.cancelAndJoin()
+        gate.complete(Unit)
+
+        assertTrue(second.await().single().result is ProductImageLoadResult.Ready)
+        assertEquals(1, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+    }
+
+    @Test
+    fun `mixed ready and not found response preserves ready item and returns absent`() = runTest {
+        val bytes = jpegBytes()
+        val missingRemoteId = uuid(10_304)
+        val remote = FakeProductImageRemote(accountScope, bytes).apply {
+            readItemTransform = { item ->
+                if (item.productId == missingRemoteId) {
+                    item.copy(
+                        expiresAt = null,
+                        metadata = null,
+                        signedUrl = null,
+                        status = "not_found"
+                    )
+                } else {
+                    item
+                }
+            }
+        }
+        val readyVersionId = uuid(3_003)
+        val missingVersionId = uuid(3_004)
+        val readyProductId = insertProduct(303, readyVersionId)
+        val missingProductId = insertProduct(304, missingVersionId)
+        val service = service(remote)
+
+        val items = service.loadBatch(
+            listOf(
+                ProductImageLoadRequest(
+                    readyProductId,
+                    ProductImageVariant.THUMB,
+                    readyVersionId
+                ),
+                ProductImageLoadRequest(
+                    missingProductId,
+                    ProductImageVariant.THUMB,
+                    missingVersionId
+                )
+            )
+        )
+
+        assertTrue(items[0].result is ProductImageLoadResult.Ready)
+        assertEquals(ProductImageLoadResult.Absent, items[1].result)
+        assertNull(items[1].errorCode)
         assertEquals(1, remote.downloadCalls.get())
     }
 
@@ -211,7 +646,94 @@ class ProductImageServiceTest {
         gate.complete(Unit)
 
         val item = deferred.await().single()
-        assertEquals("image_version_changed", item.errorCode)
+        assertEquals("image_reference_invalid", item.errorCode)
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `139 scope transition cancels signed read before download and cache`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val remote = FakeProductImageRemote(
+            accountScope = accountScope,
+            bytes = jpegBytes(),
+            readGate = gate,
+            readEntered = entered
+        ).apply { nonCancellableReadGates = true }
+        var currentShop: SelectedShop? = selectedShop()
+        val originalShop = requireNotNull(currentShop)
+        val tracker = readyBusinessScopeTracker(originalShop)
+        val versionId = uuid(5_101)
+        val productId = insertProduct(5_101, versionId)
+        val service = service(
+            remote = remote,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val load = async {
+            service.loadBatch(
+                listOf(ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId))
+            )
+        }
+        entered.await()
+        currentShop = null
+        val transition = async {
+            tracker.withBusinessDataScopeTransition {
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            }
+        }
+        awaitBusinessScopeAdmissionClosed(tracker, originalShop)
+        assertFalse(transition.isCompleted)
+        gate.complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { load.await() }.exceptionOrNull())
+        transition.await()
+        assertEquals(1, remote.readCalls)
+        assertEquals(0, remote.downloadCalls.get())
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
+    }
+
+    @Test
+    fun `139 scope transition joins stale download before it can write cache`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val remote = FakeProductImageRemote(
+            accountScope = accountScope,
+            bytes = jpegBytes(),
+            downloadGate = gate,
+            downloadEntered = entered
+        ).apply { nonCancellableReadGates = true }
+        var currentShop: SelectedShop? = selectedShop()
+        val originalShop = requireNotNull(currentShop)
+        val tracker = readyBusinessScopeTracker(originalShop)
+        val versionId = uuid(5_102)
+        val productId = insertProduct(5_102, versionId)
+        val service = service(
+            remote = remote,
+            selectedShopProvider = { currentShop },
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        val load = async {
+            service.loadBatch(
+                listOf(ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId))
+            )
+        }
+        entered.await()
+        currentShop = null
+        val transition = async {
+            tracker.withBusinessDataScopeTransition {
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            }
+        }
+        awaitBusinessScopeAdmissionClosed(tracker, originalShop)
+        assertFalse(transition.isCompleted)
+        gate.complete(Unit)
+
+        assertBusinessScopeCancellation(runCatching { load.await() }.exceptionOrNull())
+        transition.await()
+        assertEquals(1, remote.downloadCalls.get())
         assertFalse(cacheRoot.walkTopDown().any { it.isFile })
     }
 
@@ -228,7 +750,7 @@ class ProductImageServiceTest {
         val phases = mutableListOf<ProductImageMutationPhase>()
 
         val upload = async {
-            service.upload(productId, Uri.EMPTY) { phases += it }
+            service.upload(productId, Uri.EMPTY, onProgress = { phases += it })
         }
         remote.uploadEntered.await()
         upload.cancelAndJoin()
@@ -254,7 +776,7 @@ class ProductImageServiceTest {
         val service = service(remote, processor)
         val phases = mutableListOf<ProductImageMutationPhase>()
 
-        val result = service.upload(productId, Uri.EMPTY) { phases += it }
+        val result = service.upload(productId, Uri.EMPTY, onProgress = { phases += it })
 
         assertEquals("finalized", result.status)
         assertEquals(
@@ -319,8 +841,8 @@ class ProductImageServiceTest {
     fun `two forbidden downloads refresh once and never attempt a third time`() = runTest {
         val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
             expiresAt = Instant.ofEpochMilli(200_000L).toString()
-            downloadFailureCodes += "image_download_failed_403"
-            downloadFailureCodes += "image_download_failed_403"
+            downloadFailureStatuses += 403
+            downloadFailureStatuses += 403
         }
         val versionId = uuid(7_201)
         val productId = insertProduct(721, versionId)
@@ -329,7 +851,7 @@ class ProductImageServiceTest {
 
         val item = service.loadBatch(listOf(request)).single()
 
-        assertEquals("image_download_failed_403", item.errorCode)
+        assertEquals("image_request_failed", item.errorCode)
         assertEquals(2, remote.readCalls)
         assertEquals(2, remote.downloadCalls.get())
 
@@ -338,6 +860,34 @@ class ProductImageServiceTest {
         assertTrue(recovered.result is ProductImageLoadResult.Ready)
         assertEquals(3, remote.readCalls)
         assertEquals(3, remote.downloadCalls.get())
+    }
+
+    @Test
+    fun `forbidden refresh rejects changed integrity metadata before second download`() = runTest {
+        var readItems = 0
+        val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
+            expiresAt = Instant.ofEpochMilli(200_000L).toString()
+            downloadFailureStatuses += 403
+            readItemTransform = { item ->
+                readItems += 1
+                if (readItems == 2) {
+                    item.copy(metadata = item.metadata?.copy(sha256 = "0".repeat(64)))
+                } else {
+                    item
+                }
+            }
+        }
+        val versionId = uuid(7_202)
+        val productId = insertProduct(722, versionId)
+        val request = ProductImageLoadRequest(productId, ProductImageVariant.THUMB, versionId)
+        val service = service(remote, nowEpochMillis = { 30_000L })
+
+        val item = service.loadBatch(listOf(request)).single()
+
+        assertEquals("image_read_contract_invalid", item.errorCode)
+        assertEquals(2, remote.readCalls)
+        assertEquals(1, remote.downloadCalls.get())
+        assertFalse(cacheRoot.walkTopDown().any { it.isFile })
     }
 
     @Test
@@ -356,14 +906,14 @@ class ProductImageServiceTest {
         val service = service(remote, nowEpochMillis = { 40_000L })
 
         service.loadBatch(initialRequests)
-        assertEquals(3, remote.readCalls)
+        assertEquals(16, remote.readCalls)
 
         val firstRequest = initialRequests.first()
         cache.purgeProduct(accountScope, shopId, uuid(10_801))
         assertTrue(
             service.loadBatch(listOf(firstRequest)).single().result is ProductImageLoadResult.Ready
         )
-        assertEquals(3, remote.readCalls)
+        assertEquals(16, remote.readCalls)
 
         val overflowVersion = uuid(30_057)
         val overflowRequest = ProductImageLoadRequest(
@@ -372,15 +922,15 @@ class ProductImageServiceTest {
             expectedVersionId = overflowVersion
         )
         service.loadBatch(listOf(overflowRequest))
-        assertEquals(4, remote.readCalls)
+        assertEquals(17, remote.readCalls)
 
         val secondRequest = initialRequests[1]
         cache.purgeProduct(accountScope, shopId, uuid(10_801))
         cache.purgeProduct(accountScope, shopId, uuid(10_802))
         service.loadBatch(listOf(firstRequest))
-        assertEquals(4, remote.readCalls)
+        assertEquals(17, remote.readCalls)
         service.loadBatch(listOf(secondRequest))
-        assertEquals(5, remote.readCalls)
+        assertEquals(18, remote.readCalls)
     }
 
     @Test
@@ -389,7 +939,7 @@ class ProductImageServiceTest {
         val processor = mockk<ProductImageProcessor>()
         coEvery { processor.prepare(any(), any()) } returns prepared
         val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
-            uploadFailureCodes += "image_upload_failed_503"
+            uploadFailureStatuses += 503
         }
         val productId = insertProduct(731, null)
         val service = service(remote, processor)
@@ -407,7 +957,7 @@ class ProductImageServiceTest {
         val processor = mockk<ProductImageProcessor>()
         coEvery { processor.prepare(any(), any()) } returns prepared
         val remote = FakeProductImageRemote(accountScope, prepared.thumb.bytes).apply {
-            uploadFailureCodes += "image_upload_failed_403"
+            uploadFailureStatuses += 403
         }
         val productId = insertProduct(741, null)
         val service = service(remote, processor)
@@ -416,13 +966,18 @@ class ProductImageServiceTest {
             service.upload(productId, Uri.EMPTY)
             fail("Expected permanent upload failure")
         } catch (error: ProductImageException) {
-            assertEquals("image_upload_failed_403", error.code)
+            assertEquals("image_upload_failed", error.code)
+            assertEquals(403, error.httpStatus)
         }
         assertEquals(1, remote.uploadCalls)
         assertEquals(0, remote.finalizeCalls)
     }
 
-    private suspend fun insertProduct(index: Int, versionId: String?): Long {
+    private suspend fun insertProduct(
+        index: Int,
+        versionId: String?,
+        synced: Boolean = true
+    ): Long {
         val barcode = "task138-$index"
         database.productDao().insert(
             Product(
@@ -433,7 +988,11 @@ class ProductImageServiceTest {
         )
         val id = requireNotNull(database.productDao().findByBarcode(barcode)).id
         database.productRemoteRefDao().insert(
-            ProductRemoteRef(productId = id, remoteId = uuid(10_000 + index))
+            ProductRemoteRef(
+                productId = id,
+                remoteId = uuid(10_000 + index),
+                lastRemoteAppliedAt = 1L.takeIf { synced }
+            )
         )
         return id
     }
@@ -441,21 +1000,58 @@ class ProductImageServiceTest {
     private fun service(
         remote: FakeProductImageRemote,
         processor: ProductImageProcessor = ProductImageProcessor(),
-        nowEpochMillis: () -> Long = System::currentTimeMillis
+        nowEpochMillis: () -> Long = System::currentTimeMillis,
+        businessScopeAllowed: Boolean = true,
+        selectedShop: SelectedShop? = selectedShop(),
+        selectedShopProvider: () -> SelectedShop? = { selectedShop },
+        businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
+            Task126UnmanagedBusinessDataScopeRuntimeGuard,
+        networkAvailable: Boolean = true,
+        allowBoundCacheRead: Boolean = false,
+        providedAccountId: String = accountId
     ) = ProductImageService(
         context = context,
         database = database,
         api = remote,
-        accountIdProvider = { accountId },
-        selectedShopProvider = {
-            SelectedShop(shopId, "T138", "Task 138", "owner", "active", true)
-        },
+        accountIdProvider = { providedAccountId },
+        selectedShopProvider = selectedShopProvider,
         accessTokenProvider = { "fixture-token" },
+        businessDataScopeAllowed = { _, _ -> businessScopeAllowed },
+        businessDataScopeRuntimeGuard = businessDataScopeRuntimeGuard,
+        allowBoundCacheRead = { allowBoundCacheRead },
         processor = processor,
         cache = cache,
-        networkAvailable = { true },
+        networkAvailable = { networkAvailable },
         nowEpochMillis = nowEpochMillis
     )
+
+    private fun readyBusinessScopeTracker(shop: SelectedShop): CatalogSyncStateTracker =
+        CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(
+                task126ActiveOwnerStoreScope(accountId, shop)
+            )
+        )
+
+    private suspend fun awaitBusinessScopeAdmissionClosed(
+        tracker: CatalogSyncStateTracker,
+        shop: SelectedShop
+    ) {
+        repeat(100) {
+            if (!tracker.allowsBusinessDataScope(accountId, shop)) return
+            yield()
+        }
+        fail("Expected business-scope transition to close new admissions")
+    }
+
+    private fun assertBusinessScopeCancellation(error: Throwable?) {
+        assertTrue(
+            "Expected scope invalidation cancellation, got $error",
+            error is Task126BusinessDataScopeChangedException || error is CancellationException
+        )
+    }
+
+    private fun selectedShop() =
+        SelectedShop(shopId, "T138", "Task 138", "owner", "active", true)
 
     private fun preparedImage(): PreparedProductImage {
         val bytes = jpegBytes()
@@ -487,6 +1083,10 @@ class ProductImageServiceTest {
     }
 }
 
+private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+    .digest(bytes)
+    .joinToString(separator = "") { byte -> "%02x".format(byte) }
+
 private class FakeProductImageRemote(
     private val accountScope: String,
     private val bytes: ByteArray,
@@ -503,12 +1103,23 @@ private class FakeProductImageRemote(
     val maxConcurrentDownloads = AtomicInteger()
     private val activeDownloads = AtomicInteger()
     var uploadCalls = 0
+    var intentCalls = 0
     var finalizeCalls = 0
+    var removeCalls = 0
+    var intentGate: CompletableDeferred<Unit>? = null
+    val intentEntered = CompletableDeferred<Unit>()
     var uploadGate: CompletableDeferred<Unit>? = null
     val uploadEntered = CompletableDeferred<Unit>()
+    var finalizeGate: CompletableDeferred<Unit>? = null
+    val finalizeEntered = CompletableDeferred<Unit>()
+    var removeGate: CompletableDeferred<Unit>? = null
+    val removeEntered = CompletableDeferred<Unit>()
+    var nonCancellableMutationGates = false
+    var nonCancellableReadGates = false
     var expiresAt: String? = null
-    val downloadFailureCodes = mutableListOf<String>()
-    val uploadFailureCodes = mutableListOf<String>()
+    var readItemTransform: ((ProductImageReadItemResponse) -> ProductImageReadItemResponse)? = null
+    val downloadFailureStatuses = mutableListOf<Int>()
+    val uploadFailureStatuses = mutableListOf<Int>()
 
     override suspend fun readUrls(
         accessToken: String,
@@ -517,36 +1128,47 @@ private class FakeProductImageRemote(
         readCalls += 1
         readBatchSizes += body.refs.size
         readEntered?.complete(Unit)
-        readGate?.await()
+        awaitReadGate(readGate)
         return ProductImageReadResponse(
             cacheScope = accountScope,
             ok = true,
             items = body.refs.map { ref ->
-                ProductImageReadItemResponse(
+                val item = ProductImageReadItemResponse(
                     expiresAt = expiresAt,
+                    metadata = ProductImageReadMetadataResponse(
+                        bytes = bytes.size.toLong(),
+                        height = 32,
+                        mimeType = "image/jpeg",
+                        sha256 = sha256(bytes),
+                        width = 32
+                    ),
                     productId = ref.productId,
                     signedUrl = "fixture://${ref.productId}/${ref.versionId}/${ref.variant}",
                     status = "ready",
                     variant = ref.variant,
                     versionId = ref.versionId
                 )
+                readItemTransform?.invoke(item) ?: item
             }
         )
     }
 
     override suspend fun downloadSignedJpeg(
         signedUrl: String,
-        variant: ProductImageVariant
+        expectedReference: ProductImageReference
     ): ByteArray {
         downloadCalls.incrementAndGet()
         val active = activeDownloads.incrementAndGet()
         maxConcurrentDownloads.updateAndGet { previous -> maxOf(previous, active) }
         return try {
-            if (downloadFailureCodes.isNotEmpty()) {
-                throw ProductImageException(downloadFailureCodes.removeAt(0))
+            if (downloadFailureStatuses.isNotEmpty()) {
+                throw ProductImageException(
+                    "image_request_failed",
+                    downloadFailureStatuses.removeAt(0)
+                )
             }
             downloadEntered?.complete(Unit)
-            downloadGate?.await()
+            awaitReadGate(downloadGate)
             if (downloadDelayMs > 0) delay(downloadDelayMs)
             bytes
         } finally {
@@ -557,22 +1179,34 @@ private class FakeProductImageRemote(
     override suspend fun createIntent(
         accessToken: String,
         body: ProductImageIntentBody
-    ) = ProductImageIntentResponse(
-        cacheScope = accountScope,
-        mainUploadUrl = "fixture://main",
-        ok = true,
-        status = "upload_required",
-        thumbUploadUrl = "fixture://thumb",
-        versionId = "13800000-0000-4000-8000-000000009999"
-    )
+    ): ProductImageIntentResponse {
+        intentCalls += 1
+        intentEntered.complete(Unit)
+        awaitMutationGate(intentGate)
+        return ProductImageIntentResponse(
+            cacheScope = accountScope,
+            mainUploadUrl = "fixture://main",
+            ok = true,
+            status = "upload_required",
+            thumbUploadUrl = "fixture://thumb",
+            versionId = "13800000-0000-4000-8000-000000009999"
+        )
+    }
 
-    override suspend fun putSignedJpeg(signedUrl: String, bytes: ByteArray) {
+    override suspend fun putSignedJpeg(
+        signedUrl: String,
+        bytes: ByteArray,
+        expectedReference: ProductImageReference
+    ) {
         uploadCalls += 1
         uploadEntered.complete(Unit)
-        if (uploadFailureCodes.isNotEmpty()) {
-            throw ProductImageException(uploadFailureCodes.removeAt(0))
+        if (uploadFailureStatuses.isNotEmpty()) {
+            throw ProductImageException(
+                "image_upload_failed",
+                uploadFailureStatuses.removeAt(0)
+            )
         }
-        uploadGate?.await()
+        awaitMutationGate(uploadGate)
     }
 
     override suspend fun finalizeImage(
@@ -580,6 +1214,8 @@ private class FakeProductImageRemote(
         body: ProductImageFinalizeBody
     ): ProductImageFinalizeResponse {
         finalizeCalls += 1
+        finalizeEntered.complete(Unit)
+        awaitMutationGate(finalizeGate)
         return ProductImageFinalizeResponse(
             imageUpdatedAt = "now",
             ok = true,
@@ -591,7 +1227,39 @@ private class FakeProductImageRemote(
     override suspend fun removeImage(
         accessToken: String,
         body: ProductImageRemoveBody
-    ) = ProductImageRemoveResponse(ok = false)
+    ): ProductImageRemoveResponse {
+        removeCalls += 1
+        removeEntered.complete(Unit)
+        awaitMutationGate(removeGate)
+        return ProductImageRemoveResponse(
+            currentImageVersionId = null,
+            imageUpdatedAt = "now",
+            ok = true,
+            operation = "remove",
+            productId = body.productId,
+            shopId = body.shopId,
+            status = "removed",
+            versionId = body.expectedVersionId
+        )
+    }
+
+    private suspend fun awaitMutationGate(gate: CompletableDeferred<Unit>?) {
+        if (gate == null) return
+        if (nonCancellableMutationGates) {
+            withContext(NonCancellable) { gate.await() }
+        } else {
+            gate.await()
+        }
+    }
+
+    private suspend fun awaitReadGate(gate: CompletableDeferred<Unit>?) {
+        if (gate == null) return
+        if (nonCancellableReadGates) {
+            withContext(NonCancellable) { gate.await() }
+        } else {
+            gate.await()
+        }
+    }
 
     override fun close() = Unit
 }
