@@ -86,7 +86,7 @@ class ProductImageProcessor {
                 source = normalizedMain,
                 initialMaxSide = PRODUCT_IMAGE_MAIN_MAX_SIDE,
                 minimumSide = 640,
-                qualities = intArrayOf(82, 76, 70),
+                qualities = PRODUCT_IMAGE_MAIN_QUALITIES,
                 targetBytes = PRODUCT_IMAGE_MAIN_TARGET_BYTES,
                 hardMaxBytes = PRODUCT_IMAGE_MAIN_MAX_BYTES,
                 checkCancelled = checkCancelled
@@ -97,13 +97,15 @@ class ProductImageProcessor {
                 source = normalizedMain,
                 initialMaxSide = PRODUCT_IMAGE_THUMB_MAX_SIDE,
                 minimumSide = 128,
-                qualities = intArrayOf(75, 68, 60, 52),
+                qualities = PRODUCT_IMAGE_THUMB_QUALITIES,
                 targetBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES,
                 hardMaxBytes = PRODUCT_IMAGE_THUMB_MAX_BYTES,
                 checkCancelled = checkCancelled
             )
-            if (jpegContainsApp1(main.bytes) || jpegContainsApp1(thumb.bytes)) {
-                throw ProductImageException("image_metadata_strip_failed")
+            if (jpegContainsForbiddenMetadata(main.bytes) ||
+                jpegContainsForbiddenMetadata(thumb.bytes)
+            ) {
+                throw ProductImageException("image_metadata_forbidden")
             }
             PreparedProductImage(main = main, thumb = thumb)
         } finally {
@@ -150,13 +152,13 @@ class ProductImageProcessor {
                     }
                     if (!countEntireStream && headerSize == header.size) break
                 }
-            } ?: throw ProductImageException("image_input_unreadable")
+            } ?: throw ProductImageException("image_decode_failed")
         } catch (error: CancellationException) {
             throw error
         } catch (error: ProductImageException) {
             throw error
         } catch (_: Throwable) {
-            throw ProductImageException("image_input_unreadable")
+            throw ProductImageException("image_decode_failed")
         }
 
         if (total < 1L) throw ProductImageException("image_input_size_invalid")
@@ -183,7 +185,7 @@ class ProductImageProcessor {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         try {
             val input = openInputStream(resolver, uri)
-                ?: throw ProductImageException("image_input_unreadable")
+                ?: throw ProductImageException("image_decode_failed")
             input.use {
                 BitmapFactory.decodeStream(input, null, options)
             }
@@ -228,10 +230,9 @@ class ProductImageProcessor {
         checkCancelled: () -> Unit
     ): PreparedProductImageVariant {
         val sourceLongestSide = maxOf(source.width, source.height)
-        var maximumSide = minOf(initialMaxSide, sourceLongestSide)
         var fallback: PreparedProductImageVariant? = null
 
-        while (maximumSide > 0) {
+        for (maximumSide in outputSideSchedule(sourceLongestSide, initialMaxSide, minimumSide)) {
             checkCancelled()
             val useSourceDirectly = maximumSide >= sourceLongestSide && !source.hasAlpha()
             val bitmap = if (useSourceDirectly) source else renderOpaque(source, maximumSide)
@@ -242,7 +243,10 @@ class ProductImageProcessor {
                     if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)) {
                         throw ProductImageException("image_encode_failed")
                     }
-                    val variant = preparedVariant(output.toByteArray(), bitmap)
+                    val variant = preparedVariant(
+                        canonicalizeJpegMetadata(output.toByteArray()),
+                        bitmap
+                    )
                     if (variant.bytes.size <= hardMaxBytes &&
                         (fallback == null || variant.bytes.size < fallback.bytes.size)
                     ) {
@@ -253,24 +257,24 @@ class ProductImageProcessor {
             } finally {
                 if (!useSourceDirectly) bitmap.recycle()
             }
-
-            if (maximumSide <= minimumSide ||
-                (maximumSide >= sourceLongestSide && sourceLongestSide < minimumSide)
-            ) {
-                break
-            }
-            val reduced = reducedMaximumSide(maximumSide, minimumSide) ?: break
-            maximumSide = minOf(reduced, sourceLongestSide)
         }
 
         return fallback?.takeIf { it.bytes.isNotEmpty() && it.bytes.size <= hardMaxBytes }
             ?: throw ProductImageException("image_output_budget_exceeded")
     }
 
-    internal fun reducedMaximumSide(current: Int, minimum: Int): Int? {
-        if (current <= minimum) return null
-        val reduced = maxOf(minimum, kotlin.math.floor(current * 0.85).toInt())
-        return reduced.takeIf { it < current }
+    internal fun outputSideSchedule(
+        sourceLongestSide: Int,
+        initialMaximum: Int,
+        minimum: Int
+    ): List<Int> {
+        val maximum = minOf(initialMaximum, sourceLongestSide)
+        if (maximum <= minimum || sourceLongestSide < minimum) return listOf(maximum)
+        return (PRODUCT_IMAGE_OUTPUT_SIDE_FACTORS.map { factor ->
+            maxOf(minimum, kotlin.math.floor(maximum * factor).toInt())
+        } + minimum)
+            .distinct()
+            .filter { it <= maximum }
     }
 
     internal fun renderOpaque(source: Bitmap, maxSide: Int): Bitmap {
@@ -314,8 +318,112 @@ internal fun isJpeg(bytes: ByteArray): Boolean =
         bytes[bytes.lastIndex - 1] == 0xff.toByte() &&
         bytes[bytes.lastIndex] == 0xd9.toByte()
 
-/** Controlla i marker prima dello scan compresso; APP1 contiene EXIF/XMP. */
-internal fun jpegContainsApp1(bytes: ByteArray): Boolean {
+internal data class ProductImageDecodedBounds(val width: Int, val height: Int)
+
+/**
+ * Legge solo il SOF tramite BitmapFactory, senza allocare il bitmap. Il caller
+ * deve eseguire questo preflight prima di qualunque decode di payload remoto.
+ */
+internal fun decodeProductImageBounds(bytes: ByteArray): ProductImageDecodedBounds? {
+    if (!isJpeg(bytes)) return null
+    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    return try {
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+        if (options.outWidth < 1 || options.outHeight < 1) {
+            null
+        } else {
+            ProductImageDecodedBounds(options.outWidth, options.outHeight)
+        }
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+private fun isCanonicalJfifApp0(
+    bytes: ByteArray,
+    dataStart: Int,
+    dataLength: Int
+): Boolean =
+    dataLength == 14 &&
+        bytes[dataStart] == 0x4a.toByte() &&
+        bytes[dataStart + 1] == 0x46.toByte() &&
+        bytes[dataStart + 2] == 0x49.toByte() &&
+        bytes[dataStart + 3] == 0x46.toByte() &&
+        bytes[dataStart + 4] == 0x00.toByte() &&
+        bytes[dataStart + 5] == 0x01.toByte() &&
+        (bytes[dataStart + 7].toInt() and 0xff) <= 0x02 &&
+        bytes[dataStart + 12] == 0x00.toByte() &&
+        bytes[dataStart + 13] == 0x00.toByte()
+
+/**
+ * Rimuove in-place dai JPEG appena codificati i segmenti metadata che alcuni
+ * encoder Android aggiungono (per esempio ICC in APP2), conservando solo APP0
+ * JFIF. Se non serve compattare restituisce la stessa istanza; altrimenti crea
+ * una sola copia finale della lunghezza canonica.
+ */
+internal fun canonicalizeJpegMetadata(bytes: ByteArray): ByteArray {
+    if (!isJpeg(bytes)) throw ProductImageException("image_encode_failed")
+    var readOffset = 2
+    var writeOffset = 2
+
+    while (readOffset < bytes.size) {
+        val markerStart = readOffset
+        if (bytes[readOffset] != 0xff.toByte()) {
+            throw ProductImageException("image_encode_failed")
+        }
+        while (readOffset < bytes.size && bytes[readOffset] == 0xff.toByte()) readOffset++
+        if (readOffset >= bytes.size) throw ProductImageException("image_encode_failed")
+        val marker = bytes[readOffset].toInt() and 0xff
+        readOffset++
+
+        if (marker == 0xd9) {
+            if (readOffset != bytes.size) throw ProductImageException("image_encode_failed")
+            bytes.copyInto(bytes, writeOffset, markerStart, readOffset)
+            writeOffset += readOffset - markerStart
+            break
+        }
+        if (marker == 0xd8 || marker == 0x01 || marker in 0xd0..0xd7) {
+            bytes.copyInto(bytes, writeOffset, markerStart, readOffset)
+            writeOffset += readOffset - markerStart
+            continue
+        }
+        if (readOffset + 1 >= bytes.size) throw ProductImageException("image_encode_failed")
+        val length = ((bytes[readOffset].toInt() and 0xff) shl 8) or
+            (bytes[readOffset + 1].toInt() and 0xff)
+        if (length < 2 || readOffset + length > bytes.size) {
+            throw ProductImageException("image_encode_failed")
+        }
+        val dataStart = readOffset + 2
+        val dataLength = length - 2
+        val validJfif = marker == 0xe0 &&
+            isCanonicalJfifApp0(bytes, dataStart, dataLength)
+        val forbidden = marker == 0xfe ||
+            (marker == 0xe0 && !validJfif) ||
+            marker in 0xe1..0xef
+        val segmentEnd = readOffset + length
+        if (!forbidden) {
+            bytes.copyInto(bytes, writeOffset, markerStart, segmentEnd)
+            writeOffset += segmentEnd - markerStart
+        }
+        readOffset = segmentEnd
+
+        if (marker == 0xda) {
+            bytes.copyInto(bytes, writeOffset, readOffset, bytes.size)
+            writeOffset += bytes.size - readOffset
+            readOffset = bytes.size
+        }
+    }
+
+    val canonical = if (writeOffset == bytes.size) bytes else bytes.copyOf(writeOffset)
+    if (!isJpeg(canonical)) throw ProductImageException("image_encode_failed")
+    if (jpegContainsForbiddenMetadata(canonical)) {
+        throw ProductImageException("image_metadata_forbidden")
+    }
+    return canonical
+}
+
+/** Applica la stessa allowlist JPEG server: solo APP0 JFIF, nessun COM/APP1...APP15. */
+internal fun jpegContainsForbiddenMetadata(bytes: ByteArray): Boolean {
     if (!isJpeg(bytes)) return true
     var offset = 2
     while (offset + 1 < bytes.size) {
@@ -324,14 +432,44 @@ internal fun jpegContainsApp1(bytes: ByteArray): Boolean {
         if (offset >= bytes.size) return true
         val marker = bytes[offset].toInt() and 0xff
         offset++
-        if (marker == 0xda || marker == 0xd9) return false
+        if (marker == 0xd9) return offset != bytes.size
         if (marker == 0xd8 || marker in 0xd0..0xd7 || marker == 0x01) continue
         if (offset + 1 >= bytes.size) return true
         val length = ((bytes[offset].toInt() and 0xff) shl 8) or
             (bytes[offset + 1].toInt() and 0xff)
         if (length < 2 || offset + length > bytes.size) return true
-        if (marker == 0xe1) return true
+        val dataStart = offset + 2
+        val dataLength = length - 2
+        val validJfif = marker == 0xe0 &&
+            isCanonicalJfifApp0(bytes, dataStart, dataLength)
+        if (marker == 0xfe || (marker == 0xe0 && !validJfif) || marker in 0xe1..0xef) {
+            return true
+        }
         offset += length
+        if (marker == 0xda) {
+            var nextMarker = -1
+            var scanOffset = offset
+            while (scanOffset < bytes.size - 1) {
+                if (bytes[scanOffset] != 0xff.toByte()) {
+                    scanOffset++
+                    continue
+                }
+                var markerOffset = scanOffset + 1
+                while (markerOffset < bytes.size && bytes[markerOffset] == 0xff.toByte()) {
+                    markerOffset++
+                }
+                if (markerOffset >= bytes.size) return true
+                val scanMarker = bytes[markerOffset].toInt() and 0xff
+                if (scanMarker == 0x00 || scanMarker in 0xd0..0xd7) {
+                    scanOffset = markerOffset + 1
+                    continue
+                }
+                nextMarker = scanOffset
+                break
+            }
+            if (nextMarker < 0) return true
+            offset = nextMarker
+        }
     }
     return true
 }

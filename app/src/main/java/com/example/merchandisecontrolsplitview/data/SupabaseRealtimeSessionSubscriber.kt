@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.data
 
 import android.util.Log
 import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.HasRecord
 import io.github.jan.supabase.realtime.PostgresAction
 import io.github.jan.supabase.realtime.Realtime
@@ -39,6 +40,8 @@ import kotlin.time.Duration.Companion.seconds
 class SupabaseRealtimeSessionSubscriber(
     private val client: io.github.jan.supabase.SupabaseClient?,
     private val coordinator: RealtimeRefreshCoordinator,
+    private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
+        Task126UnmanagedBusinessDataScopeRuntimeGuard,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     companion object {
@@ -52,29 +55,53 @@ class SupabaseRealtimeSessionSubscriber(
     private val stateLock = Any()
 
     @Volatile
-    private var started = false
+    private var startedForScope: RemoteSignal.SourceScope? = null
+    private var subscriptionGeneration = 0L
 
     private var channel: RealtimeChannel? = null
     private var collectorJob: Job? = null
     private var subscribeJob: Job? = null
 
-    fun start() {
+    fun start(ownerUserId: String, shopId: String? = null) {
         if (client == null) {
             Log.i(TAG, "Supabase Realtime disabilitato: client assente")
             return
         }
+        val normalizedScope = RemoteSignal.SourceScope(
+            ownerUserId = ownerUserId.trim(),
+            shopId = shopId?.trim()?.takeIf { it.isNotEmpty() }
+        )
+        val admissionToken = try {
+            businessDataScopeRuntimeGuard.captureBusinessDataScopeSignal(
+                normalizedScope.ownerUserId,
+                normalizedScope.shopId
+            )
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            Log.i(TAG, "Supabase Realtime non avviato: business scope non corrente")
+            return
+        }
 
         synchronized(stateLock) {
-            if (started) return
+            if (startedForScope == normalizedScope) return
+        }
+        stop()
 
-            val realtimeChannel = client.channel(CHANNEL_NAME)
+        synchronized(stateLock) {
+            if (!businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(admissionToken)) {
+                Log.i(TAG, "Supabase Realtime non avviato: business scope cambiato")
+                return
+            }
+            subscriptionGeneration += 1L
+            val collectorGeneration = subscriptionGeneration
+            val realtimeChannel = client.channel("$CHANNEL_NAME-$collectorGeneration")
             collectorJob = realtimeChannel
                 .postgresChangeFlow<PostgresAction>(schema = SCHEMA) {
                     table = TABLE_NAME
+                    filter("owner_user_id", FilterOperator.EQ, normalizedScope.ownerUserId)
                 }
                 .onEach { action ->
                     if (action is HasRecord) {
-                        forwardPayload(action)
+                        forwardPayload(action, normalizedScope, collectorGeneration)
                     }
                 }
                 .launchIn(scope)
@@ -83,7 +110,7 @@ class SupabaseRealtimeSessionSubscriber(
                 subscribeLoop(realtimeChannel)
             }
             channel = realtimeChannel
-            started = true
+            startedForScope = normalizedScope
         }
     }
 
@@ -97,16 +124,20 @@ class SupabaseRealtimeSessionSubscriber(
 
     fun stop() {
         val realtimeChannel = synchronized(stateLock) {
-            if (!started) return
-            started = false
+            subscriptionGeneration += 1L
+            startedForScope = null
             collectorJob?.cancel()
             subscribeJob?.cancel()
+            collectorJob = null
+            subscribeJob = null
             channel.also { channel = null }
         }
 
         scope.launch {
             try {
-                realtimeChannel?.unsubscribe()
+                realtimeChannel?.let { oldChannel ->
+                    client?.realtime?.removeChannel(oldChannel)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -144,20 +175,44 @@ class SupabaseRealtimeSessionSubscriber(
         }
     }
 
-    private fun forwardPayload(action: HasRecord) {
+    private fun forwardPayload(
+        action: HasRecord,
+        expectedScope: RemoteSignal.SourceScope,
+        collectorGeneration: Long
+    ) {
         val actionKind = action::class.simpleName ?: "UnknownAction"
         val record = action.decodeRecordOrNull<SharedSheetSessionRecord>()
         if (record == null) {
             Log.w(TAG, "Evento realtime ignorato: record non decodificabile (action=$actionKind)")
             return
         }
+        val recordScope = RemoteSignal.SourceScope(
+            ownerUserId = record.ownerUserId?.trim().orEmpty(),
+            shopId = record.shopId?.trim()?.takeIf { it.isNotEmpty() }
+        )
+        if (recordScope != expectedScope) {
+            Log.w(TAG, "Evento realtime ignorato: source scope non corrente")
+            return
+        }
         Log.i(
             TAG,
-            "Evento realtime ricevuto: action=$actionKind remoteId=${record.remoteId} " +
+            "Evento realtime ricevuto: action=$actionKind " +
                 "payloadVersion=${record.payloadVersion} → forward a coordinator"
         )
-        coordinator.onRemoteSignal(
-            RemoteSignal.PayloadAvailable(record.toSessionRemotePayload())
-        )
+        synchronized(stateLock) {
+            if (
+                subscriptionGeneration != collectorGeneration ||
+                startedForScope != expectedScope
+            ) {
+                Log.i(TAG, "Evento realtime ignorato: subscription generation stale")
+                return
+            }
+            coordinator.onRemoteSignal(
+                RemoteSignal.PayloadAvailable(
+                    payload = record.toSessionRemotePayload(),
+                    sourceScope = recordScope
+                )
+            )
+        }
     }
 }

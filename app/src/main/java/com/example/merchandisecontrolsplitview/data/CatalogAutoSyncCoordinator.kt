@@ -29,12 +29,15 @@ class CatalogAutoSyncCoordinator(
     private val debounceMs: Long = DEBOUNCE_MS,
     private val bootstrapRetryGuardMs: Long = BOOTSTRAP_RETRY_GUARD_MS,
     private val foregroundSyncEventIntervalMs: Long = FOREGROUND_SYNC_EVENT_INTERVAL_MS,
+    private val foregroundSyncEventMaxBackoffMs: Long = FOREGROUND_SYNC_EVENT_MAX_BACKOFF_MS,
+    private val onRecoveryRequired: (String) -> Unit = {},
     private val logger: (String) -> Unit = {}
 ) {
     companion object {
         const val DEBOUNCE_MS = 500L
         const val BOOTSTRAP_RETRY_GUARD_MS = 5L * 60L * 1_000L
-        const val FOREGROUND_SYNC_EVENT_INTERVAL_MS = 15_000L
+        const val FOREGROUND_SYNC_EVENT_INTERVAL_MS = 2_000L
+        const val FOREGROUND_SYNC_EVENT_MAX_BACKOFF_MS = 30_000L
         const val RETRY_AFTER_BUSY_MS = 250L
         const val RETRY_AFTER_DEVICE_STATUS_MAX_ATTEMPTS = 4
         const val RETRY_AFTER_DEVICE_STATUS_MAX_MS = 2_000L
@@ -78,10 +81,13 @@ class CatalogAutoSyncCoordinator(
     private var isForeground = true
 
     @Volatile
-    private var lastBootstrapUserId: String? = null
+    private var lastBootstrapScopeKey: String? = null
 
     @Volatile
     private var lastBootstrapOkAtMs: Long = 0L
+
+    @Volatile
+    private var foregroundSyncEventFailureCount = 0
 
     private var foregroundSyncEventJob: Job? = null
 
@@ -109,7 +115,7 @@ class CatalogAutoSyncCoordinator(
                     synchronized(dirtyLock) { dirtyHints.clear() }
                     pendingLocalCatalogPushSignal = false
                     resetDeviceStatusPushRetry()
-                    lastBootstrapUserId = null
+                    lastBootstrapScopeKey = null
                     logger("cycle=catalog_auto outcome=skip reason=signed_out")
                 }
             }
@@ -145,6 +151,7 @@ class CatalogAutoSyncCoordinator(
     }
 
     fun onNetworkAvailable() {
+        foregroundSyncEventFailureCount = 0
         resetDeviceStatusPushRetry()
         scheduleBootstrap("network_available")
         schedulePush("network_available")
@@ -328,12 +335,28 @@ class CatalogAutoSyncCoordinator(
         if (foregroundSyncEventJob?.isActive == true) return
         foregroundSyncEventJob = scope.launch {
             while (true) {
-                delay(foregroundSyncEventIntervalMs)
-                if (isForeground) {
-                    scheduleSyncEventDrain("foreground_interval")
+                delay(currentForegroundSyncEventDelayMs())
+                val auth = authFlow.value as? AuthState.SignedIn
+                val selectedShop = selectedShopProvider()
+                if (
+                    isForeground &&
+                    syncStateTracker.networkAvailable.value == true &&
+                    auth != null &&
+                    selectedShop != null &&
+                    syncStateTracker.allowsBusinessDataScope(auth.userId, selectedShop)
+                ) {
+                    runSyncEventDrainCycle("foreground_interval")
                 }
             }
         }
+    }
+
+    private fun currentForegroundSyncEventDelayMs(): Long {
+        val exponent = foregroundSyncEventFailureCount.coerceIn(0, 4)
+        return minOf(
+            foregroundSyncEventIntervalMs * (1L shl exponent),
+            foregroundSyncEventMaxBackoffMs
+        )
     }
 
     @OptIn(FlowPreview::class)
@@ -359,6 +382,14 @@ class CatalogAutoSyncCoordinator(
         val auth = authFlow.value
         if (auth !is AuthState.SignedIn) {
             logger("cycle=catalog_push outcome=skip reason=no_auth debounceMs=$debounceMs")
+            return
+        }
+        val selectedShop = selectedShopProvider()
+        if (!syncStateTracker.allowsBusinessDataScope(auth.userId, selectedShop)) {
+            logger(
+                "cycle=catalog_push outcome=skip reason=business_scope_blocked " +
+                    "scopeStatus=${syncStateTracker.businessDataScopeState.value.status}"
+            )
             return
         }
         if (!remote.isConfigured) {
@@ -391,8 +422,11 @@ class CatalogAutoSyncCoordinator(
             )
             return
         }
-        val selectedShop = selectedShopProvider()
-        if (!ensureDeviceActiveForSync("catalog_push", reason, selectedShop)) return
+        if (!ensureDeviceActiveForScopedSync(auth.userId, "catalog_push", reason, selectedShop)) return
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            logger("cycle=catalog_push outcome=skip reason=business_scope_changed_after_device_check")
+            return
+        }
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
             dirtyHints.clear()
@@ -405,81 +439,124 @@ class CatalogAutoSyncCoordinator(
             schedulePushAfterBusy(reason)
             return
         }
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
+            pendingLocalCatalogPushSignal = true
+            syncStateTracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
+            logger("cycle=catalog_push outcome=skip reason=business_scope_changed_before_remote")
+            return
+        }
         var ok = false
+        var scopeChanged = false
+        var recoveryRequired = false
+        var dirtyLocalBlocked = false
+        var recoverySummary: CatalogSyncSummary? = null
         val startedAt = System.currentTimeMillis()
         try {
-            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
-            var summary: CatalogSyncSummary? = null
-            val durationMs = measureTimeMillis {
-                summary = if (syncEventRemote.isConfigured) {
-                    if (selectedShop == null) {
-                        repository.syncCatalogQuickWithEvents(
-                            remote = remote,
-                            priceRemote = priceRemote,
-                            syncEventRemote = syncEventRemote,
-                            sessionRemote = sessionRemote,
-                            ownerUserId = auth.userId,
-                            progressReporter = CatalogSyncProgressReporter { progress ->
-                                syncStateTracker.update(progress)
-                            }
-                        )
+            syncStateTracker.withBusinessDataScopeFlight(auth.userId, selectedShop) {
+                syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS))
+                var summary: CatalogSyncSummary? = null
+                val durationMs = measureTimeMillis {
+                    summary = if (syncEventRemote.isConfigured) {
+                        if (selectedShop == null) {
+                            repository.syncCatalogQuickWithEvents(
+                                remote = remote,
+                                priceRemote = priceRemote,
+                                syncEventRemote = syncEventRemote,
+                                sessionRemote = sessionRemote,
+                                ownerUserId = auth.userId,
+                                progressReporter = CatalogSyncProgressReporter { progress ->
+                                    syncStateTracker.update(progress)
+                                }
+                            )
+                        } else {
+                            repository.syncCatalogQuickWithEvents(
+                                remote = remote,
+                                priceRemote = priceRemote,
+                                syncEventRemote = syncEventRemote,
+                                sessionRemote = sessionRemote,
+                                ownerUserId = auth.userId,
+                                selectedShop = selectedShop,
+                                progressReporter = CatalogSyncProgressReporter { progress ->
+                                    syncStateTracker.update(progress)
+                                }
+                            )
+                        }
                     } else {
-                        repository.syncCatalogQuickWithEvents(
-                            remote = remote,
-                            priceRemote = priceRemote,
-                            syncEventRemote = syncEventRemote,
-                            sessionRemote = sessionRemote,
-                            ownerUserId = auth.userId,
-                            selectedShop = selectedShop,
-                            progressReporter = CatalogSyncProgressReporter { progress ->
-                                syncStateTracker.update(progress)
-                            }
-                        )
-                    }
-                } else {
-                    if (selectedShop == null) {
-                        repository.pushDirtyCatalogDeltaToRemote(
-                            remote = remote,
-                            priceRemote = priceRemote,
-                            ownerUserId = auth.userId,
-                            progressReporter = CatalogSyncProgressReporter { progress ->
-                                syncStateTracker.update(progress)
-                            }
-                        )
-                    } else {
-                        repository.pushDirtyCatalogDeltaToRemote(
-                            remote = remote,
-                            priceRemote = priceRemote,
-                            ownerUserId = auth.userId,
-                            selectedShop = selectedShop,
-                            progressReporter = CatalogSyncProgressReporter { progress ->
-                                syncStateTracker.update(progress)
-                            }
-                        )
-                    }
+                        if (selectedShop == null) {
+                            repository.pushDirtyCatalogDeltaToRemote(
+                                remote = remote,
+                                priceRemote = priceRemote,
+                                ownerUserId = auth.userId,
+                                progressReporter = CatalogSyncProgressReporter { progress ->
+                                    syncStateTracker.update(progress)
+                                }
+                            )
+                        } else {
+                            repository.pushDirtyCatalogDeltaToRemote(
+                                remote = remote,
+                                priceRemote = priceRemote,
+                                ownerUserId = auth.userId,
+                                selectedShop = selectedShop,
+                                progressReporter = CatalogSyncProgressReporter { progress ->
+                                    syncStateTracker.update(progress)
+                                }
+                            )
+                        }
+                    }.getOrThrow()
                 }
-                    .getOrThrow()
+                pendingLocalCatalogPushSignal = false
+                lastLocalPushCompletedAtMs = System.currentTimeMillis()
+                val s = summary
+                recoveryRequired = s?.manualFullSyncRequired == true
+                dirtyLocalBlocked = (s?.syncEventsSkippedDirtyLocal ?: 0) > 0
+                recoverySummary = s.takeIf { recoveryRequired }
+                ok = !recoveryRequired && !dirtyLocalBlocked
+                s?.let {
+                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
+                }
+                val cycleOutcome = when {
+                    recoveryRequired -> "blocked_recovery_required"
+                    dirtyLocalBlocked -> "blocked_dirty_local"
+                    else -> "ok"
+                }
+                logger(
+                    "cycle=catalog_push " +
+                        "outcome=$cycleOutcome " +
+                        "reason=$reason durationMs=$durationMs " +
+                        "dirtyHints=${hinted.size} dirtySample=${hinted.take(LOG_SAMPLE_LIMIT).joinToString(",")} " +
+                        "productsPushed=${s?.pushedProducts ?: 0} pricesPushed=${s?.pushedProductPrices ?: 0} " +
+                        "syncEventsProcessed=${s?.syncEventsProcessed ?: 0} " +
+                        "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
+                        "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
+                        "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
+                        "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
+                        "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
+                        "priceSyncFailed=${s?.priceSyncFailed ?: false}"
+                )
+                if (!recoveryRequired && !dirtyLocalBlocked) {
+                    scheduleSyncEventDrain("local_push_completed")
+                }
             }
-            ok = true
-            pendingLocalCatalogPushSignal = false
-            lastLocalPushCompletedAtMs = System.currentTimeMillis()
-            val s = summary
-            s?.let {
-                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
+            if (recoveryRequired) {
+                syncStateTracker.withBusinessDataScopeTransition {
+                    val previousScope = syncStateTracker.businessDataScopeState.value.boundScope
+                    syncStateTracker.updateBusinessDataScopeState(
+                        Task126BusinessDataScopeState(
+                            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                            boundScope = previousScope,
+                            errorCode = "sync_recovery_required"
+                        )
+                    )
+                }
+                recoverySummary?.let {
+                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
+                }
+                notifyRecoveryRequired("catalog_push")
             }
-            logger(
-                "cycle=catalog_push outcome=ok reason=$reason durationMs=$durationMs " +
-                    "dirtyHints=${hinted.size} dirtySample=${hinted.take(LOG_SAMPLE_LIMIT).joinToString(",")} " +
-                    "productsPushed=${s?.pushedProducts ?: 0} pricesPushed=${s?.pushedProductPrices ?: 0} " +
-                    "syncEventsProcessed=${s?.syncEventsProcessed ?: 0} " +
-                    "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
-                    "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
-                    "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
-                    "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
-                    "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
-                    "priceSyncFailed=${s?.priceSyncFailed ?: false}"
-            )
-            scheduleSyncEventDrain("local_push_completed")
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            scopeChanged = true
+            logger("cycle=catalog_push outcome=skip reason=business_scope_changed_during_remote")
         } catch (cancelled: CancellationException) {
             if (scope.coroutineContext[Job]?.isActive != true || !isLocalMutationPushReason(reason)) {
                 throw cancelled
@@ -500,9 +577,11 @@ class CatalogAutoSyncCoordinator(
                     "httpStatus=${classification.httpStatus} postgrestCode=${classification.postgrestCode}"
             )
         } finally {
-            syncStateTracker.update(
-                if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
-            )
+            if (!scopeChanged) {
+                syncStateTracker.update(
+                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                )
+            }
             syncStateTracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
         }
     }
@@ -517,6 +596,14 @@ class CatalogAutoSyncCoordinator(
         val auth = authFlow.value
         if (auth !is AuthState.SignedIn) {
             logger("cycle=catalog_bootstrap outcome=skip reason=no_auth")
+            return
+        }
+        val selectedShop = selectedShopProvider()
+        if (!syncStateTracker.allowsBusinessDataScope(auth.userId, selectedShop)) {
+            logger(
+                "cycle=catalog_bootstrap outcome=skip reason=business_scope_blocked " +
+                    "scopeStatus=${syncStateTracker.businessDataScopeState.value.status}"
+            )
             return
         }
         if (!remote.isConfigured) {
@@ -535,7 +622,8 @@ class CatalogAutoSyncCoordinator(
             logger("cycle=catalog_bootstrap outcome=skip reason=not_needed")
             return
         }
-        val recentlyBootstrappedForUser = lastBootstrapUserId == auth.userId &&
+        val bootstrapScopeKey = "${auth.userId}:${shopScopedStoreScope(selectedShop)}"
+        val recentlyBootstrappedForUser = lastBootstrapScopeKey == bootstrapScopeKey &&
             lastBootstrapOkAtMs > 0L &&
             now - lastBootstrapOkAtMs < bootstrapRetryGuardMs
         if (!forcedByRemoteGap && recentlyBootstrappedForUser) {
@@ -545,6 +633,7 @@ class CatalogAutoSyncCoordinator(
         if (
             !forcedByRemoteGap &&
             !bootstrapRequired &&
+            !automaticPullReconcile &&
             hasPendingLocalPushSignal()
         ) {
             logger(
@@ -568,8 +657,11 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrapAfterBusy(reason)
             return
         }
-        val selectedShop = selectedShopProvider()
-        if (!ensureDeviceActiveForSync("catalog_bootstrap", reason, selectedShop)) return
+        if (!ensureDeviceActiveForScopedSync(auth.userId, "catalog_bootstrap", reason, selectedShop)) return
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_after_device_check")
+            return
+        }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
             logger(
                 "cycle=catalog_bootstrap outcome=queued_after_busy " +
@@ -578,48 +670,61 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrapAfterBusy(reason)
             return
         }
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
+            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_before_remote")
+            return
+        }
         if (consumePendingCatalogBootstrapAfterBusy()) {
             logger("cycle=catalog_bootstrap outcome=drained_after_busy reason=$reason")
         }
         var ok = false
+        var scopeChanged = false
         val startedAt = System.currentTimeMillis()
         try {
-            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
-            var summary: CatalogSyncSummary? = null
-            val durationMs = measureTimeMillis {
-                summary = if (selectedShop == null) {
-                    repository.pullCatalogBootstrapFromRemote(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            syncStateTracker.update(progress)
-                        }
-                    )
-                } else {
-                    repository.pullCatalogBootstrapFromRemote(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        selectedShop = selectedShop,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            syncStateTracker.update(progress)
-                        }
-                    )
-                }.getOrThrow()
+            syncStateTracker.withBusinessDataScopeFlight(auth.userId, selectedShop) {
+                syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+                var summary: CatalogSyncSummary? = null
+                val durationMs = measureTimeMillis {
+                    summary = if (selectedShop == null) {
+                        repository.pullCatalogBootstrapFromRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    } else {
+                        repository.pullCatalogBootstrapFromRemote(
+                            remote = remote,
+                            priceRemote = priceRemote,
+                            selectedShop = selectedShop,
+                            progressReporter = CatalogSyncProgressReporter { progress ->
+                                syncStateTracker.update(progress)
+                            }
+                        )
+                    }.getOrThrow()
+                }
+                ok = true
+                lastBootstrapScopeKey = bootstrapScopeKey
+                lastBootstrapOkAtMs = System.currentTimeMillis()
+                val s = summary
+                s?.let {
+                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.BOOTSTRAP, it)
+                }
+                logger(
+                    "cycle=catalog_bootstrap outcome=ok reason=$reason durationMs=$durationMs " +
+                        "bootstrapRequired=$bootstrapRequired pullOnly=true " +
+                        "productsPulled=${s?.pulledProducts ?: 0} suppliersPulled=${s?.pulledSuppliers ?: 0} " +
+                        "categoriesPulled=${s?.pulledCategories ?: 0} pricesPulled=${s?.pulledProductPrices ?: 0} " +
+                        "priceSyncFailed=${s?.priceSyncFailed ?: false}"
+                )
+                schedulePush("local_catalog_commit_after_bootstrap")
+                scheduleSyncEventDrain("bootstrap_completed")
             }
-            ok = true
-            lastBootstrapUserId = auth.userId
-            lastBootstrapOkAtMs = System.currentTimeMillis()
-            val s = summary
-            s?.let {
-                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.BOOTSTRAP, it)
-            }
-            logger(
-                "cycle=catalog_bootstrap outcome=ok reason=$reason durationMs=$durationMs " +
-                    "bootstrapRequired=$bootstrapRequired pullOnly=true " +
-                    "productsPulled=${s?.pulledProducts ?: 0} suppliersPulled=${s?.pulledSuppliers ?: 0} " +
-                    "categoriesPulled=${s?.pulledCategories ?: 0} pricesPulled=${s?.pulledProductPrices ?: 0} " +
-                    "priceSyncFailed=${s?.priceSyncFailed ?: false}"
-            )
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            scopeChanged = true
+            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_during_remote")
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -630,9 +735,11 @@ class CatalogAutoSyncCoordinator(
                     "postgrestCode=${classification.postgrestCode}"
             )
         } finally {
-            syncStateTracker.update(
-                if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
-            )
+            if (!scopeChanged) {
+                syncStateTracker.update(
+                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                )
+            }
             syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
         }
     }
@@ -665,6 +772,22 @@ class CatalogAutoSyncCoordinator(
             logger("cycle=sync_events_drain outcome=skip reason=no_auth")
             return
         }
+        val selectedShop = selectedShopProvider()
+        if (selectedShop == null) {
+            logger("cycle=sync_events_drain outcome=skip reason=shop_unresolved")
+            return
+        }
+        if (!syncStateTracker.allowsBusinessDataScope(auth.userId, selectedShop)) {
+            logger(
+                "cycle=sync_events_drain outcome=skip reason=business_scope_blocked " +
+                    "scopeStatus=${syncStateTracker.businessDataScopeState.value.status}"
+            )
+            return
+        }
+        if (syncStateTracker.networkAvailable.value != true) {
+            logger("cycle=sync_events_drain outcome=skip reason=network_unavailable_or_unverified")
+            return
+        }
         if (!remote.isConfigured || !syncEventRemote.isConfigured) {
             logger("cycle=sync_events_drain outcome=skip reason=remote_unconfigured")
             return
@@ -681,8 +804,11 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
             return
         }
-        val selectedShop = selectedShopProvider()
-        if (!ensureDeviceActiveForSync("sync_events_drain", reason, selectedShop)) return
+        if (!ensureDeviceActiveForScopedSync(auth.userId, "sync_events_drain", reason, selectedShop)) return
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_after_device_check")
+            return
+        }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
             logger(
                 "cycle=sync_events_drain outcome=queued_after_busy " +
@@ -691,28 +817,26 @@ class CatalogAutoSyncCoordinator(
             scheduleSyncEventDrainAfterBusy(reason)
             return
         }
+        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
+            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_before_remote")
+            return
+        }
         if (consumePendingSyncEventDrainAfterBusy()) {
             logger("cycle=sync_events_drain outcome=drained_after_busy reason=$reason")
         }
         var ok = false
+        var scopeChanged = false
+        var recoveryRequired = false
+        var dirtyLocalBlocked = false
+        var recoverySummary: CatalogSyncSummary? = null
         val startedAt = System.currentTimeMillis()
         try {
-            syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
-            var summary: CatalogSyncSummary? = null
-            val durationMs = measureTimeMillis {
-                summary = if (selectedShop == null) {
-                    repository.drainSyncEventsFromRemote(
-                        remote = remote,
-                        priceRemote = priceRemote,
-                        syncEventRemote = syncEventRemote,
-                        sessionRemote = sessionRemote,
-                        ownerUserId = auth.userId,
-                        progressReporter = CatalogSyncProgressReporter { progress ->
-                            syncStateTracker.update(progress)
-                        }
-                    )
-                } else {
-                    repository.drainSyncEventsFromRemote(
+            syncStateTracker.withBusinessDataScopeFlight(auth.userId, selectedShop) {
+                syncStateTracker.update(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
+                var summary: CatalogSyncSummary? = null
+                val durationMs = measureTimeMillis {
+                    summary = repository.drainSyncEventsFromRemote(
                         remote = remote,
                         priceRemote = priceRemote,
                         syncEventRemote = syncEventRemote,
@@ -722,46 +846,94 @@ class CatalogAutoSyncCoordinator(
                         progressReporter = CatalogSyncProgressReporter { progress ->
                             syncStateTracker.update(progress)
                         }
+                    ).getOrThrow()
+                }
+                val s = summary
+                recoveryRequired = s?.manualFullSyncRequired == true
+                dirtyLocalBlocked = (s?.syncEventsSkippedDirtyLocal ?: 0) > 0
+                recoverySummary = s.takeIf { recoveryRequired }
+                ok = !recoveryRequired && !dirtyLocalBlocked
+                s?.let {
+                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
+                }
+                val cycleOutcome = when {
+                    recoveryRequired -> "blocked_recovery_required"
+                    dirtyLocalBlocked -> "blocked_dirty_local"
+                    else -> "ok"
+                }
+                logger(
+                    "cycle=sync_events_drain " +
+                        "outcome=$cycleOutcome " +
+                        "reason=$reason durationMs=$durationMs " +
+                        "eventsFetched=${s?.syncEventsFetched ?: 0} eventsProcessed=${s?.syncEventsProcessed ?: 0} " +
+                        "skippedSelf=${s?.syncEventsSkippedSelf ?: 0} outboxPending=${s?.syncEventOutboxPending ?: 0} " +
+                        "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
+                        "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
+                        "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
+                        "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
+                        "targetedProductsFetched=${s?.targetedProductsFetched ?: 0} " +
+                        "targetedPricesFetched=${s?.targetedPricesFetched ?: 0} " +
+                        "targetedHistoryFetched=${s?.targetedHistoryFetched ?: 0} " +
+                        "remoteHistoryUpdatesApplied=${s?.remoteHistoryUpdatesApplied ?: 0} " +
+                        "fullCatalogFetch=${s?.fullCatalogFetch ?: false} fullPriceFetch=${s?.fullPriceFetch ?: false}"
+                )
+            }
+            foregroundSyncEventFailureCount = 0
+            if (recoveryRequired) {
+                syncStateTracker.withBusinessDataScopeTransition {
+                    val previousScope = syncStateTracker.businessDataScopeState.value.boundScope
+                    syncStateTracker.updateBusinessDataScopeState(
+                        Task126BusinessDataScopeState(
+                            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                            boundScope = previousScope,
+                            errorCode = "sync_recovery_required"
+                        )
                     )
-                }.getOrThrow()
+                }
+                recoverySummary?.let {
+                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
+                }
+                notifyRecoveryRequired("sync_events_drain")
             }
-            ok = true
-            val s = summary
-            s?.let {
-                syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
-            }
-            logger(
-                "cycle=sync_events_drain outcome=ok reason=$reason durationMs=$durationMs " +
-                    "eventsFetched=${s?.syncEventsFetched ?: 0} eventsProcessed=${s?.syncEventsProcessed ?: 0} " +
-                    "skippedSelf=${s?.syncEventsSkippedSelf ?: 0} outboxPending=${s?.syncEventOutboxPending ?: 0} " +
-                    "manualFullSyncRequired=${s?.manualFullSyncRequired ?: false} " +
-                    "syncEventsGapDetected=${s?.syncEventsGapDetected ?: false} " +
-                    "syncEventsTooLarge=${s?.syncEventsTooLarge ?: false} " +
-                    "syncEventOutboxRetried=${s?.syncEventOutboxRetried ?: 0} " +
-                    "targetedProductsFetched=${s?.targetedProductsFetched ?: 0} " +
-                    "targetedPricesFetched=${s?.targetedPricesFetched ?: 0} " +
-                    "targetedHistoryFetched=${s?.targetedHistoryFetched ?: 0} " +
-                    "remoteHistoryUpdatesApplied=${s?.remoteHistoryUpdatesApplied ?: 0} " +
-                    "fullCatalogFetch=${s?.fullCatalogFetch ?: false} fullPriceFetch=${s?.fullPriceFetch ?: false}"
-            )
-            if (s?.manualFullSyncRequired == true) {
-                scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
-            }
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            scopeChanged = true
+            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_during_remote")
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
+            foregroundSyncEventFailureCount =
+                (foregroundSyncEventFailureCount + 1).coerceAtMost(4)
             val classification = SyncErrorClassifier.classify(t)
             logger(
                 "cycle=sync_events_drain outcome=fail reason=$reason durationMs=${System.currentTimeMillis() - startedAt} " +
                     "errCategory=${classification.category} httpStatus=${classification.httpStatus} " +
-                    "postgrestCode=${classification.postgrestCode}"
+                    "postgrestCode=${classification.postgrestCode} " +
+                    "nextPollMs=${currentForegroundSyncEventDelayMs()}"
             )
         } finally {
-            syncStateTracker.update(
-                if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
-            )
+            if (!scopeChanged) {
+                syncStateTracker.update(
+                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                )
+            }
             syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
         }
+    }
+
+    private fun notifyRecoveryRequired(source: String) {
+        runCatching { onRecoveryRequired(source) }
+            .onFailure { logger("cycle=$source recovery_schedule=failed") }
+    }
+
+    private fun businessDataScopeStillAllows(
+        ownerUserId: String,
+        capturedShop: SelectedShop?
+    ): Boolean {
+        val currentAuth = authFlow.value as? AuthState.SignedIn ?: return false
+        val currentShop = selectedShopProvider()
+        return currentAuth.userId == ownerUserId &&
+            shopScopedStoreScope(currentShop) == shopScopedStoreScope(capturedShop) &&
+            syncStateTracker.allowsBusinessDataScope(ownerUserId, currentShop)
     }
 
     private suspend fun ensureDeviceActiveForSync(
@@ -771,6 +943,7 @@ class CatalogAutoSyncCoordinator(
     ): Boolean {
         val authorization = deviceAuthorization ?: return true
         val result = authorization.ensureActiveForCloudWrite("$cycle:$reason", selectedShop?.shopId)
+        syncStateTracker.requireCurrentBusinessDataScope()
         if (result.isSuccess) {
             if (cycle == "catalog_push") {
                 resetDeviceStatusPushRetry()
@@ -794,6 +967,20 @@ class CatalogAutoSyncCoordinator(
         }
         syncStateTracker.update(CatalogSyncProgressState.failed(CatalogSyncStage.DEVICE_STATUS))
         return false
+    }
+
+    private suspend fun ensureDeviceActiveForScopedSync(
+        ownerUserId: String,
+        cycle: String,
+        reason: String,
+        selectedShop: SelectedShop?
+    ): Boolean = try {
+        syncStateTracker.withBusinessDataScopeFlight(ownerUserId, selectedShop) {
+            ensureDeviceActiveForSync(cycle, reason, selectedShop)
+        }
+    } catch (_: Task126BusinessDataScopeChangedException) {
+        logger("cycle=$cycle outcome=skip reason=business_scope_changed_during_device_check")
+        false
     }
 
     private sealed interface DeviceStatusRetryPlan {

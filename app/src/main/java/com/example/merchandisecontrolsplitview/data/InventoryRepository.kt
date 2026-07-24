@@ -99,6 +99,8 @@ interface InventoryRepository {
     suspend fun findProductsByBarcodes(barcodes: List<String>): List<Product>
     suspend fun getAllProducts(): List<Product>
     suspend fun getProductDetailsById(productId: Long): ProductWithDetails?
+    /** True solo dopo che il bridge prodotto e' stato applicato almeno una volta al remoto. */
+    suspend fun hasSyncedProductRemoteRef(productId: Long): Boolean = false
     val remoteAppliedProductIds: Flow<Set<Long>>
         get() = emptyFlow()
     suspend fun addProduct(product: Product)
@@ -300,12 +302,28 @@ interface InventoryRepository {
 internal object DefaultInventoryRepositoryTestHooks {
     @Volatile
     var afterProductsPersisted: (suspend () -> Unit)? = null
+
+    @Volatile
+    var beforeLocalProductInsert: (suspend () -> Unit)? = null
 }
 
-class DefaultInventoryRepository(private val db: AppDatabase) :
+internal data class ShopSyncRecoveryStageApplyResult(
+    val businessRowsApplied: Int,
+    val skippedParentRows: Int = 0,
+    val failedRows: Int = 0,
+    val unsupportedRows: Int = 0
+)
+
+class DefaultInventoryRepository(
+    private val db: AppDatabase,
+    private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
+        Task126UnmanagedBusinessDataScopeRuntimeGuard,
+    private val shopSyncReadRemoteDataSource: ShopSyncReadRemoteDataSource? = null
+) :
     InventoryRepository,
     CatalogSyncProgressRepository,
-    CatalogAutoSyncRepository {
+    CatalogAutoSyncRepository,
+    Task126BusinessDataScopeRepository {
 
     private data class HistorySessionPushCandidate(
         val entry: HistoryEntry,
@@ -334,6 +352,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val completeSnapshot: Boolean = true,
         val appliedProductIds: Set<Long> = emptySet(),
         val targetedMissingRemote: Boolean = false
+    )
+
+    private data class TargetedCatalogBundle(
+        val bundle: InventoryCatalogFetchBundle,
+        val missingRemote: Boolean
     )
 
     private data class PricePullApplyResult(
@@ -375,12 +398,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     ) {
         val remoteIds = mutableListOf<String>()
     }
-
-    private data class SyncEventRecordIds(
-        val ids: SyncEventEntityIds,
-        val changedCount: Int,
-        val compacted: Boolean
-    )
 
     private data class ProductPricePushResult(
         val count: Int,
@@ -513,6 +530,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private val syncEventDeviceStateDao: SyncEventDeviceStateDao = db.syncEventDeviceStateDao()
     private val syncEventOutboxDao: SyncEventOutboxDao = db.syncEventOutboxDao()
     private val syncEventApplyStatusDao: SyncEventApplyStatusDao = db.syncEventApplyStatusDao()
+    private val businessDataScopeBindingDao: BusinessDataScopeBindingDao = db.businessDataScopeBindingDao()
+    private val syncRecoveryJournalDao: SyncRecoveryJournalDao = db.syncRecoveryJournalDao()
+    private val syncRecoveryBaselineDao: SyncRecoveryBaselineDao = db.syncRecoveryBaselineDao()
+    private val syncRecoveryManifestDao: SyncRecoveryManifestDao = db.syncRecoveryManifestDao()
     private val tSFMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
     private val applyImportMutex = Mutex()
     private val syncEventJson = Json {
@@ -521,6 +542,37 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
     private val _remoteAppliedProductIds = MutableSharedFlow<Set<Long>>(extraBufferCapacity = 64)
     override val remoteAppliedProductIds: Flow<Set<Long>> = _remoteAppliedProductIds.asSharedFlow()
+
+    private suspend fun requireCurrentBusinessDataScope() {
+        businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
+    }
+
+    /**
+     * Registra anche i writer locali nella stessa lease usata dai flight cloud.
+     * Una transition account/shop/recovery li cancella e li attende prima
+     * dell'activation, impedendo a un job UI/import del vecchio scope di
+     * scrivere nel database della nuova generazione dopo il commit atomico.
+     */
+    private suspend fun <T> withLocalBusinessMutation(
+        block: suspend () -> T
+    ): T = businessDataScopeRuntimeGuard.withCurrentBusinessDataScopeFlight {
+        requireCurrentBusinessDataScope()
+        val result = block()
+        requireCurrentBusinessDataScope()
+        result
+    }
+
+    private suspend fun <T> businessScopedRemoteCall(
+        block: suspend () -> Result<T>
+    ): Result<T> {
+        requireCurrentBusinessDataScope()
+        val result = block()
+        result.exceptionOrNull()?.let { error ->
+            if (error is CancellationException) throw error
+        }
+        requireCurrentBusinessDataScope()
+        return result
+    }
 
     private fun historyTombstoneTimestamp(): String =
         LocalDateTime.now().format(tSFMT)
@@ -546,8 +598,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
     override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
         withContext(Dispatchers.IO) { productDao.getDetailsById(productId) }
+    override suspend fun hasSyncedProductRemoteRef(productId: Long): Boolean =
+        withContext(Dispatchers.IO) {
+            productRemoteRefDao.getByProductId(productId)?.lastRemoteAppliedAt != null
+        }
 
-    override suspend fun addProduct(product: Product) {
+    override suspend fun addProduct(product: Product) = withLocalBusinessMutation {
+        DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert?.invoke()
+        requireCurrentBusinessDataScope()
         val persistedId = withContext(Dispatchers.IO) {
             productDao.insert(product)
             val persisted = productDao.findByBarcode(product.barcode) ?: return@withContext null
@@ -560,8 +618,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             persisted.id
         }
         persistedId?.let(::notifyProductCatalogChanged)
+        Unit
     }
-    override suspend fun updateProduct(product: Product) {
+    override suspend fun updateProduct(product: Product) = withLocalBusinessMutation {
         withContext(Dispatchers.IO) {
             val existing = productDao.getById(product.id)
             productDao.update(product)
@@ -584,7 +643,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         price: Double,
         at: String,
         source: String?
-    ): Product? {
+    ): Product? = withLocalBusinessMutation {
         val result = withContext(Dispatchers.IO) {
             db.withTransaction {
                 val current = productDao.getById(productId) ?: return@withTransaction null
@@ -633,14 +692,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (result != null) {
             notifyProductCatalogChanged(productId)
         }
-        return result
+        result
     }
     override suspend fun getAllProductsWithDetails(): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getAllWithDetailsOnce() }
 
     override suspend fun getProductsWithDetailsPage(limit: Int, offset: Int): List<ProductWithDetails> =
         withContext(Dispatchers.IO) { productDao.getWithDetailsPage(limit, offset) }
-    override suspend fun deleteProduct(product: Product) {
+    override suspend fun deleteProduct(product: Product) = withLocalBusinessMutation {
         withContext(Dispatchers.IO) {
             db.withTransaction {
                 productRemoteRefDao.getByProductId(product.id)?.remoteId?.let { rid ->
@@ -660,23 +719,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         notifyCatalogChanged()
     }
     override suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult =
-        withContext(Dispatchers.IO) {
-            if (!applyImportMutex.tryLock()) {
-                return@withContext ImportApplyResult.AlreadyRunning
-            }
-
-            try {
-                val touchedProductIds = db.withTransaction {
-                    applyImportAtomically(request)
+        withLocalBusinessMutation {
+            withContext(Dispatchers.IO) {
+                if (!applyImportMutex.tryLock()) {
+                    return@withContext ImportApplyResult.AlreadyRunning
                 }
-                touchedProductIds.forEach(::notifyProductCatalogChanged)
-                ImportApplyResult.Success
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (throwable: Throwable) {
-                ImportApplyResult.Failure(throwable)
-            } finally {
-                applyImportMutex.unlock()
+
+                try {
+                    val touchedProductIds = db.withTransaction {
+                        applyImportAtomically(request)
+                    }
+                    touchedProductIds.forEach(::notifyProductCatalogChanged)
+                    ImportApplyResult.Success
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (throwable: Throwable) {
+                    ImportApplyResult.Failure(throwable)
+                } finally {
+                    applyImportMutex.unlock()
+                }
             }
         }
 
@@ -696,7 +757,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private val supplierMutex = Mutex()
-    override suspend fun addSupplier(name: String): Supplier? {
+    override suspend fun addSupplier(name: String): Supplier? = withLocalBusinessMutation {
         val (supplier, didCreate) = withContext(Dispatchers.IO) {
             val normalizedName = name.trim()
             if (normalizedName.isBlank()) return@withContext null to false
@@ -719,7 +780,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (didCreate) {
             notifyCatalogChanged()
         }
-        return supplier
+        supplier
     }
 
     override suspend fun getCatalogItems(
@@ -747,7 +808,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     override suspend fun createCatalogEntry(
         kind: CatalogEntityKind,
         name: String
-    ): CatalogListItem {
+    ): CatalogListItem = withLocalBusinessMutation {
         val item = withContext(Dispatchers.IO) {
             withCatalogMutationLock(kind) {
                 val created = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
@@ -759,14 +820,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
         }
         notifyCatalogChanged()
-        return item
+        item
     }
 
     override suspend fun renameCatalogEntry(
         kind: CatalogEntityKind,
         id: Long,
         newName: String
-    ): CatalogListItem {
+    ): CatalogListItem = withLocalBusinessMutation {
         val item = withContext(Dispatchers.IO) {
             withCatalogMutationLock(kind) {
                 val current = getCatalogEntityRef(kind, id)
@@ -787,14 +848,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
         }
         notifyCatalogChanged()
-        return item
+        item
     }
 
     override suspend fun deleteCatalogEntry(
         kind: CatalogEntityKind,
         id: Long,
         strategy: CatalogDeleteStrategy
-    ): CatalogDeleteResult {
+    ): CatalogDeleteResult = withLocalBusinessMutation {
         val result = withContext(Dispatchers.IO) {
             withCatalogMutationLock(kind) {
                 db.withTransaction {
@@ -866,7 +927,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
         }
         notifyCatalogChanged()
-        return result
+        result
     }
     override suspend fun recordPriceIfChanged(
         productId: Long,
@@ -874,7 +935,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         price: Double,
         at: String,
         source: String?
-    ) {
+    ) = withLocalBusinessMutation {
         val inserted = withContext(Dispatchers.IO) {
             priceDao.insertIfChanged(productId, type, price, at, source)
         }
@@ -938,7 +999,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     }
 
     private val categoryMutex = Mutex()
-    override suspend fun addCategory(name: String): Category? {
+    override suspend fun addCategory(name: String): Category? = withLocalBusinessMutation {
         val (category, didCreate) = withContext(Dispatchers.IO) {
             val normalizedName = name.trim()
             if (normalizedName.isBlank()) return@withContext null to false
@@ -961,7 +1022,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (didCreate) {
             notifyCatalogChanged()
         }
-        return category
+        category
     }
 
     // --- History Implementations ---
@@ -1013,29 +1074,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         historyDao.observeByUid(uid)
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
-    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
-        val uid = historyDao.insert(entry.withInitialDisplayName())
-        if (uid > 0L) notifyHistorySessionPayloadChanged(uid)
-        uid
-    }
-    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
-        val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
-        var payloadRelevant = false
-        if (bridgeRef != null) {
-            // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
-            // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
-            val old = historyDao.getByUid(entry.uid)
-            historyDao.update(entry)
-            payloadRelevant = old != null && isPayloadRelevantChange(old, entry)
-            if (payloadRelevant) {
-                remoteRefDao.incrementLocalRevision(entry.uid)
-            }
-        } else {
-            val old = historyDao.getByUid(entry.uid)
-            historyDao.update(entry)
-            payloadRelevant = old == null || isPayloadRelevantChange(old, entry)
+    override suspend fun insertHistoryEntry(entry: HistoryEntry) = withLocalBusinessMutation {
+        withContext(Dispatchers.IO) {
+            val uid = historyDao.insert(entry.withInitialDisplayName())
+            if (uid > 0L) notifyHistorySessionPayloadChanged(uid)
+            uid
         }
-        if (payloadRelevant) notifyHistorySessionPayloadChanged(entry.uid)
+    }
+    override suspend fun updateHistoryEntry(entry: HistoryEntry) = withLocalBusinessMutation {
+        withContext(Dispatchers.IO) {
+            val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
+            var payloadRelevant = false
+            if (bridgeRef != null) {
+                // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
+                // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
+                val old = historyDao.getByUid(entry.uid)
+                historyDao.update(entry)
+                payloadRelevant = old != null && isPayloadRelevantChange(old, entry)
+                if (payloadRelevant) {
+                    remoteRefDao.incrementLocalRevision(entry.uid)
+                }
+            } else {
+                val old = historyDao.getByUid(entry.uid)
+                historyDao.update(entry)
+                payloadRelevant = old == null || isPayloadRelevantChange(old, entry)
+            }
+            if (payloadRelevant) notifyHistorySessionPayloadChanged(entry.uid)
+        }
     }
 
     /**
@@ -1079,41 +1144,43 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
     }
 
-    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withContext(Dispatchers.IO) {
-        var changedUid: Long? = null
-        db.withTransaction {
-            val existingRemoteId = remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
-            val remoteId = existingRemoteId ?: run {
-                historyDao.getByUid(entry.uid) ?: return@withTransaction
-                val inserted = remoteRefDao.insert(
-                    HistoryEntryRemoteRef(
-                        historyEntryUid = entry.uid,
-                        remoteId = java.util.UUID.randomUUID().toString()
+    override suspend fun deleteHistoryEntry(entry: HistoryEntry) = withLocalBusinessMutation {
+        withContext(Dispatchers.IO) {
+            var changedUid: Long? = null
+            db.withTransaction {
+                val existingRemoteId = remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+                val remoteId = existingRemoteId ?: run {
+                    historyDao.getByUid(entry.uid) ?: return@withTransaction
+                    val inserted = remoteRefDao.insert(
+                        HistoryEntryRemoteRef(
+                            historyEntryUid = entry.uid,
+                            remoteId = java.util.UUID.randomUUID().toString()
+                        )
+                    )
+                    if (inserted > 0L) {
+                        remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+                    } else {
+                        remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
+                    }
+                }
+                if (remoteId == null) {
+                    historyDao.delete(entry)
+                    return@withTransaction
+                }
+                val tombstone = historyTombstoneTimestamp()
+                historyDao.update(
+                    entry.copy(
+                        deletedAt = tombstone,
+                        syncStatus = SyncStatus.NOT_ATTEMPTED
                     )
                 )
-                if (inserted > 0L) {
-                    remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
-                } else {
-                    remoteRefDao.getByHistoryEntryUid(entry.uid)?.remoteId
-                }
+                remoteRefDao.incrementLocalRevision(entry.uid)
+                changedUid = entry.uid
             }
-            if (remoteId == null) {
-                historyDao.delete(entry)
-                return@withTransaction
+            val uidToNotify = changedUid
+            if (uidToNotify != null) {
+                notifyHistorySessionPayloadChanged(uidToNotify)
             }
-            val tombstone = historyTombstoneTimestamp()
-            historyDao.update(
-                entry.copy(
-                    deletedAt = tombstone,
-                    syncStatus = SyncStatus.NOT_ATTEMPTED
-                )
-            )
-            remoteRefDao.incrementLocalRevision(entry.uid)
-            changedUid = entry.uid
-        }
-        val uidToNotify = changedUid
-        if (uidToNotify != null) {
-            notifyHistorySessionPayloadChanged(uidToNotify)
         }
     }
     // ⬇️ in DefaultInventoryRepository, aggiungi l'implementazione:
@@ -1143,21 +1210,23 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     override suspend fun recordPriceHistoryByBarcodeBatch(
         rows: List<Triple<String, String, Pair<String, Double>>>,
         source: String
-    ) = withContext(Dispatchers.IO) {
-        if (rows.isEmpty()) return@withContext
-        val barcodes = rows.map { it.first }.distinct()
-        val products = productDao.findByBarcodes(barcodes).associateBy { it.barcode }
-        val points = rows.mapNotNull { (barcode, type, tsPrice) ->
-            val p = products[barcode] ?: return@mapNotNull null
-            ProductPrice(
-                productId = p.id,
-                type = type,
-                price = tsPrice.second,
-                effectiveAt = tsPrice.first,
-                source = source
-            )
+    ) = withLocalBusinessMutation {
+        withContext(Dispatchers.IO) {
+            if (rows.isEmpty()) return@withContext
+            val barcodes = rows.map { it.first }.distinct()
+            val products = productDao.findByBarcodes(barcodes).associateBy { it.barcode }
+            val points = rows.mapNotNull { (barcode, type, tsPrice) ->
+                val p = products[barcode] ?: return@mapNotNull null
+                ProductPrice(
+                    productId = p.id,
+                    type = type,
+                    price = tsPrice.second,
+                    effectiveAt = tsPrice.first,
+                    source = source
+                )
+            }
+            if (points.isNotEmpty()) priceDao.insertAll(points)
         }
-        if (points.isNotEmpty()) priceDao.insertAll(points)
     }
     override suspend fun getCurrentPricesForBarcodes(
         barcodes: List<String>
@@ -1186,23 +1255,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     // --- Bridge locale (task 007 / DEC-017) ---
 
     override suspend fun getOrCreateRemoteId(historyEntryUid: Long): String? =
-        withContext(Dispatchers.IO) {
-            val existing = remoteRefDao.getByHistoryEntryUid(historyEntryUid)
-            if (existing != null) return@withContext existing.remoteId
+        withLocalBusinessMutation {
+            withContext(Dispatchers.IO) {
+                val existing = remoteRefDao.getByHistoryEntryUid(historyEntryUid)
+                if (existing != null) return@withContext existing.remoteId
 
-            // Verifica che l'entry esista prima di creare il bridge
-            historyDao.getByUid(historyEntryUid) ?: return@withContext null
+                // Verifica che l'entry esista prima di creare il bridge
+                historyDao.getByUid(historyEntryUid) ?: return@withContext null
 
-            val newRef = HistoryEntryRemoteRef(
-                historyEntryUid = historyEntryUid,
-                remoteId = java.util.UUID.randomUUID().toString()
-            )
-            val inserted = remoteRefDao.insert(newRef)
-            if (inserted > 0L) {
-                remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
-            } else {
-                // Race condition: un'altra chiamata concorrente ha già inserito; rilegge
-                remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
+                val newRef = HistoryEntryRemoteRef(
+                    historyEntryUid = historyEntryUid,
+                    remoteId = java.util.UUID.randomUUID().toString()
+                )
+                val inserted = remoteRefDao.insert(newRef)
+                if (inserted > 0L) {
+                    remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
+                } else {
+                    // Race condition: un'altra chiamata concorrente ha già inserito; rilegge
+                    remoteRefDao.getByHistoryEntryUid(historyEntryUid)?.remoteId
+                }
             }
         }
 
@@ -1220,7 +1291,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 return@withContext RemoteSessionApplyOutcome.UnsupportedVersion
             }
             try {
-                db.withTransaction { applySingleRemotePayload(payload) }
+                db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    applySingleRemotePayload(payload)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -1286,6 +1360,19 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 existingEntry.isManualEntry == payload.isManualEntry &&
                 existingEntry.data == payload.data &&
                 overlayState.isMateriallySameAs(existingEntry)) {
+                // A legacy v1 receipt can change only fields deliberately not
+                // materialized by Room (for example display_name). It still
+                // advances the authoritative remote fingerprint: without this
+                // bridge-only acknowledgement a fenced A→B recovery would
+                // repeatedly fail physical verification despite an unchanged
+                // local business row. This is safe because dirty local rows
+                // returned above before reaching this branch.
+                remoteRefDao.updateRemoteApplyState(
+                    uid = existingRef.historyEntryUid,
+                    rev = existingRef.localChangeRevision,
+                    appliedAt = System.currentTimeMillis(),
+                    fingerprint = fp
+                )
                 return RemoteSessionApplyOutcome.Skipped
             }
             val refreshedLocalState = when {
@@ -2373,49 +2460,271 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         selectedShop: SelectedShop?
     ): LocalDatabaseStatusSnapshot =
         withContext(Dispatchers.IO) {
-            val breakdown = getCatalogCloudPendingBreakdown()
-            val pendingHistorySessions = historyDao.getUserVisibleSessionPushCandidateUids().size
-            val outboxPending = ownerUserId
-                ?.let { syncEventOutboxDao.countPendingForScope(it, shopScopedStoreScope(selectedShop)) }
-                ?: 0
-            val pendingTotal =
-                breakdown.pendingCatalogTombstones +
-                    breakdown.productPricesPendingPriceBridge +
-                    breakdown.productPricesBlockedWithoutProductRemote +
-                    breakdown.suppliersMissingRemoteRef +
-                    breakdown.categoriesMissingRemoteRef +
-                    breakdown.productsMissingRemoteRef +
-                    pendingHistorySessions +
-                    outboxPending
+            readLocalDatabaseStatusSnapshot(ownerUserId, selectedShop)
+        }
 
-            LocalDatabaseStatusSnapshot(
-                products = productDao.count(),
-                suppliers = supplierDao.count(),
-                categories = categoryDao.count(),
-                priceHistoryRows = priceDao.countAll(),
-                historySessions = historyDao.countUserVisible(),
-                pendingLocalChanges = pendingTotal,
-                syncEventOutboxPending = outboxPending
+    private suspend fun readLocalDatabaseStatusSnapshot(
+        ownerUserId: String?,
+        selectedShop: SelectedShop?
+    ): LocalDatabaseStatusSnapshot {
+        val breakdown = CatalogCloudPendingBreakdown(
+            pendingCatalogTombstones = pendingCatalogTombstoneDao.count(),
+            productPricesPendingPriceBridge = priceDao.countPriceRowsPendingPriceBridge(),
+            productPricesBlockedWithoutProductRemote = priceDao.countPriceRowsWithoutProductRemote(),
+            suppliersMissingRemoteRef = supplierRemoteRefDao.countLocalRowsMissingRemoteRef(),
+            categoriesMissingRemoteRef = categoryRemoteRefDao.countLocalRowsMissingRemoteRef(),
+            productsMissingRemoteRef = productRemoteRefDao.countLocalRowsMissingRemoteRef()
+        )
+        val pendingHistorySessions = historyDao.getUserVisibleSessionPushCandidateUids().size
+        val outboxPending = ownerUserId
+            ?.let { syncEventOutboxDao.countPendingForScope(it, shopScopedStoreScope(selectedShop)) }
+            ?: syncEventOutboxDao.countAll()
+        val pendingTotal =
+            breakdown.pendingCatalogTombstones +
+                breakdown.productPricesPendingPriceBridge +
+                breakdown.productPricesBlockedWithoutProductRemote +
+                breakdown.suppliersMissingRemoteRef +
+                breakdown.categoriesMissingRemoteRef +
+                breakdown.productsMissingRemoteRef +
+                pendingHistorySessions +
+                outboxPending
+
+        return LocalDatabaseStatusSnapshot(
+            products = productDao.count(),
+            suppliers = supplierDao.count(),
+            categories = categoryDao.count(),
+            priceHistoryRows = priceDao.countAll(),
+            historySessions = historyDao.countUserVisible(),
+            pendingLocalChanges = pendingTotal,
+            syncEventOutboxPending = outboxPending
+        )
+    }
+
+    override suspend fun resolveBusinessDataScope(
+        activeScope: Task126OwnerStoreScope,
+        legacyBoundScope: Task126OwnerStoreScope?
+    ): Task126BusinessDataScopeState = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            val storedBinding = businessDataScopeBindingDao.get()
+            val boundScope = storedBinding?.toOwnerStoreScope() ?: legacyBoundScope
+            if (storedBinding == null && legacyBoundScope != null) {
+                businessDataScopeBindingDao.upsert(
+                    BusinessDataScopeBinding.from(legacyBoundScope, System.currentTimeMillis())
+                )
+            }
+            val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
+            val pendingTargetRecovery = syncRecoveryJournalDao.getForScope(
+                ownerHash = activeScope.ownerHash,
+                storeScope = activeScope.storeId
+            )
+            if (pendingTargetRecovery != null) {
+                return@withTransaction Task126BusinessDataScopeState(
+                    status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                    boundScope = boundScope,
+                    localSnapshot = snapshot,
+                    errorCode = "sync_recovery_required"
+                )
+            }
+            when (val decision = Task126OwnerStoreGate.resolveBinding(boundScope, activeScope, snapshot)) {
+                Task126BusinessDataBindingDecision.AllowExisting ->
+                    readyStateAfterVerifiedBinding(boundScope ?: activeScope, "binding_missing_after_import")
+                Task126BusinessDataBindingDecision.BindEmpty -> {
+                    businessDataScopeBindingDao.upsert(
+                        BusinessDataScopeBinding.from(activeScope, System.currentTimeMillis())
+                    )
+                    readyStateAfterVerifiedBinding(activeScope, "binding_empty_commit_failed")
+                }
+                is Task126BusinessDataBindingDecision.ReviewRequiredUnbound ->
+                    Task126BusinessDataScopeState(
+                        status = Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND,
+                        localSnapshot = decision.localSnapshot
+                    )
+                is Task126BusinessDataBindingDecision.Blocked ->
+                    blockedBusinessDataScopeState(decision.reason, boundScope, snapshot)
+            }
+        }
+    }
+
+    override suspend fun discardUnboundBusinessDataAndBind(
+        activeScope: Task126OwnerStoreScope
+    ): Task126BusinessDataScopeState {
+        var discarded = false
+        val state = withContext(Dispatchers.IO) {
+            db.withTransaction {
+                val existing = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+                if (existing != null) {
+                    val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
+                    return@withTransaction when (val gate = Task126OwnerStoreGate.validate(existing, activeScope)) {
+                        Task126OwnerStoreGateDecision.Allowed ->
+                            readyStateAfterVerifiedBinding(existing, "binding_discard_commit_failed")
+                        is Task126OwnerStoreGateDecision.Blocked ->
+                            blockedBusinessDataScopeState(gate.reason, existing, snapshot)
+                    }
+                }
+
+                val before = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
+                if (!before.isCompletelyEmptyForBinding) {
+                    deleteUnboundBusinessDataInsideTransaction()
+                    discarded = true
+                }
+                businessDataScopeBindingDao.upsert(
+                    BusinessDataScopeBinding.from(activeScope, System.currentTimeMillis())
+                )
+                readyStateAfterVerifiedBinding(activeScope, "binding_discard_commit_failed")
+            }
+        }
+        if (discarded && state.status == Task126BusinessDataScopeStatus.READY) {
+            onCatalogChanged?.invoke()
+        }
+        return state
+    }
+
+    override suspend fun replaceMismatchedBusinessDataAndBind(
+        activeScope: Task126OwnerStoreScope
+    ): Task126BusinessDataScopeState = withContext(Dispatchers.IO) {
+            db.withTransaction {
+                val existing = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+                val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
+                if (existing == null) {
+                    return@withTransaction Task126BusinessDataScopeState(
+                        status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                        localSnapshot = snapshot,
+                        errorCode = "binding_replace_requires_mismatch"
+                    )
+                }
+                when (val gate = Task126OwnerStoreGate.validate(existing, activeScope)) {
+                    Task126OwnerStoreGateDecision.Allowed ->
+                        readyStateAfterVerifiedBinding(existing, "binding_replace_commit_failed")
+                    is Task126OwnerStoreGateDecision.Blocked -> when (gate.reason) {
+                        Task126OwnerStoreGateDecision.Reason.SchemaMismatch ->
+                            blockedBusinessDataScopeState(gate.reason, existing, snapshot)
+                        Task126OwnerStoreGateDecision.Reason.OwnerMismatch,
+                        Task126OwnerStoreGateDecision.Reason.StoreMismatch,
+                        Task126OwnerStoreGateDecision.Reason.LocalStoreMismatch -> {
+                            val nowMs = System.currentTimeMillis()
+                            val prior = syncRecoveryJournalDao.get()
+                                ?.takeIf {
+                                    it.ownerHash == activeScope.ownerHash &&
+                                        it.storeScope == activeScope.storeId
+                                }
+                            val deviceId = checkNotNull(syncEventDeviceStateDao.get()?.deviceId) {
+                                "binding_replace_device_identity_missing"
+                            }
+                            syncRecoveryJournalDao.upsert(
+                                SyncRecoveryJournal(
+                                    ownerHash = activeScope.ownerHash,
+                                    storeScope = activeScope.storeId,
+                                    shopId = shopIdFromStoreScope(activeScope.storeId),
+                                    deviceId = deviceId,
+                                    authorizationMode =
+                                        SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED,
+                                    runId = null,
+                                    phase = SyncRecoveryJournalPhases.REQUIRED,
+                                    reason = SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED,
+                                    blockingEventId = prior?.blockingEventId,
+                                    attemptCount = nextSyncRecoveryAttemptCount(
+                                        prior?.attemptCount ?: 0
+                                    ),
+                                    createdAtMs = prior?.createdAtMs ?: nowMs,
+                                    updatedAtMs = nowMs,
+                                    nextRetryAtMs = nowMs,
+                                    checkpointADigest = prior?.checkpointADigest,
+                                    checkpointBDigest = prior?.checkpointBDigest,
+                                    stagingDatabaseName = prior?.stagingDatabaseName
+                                )
+                            )
+                            Task126BusinessDataScopeState(
+                                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                                boundScope = existing,
+                                localSnapshot = snapshot,
+                                errorCode = "sync_recovery_required"
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private suspend fun readyStateAfterVerifiedBinding(
+        expectedScope: Task126OwnerStoreScope,
+        errorCode: String
+    ): Task126BusinessDataScopeState {
+        val persisted = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+        return if (
+            persisted != null &&
+            Task126OwnerStoreGate.validate(persisted, expectedScope) == Task126OwnerStoreGateDecision.Allowed
+        ) {
+            val pendingRecovery = syncRecoveryJournalDao.getForScope(
+                ownerHash = persisted.ownerHash,
+                storeScope = persisted.storeId
+            )
+            if (pendingRecovery == null) {
+                Task126BusinessDataScopeState.ready(persisted)
+            } else {
+                Task126BusinessDataScopeState(
+                    status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                    boundScope = persisted,
+                    errorCode = "sync_recovery_required"
+                )
+            }
+        } else {
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                errorCode = errorCode
             )
         }
+    }
+
+    private fun blockedBusinessDataScopeState(
+        reason: Task126OwnerStoreGateDecision.Reason,
+        boundScope: Task126OwnerStoreScope?,
+        snapshot: LocalDatabaseStatusSnapshot
+    ): Task126BusinessDataScopeState =
+        Task126BusinessDataScopeState(
+            status = when (reason) {
+                Task126OwnerStoreGateDecision.Reason.OwnerMismatch ->
+                    Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH
+                Task126OwnerStoreGateDecision.Reason.StoreMismatch,
+                Task126OwnerStoreGateDecision.Reason.LocalStoreMismatch ->
+                    Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH
+                Task126OwnerStoreGateDecision.Reason.SchemaMismatch ->
+                    Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH
+            },
+            boundScope = boundScope,
+            localSnapshot = snapshot
+        )
 
     override suspend fun resetBusinessDataForShopContextChange() {
         withContext(Dispatchers.IO) {
             db.withTransaction {
-                pendingCatalogTombstoneDao.deleteAll()
-                productPriceRemoteRefDao.deleteAll()
-                productRemoteRefDao.deleteAll()
-                supplierRemoteRefDao.deleteAll()
-                categoryRemoteRefDao.deleteAll()
-                remoteRefDao.deleteAll()
-                priceDao.deleteAll()
-                historyDao.deleteAll()
-                productDao.deleteAll()
-                supplierDao.deleteAll()
-                categoryDao.deleteAll()
+                deleteBusinessDataInsideTransaction()
             }
         }
         onCatalogChanged?.invoke()
+    }
+
+    private suspend fun deleteBusinessDataInsideTransaction() {
+        syncRecoveryManifestDao.deleteAll()
+        syncRecoveryBaselineDao.deleteAll()
+        pendingCatalogTombstoneDao.deleteAll()
+        productPriceRemoteRefDao.deleteAll()
+        productRemoteRefDao.deleteAll()
+        supplierRemoteRefDao.deleteAll()
+        categoryRemoteRefDao.deleteAll()
+        remoteRefDao.deleteAll()
+        priceDao.deleteAll()
+        historyDao.deleteAll()
+        productDao.deleteAll()
+        supplierDao.deleteAll()
+        categoryDao.deleteAll()
+    }
+
+    private suspend fun deleteUnboundBusinessDataInsideTransaction() {
+        deleteBusinessDataInsideTransaction()
+        syncEventOutboxDao.deleteAll()
+        syncEventWatermarkDao.deleteAll()
+        syncEventApplyStatusDao.deleteAll()
+        syncRecoveryJournalDao.deleteAll()
     }
 
     override suspend fun pushHistorySessionsToRemote(
@@ -2477,11 +2786,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 val rows = chunk.map {
                     it.payload.toSharedSheetSessionUpsertRow(ownerUserId, selectedShop?.shopId)
                 }
-                remote.upsertSessions(rows, selectedShop?.shopId).getOrElse { error ->
+                businessScopedRemoteCall {
+                    remote.upsertSessions(rows, selectedShop?.shopId)
+                }.getOrElse { error ->
                     logHistorySessionPushFailure(chunk, error)
                     return@withContext Result.failure(error)
                 }
                 db.withTransaction {
+                    requireCurrentBusinessDataScope()
                     for (c in chunk) {
                         val fp = c.payload.payloadFingerprint()
                         remoteRefDao.updateRemoteApplyState(
@@ -2531,7 +2843,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
         }
         try {
-            val records = remote.fetchAllSessionsForOwner(selectedShop?.shopId)
+            val records = businessScopedRemoteCall {
+                remote.fetchAllSessionsForOwner(selectedShop?.shopId)
+            }
                 .getOrElse { return@withContext Result.failure(it) }
             val payloads = records.map { it.toSessionRemotePayload() }
             val result = applyRemoteSessionPayloadBatch(payloads)
@@ -2914,8 +3228,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         val shopId = selectedShop?.shopId
         val storeScope = shopScopedStoreScope(selectedShop)
-        val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrElse {
-            SyncEventRemoteCapabilities.disabled("sync_events_capability_error")
+        val capabilities = businessScopedRemoteCall {
+            syncEventRemote.checkCapabilities(ownerUserId)
+        }.getOrElse { error ->
+            return@withContext Result.failure(error)
         }
         if (!syncEventRemote.isConfigured ||
             !capabilities.syncEventsAvailable ||
@@ -2994,9 +3310,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 categoryIds = (pushedCategories.remoteIds + tombstonedIds.categoryIds).distinct(),
                 productIds = (pushedProducts.remoteIds + tombstonedIds.productIds).distinct()
             )
-            val catalogIds = syncEventRecordIdsForRecord(rawCatalogIds)
             val rawPriceIds = SyncEventEntityIds(priceIds = pushedPrices.remoteIds.distinct())
-            val priceIds = syncEventRecordIdsForRecord(rawPriceIds)
             val catalogEventType = if (
                 pushedSuppliers.count + pushedCategories.count + pushedProducts.count == 0 &&
                 !tombstonedIds.isEmpty
@@ -3009,26 +3323,22 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
-                ids = catalogIds.ids,
+                ids = rawCatalogIds,
                 domain = SyncEventDomains.CATALOG,
                 eventType = catalogEventType,
                 batchId = batchId,
                 deviceId = deviceId,
-                changedCountOverride = catalogIds.changedCount,
-                entityIdsCompacted = catalogIds.compacted,
                 shopId = shopId
             )
             val priceEventOutcome = recordOrEnqueueSyncEvent(
                 remote = syncEventRemote,
                 ownerUserId = ownerUserId,
                 storeScope = storeScope,
-                ids = priceIds.ids,
+                ids = rawPriceIds,
                 domain = SyncEventDomains.PRICES,
                 eventType = SyncEventTypes.PRICES_CHANGED,
                 batchId = batchId,
                 deviceId = deviceId,
-                changedCountOverride = priceIds.changedCount,
-                entityIdsCompacted = priceIds.compacted,
                 shopId = shopId
             )
 
@@ -3165,8 +3475,10 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         selectedShop: SelectedShop?
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         val storeScope = shopScopedStoreScope(selectedShop)
-        val capabilities = syncEventRemote.checkCapabilities(ownerUserId).getOrElse {
-            SyncEventRemoteCapabilities.disabled("sync_events_capability_error")
+        val capabilities = businessScopedRemoteCall {
+            syncEventRemote.checkCapabilities(ownerUserId)
+        }.getOrElse { error ->
+            return@withContext Result.failure(error)
         }
         if (!syncEventRemote.isConfigured || !capabilities.syncEventsAvailable) {
             return@withContext Result.success(
@@ -3349,9 +3661,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
         runCatching {
             require(BuildConfig.DEBUG) { "TASK087 smoke disabled" }
-            val bundle = remote.fetchTask087CatalogByBarcodes(
-                setOf("TASK087_BAR_A", "TASK087_BAR_I")
-            ).getOrThrow()
+            val bundle = businessScopedRemoteCall {
+                remote.fetchTask087CatalogByBarcodes(
+                    setOf("TASK087_BAR_A", "TASK087_BAR_I")
+                )
+            }.getOrThrow()
             val counts = applyCatalogBundleInbound(bundle)
             notifyRemoteProductCatalogApplied(counts.appliedProductIds)
             CatalogSyncSummary(
@@ -3384,7 +3698,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     ): CatalogPullApplyCounts {
         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
         val fetchStartedAt = System.currentTimeMillis()
-        val bundle = remote.fetchCatalog(shopId).getOrThrow()
+        val bundle = businessScopedRemoteCall { remote.fetchCatalog(shopId) }.getOrThrow()
         val fetchMs = System.currentTimeMillis() - fetchStartedAt
         val applyStartedAt = System.currentTimeMillis()
         val applyCounts = applyCatalogBundleInbound(bundle)
@@ -3454,6 +3768,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var prunedProducts = 0
 
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             val pendingTombstones = pendingCatalogTombstoneDao.listPendingOrdered()
             val pendingSupplierTombstones = pendingTombstones
                 .filter { it.entityType == PendingCatalogTombstoneEntityTypes.SUPPLIER }
@@ -3533,6 +3848,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var pulledProducts = 0
         val appliedProductIds = linkedSetOf<Long>()
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             for (row in bundle.products.filter { !it.deletedAt.isNullOrBlank() }) {
                 applyInboundProductTombstone(row)?.let { productId ->
                     pulledProducts++
@@ -3637,27 +3953,246 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val remoteAppliedProductIds = linkedSetOf<Long>()
         var iterations = 0
         var checkpointBlockedByUnappliedEvent = false
+        var iterationCapNeedsOverflowProbe = false
+        var resolvedShopReadScope: ShopSyncScope? = null
+        var capturedShopEventMaxId: String? = null
+        var capturedShopDomainEventMaxIds: Map<String, String> = emptyMap()
+        var verifiedBaselineScopeKey: String? = null
+        var verifiedShopBaseline: ShopSyncRecoveryCheckpoint? = null
 
         while (iterations < SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
-            val events = syncEventRemote.fetchSyncEventsAfter(
-                ownerUserId = ownerUserId,
-                storeId = remoteStoreIdFromStoreScope(storeScope),
-                shopId = shopId,
-                afterId = watermark,
-                limit = SYNC_EVENT_FETCH_LIMIT
-            ).getOrThrow().sortedBy { it.id }
+            var shopPageHasMore: Boolean? = null
+            val events = if (shopId != null) {
+                val reader = shopSyncReadRemoteDataSource
+                    ?.takeIf { it.isConfigured }
+                    ?: throw ShopSyncContractException("shop_sync_reader_unavailable")
+                if (resolvedShopReadScope == null) {
+                    val baseline = shopSyncBaselineForEventDrain(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        shopId = shopId,
+                        deviceId = deviceId,
+                        watermark = watermark
+                    )
+                    if (watermark > 0L && baseline == null) {
+                        recordShopSyncRecoveryRequiredWithoutEvent(
+                            ownerUserId = ownerUserId,
+                            storeScope = storeScope,
+                            shopId = shopId,
+                            deviceId = deviceId,
+                            reason = SyncEventApplyStatusReasons.SCOPE_MISMATCH
+                        )
+                        return SyncEventDrainResult(
+                            fetched = fetched,
+                            processed = processed,
+                            skippedSelf = skippedSelf,
+                            skippedDirtyLocal = skippedDirty,
+                            watermarkBefore = watermarkBefore,
+                            watermarkAfter = watermark,
+                            targetedProductsFetched = targetedProductsFetched,
+                            targetedPricesFetched = targetedPricesFetched,
+                            targetedHistoryFetched = targetedHistoryFetched,
+                            remoteUpdatesApplied = remoteUpdatesApplied,
+                            remoteHistoryUpdatesApplied = remoteHistoryUpdatesApplied,
+                            tooLarge = tooLarge,
+                            gapDetected = true,
+                            manualFullSyncRequired = true
+                        )
+                    }
+                    val checkpoint = businessScopedRemoteCall {
+                        reader.checkpoint(
+                            ShopSyncRpcContext(
+                                accountId = ownerUserId,
+                                shopId = shopId,
+                                deviceIdentifier = deviceId,
+                                expectedScope = baseline?.scope,
+                                verifiedBaselineId = watermark.toString(),
+                                expectedBaselineScopeKey = baseline?.scope?.key
+                            )
+                        )
+                    }.getOrThrow()
+                    if (checkpoint.syncEvents.requiresFullRecovery) {
+                        recordShopSyncRecoveryRequiredWithoutEvent(
+                            ownerUserId = ownerUserId,
+                            storeScope = storeScope,
+                            shopId = shopId,
+                            deviceId = deviceId,
+                            reason = SyncEventApplyStatusReasons.MISSING_ENTITY_IDS,
+                            blockingEventId = checkpoint.syncEvents.oldestBlockingId
+                                ?.let(::parseShopSyncMaxEventId)
+                        )
+                        return SyncEventDrainResult(
+                            fetched = fetched,
+                            processed = processed,
+                            skippedSelf = skippedSelf,
+                            skippedDirtyLocal = skippedDirty,
+                            watermarkBefore = watermarkBefore,
+                            watermarkAfter = watermark,
+                            targetedProductsFetched = targetedProductsFetched,
+                            targetedPricesFetched = targetedPricesFetched,
+                            targetedHistoryFetched = targetedHistoryFetched,
+                            remoteUpdatesApplied = remoteUpdatesApplied,
+                            remoteHistoryUpdatesApplied = remoteHistoryUpdatesApplied,
+                            tooLarge = tooLarge,
+                            gapDetected = true,
+                            manualFullSyncRequired = true
+                        )
+                    }
+                    resolvedShopReadScope = checkpoint.scope
+                    // The checkpoint is the only authoritative bootstrap for
+                    // a non-zero watermark. Keep its opaque snapshot fence on
+                    // the first event-page request as well: omitting it is
+                    // rejected by the V6 reader and could otherwise turn a
+                    // valid post-recovery delta into a false no-work path.
+                    capturedShopEventMaxId = checkpoint.syncEvents.maxId
+                    capturedShopDomainEventMaxIds = checkpoint.syncEvents.domainMaxIds
+                    verifiedBaselineScopeKey = checkpoint.scope.key
+                    verifiedShopBaseline = baseline
+                }
+                val page = businessScopedRemoteCall {
+                    reader.eventPage(
+                        context = ShopSyncRpcContext(
+                            accountId = ownerUserId,
+                            shopId = shopId,
+                            deviceIdentifier = deviceId,
+                            expectedScope = resolvedShopReadScope,
+                            expectedEventMaxId = capturedShopEventMaxId
+                        ),
+                        afterId = watermark,
+                        limit = SYNC_EVENT_FETCH_LIMIT.toInt()
+                    )
+                }.getOrThrow()
+                resolvedShopReadScope = page.scope
+                if (capturedShopEventMaxId == null) {
+                    capturedShopEventMaxId = page.asOfEventMaxId
+                    capturedShopDomainEventMaxIds = page.asOfDomainEventMaxIds
+                }
+                shopPageHasMore = page.hasMore
+                page.rows
+            } else {
+                businessScopedRemoteCall {
+                    syncEventRemote.fetchSyncEventsAfter(
+                        ownerUserId = ownerUserId,
+                        storeId = remoteStoreIdFromStoreScope(storeScope),
+                        shopId = null,
+                        afterId = watermark,
+                        limit = SYNC_EVENT_FETCH_LIMIT
+                    )
+                }.getOrThrow().sortedBy { it.id }
+            }
             if (events.isEmpty()) break
             fetched += events.size
             for (event in events) {
                 if (event.id <= watermark) continue
                 val ids = event.entityIds
-                if (event.sourceDeviceId == deviceId) {
-                    skippedSelf++
+                val scopeMatches = if (shopId == null) {
+                    val expectedStoreId = remoteStoreIdFromStoreScope(storeScope)
+                    event.shopId == null &&
+                        event.ownerUserId == ownerUserId &&
+                        event.storeId?.takeIf { it.isNotBlank() } == expectedStoreId
+                } else {
+                    when (resolvedShopReadScope?.kind) {
+                        ShopSyncScopeKinds.SHOP_SCOPED ->
+                            event.shopId?.lowercase() == shopId.lowercase()
+                        ShopSyncScopeKinds.LEGACY_OWNER_BRIDGE ->
+                            event.shopId == null &&
+                                resolvedShopReadScope.legacyOwnerKey ==
+                                task126OwnerHash(event.ownerUserId.lowercase())
+                        ShopSyncScopeKinds.AUTHORIZED_SHOP_PLUS_LEGACY ->
+                            event.shopId?.lowercase() == shopId.lowercase() ||
+                                (
+                                    event.shopId == null &&
+                                        resolvedShopReadScope.legacyOwnerKey ==
+                                        task126OwnerHash(event.ownerUserId.lowercase())
+                                )
+                        else -> false
+                    }
+                }
+                if (!scopeMatches) {
+                    gapDetected = true
+                    manualFullSyncRequired = true
+                    checkpointBlockedByUnappliedEvent = true
                     recordSyncEventApplyStatus(
                         ownerUserId = ownerUserId,
                         storeScope = storeScope,
                         event = event,
                         ids = ids,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.SCOPE_MISMATCH
+                    )
+                    break
+                }
+                val supportedDomain = event.domain == SyncEventDomains.CATALOG ||
+                    event.domain == SyncEventDomains.PRICES ||
+                    event.domain == SyncEventDomains.HISTORY
+                if (!supportedDomain) {
+                    gapDetected = true
+                    manualFullSyncRequired = true
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = ids,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.UNSUPPORTED_DOMAIN
+                    )
+                    break
+                }
+                if (!SyncEventContract.hasSupportedEventType(event.domain, event.eventType)) {
+                    gapDetected = true
+                    manualFullSyncRequired = true
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = ids,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = SyncEventApplyStatusReasons.UNSUPPORTED_EVENT_TYPE
+                    )
+                    break
+                }
+                val normalizedIds = ids ?: SyncEventEntityIds()
+                val completeIds = !event.requiresFullRecovery &&
+                    SyncEventContract.hasCompletePrimaryIds(
+                    event.domain,
+                    event.changedCount,
+                    normalizedIds
+                )
+                if (!completeIds) {
+                    val exceedsBudget = event.changedCount >
+                        SyncEventContract.maxPrimaryEntityIds(event.domain) ||
+                        (ids?.let { SyncEventContract.primaryChangedCount(event.domain, it) } ?: 0) >
+                        SyncEventContract.maxPrimaryEntityIds(event.domain)
+                    tooLarge = tooLarge || exceedsBudget
+                    gapDetected = true
+                    manualFullSyncRequired = true
+                    checkpointBlockedByUnappliedEvent = true
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = normalizedIds,
+                        status = SyncEventApplyStatusValues.BLOCKED,
+                        reason = if (exceedsBudget) {
+                            SyncEventApplyStatusReasons.ENTITY_IDS_TOO_LARGE
+                        } else {
+                            SyncEventApplyStatusReasons.MISSING_ENTITY_IDS
+                        }
+                    )
+                    break
+                }
+                if (
+                    event.sourceDeviceId == deviceId ||
+                    event.sourceDeviceKey == syncEventDeviceKey(deviceId)
+                ) {
+                    skippedSelf++
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = normalizedIds,
                         status = SyncEventApplyStatusValues.SKIPPED,
                         reason = SyncEventApplyStatusReasons.SELF_ORIGIN
                     )
@@ -3666,17 +4201,29 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     }
                     continue
                 }
-                val effectiveIds = ids?.withoutProtected(protectedLocalCommitIds)
-                skippedProtectedLocalCommit += when {
-                    ids == null || effectiveIds == null -> 0
-                    else -> ids.totalIds - effectiveIds.totalIds
-                }
-                if (ids != null && ids.totalIds > 0 && effectiveIds != null && effectiveIds.isEmpty) {
+                if (normalizedIds.isEmpty) {
+                    processed++
                     recordSyncEventApplyStatus(
                         ownerUserId = ownerUserId,
                         storeScope = storeScope,
                         event = event,
-                        ids = ids,
+                        ids = normalizedIds,
+                        status = SyncEventApplyStatusValues.APPLIED,
+                        reason = SyncEventApplyStatusReasons.APPLIED
+                    )
+                    if (!checkpointBlockedByUnappliedEvent) {
+                        watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
+                    }
+                    continue
+                }
+                val effectiveIds = normalizedIds.withoutProtected(protectedLocalCommitIds)
+                skippedProtectedLocalCommit += normalizedIds.totalIds - effectiveIds.totalIds
+                if (normalizedIds.totalIds > 0 && effectiveIds.isEmpty) {
+                    recordSyncEventApplyStatus(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        event = event,
+                        ids = normalizedIds,
                         status = SyncEventApplyStatusValues.SKIPPED,
                         reason = SyncEventApplyStatusReasons.PROTECTED_LOCAL_COMMIT
                     )
@@ -3686,52 +4233,53 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     continue
                 }
                 val idsForApply = effectiveIds
-                val eventDirty = idsForApply?.let { countDirtyLocalRefsForEvent(it) } ?: 0
+                val eventDirty = countDirtyLocalRefsForEvent(idsForApply)
                 skippedDirty += eventDirty
                 if (eventDirty > 0) {
                     checkpointBlockedByUnappliedEvent = true
-                    recordSyncEventApplyStatus(
-                        ownerUserId = ownerUserId,
-                        storeScope = storeScope,
-                        event = event,
-                        ids = idsForApply,
-                        status = SyncEventApplyStatusValues.BLOCKED,
-                        reason = SyncEventApplyStatusReasons.DIRTY_LOCAL
-                    )
-                    continue
-                }
-                if (idsForApply == null || (idsForApply.isEmpty && event.changedCount > 0)) {
-                    gapDetected = true
-                    manualFullSyncRequired = true
-                    checkpointBlockedByUnappliedEvent = true
-                    recordSyncEventApplyStatus(
-                        ownerUserId = ownerUserId,
-                        storeScope = storeScope,
-                        event = event,
-                        ids = idsForApply,
-                        status = SyncEventApplyStatusValues.BLOCKED,
-                        reason = SyncEventApplyStatusReasons.MISSING_ENTITY_IDS
-                    )
-                    continue
-                }
-                if (idsForApply.totalIds > SYNC_EVENT_ENTITY_ID_BUDGET) {
-                    tooLarge = true
-                    manualFullSyncRequired = true
-                    checkpointBlockedByUnappliedEvent = true
-                    recordSyncEventApplyStatus(
-                        ownerUserId = ownerUserId,
-                        storeScope = storeScope,
-                        event = event,
-                        ids = idsForApply,
-                        status = SyncEventApplyStatusValues.BLOCKED,
-                        reason = SyncEventApplyStatusReasons.ENTITY_IDS_TOO_LARGE
-                    )
-                    continue
+                    val previousStatus = syncEventApplyStatusDao.get(ownerUserId, storeScope, event.id)
+                    val nowMs = System.currentTimeMillis()
+                    val retryDeferred = previousStatus?.let { previous ->
+                        previous.status == SyncEventApplyStatusValues.BLOCKED &&
+                            previous.reason == SyncEventApplyStatusReasons.DIRTY_LOCAL &&
+                            (
+                                previous.attemptCount >= SYNC_EVENT_APPLY_MAX_ATTEMPTS ||
+                                    (previous.nextRetryAtMs ?: Long.MAX_VALUE) > nowMs
+                                )
+                    } == true
+                    if (!retryDeferred) {
+                        recordSyncEventApplyStatus(
+                            ownerUserId = ownerUserId,
+                            storeScope = storeScope,
+                            event = event,
+                            ids = idsForApply,
+                            status = SyncEventApplyStatusValues.BLOCKED,
+                            reason = SyncEventApplyStatusReasons.DIRTY_LOCAL
+                        )
+                    }
+                    break
                 }
                 var blockedReason: String? = null
                 val applied = when (event.domain) {
                     SyncEventDomains.CATALOG -> {
-                        val counts = applyCatalogEventByIds(remote, idsForApply, progressReporter, shopId)
+                        val shopReadContext = resolvedShopReadScope?.let { scope ->
+                            shopSyncTargetedContext(
+                                ownerUserId = ownerUserId,
+                                shopId = requireNotNull(shopId),
+                                deviceId = deviceId,
+                                scope = scope,
+                                eventMaxId = requireNotNull(capturedShopEventMaxId),
+                                domainEventMaxIds = capturedShopDomainEventMaxIds,
+                                domain = SyncEventDomains.CATALOG
+                            )
+                        }
+                        val counts = applyCatalogEventByIds(
+                            remote,
+                            idsForApply,
+                            progressReporter,
+                            shopId,
+                            shopReadContext
+                        )
                         targetedProductsFetched += counts.remoteProductRows
                         remoteAppliedProductIds += counts.appliedProductIds
                         if (counts.targetedMissingRemote) {
@@ -3746,7 +4294,8 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                                 priceRemote = priceRemote,
                                 productRemoteIds = idsForApply.productIds.toSet(),
                                 progressReporter = progressReporter,
-                                shopId = shopId
+                                shopId = shopId,
+                                shopReadContext = shopReadContext
                             )
                             targetedPricesFetched += priceOutcome.remoteRowsEvaluated
                             remoteAppliedProductIds += priceOutcome.appliedProductIds
@@ -3755,11 +4304,35 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         applied
                     }
                     SyncEventDomains.PRICES -> {
-                        val outcome = applyPriceEventByIds(remote, priceRemote, idsForApply, progressReporter, shopId)
+                        val shopReadContext = resolvedShopReadScope?.let { scope ->
+                            shopSyncTargetedContext(
+                                ownerUserId = ownerUserId,
+                                shopId = requireNotNull(shopId),
+                                deviceId = deviceId,
+                                scope = scope,
+                                eventMaxId = requireNotNull(capturedShopEventMaxId),
+                                domainEventMaxIds = capturedShopDomainEventMaxIds,
+                                domain = SyncEventDomains.PRICES
+                            )
+                        }
+                        val outcome = applyPriceEventByIds(
+                            remote,
+                            priceRemote,
+                            idsForApply,
+                            progressReporter,
+                            shopId,
+                            shopReadContext
+                        )
                         targetedProductsFetched += outcome.first
                         targetedPricesFetched += outcome.second.remoteRowsEvaluated
                         remoteAppliedProductIds += outcome.second.appliedProductIds
-                        if (idsForApply.priceIds.isNotEmpty() && outcome.second.remoteRowsEvaluated < idsForApply.priceIds.size) {
+                        if (
+                            idsForApply.priceIds.isNotEmpty() &&
+                            (
+                                outcome.second.remoteRowsEvaluated < idsForApply.priceIds.size ||
+                                    outcome.second.skippedNoLocalProduct > 0
+                                )
+                        ) {
                             gapDetected = true
                             manualFullSyncRequired = true
                             checkpointBlockedByUnappliedEvent = true
@@ -3768,16 +4341,46 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         outcome.second.pulled
                     }
                     SyncEventDomains.HISTORY -> {
-                        val outcome = applyHistoryEventByIds(sessionRemote, idsForApply, shopId)
-                        targetedHistoryFetched += outcome.first
-                        remoteHistoryUpdatesApplied += outcome.second
-                        if (idsForApply.sessionIds.isNotEmpty() && outcome.first < idsForApply.sessionIds.size) {
+                        val shopReadContext = resolvedShopReadScope?.let { scope ->
+                            shopSyncTargetedContext(
+                                ownerUserId = ownerUserId,
+                                shopId = requireNotNull(shopId),
+                                deviceId = deviceId,
+                                scope = scope,
+                                eventMaxId = requireNotNull(capturedShopEventMaxId),
+                                domainEventMaxIds = capturedShopDomainEventMaxIds,
+                                domain = SyncEventDomains.HISTORY
+                            )
+                        }
+                        val outcome = applyHistoryEventByIds(
+                            sessionRemote,
+                            idsForApply,
+                            shopId,
+                            shopReadContext
+                        )
+                        targetedHistoryFetched += outcome.remoteRows
+                        remoteHistoryUpdatesApplied += outcome.appliedRows
+                        if (
+                            idsForApply.sessionIds.isNotEmpty() &&
+                            outcome.remoteRows < idsForApply.sessionIds.size
+                        ) {
                             gapDetected = true
                             manualFullSyncRequired = true
                             checkpointBlockedByUnappliedEvent = true
                             blockedReason = SyncEventApplyStatusReasons.MISSING_REMOTE
+                        } else if (outcome.unsupportedRows > 0) {
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                            checkpointBlockedByUnappliedEvent = true
+                            blockedReason =
+                                SyncEventApplyStatusReasons.UNSUPPORTED_PAYLOAD_VERSION
+                        } else if (outcome.failedRows > 0) {
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                            checkpointBlockedByUnappliedEvent = true
+                            blockedReason = SyncEventApplyStatusReasons.REMOTE_APPLY_FAILED
                         }
-                        outcome.second
+                        outcome.appliedRows
                     }
                     else -> {
                         gapDetected = true
@@ -3801,17 +4404,126 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     },
                     reason = blockedReason ?: SyncEventApplyStatusReasons.APPLIED
                 )
+                if (blockedReason != null) {
+                    break
+                }
                 if (!checkpointBlockedByUnappliedEvent) {
                     watermark = advanceSyncEventWatermark(ownerUserId, storeScope, event.id)
                 }
             }
             iterations++
             if (checkpointBlockedByUnappliedEvent) break
+            if (shopPageHasMore == false) break
             if (events.size < SYNC_EVENT_FETCH_LIMIT) break
+            iterationCapNeedsOverflowProbe = iterations >= SYNC_EVENT_DRAIN_MAX_ITERATIONS
         }
-        if (iterations >= SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
-            gapDetected = true
-            manualFullSyncRequired = true
+        if (iterationCapNeedsOverflowProbe && !checkpointBlockedByUnappliedEvent) {
+            val overflowEvent = if (shopId != null) {
+                val reader = checkNotNull(shopSyncReadRemoteDataSource) {
+                    "shop_sync_reader_unavailable"
+                }
+                businessScopedRemoteCall {
+                    reader.eventPage(
+                        context = ShopSyncRpcContext(
+                            accountId = ownerUserId,
+                            shopId = shopId,
+                            deviceIdentifier = deviceId,
+                            expectedScope = resolvedShopReadScope,
+                            expectedEventMaxId = capturedShopEventMaxId
+                        ),
+                        afterId = watermark,
+                        limit = 1
+                    )
+                }.getOrThrow().rows.firstOrNull()
+            } else {
+                businessScopedRemoteCall {
+                    syncEventRemote.fetchSyncEventsAfter(
+                        ownerUserId = ownerUserId,
+                        storeId = remoteStoreIdFromStoreScope(storeScope),
+                        shopId = null,
+                        afterId = watermark,
+                        limit = 1L
+                    )
+                }.getOrThrow().sortedBy { it.id }.firstOrNull { it.id > watermark }
+            }
+            if (overflowEvent != null) {
+                fetched++
+                gapDetected = true
+                manualFullSyncRequired = true
+                checkpointBlockedByUnappliedEvent = true
+                recordSyncEventApplyStatus(
+                    ownerUserId = ownerUserId,
+                    storeScope = storeScope,
+                    event = overflowEvent,
+                    ids = overflowEvent.entityIds,
+                    status = SyncEventApplyStatusValues.BLOCKED,
+                    reason = SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED
+                )
+            }
+        }
+        if (
+            shopId != null &&
+            !checkpointBlockedByUnappliedEvent &&
+            !manualFullSyncRequired &&
+            resolvedShopReadScope != null &&
+            capturedShopEventMaxId != null &&
+            watermark == parseShopSyncMaxEventId(requireNotNull(capturedShopEventMaxId))
+        ) {
+            val journalPending = syncRecoveryJournalDao.getForScope(
+                ownerHash = task126OwnerHash(ownerUserId),
+                storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
+            ) != null
+            val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope) > 0
+            if (journalPending || outboxPending) {
+                gapDetected = true
+                manualFullSyncRequired = true
+                recordShopSyncRecoveryRequiredWithoutEvent(
+                    ownerUserId = ownerUserId,
+                    storeScope = storeScope,
+                    shopId = shopId,
+                    deviceId = deviceId,
+                    reason = SyncEventApplyStatusReasons.SCOPE_MISMATCH
+                )
+            } else {
+                val reader = checkNotNull(shopSyncReadRemoteDataSource) {
+                    "shop_sync_reader_unavailable"
+                }
+                val marker = try {
+                    businessScopedRemoteCall {
+                        reader.convergenceMarker(
+                            ShopSyncRpcContext(
+                                accountId = ownerUserId,
+                                shopId = shopId,
+                                deviceIdentifier = deviceId,
+                                expectedScope = requireNotNull(resolvedShopReadScope),
+                                verifiedBaselineId = watermark.toString(),
+                                expectedBaselineScopeKey = requireNotNull(verifiedBaselineScopeKey)
+                            )
+                        )
+                    }.getOrThrow()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                // An event drain can prove that every targeted RPC stayed inside
+                // its server fence, but it cannot mutate the immutable recovery
+                // manifest into a new strong local digest. Therefore it must not
+                // publish noWork merely because the server marker is ready. Only
+                // the previously activated baseline at the same watermark is a
+                // local proof; every other case retains a durable recovery latch.
+                if (!markerProvesNoWorkAgainstBaseline(marker, verifiedShopBaseline, watermark)) {
+                    gapDetected = true
+                    manualFullSyncRequired = true
+                    recordShopSyncRecoveryRequiredWithoutEvent(
+                        ownerUserId = ownerUserId,
+                        storeScope = storeScope,
+                        shopId = shopId,
+                        deviceId = deviceId,
+                        reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+                    )
+                }
+            }
         }
         return SyncEventDrainResult(
             fetched = fetched,
@@ -3853,19 +4565,31 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         remote: CatalogRemoteDataSource,
         ids: SyncEventEntityIds,
         progressReporter: CatalogSyncProgressReporter,
-        shopId: String?
+        shopId: String?,
+        shopReadContext: ShopSyncRpcContext?
     ): CatalogPullApplyCounts {
         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
-        val first = remote.fetchCatalogByIds(
-            supplierIds = ids.supplierIds.toSet(),
-            categoryIds = ids.categoryIds.toSet(),
-            productIds = ids.productIds.toSet(),
-            shopId = shopId
-        ).getOrThrow()
-        val directlyMissingRemote =
-            first.suppliers.map { it.id }.toSet().containsAll(ids.supplierIds).not() ||
-                first.categories.map { it.id }.toSet().containsAll(ids.categoryIds).not() ||
-                first.products.map { it.id }.toSet().containsAll(ids.productIds).not()
+        val firstResult = if (shopReadContext != null) {
+            fetchCatalogBundleViaShopRpc(ids, shopReadContext)
+        } else {
+            val bundle = businessScopedRemoteCall {
+                remote.fetchCatalogByIds(
+                    supplierIds = ids.supplierIds.toSet(),
+                    categoryIds = ids.categoryIds.toSet(),
+                    productIds = ids.productIds.toSet(),
+                    shopId = shopId
+                )
+            }.getOrThrow()
+            TargetedCatalogBundle(
+                bundle = bundle,
+                missingRemote =
+                    bundle.suppliers.map { it.id }.toSet().containsAll(ids.supplierIds).not() ||
+                        bundle.categories.map { it.id }.toSet().containsAll(ids.categoryIds).not() ||
+                        bundle.products.map { it.id }.toSet().containsAll(ids.productIds).not()
+            )
+        }
+        val first = firstResult.bundle
+        val directlyMissingRemote = firstResult.missingRemote
         val missingSupplierIds = first.products
             .mapNotNull { it.supplierId }
             .filter { supplierRemoteRefDao.getByRemoteId(it) == null }
@@ -3874,20 +4598,39 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             .mapNotNull { it.categoryId }
             .filter { categoryRemoteRefDao.getByRemoteId(it) == null }
             .toSet() - ids.categoryIds.toSet()
-        val parentBundle = if (missingSupplierIds.isNotEmpty() || missingCategoryIds.isNotEmpty()) {
-            remote.fetchCatalogByIds(
-                supplierIds = missingSupplierIds,
-                categoryIds = missingCategoryIds,
-                productIds = emptySet(),
-                shopId = shopId
-            ).getOrThrow()
+        val parentResult = if (missingSupplierIds.isNotEmpty() || missingCategoryIds.isNotEmpty()) {
+            if (shopReadContext != null) {
+                fetchCatalogBundleViaShopRpc(
+                    SyncEventEntityIds(
+                        supplierIds = missingSupplierIds.toList(),
+                        categoryIds = missingCategoryIds.toList()
+                    ),
+                    shopReadContext
+                )
+            } else {
+                val bundle = businessScopedRemoteCall {
+                    remote.fetchCatalogByIds(
+                        supplierIds = missingSupplierIds,
+                        categoryIds = missingCategoryIds,
+                        productIds = emptySet(),
+                        shopId = shopId
+                    )
+                }.getOrThrow()
+                TargetedCatalogBundle(
+                    bundle = bundle,
+                    missingRemote =
+                        bundle.suppliers.map { it.id }.toSet().containsAll(missingSupplierIds).not() ||
+                            bundle.categories.map { it.id }.toSet().containsAll(missingCategoryIds).not()
+                )
+            }
         } else {
-            InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList())
+            TargetedCatalogBundle(
+                InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList()),
+                missingRemote = false
+            )
         }
-        val missingParentRemote =
-            parentBundle.suppliers.map { it.id }.toSet().containsAll(missingSupplierIds).not() ||
-                parentBundle.categories.map { it.id }.toSet().containsAll(missingCategoryIds).not()
-        val merged = mergeCatalogBundles(parentBundle, first)
+        val missingParentRemote = parentResult.missingRemote
+        val merged = mergeCatalogBundles(parentResult.bundle, first)
         val counts = applyCatalogBundleInbound(merged)
         Log.i(
             TAG,
@@ -3903,13 +4646,25 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         priceRemote: ProductPriceRemoteDataSource,
         ids: SyncEventEntityIds,
         progressReporter: CatalogSyncProgressReporter,
-        shopId: String?
+        shopId: String?,
+        shopReadContext: ShopSyncRpcContext?
     ): Pair<Int, PricePullApplyResult> {
-        if (ids.priceIds.isEmpty() || !priceRemote.isConfigured) {
+        if (ids.priceIds.isEmpty() || (shopReadContext == null && !priceRemote.isConfigured)) {
             return 0 to PricePullApplyResult(0, 0, 0)
         }
         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
-        val rows = priceRemote.fetchProductPricesByIds(ids.priceIds.toSet(), shopId).getOrThrow()
+        val rows = if (shopReadContext != null) {
+            val targeted = fetchShopRowsByIds(
+                ShopSyncRowDomain.PRICES,
+                ids.priceIds,
+                shopReadContext
+            )
+            (targeted.rows as ShopSyncRows.Prices).values
+        } else {
+            businessScopedRemoteCall {
+                priceRemote.fetchProductPricesByIds(ids.priceIds.toSet(), shopId)
+            }.getOrThrow()
+        }
         val missingProductIds = rows
             .map { it.productId }
             .filter { productRemoteRefDao.getByRemoteId(it) == null }
@@ -3917,12 +4672,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var targetedProductsFetched = 0
         val parentAppliedProductIds = linkedSetOf<Long>()
         if (missingProductIds.isNotEmpty()) {
-            val parentProducts = remote.fetchCatalogByIds(
-                supplierIds = emptySet(),
-                categoryIds = emptySet(),
-                productIds = missingProductIds,
-                shopId = shopId
-            ).getOrThrow()
+            val parentProducts = if (shopReadContext != null) {
+                fetchCatalogBundleViaShopRpc(
+                    SyncEventEntityIds(productIds = missingProductIds.toList()),
+                    shopReadContext
+                ).bundle
+            } else {
+                businessScopedRemoteCall {
+                    remote.fetchCatalogByIds(
+                        supplierIds = emptySet(),
+                        categoryIds = emptySet(),
+                        productIds = missingProductIds,
+                        shopId = shopId
+                    )
+                }.getOrThrow()
+            }
             val parentSupplierIds = parentProducts.products
                 .mapNotNull { it.supplierId }
                 .filter { supplierRemoteRefDao.getByRemoteId(it) == null }
@@ -3932,12 +4696,24 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 .filter { categoryRemoteRefDao.getByRemoteId(it) == null }
                 .toSet()
             val parentRefs = if (parentSupplierIds.isNotEmpty() || parentCategoryIds.isNotEmpty()) {
-                remote.fetchCatalogByIds(
-                    supplierIds = parentSupplierIds,
-                    categoryIds = parentCategoryIds,
-                    productIds = emptySet(),
-                    shopId = shopId
-                ).getOrThrow()
+                if (shopReadContext != null) {
+                    fetchCatalogBundleViaShopRpc(
+                        SyncEventEntityIds(
+                            supplierIds = parentSupplierIds.toList(),
+                            categoryIds = parentCategoryIds.toList()
+                        ),
+                        shopReadContext
+                    ).bundle
+                } else {
+                    businessScopedRemoteCall {
+                        remote.fetchCatalogByIds(
+                            supplierIds = parentSupplierIds,
+                            categoryIds = parentCategoryIds,
+                            productIds = emptySet(),
+                            shopId = shopId
+                        )
+                    }.getOrThrow()
+                }
             } else {
                 InventoryCatalogFetchBundle(emptyList(), emptyList(), emptyList())
             }
@@ -3960,12 +4736,20 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         priceRemote: ProductPriceRemoteDataSource,
         productRemoteIds: Set<String>,
         progressReporter: CatalogSyncProgressReporter,
-        shopId: String?
+        shopId: String?,
+        shopReadContext: ShopSyncRpcContext?
     ): PricePullApplyResult {
+        if (shopReadContext != null) {
+            // Il contratto shop targeted e' per ID di riga; i cambi prezzo
+            // arrivano come eventi prices separati e non usano query per parent ID.
+            return PricePullApplyResult(0, 0, 0)
+        }
         if (productRemoteIds.isEmpty() || !priceRemote.isConfigured) {
             return PricePullApplyResult(0, 0, 0)
         }
-        val rows = priceRemote.fetchProductPricesByProductIds(productRemoteIds, shopId).getOrThrow()
+        val rows = businessScopedRemoteCall {
+            priceRemote.fetchProductPricesByProductIds(productRemoteIds, shopId)
+        }.getOrThrow()
         val result = applyProductPriceRows(rows, progressReporter)
         Log.i(
             TAG,
@@ -3979,12 +4763,32 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private suspend fun applyHistoryEventByIds(
         sessionRemote: SessionBackupRemoteDataSource?,
         ids: SyncEventEntityIds,
-        shopId: String?
-    ): Pair<Int, Int> {
-        if (ids.sessionIds.isEmpty() || sessionRemote == null || !sessionRemote.isConfigured) {
-            return 0 to 0
+        shopId: String?,
+        shopReadContext: ShopSyncRpcContext?
+    ): HistoryEventApplyResult {
+        if (
+            ids.sessionIds.isEmpty() ||
+            (shopReadContext == null && (sessionRemote == null || !sessionRemote.isConfigured))
+        ) {
+            return HistoryEventApplyResult()
         }
-        val records = sessionRemote.fetchSessionsByRemoteIds(ids.sessionIds.toSet(), shopId).getOrThrow()
+        val records = if (shopReadContext != null) {
+            ids.sessionIds
+                .chunked(SHOP_SYNC_HISTORY_TARGETED_ID_LIMIT)
+                .flatMap { chunk ->
+                    val targeted = fetchShopRowsByIds(
+                        ShopSyncRowDomain.HISTORY,
+                        chunk,
+                        shopReadContext
+                    )
+                    (targeted.rows as ShopSyncRows.History).values
+                }
+                .distinctBy { it.remoteId.lowercase() }
+        } else {
+            businessScopedRemoteCall {
+                checkNotNull(sessionRemote).fetchSessionsByRemoteIds(ids.sessionIds.toSet(), shopId)
+            }.getOrThrow()
+        }
         val result = applyRemoteSessionPayloadBatch(records.map { it.toSessionRemotePayload() })
         val applied = result.inserted + result.updated
         Log.i(
@@ -3992,7 +4796,114 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             "sync_events_apply domain=history remoteSessions=${records.size} applied=$applied " +
                 "skipped=${result.skipped} failed=${result.failed} unsupported=${result.unsupported}"
         )
-        return records.size to applied
+        return HistoryEventApplyResult(
+            remoteRows = records.size,
+            appliedRows = applied,
+            failedRows = result.failed,
+            unsupportedRows = result.unsupported
+        )
+    }
+
+    private data class HistoryEventApplyResult(
+        val remoteRows: Int = 0,
+        val appliedRows: Int = 0,
+        val failedRows: Int = 0,
+        val unsupportedRows: Int = 0
+    )
+
+    private suspend fun fetchCatalogBundleViaShopRpc(
+        ids: SyncEventEntityIds,
+        context: ShopSyncRpcContext
+    ): TargetedCatalogBundle {
+        val suppliers = if (ids.supplierIds.isEmpty()) {
+            emptyList()
+        } else {
+            val result = fetchShopRowsByIds(ShopSyncRowDomain.SUPPLIERS, ids.supplierIds, context)
+            (result.rows as ShopSyncRows.Suppliers).values
+        }
+        val categories = if (ids.categoryIds.isEmpty()) {
+            emptyList()
+        } else {
+            val result = fetchShopRowsByIds(ShopSyncRowDomain.CATEGORIES, ids.categoryIds, context)
+            (result.rows as ShopSyncRows.Categories).values
+        }
+        val products = if (ids.productIds.isEmpty()) {
+            emptyList()
+        } else {
+            val result = fetchShopRowsByIds(ShopSyncRowDomain.PRODUCTS, ids.productIds, context)
+            (result.rows as ShopSyncRows.Products).values
+        }
+        val missingRemote =
+            suppliers.map { it.id }.toSet().containsAll(ids.supplierIds).not() ||
+                categories.map { it.id }.toSet().containsAll(ids.categoryIds).not() ||
+                products.map { it.id }.toSet().containsAll(ids.productIds).not()
+        return TargetedCatalogBundle(
+            bundle = InventoryCatalogFetchBundle(suppliers, categories, products),
+            missingRemote = missingRemote
+        )
+    }
+
+    private suspend fun fetchShopRowsByIds(
+        domain: ShopSyncRowDomain,
+        ids: List<String>,
+        context: ShopSyncRpcContext
+    ): ShopSyncTargetedRows {
+        val reader = shopSyncReadRemoteDataSource
+            ?.takeIf { it.isConfigured }
+            ?: throw ShopSyncContractException("shop_sync_reader_unavailable")
+        val cap = when (domain) {
+            ShopSyncRowDomain.SUPPLIERS,
+            ShopSyncRowDomain.CATEGORIES,
+            ShopSyncRowDomain.PRODUCTS -> 60
+            ShopSyncRowDomain.PRICES -> 120
+            ShopSyncRowDomain.HISTORY -> 3
+            ShopSyncRowDomain.IMAGES -> 240
+        }
+        val chunks = ids.distinct().chunked(cap)
+        if (chunks.isEmpty()) {
+            throw ShopSyncContractException("targeted_ids_empty")
+        }
+        val results = chunks.map { chunk ->
+            businessScopedRemoteCall {
+                reader.rowsByIds(context, domain, chunk)
+            }.getOrThrow()
+        }
+        if (results.size == 1) return results.single()
+        val first = results.first()
+        if (results.any {
+                it.scope != first.scope ||
+                    it.asOfEventMaxId != first.asOfEventMaxId ||
+                    it.minimumDomainEventMaxId != first.minimumDomainEventMaxId ||
+                    it.domain != domain
+            }
+        ) {
+            throw ShopSyncContractException("targeted_chunk_fence_changed")
+        }
+        val mergedRows = when (domain) {
+            ShopSyncRowDomain.SUPPLIERS -> ShopSyncRows.Suppliers(
+                results.flatMap { (it.rows as ShopSyncRows.Suppliers).values }
+            )
+            ShopSyncRowDomain.CATEGORIES -> ShopSyncRows.Categories(
+                results.flatMap { (it.rows as ShopSyncRows.Categories).values }
+            )
+            ShopSyncRowDomain.PRODUCTS -> ShopSyncRows.Products(
+                results.flatMap { (it.rows as ShopSyncRows.Products).values }
+            )
+            ShopSyncRowDomain.PRICES -> ShopSyncRows.Prices(
+                results.flatMap { (it.rows as ShopSyncRows.Prices).values }
+            )
+            ShopSyncRowDomain.HISTORY -> ShopSyncRows.History(
+                results.flatMap { (it.rows as ShopSyncRows.History).values }
+            )
+            ShopSyncRowDomain.IMAGES -> ShopSyncRows.Images(
+                results.flatMap { (it.rows as ShopSyncRows.Images).values }
+            )
+        }
+        return first.copy(
+            requestedCount = results.sumOf { it.requestedCount },
+            rows = mergedRows,
+            missingIds = results.flatMap { it.missingIds }
+        )
     }
 
     private suspend fun applyProductPriceRows(
@@ -4013,6 +4924,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var skippedNoLocalProduct = 0
         val appliedProductIds = linkedSetOf<Long>()
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             fun reportProgress(index: Int) {
                 if (index == 0 || index == remotes.lastIndex || (processedBefore + index + 1) % 100 == 0) {
                     progressReporter.onProgress(
@@ -4114,6 +5026,72 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         )
     }
 
+    /**
+     * Materializza una pagina del contratto recovery esclusivamente nel DB
+     * associato a questa istanza. Il coordinator usa un'istanza unmanaged su
+     * un file Room temporaneo: nessuna pagina diventa quindi visibile al DB/UI
+     * attivi prima del commit di attivazione.
+     */
+    internal suspend fun applyShopSyncRecoveryRows(
+        rows: ShopSyncRows
+    ): ShopSyncRecoveryStageApplyResult = when (rows) {
+        is ShopSyncRows.Suppliers -> {
+            val applied = applyCatalogBundleInbound(
+                InventoryCatalogFetchBundle(
+                    suppliers = rows.values,
+                    categories = emptyList(),
+                    products = emptyList(),
+                    isCompleteSnapshot = false
+                )
+            )
+            ShopSyncRecoveryStageApplyResult(applied.suppliers)
+        }
+        is ShopSyncRows.Categories -> {
+            val applied = applyCatalogBundleInbound(
+                InventoryCatalogFetchBundle(
+                    suppliers = emptyList(),
+                    categories = rows.values,
+                    products = emptyList(),
+                    isCompleteSnapshot = false
+                )
+            )
+            ShopSyncRecoveryStageApplyResult(applied.categories)
+        }
+        is ShopSyncRows.Products -> {
+            val applied = applyCatalogBundleInbound(
+                InventoryCatalogFetchBundle(
+                    suppliers = emptyList(),
+                    categories = emptyList(),
+                    products = rows.values,
+                    isCompleteSnapshot = false
+                )
+            )
+            ShopSyncRecoveryStageApplyResult(applied.products)
+        }
+        is ShopSyncRows.Prices -> {
+            val applied = applyProductPriceRows(
+                remotes = rows.values,
+                progressReporter = CatalogSyncProgressReporter { },
+                stage = CatalogSyncStage.SYNC_PRICES_PULL
+            )
+            ShopSyncRecoveryStageApplyResult(
+                businessRowsApplied = applied.pulled,
+                skippedParentRows = applied.skippedNoLocalProduct
+            )
+        }
+        is ShopSyncRows.History -> {
+            val result = applyRemoteSessionPayloadBatch(
+                rows.values.map { it.toSessionRemotePayload() }
+            )
+            ShopSyncRecoveryStageApplyResult(
+                businessRowsApplied = result.inserted + result.updated,
+                failedRows = result.failed,
+                unsupportedRows = result.unsupported
+            )
+        }
+        is ShopSyncRows.Images -> ShopSyncRecoveryStageApplyResult(0)
+    }
+
     private fun mergeCatalogBundles(
         first: InventoryCatalogFetchBundle,
         second: InventoryCatalogFetchBundle
@@ -4140,6 +5118,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         syncEventWatermarkDao.get(ownerUserId, storeScope)?.lastSyncEventId ?: 0L
 
     private suspend fun advanceSyncEventWatermark(ownerUserId: String, storeScope: String, id: Long): Long {
+        requireCurrentBusinessDataScope()
         syncEventWatermarkDao.upsert(
             SyncEventWatermark(
                 ownerUserId = ownerUserId,
@@ -4158,33 +5137,242 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         status: String,
         reason: String?
     ) {
-        val previous = syncEventApplyStatusDao.get(ownerUserId, storeScope, event.id)
-        val attemptCount = (previous?.attemptCount ?: 0) + 1
-        val nowMs = System.currentTimeMillis()
-        val nextRetryAtMs = when (status) {
-            SyncEventApplyStatusValues.BLOCKED,
-            SyncEventApplyStatusValues.RETRYING -> nowMs + SYNC_EVENT_APPLY_STATUS_RETRY_MS
-            else -> null
-        }
-        syncEventApplyStatusDao.upsert(
-            SyncEventApplyStatus(
-                ownerUserId = ownerUserId,
-                storeScope = storeScope,
-                eventId = event.id,
-                shopId = event.shopId,
-                domain = event.domain,
-                entityType = event.metadata["entity_type"]?.toString()?.trim('"'),
-                entityIdsJson = syncEventJson.encodeToString(ids ?: SyncEventEntityIds()),
-                status = status,
-                reason = reason,
-                attemptCount = attemptCount,
-                lastAttemptAtMs = nowMs,
-                nextRetryAtMs = nextRetryAtMs,
-                correlationId = event.clientEventId ?: event.batchId,
-                clientEventId = event.clientEventId,
-                remoteCreatedAt = event.createdAt
+        requireCurrentBusinessDataScope()
+        db.withTransaction {
+            requireCurrentBusinessDataScope()
+            val previous = syncEventApplyStatusDao.get(ownerUserId, storeScope, event.id)
+            val repeatedRecoveryBlocker = status == SyncEventApplyStatusValues.BLOCKED &&
+                reason.requiresVerifiedRecovery() &&
+                previous?.status == SyncEventApplyStatusValues.BLOCKED &&
+                previous.reason == reason
+            val attemptCount = if (repeatedRecoveryBlocker) {
+                previous.attemptCount
+            } else {
+                (previous?.attemptCount ?: 0) + 1
+            }
+            val nowMs = System.currentTimeMillis()
+            val nextRetryAtMs = if (repeatedRecoveryBlocker) {
+                previous.nextRetryAtMs
+            } else when (status) {
+                SyncEventApplyStatusValues.BLOCKED,
+                SyncEventApplyStatusValues.RETRYING -> if (
+                    attemptCount >= SYNC_EVENT_APPLY_MAX_ATTEMPTS
+                ) {
+                    null
+                } else {
+                    nowMs + syncRecoveryRetryDelayMs(attemptCount)
+                }
+                else -> null
+            }
+            syncEventApplyStatusDao.upsert(
+                SyncEventApplyStatus(
+                    ownerUserId = ownerUserId,
+                    storeScope = storeScope,
+                    eventId = event.id,
+                    shopId = event.shopId,
+                    domain = event.domain,
+                    entityType = event.metadata["entity_type"]?.toString()?.trim('"'),
+                    entityIdsJson = syncEventJson.encodeToString(ids ?: SyncEventEntityIds()),
+                    status = status,
+                    reason = reason,
+                    attemptCount = attemptCount,
+                    lastAttemptAtMs = nowMs,
+                    nextRetryAtMs = nextRetryAtMs,
+                    correlationId = event.clientEventId ?: event.batchId,
+                    clientEventId = event.clientEventId,
+                    remoteCreatedAt = event.createdAt
+                )
             )
-        )
+            if (status == SyncEventApplyStatusValues.BLOCKED && reason.requiresVerifiedRecovery()) {
+                val recoveryStoreScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
+                val existing = syncRecoveryJournalDao.get()
+                    ?.takeIf {
+                        it.ownerHash == task126OwnerHash(ownerUserId) &&
+                            it.storeScope == recoveryStoreScope
+                    }
+                val blockingEventId = listOfNotNull(existing?.blockingEventId, event.id).minOrNull()
+                val selectedReason = if (
+                    existing != null && blockingEventId == existing.blockingEventId
+                ) {
+                    existing.reason
+                } else {
+                    requireNotNull(reason)
+                }
+                syncRecoveryJournalDao.upsert(
+                    SyncRecoveryJournal(
+                        ownerHash = task126OwnerHash(ownerUserId),
+                        storeScope = recoveryStoreScope,
+                        shopId = shopIdFromStoreScope(storeScope),
+                        deviceId = checkNotNull(syncEventDeviceStateDao.get()?.deviceId) {
+                            "sync_recovery_device_identity_missing"
+                        },
+                        authorizationMode = existing?.authorizationMode
+                            ?: SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                        runId = existing?.runId,
+                        phase = existing?.phase ?: SyncRecoveryJournalPhases.REQUIRED,
+                        reason = selectedReason,
+                        blockingEventId = blockingEventId,
+                        // Il budget appartiene ai tentativi di snapshot, non alle
+                        // ri-osservazioni dello stesso evento bloccante.
+                        attemptCount = existing?.attemptCount ?: 0,
+                        createdAtMs = existing?.createdAtMs ?: nowMs,
+                        updatedAtMs = nowMs,
+                        nextRetryAtMs = existing?.nextRetryAtMs ?: nowMs,
+                        checkpointADigest = existing?.checkpointADigest,
+                        checkpointBDigest = existing?.checkpointBDigest,
+                        stagingDatabaseName = existing?.stagingDatabaseName
+                    )
+                )
+            }
+            requireCurrentBusinessDataScope()
+        }
+    }
+
+    /**
+     * The V6 reader cannot safely resume a non-zero watermark without the
+     * opaque baseline scope. There is no event row to attach in this branch,
+     * so persist the same recovery latch explicitly instead of silently
+     * returning no work.
+     */
+    private suspend fun recordShopSyncRecoveryRequiredWithoutEvent(
+        ownerUserId: String,
+        storeScope: String,
+        shopId: String,
+        deviceId: String,
+        reason: String,
+        blockingEventId: Long? = null
+    ) {
+        requireCurrentBusinessDataScope()
+        db.withTransaction {
+            requireCurrentBusinessDataScope()
+            val recoveryStoreScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
+            val existing = syncRecoveryJournalDao.get()
+                ?.takeIf {
+                    it.ownerHash == task126OwnerHash(ownerUserId) &&
+                        it.storeScope == recoveryStoreScope
+                }
+            val nowMs = System.currentTimeMillis()
+            syncRecoveryJournalDao.upsert(
+                SyncRecoveryJournal(
+                    ownerHash = task126OwnerHash(ownerUserId),
+                    storeScope = recoveryStoreScope,
+                    shopId = shopId,
+                    deviceId = deviceId,
+                    authorizationMode = existing?.authorizationMode
+                        ?: SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                    runId = existing?.runId,
+                    phase = existing?.phase ?: SyncRecoveryJournalPhases.REQUIRED,
+                    reason = existing?.reason ?: reason,
+                    blockingEventId = listOfNotNull(existing?.blockingEventId, blockingEventId)
+                        .minOrNull(),
+                    attemptCount = existing?.attemptCount ?: 0,
+                    createdAtMs = existing?.createdAtMs ?: nowMs,
+                    updatedAtMs = nowMs,
+                    nextRetryAtMs = existing?.nextRetryAtMs ?: nowMs,
+                    checkpointADigest = existing?.checkpointADigest,
+                    checkpointBDigest = existing?.checkpointBDigest,
+                    stagingDatabaseName = existing?.stagingDatabaseName
+                )
+            )
+            requireCurrentBusinessDataScope()
+        }
+    }
+
+    private suspend fun shopSyncBaselineForEventDrain(
+        ownerUserId: String,
+        storeScope: String,
+        shopId: String,
+        deviceId: String,
+        watermark: Long
+    ): ShopSyncRecoveryCheckpoint? {
+        if (watermark == 0L) return null
+        val baseline = syncRecoveryBaselineDao.get() ?: return null
+        if (
+            baseline.ownerHash != task126OwnerHash(ownerUserId) ||
+            baseline.storeScope != Task126OwnerStoreScope.normalizedStoreId(storeScope) ||
+            baseline.shopId.lowercase() != shopId.lowercase() ||
+            baseline.deviceId != deviceId
+        ) {
+            return null
+        }
+        val checkpoint = runCatching { decodeRecoveryCheckpointJson(baseline.checkpointJson) }
+            .getOrNull() ?: return null
+        if (
+            checkpoint.scope.key != baseline.scopeKey ||
+            checkpoint.syncEvents.maxId != watermark.toString() ||
+            // A persisted recovery baseline must be the C receipt obtained
+            // after marker(B): it is self-verifying at the activated
+            // watermark. Raw checkpoint B used A as its query baseline and
+            // would otherwise re-latch recovery on every next drain.
+            checkpoint.syncEvents.verifiedBaselineId != watermark.toString()
+        ) {
+            return null
+        }
+        return checkpoint
+    }
+
+    private fun shopSyncTargetedContext(
+        ownerUserId: String,
+        shopId: String,
+        deviceId: String,
+        scope: ShopSyncScope,
+        eventMaxId: String,
+        domainEventMaxIds: Map<String, String>,
+        domain: String
+    ): ShopSyncRpcContext = ShopSyncRpcContext(
+        accountId = ownerUserId,
+        shopId = shopId,
+        deviceIdentifier = deviceId,
+        expectedScope = scope,
+        expectedEventMaxId = eventMaxId,
+        expectedDomainEventMaxId = domainEventMaxIds[domain]
+            ?: throw ShopSyncContractException("sync_event_domain_fence_missing")
+    )
+
+    private fun syncEventDeviceKey(deviceId: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(deviceId.toByteArray(Charsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
+
+    private fun String?.requiresVerifiedRecovery(): Boolean = this in setOf(
+        SyncEventApplyStatusReasons.MISSING_ENTITY_IDS,
+        SyncEventApplyStatusReasons.ENTITY_IDS_TOO_LARGE,
+        SyncEventApplyStatusReasons.MISSING_REMOTE,
+        SyncEventApplyStatusReasons.UNSUPPORTED_DOMAIN,
+        SyncEventApplyStatusReasons.UNSUPPORTED_EVENT_TYPE,
+        SyncEventApplyStatusReasons.SCOPE_MISMATCH,
+        SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED,
+        SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+    )
+
+    private fun markerProvesNoWorkAgainstBaseline(
+        marker: ShopSyncConvergenceMarker?,
+        baseline: ShopSyncRecoveryCheckpoint?,
+        watermark: Long
+    ): Boolean {
+        val expected = baseline ?: return false
+        val expectedWatermark = watermark.toString()
+        return marker != null &&
+            marker.status == "ready" &&
+            marker.serverNoWorkEligible &&
+            marker.shopId == expected.shopId &&
+            marker.scope == expected.scope &&
+            marker.syncEvents.maxId == expectedWatermark &&
+            marker.syncEvents.verifiedBaselineId == expectedWatermark &&
+            marker.syncEvents.domainMaxIds == expected.syncEvents.domainMaxIds &&
+            marker.checkpointDigest == expected.checkpointDigest &&
+            !marker.syncEvents.requiresFullRecovery &&
+            marker.catalog == expected.catalog &&
+            marker.prices == expected.prices &&
+            marker.history == expected.history &&
+            marker.images == expected.images &&
+            marker.integrity.totalViolationCount == 0L
+    }
+
+    private fun syncRecoveryRetryDelayMs(attempt: Int): Long {
+        val exponent = (attempt - 1).coerceIn(0, 5)
+        return (SYNC_RECOVERY_RETRY_BASE_MS * (1L shl exponent))
+            .coerceAtMost(SYNC_RECOVERY_RETRY_MAX_MS)
     }
 
     private suspend fun retrySyncEventOutbox(
@@ -4212,6 +5400,33 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             if (entry.attemptCount >= SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) continue
             retryEligible++
             val ids = syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
+            if (
+                !SyncEventContract.hasCompletePrimaryIds(
+                    domain = entry.domain,
+                    changedCount = entry.changedCount,
+                    ids = ids
+                )
+            ) {
+                val nextAttemptCount = entry.attemptCount + 1
+                val errorType = SyncEventApplyStatusReasons.MISSING_ENTITY_IDS
+                requireCurrentBusinessDataScope()
+                syncEventOutboxDao.update(
+                    entry.copy(
+                        attemptCount = nextAttemptCount,
+                        lastAttemptAtMs = System.currentTimeMillis(),
+                        lastErrorType = errorType
+                    )
+                )
+                retryFailed++
+                logSyncEventOutboxRetryEntry(
+                    outcome = "rejected_invalid_entity_ids",
+                    entry = entry,
+                    lastErrorType = errorType,
+                    attemptCount = nextAttemptCount,
+                    retryDeletedOnSuccess = 0
+                )
+                continue
+            }
             val params = SyncEventRecordRpcParams(
                 domain = entry.domain,
                 eventType = entry.eventType,
@@ -4225,8 +5440,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 metadata = buildJsonObject { put("task", "045") },
                 shopId = shopIdFromStoreScope(entry.storeScope)
             )
-            val result = remote.recordSyncEvent(params)
+            val result = businessScopedRemoteCall { remote.recordSyncEvent(params) }
             if (result.isSuccess) {
+                requireCurrentBusinessDataScope()
                 syncEventOutboxDao.deleteById(entry.id)
                 retrySucceeded++
                 retryDeletedOnSuccess++
@@ -4238,9 +5454,11 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     retryDeletedOnSuccess = 1
                 )
             } else {
+                requireCurrentBusinessDataScope()
                 val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
                     ?: "unknown"
                 val nextAttemptCount = entry.attemptCount + 1
+                requireCurrentBusinessDataScope()
                 syncEventOutboxDao.update(
                     entry.copy(
                         attemptCount = nextAttemptCount,
@@ -4290,18 +5508,15 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         eventType: String,
         batchId: String,
         deviceId: String,
-        changedCountOverride: Int? = null,
-        entityIdsCompacted: Boolean = false,
         shopId: String? = null
     ): SyncEventRecordOutcome {
-        val totalChangedCount = changedCountOverride ?: ids.totalIds
+        val totalChangedCount = SyncEventContract.primaryChangedCount(domain, ids)
         if (ids.isEmpty && totalChangedCount <= 0) {
             val outcome = SyncEventRecordOutcome.NoOp
             logSyncEventRecordOutcome(
                 domain = domain,
                 eventType = eventType,
                 totalChangedCount = totalChangedCount,
-                entityIdsCompacted = entityIdsCompacted,
                 outcome = outcome
             )
             return outcome
@@ -4309,19 +5524,19 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         var recordedChunks = 0
         var enqueuedChunks = 0
         var outboxInserted = 0
-        val chunks = if (ids.isEmpty) listOf(ids) else chunkSyncEventIds(ids)
+        val chunks = if (ids.isEmpty) listOf(ids) else SyncEventContract.chunkPrimaryIds(domain, ids)
         for ((index, chunk) in chunks.withIndex()) {
             val clientEventId = buildClientEventId(batchId, domain, eventType, chunk, index)
-            val chunkChangedCount = if (ids.isEmpty) totalChangedCount else chunk.totalIds
+            val chunkChangedCount = SyncEventContract.primaryChangedCount(domain, chunk)
+            check(SyncEventContract.hasCompletePrimaryIds(domain, chunkChangedCount, chunk)) {
+                "sync_event_chunk_invalid_primary_ids"
+            }
             val metadata = buildJsonObject {
                 put("task", "045")
                 put("source", "android_repository")
                 put("chunk_index", index)
                 put("chunk_count", chunks.size)
-                put("entity_ids_compacted", entityIdsCompacted)
-                if (entityIdsCompacted) {
-                    put("original_changed_count", totalChangedCount)
-                }
+                put("entity_ids_compacted", false)
             }
             val params = SyncEventRecordRpcParams(
                 domain = domain,
@@ -4336,12 +5551,13 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 metadata = metadata,
                 shopId = shopId
             )
-            val result = remote.recordSyncEvent(params)
+            val result = businessScopedRemoteCall { remote.recordSyncEvent(params) }
             if (result.isSuccess) {
                 recordedChunks++
                 continue
             }
             enqueuedChunks++
+            requireCurrentBusinessDataScope()
             val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
                 ?: "unknown"
             val insertId = syncEventOutboxDao.insert(
@@ -4370,7 +5586,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                     "eventType=$eventType domain=$domain outboxInserted=${if (inserted) 1 else 0} " +
                     "lastErrorType=$errorType attemptCount=0 " +
                     "clientEventIdHash=${clientEventIdHash(clientEventId)} " +
-                    "changedCount=$chunkChangedCount entityIdsCompacted=$entityIdsCompacted"
+                    "changedCount=$chunkChangedCount entityIdsCompacted=false"
             )
         }
         val outcome = SyncEventRecordOutcome.from(
@@ -4383,25 +5599,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             domain = domain,
             eventType = eventType,
             totalChangedCount = totalChangedCount,
-            entityIdsCompacted = entityIdsCompacted,
             outcome = outcome
         )
         return outcome
-    }
-
-    private fun syncEventRecordIdsForRecord(ids: SyncEventEntityIds): SyncEventRecordIds {
-        if (ids.totalIds <= SYNC_EVENT_ENTITY_ID_BUDGET) {
-            return SyncEventRecordIds(
-                ids = ids,
-                changedCount = ids.totalIds,
-                compacted = false
-            )
-        }
-        return SyncEventRecordIds(
-            ids = SyncEventEntityIds(),
-            changedCount = ids.totalIds,
-            compacted = true
-        )
     }
 
     private fun buildClientEventId(
@@ -4419,26 +5619,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             ids.sessionIds.sorted().joinToString(",")
         ).joinToString("|").hashCode().toUInt().toString(16)
         return "android-$batchId-$domain-$eventType-$chunkIndex-$fingerprint"
-    }
-
-    private fun chunkSyncEventIds(ids: SyncEventEntityIds): List<SyncEventEntityIds> {
-        val entries = buildList<Pair<String, String>> {
-            ids.supplierIds.forEach { add("supplier" to it) }
-            ids.categoryIds.forEach { add("category" to it) }
-            ids.productIds.forEach { add("product" to it) }
-            ids.priceIds.forEach { add("price" to it) }
-            ids.sessionIds.forEach { add("session" to it) }
-        }
-        if (entries.isEmpty()) return emptyList()
-        return entries.chunked(SYNC_EVENT_ENTITY_ID_BUDGET).map { chunk ->
-            SyncEventEntityIds(
-                supplierIds = chunk.filter { it.first == "supplier" }.map { it.second },
-                categoryIds = chunk.filter { it.first == "category" }.map { it.second },
-                productIds = chunk.filter { it.first == "product" }.map { it.second },
-                priceIds = chunk.filter { it.first == "price" }.map { it.second },
-                sessionIds = chunk.filter { it.first == "session" }.map { it.second }
-            )
-        }
     }
 
     private suspend fun countDirtyLocalRefsForEvent(ids: SyncEventEntityIds): Int {
@@ -4511,7 +5691,6 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         domain: String,
         eventType: String,
         totalChangedCount: Int,
-        entityIdsCompacted: Boolean,
         outcome: SyncEventRecordOutcome
     ) {
         Log.i(
@@ -4520,7 +5699,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "domain=$domain eventType=$eventType outcome=${outcome.logName} " +
                 "attemptedChunks=${outcome.attemptedChunks} recordedChunks=${outcome.recordedChunks} " +
                 "enqueuedChunks=${outcome.enqueuedChunks} outboxInserted=${outcome.outboxInserted} " +
-                "changedCount=$totalChangedCount entityIdsCompacted=$entityIdsCompacted"
+                "changedCount=$totalChangedCount entityIdsCompacted=false"
         )
     }
 
@@ -4561,10 +5740,14 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         const val IMPORT_DIRTY_PRICE_TOLERANCE = 0.001
         const val SYNC_EVENT_FETCH_LIMIT = 100L
         const val SYNC_EVENT_DRAIN_MAX_ITERATIONS = 20
-        const val SYNC_EVENT_ENTITY_ID_BUDGET = 250
+        const val SYNC_EVENT_ENTITY_ID_BUDGET = SyncEventContract.MAX_PRIMARY_ENTITY_IDS_PER_EVENT
         const val SYNC_EVENT_OUTBOX_RETRY_LIMIT = 20
         const val SYNC_EVENT_OUTBOX_MAX_ATTEMPTS = 5
-        const val SYNC_EVENT_APPLY_STATUS_RETRY_MS = 30_000L
+        const val SYNC_EVENT_APPLY_MAX_ATTEMPTS = 5
+        // Contratto V6: history targeted massimo tre ID per chiamata.
+        const val SHOP_SYNC_HISTORY_TARGETED_ID_LIMIT = 3
+        const val SYNC_RECOVERY_RETRY_BASE_MS = 30_000L
+        const val SYNC_RECOVERY_RETRY_MAX_MS = 15 * 60_000L
         const val SESSION_BACKUP_PUSH_CHUNK = 80
         const val LOG_SAMPLE_LIMIT = 5
         const val POSTGREST_UNIQUE_VIOLATION = "23505"
@@ -4602,7 +5785,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 "${prefix}_skip_remote_already_bridged=$skippedRemoteAlreadyBridged"
     }
 
-    private class CatalogConflictRecoveryCache(
+    private inner class CatalogConflictRecoveryCache(
         private val allowRemoteFetch: Boolean = true
     ) {
         private var bundle: InventoryCatalogFetchBundle? = null
@@ -4621,7 +5804,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 return null
             }
             val loaded = try {
-                val result = remote.fetchCatalog(shopId)
+                val result = businessScopedRemoteCall { remote.fetchCatalog(shopId) }
                 if (result.isFailure) {
                     val throwable = result.exceptionOrNull()
                     if (throwable != null) {
@@ -4789,7 +5972,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
             }
             val upsertRows = pairs.map { (r, rid) -> buildProductPricePushRow(r, rid, ownerUserId, shopId) }
             val batchStartedAt = System.currentTimeMillis()
-            val result = priceRemote.upsertProductPrices(upsertRows, shopId)
+            val result = businessScopedRemoteCall {
+                priceRemote.upsertProductPrices(upsertRows, shopId)
+            }
             totalBatchMs += System.currentTimeMillis() - batchStartedAt
             batchCount++
             val firstError = result.exceptionOrNull()
@@ -4806,7 +5991,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 for ((r, rid) in pairs) {
                     val row = buildProductPricePushRow(r, rid, ownerUserId, shopId)
                     val singleStartedAt = System.currentTimeMillis()
-                    val single = priceRemote.upsertProductPrices(listOf(row), shopId)
+                    val single = businessScopedRemoteCall {
+                        priceRemote.upsertProductPrices(listOf(row), shopId)
+                    }
                     totalBatchMs += System.currentTimeMillis() - singleStartedAt
                     batchCount++
                     val singleError = single.exceptionOrNull()
@@ -4881,6 +6068,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         pairs: List<Pair<ProductPricePushRow, String>>
     ) {
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             for ((row, remoteId) in pairs) {
                 if (row.existingPriceRemoteId == null) {
                     productPriceRemoteRefDao.insert(
@@ -4909,7 +6097,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val appliedProductIds = linkedSetOf<Long>()
 
         while (true) {
-            val page = priceRemote.fetchProductPricesPage(lastRemoteId, INVENTORY_REMOTE_PAGE_SIZE, shopId).getOrThrow()
+            val page = businessScopedRemoteCall {
+                priceRemote.fetchProductPricesPage(lastRemoteId, INVENTORY_REMOTE_PAGE_SIZE, shopId)
+            }.getOrThrow()
             if (page.isEmpty()) break
 
             pageCount++
@@ -5221,7 +6411,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                         skippedMissingDependencyRef++
                     } else if (!patch.isEmpty) {
                         val startedAt = System.currentTimeMillis()
-                        remote.patchProduct(ref.remoteId, ownerUserId, shopId, patch).getOrThrow()
+                        businessScopedRemoteCall {
+                            remote.patchProduct(ref.remoteId, ownerUserId, shopId, patch)
+                        }.getOrThrow()
                         accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
                         accumulator.batchCount++
                         markProductPatchApplied(productForPush.id, ref, patch)
@@ -5354,7 +6546,9 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         }
 
         val startedAt = System.currentTimeMillis()
-        val first = remote.upsertProducts(batch.map { it.row }, shopId)
+        val first = businessScopedRemoteCall {
+            remote.upsertProducts(batch.map { it.row }, shopId)
+        }
         accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
         accumulator.batchCount++
         val error = first.exceptionOrNull()
@@ -5465,6 +6659,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     private suspend fun markProductPushBatchApplied(batch: List<ProductPushCandidatePrepared>) {
         val appliedAt = System.currentTimeMillis()
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             for (prepared in batch) {
                 productRemoteRefDao.updateRemoteApplyState(
                     prepared.product.id,
@@ -5624,7 +6819,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         shopId: String?
     ): Boolean {
         val row = buildSupplierPushRow(supplier, ref, ownerUserId, shopId)
-        val first = remote.upsertSuppliers(listOf(row), shopId)
+        val first = businessScopedRemoteCall { remote.upsertSuppliers(listOf(row), shopId) }
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
             markSupplierPushApplied(supplier.id, ref, row)
@@ -5638,7 +6833,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (!supplierNeedsPush(correctedRef)) return false
 
         val retryRow = buildSupplierPushRow(supplier, correctedRef, ownerUserId, shopId)
-        remote.upsertSuppliers(listOf(retryRow), shopId).getOrThrow()
+        businessScopedRemoteCall { remote.upsertSuppliers(listOf(retryRow), shopId) }.getOrThrow()
         markSupplierPushApplied(supplier.id, correctedRef, retryRow)
         return true
     }
@@ -5652,7 +6847,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         shopId: String?
     ): Boolean {
         val row = buildCategoryPushRow(category, ref, ownerUserId, shopId)
-        val first = remote.upsertCategories(listOf(row), shopId)
+        val first = businessScopedRemoteCall { remote.upsertCategories(listOf(row), shopId) }
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
             markCategoryPushApplied(category.id, ref, row)
@@ -5666,7 +6861,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         if (!categoryNeedsPush(correctedRef)) return false
 
         val retryRow = buildCategoryPushRow(category, correctedRef, ownerUserId, shopId)
-        remote.upsertCategories(listOf(retryRow), shopId).getOrThrow()
+        businessScopedRemoteCall { remote.upsertCategories(listOf(retryRow), shopId) }.getOrThrow()
         markCategoryPushApplied(category.id, correctedRef, retryRow)
         return true
     }
@@ -5682,7 +6877,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
     ): Boolean {
         val row = buildProductPushRow(product, ref, ownerUserId, shopId, allowCreatingDependencyRefs)
             ?: return false
-        val first = remote.upsertProducts(listOf(row), shopId)
+        val first = businessScopedRemoteCall { remote.upsertProducts(listOf(row), shopId) }
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
             markProductPushApplied(product.id, ref, row)
@@ -5697,7 +6892,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
 
         val retryRow = buildProductPushRow(product, correctedRef, ownerUserId, shopId, allowCreatingDependencyRefs)
             ?: return false
-        remote.upsertProducts(listOf(retryRow), shopId).getOrThrow()
+        businessScopedRemoteCall { remote.upsertProducts(listOf(retryRow), shopId) }.getOrThrow()
         markProductPushApplied(product.id, correctedRef, retryRow)
         return true
     }
@@ -5707,6 +6902,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ref: SupplierRemoteRef,
         row: InventorySupplierRow
     ) {
+        requireCurrentBusinessDataScope()
         supplierRemoteRefDao.updateRemoteApplyState(
             supplierId,
             ref.localChangeRevision,
@@ -5721,6 +6917,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ref: CategoryRemoteRef,
         row: InventoryCategoryRow
     ) {
+        requireCurrentBusinessDataScope()
         categoryRemoteRefDao.updateRemoteApplyState(
             categoryId,
             ref.localChangeRevision,
@@ -5735,6 +6932,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ref: ProductRemoteRef,
         row: InventoryProductRow
     ) {
+        requireCurrentBusinessDataScope()
         productRemoteRefDao.updateRemoteApplyState(
             productId,
             ref.localChangeRevision,
@@ -5749,6 +6947,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         ref: ProductRemoteRef,
         patch: InventoryProductPatch
     ) {
+        requireCurrentBusinessDataScope()
         productRemoteRefDao.updateRemoteApplyState(
             productId,
             ref.localChangeRevision,
@@ -5795,6 +6994,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 normalizeCatalogNameKey(it.name) == key
         } ?: return false
         val recovered = db.withTransaction {
+            requireCurrentBusinessDataScope()
             attachSupplierBridgeForRetry(supplier.id, remoteRow.id)
         }
         logCatalogBridgeRecovery("supplier", recovered, supplier.id, failedRef.remoteId, remoteRow.id)
@@ -5819,6 +7019,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 normalizeCatalogNameKey(it.name) == key
         } ?: return false
         val recovered = db.withTransaction {
+            requireCurrentBusinessDataScope()
             attachCategoryBridgeForRetry(category.id, remoteRow.id)
         }
         logCatalogBridgeRecovery("category", recovered, category.id, failedRef.remoteId, remoteRow.id)
@@ -5843,6 +7044,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 normalizeCatalogBarcodeKey(it.barcode) == key
         } ?: return false
         val recovered = db.withTransaction {
+            requireCurrentBusinessDataScope()
             attachProductBridgeForRetry(product.id, remoteRow.id)
         }
         logCatalogBridgeRecovery("product", recovered, product.id, failedRef.remoteId, remoteRow.id)
@@ -5970,6 +7172,7 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
         val categoryStats = CatalogBridgeRealignStats()
         val productStats = CatalogBridgeRealignStats()
         db.withTransaction {
+            requireCurrentBusinessDataScope()
             if (suppliersMissing > 0 || suppliersNeverApplied) {
                 for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId) }) {
                     supplierStats.remoteRowsSeen++
@@ -6170,17 +7373,21 @@ class DefaultInventoryRepository(private val db: AppDatabase) :
                 deletedAt = deletedAt,
                 updatedAt = deletedAt
             )
-            val outcome = when (row.entityType) {
-                PendingCatalogTombstoneEntityTypes.SUPPLIER -> remote.markSupplierTombstoned(patch, shopId)
-                PendingCatalogTombstoneEntityTypes.CATEGORY -> remote.markCategoryTombstoned(patch, shopId)
-                PendingCatalogTombstoneEntityTypes.PRODUCT -> remote.markProductTombstoned(patch, shopId)
-                else -> Result.success(Unit)
+            val outcome = businessScopedRemoteCall {
+                when (row.entityType) {
+                    PendingCatalogTombstoneEntityTypes.SUPPLIER -> remote.markSupplierTombstoned(patch, shopId)
+                    PendingCatalogTombstoneEntityTypes.CATEGORY -> remote.markCategoryTombstoned(patch, shopId)
+                    PendingCatalogTombstoneEntityTypes.PRODUCT -> remote.markProductTombstoned(patch, shopId)
+                    else -> Result.success(Unit)
+                }
             }
             outcome.onFailure {
+                requireCurrentBusinessDataScope()
                 pendingCatalogTombstoneDao.incrementAttempt(row.id)
                 logSyncTransportFailure("catalog_tombstone_drain_${row.entityType}", it)
                 throw it
             }
+            requireCurrentBusinessDataScope()
             pendingCatalogTombstoneDao.deleteById(row.id)
             when (row.entityType) {
                 PendingCatalogTombstoneEntityTypes.SUPPLIER -> suppliers += row.remoteId

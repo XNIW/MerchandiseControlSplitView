@@ -235,7 +235,13 @@ interface CatalogAutoSyncRepository {
  * E un osservabile sottile: scritto dal `CatalogSyncViewModel`, letto dalla UI root.
  * Mantiene anche [isSyncing] per i call site esistenti, ma la fonte piu ricca e [state].
  */
-class CatalogSyncStateTracker {
+class CatalogSyncStateTracker(
+    initialBusinessDataScopeState: Task126BusinessDataScopeState =
+        Task126BusinessDataScopeState.unmanagedAllowed()
+) : Task126BusinessDataScopeRuntimeGuard {
+
+    private val businessDataScopeFlightGate =
+        Task126BusinessDataScopeFlightGate(initialBusinessDataScopeState)
 
     private val _state = MutableStateFlow(CatalogSyncProgressState.idle())
     val state: StateFlow<CatalogSyncProgressState> = _state.asStateFlow()
@@ -245,6 +251,19 @@ class CatalogSyncStateTracker {
 
     private val _lastOutcome = MutableStateFlow<CatalogSyncOutcomeState?>(null)
     val lastOutcome: StateFlow<CatalogSyncOutcomeState?> = _lastOutcome.asStateFlow()
+
+    private val _businessDataScopeState = MutableStateFlow(initialBusinessDataScopeState)
+    val businessDataScopeState: StateFlow<Task126BusinessDataScopeState> =
+        _businessDataScopeState.asStateFlow()
+
+    /**
+     * `null` finche Android non consegna il primo snapshot di rete. In questo
+     * modo la UI non inventa uno stato offline durante il bootstrap, ma passa
+     * immediatamente a offline quando il default network perde la capability
+     * VALIDATED.
+     */
+    private val _networkAvailable = MutableStateFlow<Boolean?>(null)
+    val networkAvailable: StateFlow<Boolean?> = _networkAvailable.asStateFlow()
 
     private val ownerLock = Any()
     private var activeOwner: CatalogSyncFlightOwner? = null
@@ -296,4 +315,75 @@ class CatalogSyncStateTracker {
             summary = summary
         )
     }
+
+    fun updateBusinessDataScopeState(next: Task126BusinessDataScopeState) {
+        val previous = _businessDataScopeState.value
+        val scopeChanged = scopeSignature(previous) != scopeSignature(next)
+        businessDataScopeFlightGate.updateState(next)
+        _businessDataScopeState.value = next
+        if (scopeChanged || !next.allowsCloudSync) {
+            _lastOutcome.value = null
+        }
+        if (previous.status != next.status) {
+            Log.i("CatalogCloudSync", "business_scope status=${next.status}")
+        }
+    }
+
+    fun updateNetworkAvailability(available: Boolean) {
+        if (_networkAvailable.value == available) return
+        _networkAvailable.value = available
+        Log.i("CatalogCloudSync", "network_available=$available")
+    }
+
+    fun allowsBusinessDataScope(ownerUserId: String, selectedShop: SelectedShop?): Boolean {
+        return businessDataScopeFlightGate.allowsBusinessDataScope(ownerUserId, selectedShop)
+    }
+
+    override suspend fun <T> withBusinessDataScopeFlight(
+        ownerUserId: String,
+        selectedShop: SelectedShop?,
+        block: suspend () -> T
+    ): T = businessDataScopeFlightGate.withBusinessDataScopeFlight(
+        ownerUserId = ownerUserId,
+        selectedShop = selectedShop,
+        block = block
+    )
+
+    override suspend fun <T> withCurrentBusinessDataScopeFlight(
+        block: suspend () -> T
+    ): T = businessDataScopeFlightGate.withCurrentBusinessDataScopeFlight(block)
+
+    override suspend fun requireCurrentBusinessDataScope() {
+        businessDataScopeFlightGate.requireCurrentBusinessDataScope()
+    }
+
+    override fun captureBusinessDataScopeSignal(
+        ownerUserId: String,
+        shopId: String?
+    ): Task126BusinessDataScopeSignalToken =
+        businessDataScopeFlightGate.captureBusinessDataScopeSignal(ownerUserId, shopId)
+
+    override fun isCurrentBusinessDataScopeSignal(
+        token: Task126BusinessDataScopeSignalToken
+    ): Boolean = businessDataScopeFlightGate.isCurrentBusinessDataScopeSignal(token)
+
+    override suspend fun cancelAndJoinBusinessDataScopeFlights() {
+        businessDataScopeFlightGate.cancelAndJoinBusinessDataScopeFlights()
+    }
+
+    override suspend fun <T> withBusinessDataScopeTransition(
+        block: suspend () -> T
+    ): T = businessDataScopeFlightGate.withBusinessDataScopeTransition(block)
+
+    private fun scopeSignature(state: Task126BusinessDataScopeState): String? =
+        state.boundScope?.let { scope ->
+            listOf(
+                scope.ownerHash,
+                scope.storeId,
+                scope.localStoreId,
+                scope.syncProtocolVersion.toString(),
+                scope.schemaVersion.toString(),
+                scope.storeEpoch.toString()
+            ).joinToString("|")
+        }
 }

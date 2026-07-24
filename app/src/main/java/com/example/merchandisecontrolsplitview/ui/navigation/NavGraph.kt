@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -44,6 +46,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.ui.components.CloudSyncIndicator
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModel
@@ -68,6 +73,8 @@ fun AppNavGraph() {
     // Stato sync globale strutturato: fase corrente + conteggio opzionale.
     val cloudSyncState by app.catalogSyncStateTracker.state.collectAsState()
     val shopContext by app.shopContextRepository.state.collectAsState()
+    val businessDataScopeState by
+        app.catalogSyncStateTracker.businessDataScopeState.collectAsState()
 
     val excelViewModel: ExcelViewModel = viewModel(
         factory = ExcelViewModel.factory(app, repository)
@@ -84,14 +91,25 @@ fun AppNavGraph() {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
+    val businessContentAllowed = businessContentAvailable(
+        authEnabled = app.authManager.isEnabled,
+        authState = authState,
+        status = businessDataScopeState.status
+    )
+    val businessRouteBlocked = !businessContentAllowed && currentRoute != Screen.Options.route
     val showBottomBar = currentRootTab != null
-    val showCloudSyncIndicator = currentRoute != Screen.Options.route
+    val showCloudSyncIndicator = businessContentAllowed && currentRoute != Screen.Options.route
     var pendingImportAnalysisExitCleanup by remember {
         mutableStateOf<ImportAnalysisExitCleanup?>(null)
     }
     var importAnalysisExitCleanupApplied by remember { mutableStateOf(false) }
 
-    LaunchedEffect(importAnalysisResult, pendingImportAnalysisExitCleanup) {
+    LaunchedEffect(
+        importAnalysisResult,
+        pendingImportAnalysisExitCleanup,
+        businessContentAllowed
+    ) {
+        if (!businessContentAllowed) return@LaunchedEffect
         if (pendingImportAnalysisExitCleanup != null) {
             if (importAnalysisResult == null) {
                 pendingImportAnalysisExitCleanup = null
@@ -121,11 +139,12 @@ fun AppNavGraph() {
         }
     }
 
-    LaunchedEffect(navController, lifecycleOwner) {
+    LaunchedEffect(navController, lifecycleOwner, businessContentAllowed) {
         navController.currentBackStackEntryFlow.first()
 
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             MainActivity.ShareBus.uris.collect { uris ->
+                if (!businessContentAllowed) return@collect
                 if (uris.isNotEmpty()) {
                     if (navController.currentDestination?.route != Screen.PreGenerate.route) {
                         navController.navigate(Screen.PreGenerate.route) { launchSingleTop = true }
@@ -138,12 +157,28 @@ fun AppNavGraph() {
         }
     }
 
+    LaunchedEffect(businessRouteBlocked, businessDataScopeState.status, currentRoute) {
+        if (
+            businessRouteBlocked &&
+            currentRoute != null &&
+            businessDataScopeState.status != Task126BusinessDataScopeStatus.CHECKING
+        ) {
+            navController.navigate(Screen.Options.route) { launchSingleTop = true }
+        }
+    }
+    BackHandler(
+        enabled = !businessContentAllowed && currentRoute == Screen.Options.route
+    ) {
+        // Il database del vecchio scope non torna visibile finche il gate resta chiuso.
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (showBottomBar) {
                 RootNavigationBar(
                     selectedTab = currentRootTab,
+                    businessContentAllowed = businessContentAllowed,
                     onTabSelected = { tab ->
                         if (tab.screen == Screen.History) {
                             navigateByGeneratedExitRequest(
@@ -171,7 +206,15 @@ fun AppNavGraph() {
         NavHost(
             navController = navController,
             startDestination = Screen.FilePicker.route,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (businessRouteBlocked) {
+                        Modifier.clearAndSetSemantics { }
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
             composable(Screen.FilePicker.route) {
                 FilePickerScreen(
@@ -348,6 +391,21 @@ fun AppNavGraph() {
                 )
                 val catalogSyncUi by catalogSyncViewModel.uiState.collectAsState()
                 val localDatabaseStatusUi by catalogSyncViewModel.localDatabaseStatusUi.collectAsState()
+                val verifiedActiveScope = (authState as? AuthState.SignedIn)
+                    ?.takeIf { signedIn ->
+                        signedIn.userId.isNotBlank() &&
+                        shopContext.ownerUserId == signedIn.userId &&
+                            !shopContext.isLoading &&
+                            shopContext.syncAllowed &&
+                            shopContext.selectedShop?.shopId?.isNotBlank() == true
+                    }
+                    ?.let { signedIn ->
+                        task126ActiveOwnerStoreScope(signedIn.userId, shopContext.selectedShop)
+                    }
+                val mismatchDialogEligibility = businessScopeMismatchDialogEligibility(
+                    state = businessDataScopeState,
+                    verifiedActiveScope = verifiedActiveScope
+                )
                 LaunchedEffect(Unit) {
                     catalogSyncViewModel.onOptionsScreenVisible()
                 }
@@ -362,6 +420,14 @@ fun AppNavGraph() {
                         authScope.launch { app.authManager.signOut() }
                     },
                     onDismissError = { app.authManager.dismissError() },
+                    onDiscardUnboundLocalData = {
+                        app.discardUnboundLocalBusinessDataAndBind()
+                    },
+                    onReplaceMismatchedLocalData = {
+                        app.replaceMismatchedLocalBusinessDataAndBind()
+                    },
+                    businessScopeMismatchIdentity = mismatchDialogEligibility.identity,
+                    canReplaceMismatchedLocalData = mismatchDialogEligibility.canReplace,
                     catalogSyncUi = if (app.authManager.isEnabled) catalogSyncUi else null,
                     localDatabaseStatusUi = localDatabaseStatusUi
                 )
@@ -533,7 +599,30 @@ fun AppNavGraph() {
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = innerPadding.calculateTopPadding() + 12.dp, end = 12.dp)
-            )
+                )
+        }
+        if (businessRouteBlocked) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.background
+            ) {
+                if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator()
+                        Text(
+                            text = stringResource(R.string.business_scope_checking),
+                            modifier = Modifier.padding(top = 16.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
         }
       }
     }
@@ -542,6 +631,17 @@ fun AppNavGraph() {
 private enum class ImportAnalysisExitCleanup {
     CancelPreview,
     DismissPreview
+}
+
+internal fun businessContentAvailable(
+    authEnabled: Boolean,
+    authState: AuthState,
+    status: Task126BusinessDataScopeStatus
+): Boolean {
+    if (!authEnabled || authState is AuthState.SignedOut) return true
+    if (authState !is AuthState.SignedIn) return false
+    return status == Task126BusinessDataScopeStatus.READY ||
+        status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
 }
 
 @Composable
@@ -678,6 +778,7 @@ private fun navigateToRootTab(
 @Composable
 private fun RootNavigationBar(
     selectedTab: RootTab?,
+    businessContentAllowed: Boolean,
     onTabSelected: (RootTab) -> Unit
 ) {
     Box(
@@ -699,6 +800,7 @@ private fun RootNavigationBar(
                 rootTabs.forEach { tab ->
                     NavigationBarItem(
                         selected = selectedTab?.screen == tab.screen,
+                        enabled = businessContentAllowed || tab.screen == Screen.Options,
                         onClick = { onTabSelected(tab) },
                         icon = {
                             androidx.compose.material3.Icon(

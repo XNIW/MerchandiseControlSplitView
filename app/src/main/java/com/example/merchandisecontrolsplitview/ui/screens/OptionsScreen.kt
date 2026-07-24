@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,7 +44,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncBadgeUiState
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncUiState
@@ -75,6 +79,10 @@ fun OptionsScreen(
     onSignIn: (Context) -> Unit = {},
     onSignOut: () -> Unit = {},
     onDismissError: () -> Unit = {},
+    onDiscardUnboundLocalData: () -> Unit = {},
+    onReplaceMismatchedLocalData: () -> Unit = {},
+    businessScopeMismatchIdentity: String? = null,
+    canReplaceMismatchedLocalData: Boolean = false,
     catalogSyncUi: CatalogSyncUiState? = null,
     localDatabaseStatusUi: LocalDatabaseStatusUiState? = null
 ) {
@@ -179,18 +187,90 @@ fun OptionsScreen(
         }
 
         localDatabaseStatusUi?.let { status ->
-            LocalDatabaseStatusSection(state = status)
+            LocalDatabaseStatusSection(
+                state = status,
+                onDiscardUnboundLocalData = onDiscardUnboundLocalData,
+                onReplaceMismatchedLocalData = onReplaceMismatchedLocalData,
+                mismatchIdentity = businessScopeMismatchIdentity,
+                canReplaceMismatchedLocalData = canReplaceMismatchedLocalData
+            )
         }
     }
 }
 
 @Composable
-private fun LocalDatabaseStatusSection(
-    state: LocalDatabaseStatusUiState
+internal fun LocalDatabaseStatusSection(
+    state: LocalDatabaseStatusUiState,
+    onDiscardUnboundLocalData: () -> Unit,
+    onReplaceMismatchedLocalData: () -> Unit,
+    mismatchIdentity: String?,
+    canReplaceMismatchedLocalData: Boolean
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember(context) {
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    }
+    var showUnboundReviewDetails by remember { mutableStateOf(false) }
+    var showDiscardConfirmation by remember { mutableStateOf(false) }
+    var showMismatchChoiceDialog by remember { mutableStateOf(false) }
+    val isBindingMismatch =
+        state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ||
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH
+
+    fun markMismatchIdentityAsShown() {
+        val current = prefs.getStringSet(
+            BUSINESS_SCOPE_MISMATCH_AUTO_SHOWN_IDENTITIES_PREF,
+            emptySet()
+        ).orEmpty().toSet()
+        val updated = businessScopeMismatchAutoShownIdentitiesAfterPresentation(
+            current = current,
+            identity = mismatchIdentity
+        )
+        if (updated != current) {
+            prefs.edit(commit = true) {
+                putStringSet(BUSINESS_SCOPE_MISMATCH_AUTO_SHOWN_IDENTITIES_PREF, updated)
+            }
+        }
+    }
+
+    LaunchedEffect(
+        isBindingMismatch,
+        mismatchIdentity,
+        canReplaceMismatchedLocalData
+    ) {
+        if (!isBindingMismatch) {
+            showMismatchChoiceDialog = false
+            return@LaunchedEffect
+        }
+        val autoShownIdentities = prefs.getStringSet(
+            BUSINESS_SCOPE_MISMATCH_AUTO_SHOWN_IDENTITIES_PREF,
+            emptySet()
+        ).orEmpty()
+        val shouldAutoShow = canReplaceMismatchedLocalData &&
+            shouldAutoShowBusinessScopeMismatchDialog(
+                identity = mismatchIdentity,
+                autoShownIdentities = autoShownIdentities
+            )
+        if (shouldAutoShow) {
+            markMismatchIdentityAsShown()
+            showMismatchChoiceDialog = true
+        }
+    }
     OptionsGroup(
         title = stringResource(R.string.local_database_status_title),
         subtitle = when {
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING ->
+                stringResource(R.string.business_scope_checking)
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
+                stringResource(R.string.business_scope_unbound_review_short)
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->
+                stringResource(R.string.business_scope_account_mismatch_short)
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH ->
+                stringResource(R.string.business_scope_shop_mismatch_short)
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH ->
+                stringResource(R.string.business_scope_schema_mismatch_short)
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE ->
+                stringResource(R.string.business_scope_recoverable_error)
             state.isLoading -> stringResource(R.string.local_database_status_loading)
             state.needsReconciliation -> stringResource(R.string.local_database_status_reconcile)
             state.isEmpty -> stringResource(R.string.local_database_status_empty)
@@ -198,33 +278,137 @@ private fun LocalDatabaseStatusSection(
         },
         icon = Icons.Default.Storage
     ) {
-        val dash = stringResource(R.string.local_database_status_unknown)
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_products),
-            value = state.productsCount?.toString() ?: dash
-        )
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_suppliers),
-            value = state.suppliersCount?.toString() ?: dash
-        )
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_categories),
-            value = state.categoriesCount?.toString() ?: dash
-        )
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_price_history),
-            value = state.priceHistoryCount?.toString() ?: dash
-        )
-        LocalDatabaseStatusRow(
-            label = stringResource(R.string.local_database_status_history_sessions),
-            value = state.historySessionsCount?.toString() ?: dash
-        )
-        state.lastSyncText?.let { lastSync ->
+        val canShowBusinessDataDetails =
+            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.READY ||
+                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
+                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND
+        if (canShowBusinessDataDetails) {
+            val dash = stringResource(R.string.local_database_status_unknown)
             LocalDatabaseStatusRow(
-                label = stringResource(R.string.local_database_status_last_sync),
-                value = lastSync
+                label = stringResource(R.string.local_database_status_products),
+                value = state.productsCount?.toString() ?: dash
             )
+            LocalDatabaseStatusRow(
+                label = stringResource(R.string.local_database_status_suppliers),
+                value = state.suppliersCount?.toString() ?: dash
+            )
+            LocalDatabaseStatusRow(
+                label = stringResource(R.string.local_database_status_categories),
+                value = state.categoriesCount?.toString() ?: dash
+            )
+            LocalDatabaseStatusRow(
+                label = stringResource(R.string.local_database_status_price_history),
+                value = state.priceHistoryCount?.toString() ?: dash
+            )
+            LocalDatabaseStatusRow(
+                label = stringResource(R.string.local_database_status_history_sessions),
+                value = state.historySessionsCount?.toString() ?: dash
+            )
+            if (
+                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ||
+                (state.pendingLocalChangesCount ?: 0) > 0
+            ) {
+                LocalDatabaseStatusRow(
+                    label = stringResource(R.string.business_scope_pending_local_changes),
+                    value = state.pendingLocalChangesCount?.toString() ?: dash
+                )
+            }
+            if (
+                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ||
+                (state.syncEventOutboxPendingCount ?: 0) > 0
+            ) {
+                LocalDatabaseStatusRow(
+                    label = stringResource(R.string.business_scope_pending_outbox),
+                    value = state.syncEventOutboxPendingCount?.toString() ?: dash
+                )
+            }
+            state.lastSyncText?.let { lastSync ->
+                LocalDatabaseStatusRow(
+                    label = stringResource(R.string.local_database_status_last_sync),
+                    value = lastSync
+                )
+            }
         }
+        if (state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND) {
+            Text(
+                text = stringResource(R.string.business_scope_unbound_review_message),
+                modifier = Modifier.padding(top = 12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(
+                onClick = { showUnboundReviewDetails = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.business_scope_review_details))
+            }
+            Button(
+                onClick = { showDiscardConfirmation = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.business_scope_continue_discard))
+            }
+        }
+        if (isBindingMismatch) {
+            OutlinedButton(
+                onClick = {
+                    markMismatchIdentityAsShown()
+                    showMismatchChoiceDialog = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.business_scope_mismatch_review))
+            }
+        }
+    }
+
+    if (showUnboundReviewDetails) {
+        AlertDialog(
+            onDismissRequest = { showUnboundReviewDetails = false },
+            title = { Text(stringResource(R.string.business_scope_review_details)) },
+            text = { Text(stringResource(R.string.business_scope_unbound_review_message)) },
+            confirmButton = {
+                TextButton(onClick = { showUnboundReviewDetails = false }) {
+                    Text(stringResource(R.string.business_scope_keep_local))
+                }
+            }
+        )
+    }
+
+    if (showDiscardConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDiscardConfirmation = false },
+            title = { Text(stringResource(R.string.business_scope_discard_confirm_title)) },
+            text = { Text(stringResource(R.string.business_scope_discard_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardConfirmation = false
+                        onDiscardUnboundLocalData()
+                    }
+                ) {
+                    Text(stringResource(R.string.business_scope_discard_confirm_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardConfirmation = false }) {
+                    Text(stringResource(R.string.business_scope_keep_local))
+                }
+            }
+        )
+    }
+
+    if (showMismatchChoiceDialog && isBindingMismatch) {
+        BusinessScopeMismatchChoiceDialog(
+            canReplace = canReplaceMismatchedLocalData,
+            onKeepLocal = { showMismatchChoiceDialog = false },
+            onReplaceWithCloud = {
+                if (canReplaceMismatchedLocalData) {
+                    showMismatchChoiceDialog = false
+                    onReplaceMismatchedLocalData()
+                }
+            }
+        )
     }
 }
 
@@ -297,18 +481,26 @@ private fun CatalogCloudContent(
                 )
             }
         }
-        CatalogCloudDetailBlock(
-            title = if (state.fullSyncRecommended) {
-                stringResource(R.string.catalog_cloud_auto_reconcile_title)
-            } else {
-                stringResource(R.string.catalog_cloud_auto_status_title)
-            },
-            body = if (state.fullSyncRecommended) {
-                stringResource(R.string.catalog_cloud_auto_reconcile_body)
-            } else {
-                stringResource(R.string.catalog_cloud_auto_status_body)
-            }
-        )
+        if (
+            state.showAutomaticSyncDetail &&
+            (
+                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.READY ||
+                    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
+                )
+        ) {
+            CatalogCloudDetailBlock(
+                title = if (state.fullSyncRecommended) {
+                    stringResource(R.string.catalog_cloud_auto_reconcile_title)
+                } else {
+                    stringResource(R.string.catalog_cloud_auto_status_title)
+                },
+                body = if (state.fullSyncRecommended) {
+                    stringResource(R.string.catalog_cloud_auto_reconcile_body)
+                } else {
+                    stringResource(R.string.catalog_cloud_auto_status_body)
+                }
+            )
+        }
     }
 }
 

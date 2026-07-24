@@ -1,0 +1,33 @@
+{
+  "artifact": "TASK-139 sync recovery V6 Android shared fixture",
+  "schemaVersion": 6,
+  "canonicalEventIdPattern": "0|[1-9][0-9]{0,18}",
+  "eventPageLimit": 150,
+  "recoveryCaps": {
+    "suppliers": 240,
+    "categories": 240,
+    "products": 60,
+    "prices": 120,
+    "history": 3,
+    "images": 240
+  },
+  "targetedCaps": {
+    "catalog": 60,
+    "prices": 120,
+    "history": 3,
+    "images": 240
+  },
+  "imageReadUrlsMaxRefs": 16,
+  "requiredRpcFences": {
+    "checkpoint": ["p_verified_baseline_id", "p_expected_baseline_scope_key"],
+    "convergenceMarker": ["p_verified_baseline_id", "p_expected_baseline_scope_key"],
+    "recoveryPage": ["p_expected_scope_key", "p_expected_event_max_id", "p_expected_domain_event_max_id"],
+    "eventPage": ["p_expected_scope_key", "p_expected_event_max_id"],
+    "rowsByIds": ["p_expected_scope_key", "p_expected_event_max_id", "p_expected_domain_event_max_id"]
+  },
+  "scopeKinds": {
+    "catalog": ["shop_scoped", "legacy_owner_bridge", "authorized_shop_plus_legacy"],
+    "history": ["shop_scoped", "authorized_shop_plus_legacy"]
+  },
+  "noWork": "marker_plus_local_pending_outbox_journal_and_lease_checks"
+}

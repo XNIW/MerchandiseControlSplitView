@@ -1,0 +1,18 @@
+{
+  "apiCases": [
+    {"id": "intent-png-wire", "expected": "invalid", "path": "intent.main.mimeType", "value": "image/png"},
+    {"id": "intent-main-over-budget", "expected": "invalid", "path": "intent.main.bytes", "value": 1048577},
+    {"id": "read-batch-empty", "expected": "invalid", "path": "readUrls.refs", "value": []},
+    {"id": "read-variant-preview", "expected": "invalid", "path": "readUrls.refs.0.variant", "value": "preview"}
+  ],
+  "jpegCases": [
+    {"id": "trailing-byte", "expectedCode": "jpeg_magic_invalid", "markerHex": "00"},
+    {"id": "com", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "fffe"},
+    {"id": "app1-exif", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "ffe1"},
+    {"id": "app2-icc", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "ffe2"},
+    {"id": "app13-photoshop", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "ffed"},
+    {"id": "app14-adobe", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "ffee"},
+    {"id": "app0-non-jfif", "expectedCode": "jpeg_metadata_forbidden", "markerHex": "ffe0"},
+    {"id": "truncated-segment", "expectedCode": "jpeg_truncated", "markerHex": "ffe10010"}
+  ]
+}

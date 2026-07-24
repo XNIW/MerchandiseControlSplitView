@@ -96,10 +96,13 @@ data class InventoryProductPriceRow(
     @SerialName("product_id") val productId: String,
     val type: String,
     val price: Double,
+    /** Valore decimale canonico emesso dal recovery RPC per il checkpoint V6. */
+    @SerialName("price_canonical") val priceCanonical: String? = null,
     @SerialName("effective_at") val effectiveAt: String,
     val source: String? = null,
     val note: String? = null,
-    @SerialName("created_at") val createdAt: String
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String? = null
 )
 
 /**

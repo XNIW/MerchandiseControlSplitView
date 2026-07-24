@@ -571,13 +571,17 @@ private fun PriceColumn(
     priceNew: String?,
     labelOld: String,
     priceOldValue: Double?,
-    horizontalAlignment: Alignment.Horizontal
+    horizontalAlignment: Alignment.Horizontal,
+    modifier: Modifier = Modifier
 ) {
     val visibleOldPrice = priceOldValue?.takeIf {
         shouldShowOldPrice(oldPrice = it, currentPrice = currentPriceValue)
     }
 
-    Column(horizontalAlignment = horizontalAlignment) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = horizontalAlignment
+    ) {
         Text(
             text = labelNew,
             style = MaterialTheme.typography.labelMedium,
@@ -659,18 +663,22 @@ internal fun ProductRow(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            ProductImagePreview(
+                state = imageState,
+                contentDescription = stringResource(R.string.product_image_thumbnail),
+                modifier = Modifier.size(80.dp)
+            )
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ProductImagePreview(
-                    state = imageState,
-                    contentDescription = stringResource(R.string.product_image_thumbnail),
-                    modifier = Modifier.size(64.dp)
-                )
-                Column(modifier = Modifier.weight(1f)) {
+                Column {
                     Text(
                         text = product.productName ?: stringResource(R.string.unnamed_product),
                         style = MaterialTheme.typography.titleMedium,
@@ -684,20 +692,16 @@ internal fun ProductRow(
                         )
                     }
                 }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+                Text(
+                    text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 val currentPurchasePrice = productDetails.currentPurchasePrice
                 val currentRetailPrice = productDetails.currentRetailPrice
 
@@ -707,7 +711,8 @@ internal fun ProductRow(
                     priceNew = formatClPricePlainDisplay(currentPurchasePrice),
                     labelOld = stringResource(R.string.product_purchase_price_old_short),
                     priceOldValue = productDetails.prevPurchase,
-                    horizontalAlignment = Alignment.Start
+                    horizontalAlignment = Alignment.Start,
+                    modifier = Modifier.weight(1f)
                 )
                 PriceColumn(
                     labelNew = stringResource(R.string.product_retail_price_new_short),
@@ -715,21 +720,18 @@ internal fun ProductRow(
                     priceNew = formatClPricePlainDisplay(currentRetailPrice),
                     labelOld = stringResource(R.string.product_retail_price_old_short),
                     priceOldValue = productDetails.prevRetail,
-                    horizontalAlignment = Alignment.End
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.weight(1f)
                 )
-            }
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+                }
                 Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         Text(
                             text = stringResource(R.string.product_supplier_full),
@@ -738,9 +740,7 @@ internal fun ProductRow(
                         )
                         Text(
                             text = productDetails.supplierName ?: "-",
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
                     if (productDetails.categoryName != null) {
@@ -752,22 +752,20 @@ internal fun ProductRow(
                             )
                             Text(
                                 text = productDetails.categoryName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                style = MaterialTheme.typography.bodyMedium
                             )
                         }
                     }
-                }
-
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Row {
+                    }
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.Start,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         Text(
-                            text = "${stringResource(R.string.header_stock_quantity)}: ",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = stringResource(R.string.header_stock_quantity),
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -796,6 +794,7 @@ internal fun ProductRow(
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.primary
                         )
+                    }
                     }
                 }
             }
