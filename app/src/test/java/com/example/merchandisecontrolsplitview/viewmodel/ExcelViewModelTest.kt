@@ -1174,7 +1174,7 @@ class ExcelViewModelTest {
 
         viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
         advanceUntilIdle()
-        waitForCondition { viewModel.excelData.size == 2 }
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
         val before = captureGridState()
 
         viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(emptyWorkbook)))
@@ -1207,7 +1207,7 @@ class ExcelViewModelTest {
 
         viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
         advanceUntilIdle()
-        waitForCondition { viewModel.excelData.size == 2 }
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
         val before = captureGridState()
 
         viewModel.appendFromMultipleUris(app, listOf(Uri.fromFile(incompatibleWorkbook)))
@@ -1241,7 +1241,7 @@ class ExcelViewModelTest {
 
         viewModel.loadFromMultipleUris(app, listOf(Uri.fromFile(baseWorkbook)))
         advanceUntilIdle()
-        waitForCondition { viewModel.excelData.size == 2 }
+        waitForCondition { viewModel.excelData.size == 2 && !viewModel.isLoading.value }
 
         viewModel.appendFromMultipleUris(
             app,
