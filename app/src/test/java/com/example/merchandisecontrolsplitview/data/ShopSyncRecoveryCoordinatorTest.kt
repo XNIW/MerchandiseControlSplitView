@@ -590,6 +590,100 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun `retry journal CAS preserves an intent written inside the old retry window`() = runTest {
+        seedOldMismatchGeneration()
+        remote.configured = false
+        var replacement: SyncRecoveryJournal? = null
+        ShopSyncRecoveryTestHooks.beforeRetryJournalPersisted = {
+            val current = requireNotNull(db.syncRecoveryJournalDao().get())
+            replacement = current.copy(
+                reason = "newer_concurrent_intent",
+                blockingEventId = 99L,
+                attemptCount = current.attemptCount + 10,
+                nextRetryAtMs = 999_999L
+            )
+            db.syncRecoveryJournalDao().upsert(requireNotNull(replacement))
+        }
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals(
+            "shop_sync_reader_unavailable",
+            (result as ShopSyncRecoveryResult.RetryRequired).code
+        )
+        assertEquals(replacement, db.syncRecoveryJournalDao().get())
+        assertNotNull(db.productDao().findByBarcode("old-barcode"))
+        assertNull(db.productDao().findByBarcode("target-barcode"))
+    }
+
+    @Test
+    fun `retry journal CAS preserves same-run intent written before transaction entry`() = runTest {
+        seedOldMismatchGeneration()
+        remote.configured = false
+        var replacement: SyncRecoveryJournal? = null
+        ShopSyncRecoveryTestHooks.beforeRetryTransaction = {
+            val current = requireNotNull(db.syncRecoveryJournalDao().get())
+            replacement = current.copy(
+                phase = SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING,
+                reason = "newer_pre_transaction_intent",
+                blockingEventId = 101L,
+                attemptCount = current.attemptCount + 20,
+                nextRetryAtMs = 1_222_333L,
+                checkpointBDigest = "newer-checkpoint-b",
+                stagingDatabaseName = "newer-stage.db"
+            )
+            db.syncRecoveryJournalDao().upsert(requireNotNull(replacement))
+        }
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals(
+            "shop_sync_reader_unavailable",
+            (result as ShopSyncRecoveryResult.RetryRequired).code
+        )
+        assertEquals(1_222_333L, result.nextRetryAtMs)
+        assertEquals(replacement, db.syncRecoveryJournalDao().get())
+        assertNotNull(db.productDao().findByBarcode("old-barcode"))
+        assertNull(db.productDao().findByBarcode("target-barcode"))
+    }
+
+    @Test
+    fun `cancellation delivered after activation commit keeps durable cleanup phase`() = runTest {
+        seedOldMismatchGeneration()
+        ShopSyncRecoveryTestHooks.afterActivationCommitted = {
+            throw CancellationException("fixture_post_commit_pre_flag")
+        }
+
+        var cancelled = false
+        try {
+            coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+
+        assertTrue(cancelled)
+        assertNotNull(db.productDao().findByBarcode("target-barcode"))
+        assertNull(db.productDao().findByBarcode("old-barcode"))
+        assertEquals(
+            SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING,
+            db.syncRecoveryJournalDao().get()?.phase
+        )
+        assertEquals("recovery_cancelled", db.syncRecoveryJournalDao().get()?.reason)
+        assertNotNull(db.syncRecoveryBaselineDao().get())
+
+        ShopSyncRecoveryTestHooks.afterActivationCommitted = null
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        val resumed = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(resumed.toString(), resumed is ShopSyncRecoveryResult.Activated)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertNotNull(db.productDao().findByBarcode("target-barcode"))
+    }
+
+    @Test
     fun `cleanup failure relaunch path keeps complete target and never downloads twice`() = runTest {
         seedOldMismatchGeneration()
         var purgeCalls = 0

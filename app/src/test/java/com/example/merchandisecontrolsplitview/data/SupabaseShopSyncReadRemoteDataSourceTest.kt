@@ -262,6 +262,23 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
     }
 
     @Test
+    fun `v6 event page default is the frozen 150 row contract cap`() = runTest {
+        val invoker = RecordingInvoker { _, _ ->
+            eventPageJson(id = null, asOf = "0")
+        }
+
+        SupabaseShopSyncReadRemoteDataSource(invoker).eventPage(
+            context = context(expectedScope = scope()),
+            afterId = 0L
+        ).getOrThrow()
+
+        assertEquals(
+            150,
+            invoker.calls.single().second.getValue("p_limit").jsonPrimitive.content.toInt()
+        )
+    }
+
+    @Test
     fun `v6 event page rejects numeric ids before any local long conversion`() = runTest {
         val source = SupabaseShopSyncReadRemoteDataSource(
             RecordingInvoker { _, _ -> eventPageJson(id = "1", numericId = true) }

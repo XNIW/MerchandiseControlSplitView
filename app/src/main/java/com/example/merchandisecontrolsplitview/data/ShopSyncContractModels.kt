@@ -388,7 +388,7 @@ interface ShopSyncReadRemoteDataSource {
     suspend fun eventPage(
         context: ShopSyncRpcContext,
         afterId: Long,
-        limit: Int = 250
+        limit: Int = 150
     ): Result<ShopSyncEventPage>
 
     suspend fun rowsByIds(

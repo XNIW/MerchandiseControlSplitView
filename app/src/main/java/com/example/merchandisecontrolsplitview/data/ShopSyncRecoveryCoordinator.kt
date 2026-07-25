@@ -66,6 +66,12 @@ internal object ShopSyncRecoveryTestHooks {
     @Volatile
     var beforeStagingValidation: (suspend (AppDatabase) -> Unit)? = null
 
+    @Volatile
+    var beforeRetryJournalPersisted: (suspend () -> Unit)? = null
+
+    @Volatile
+    var beforeRetryTransaction: (suspend () -> Unit)? = null
+
     fun reset() {
         afterStagingJournalPersisted = null
         afterReadyJournalPersisted = null
@@ -73,6 +79,8 @@ internal object ShopSyncRecoveryTestHooks {
         afterActiveTableCopied = null
         beforeActivationMetadata = null
         beforeStagingValidation = null
+        beforeRetryJournalPersisted = null
+        beforeRetryTransaction = null
     }
 }
 
@@ -364,8 +372,8 @@ internal class ShopSyncRecoveryCoordinator(
                     stagingDb = requireNotNull(stagingDb),
                     replaceConfirmed = replaceConfirmed
                 )
-                activated = true
                 ShopSyncRecoveryTestHooks.afterActivationCommitted?.invoke()
+                activated = true
                 if (!leaseStillValid(accountId, shopId, currentDevice)) {
                     throw ShopSyncContractException(
                         "recovery_lease_invalid_before_activation_callback"
@@ -435,14 +443,21 @@ internal class ShopSyncRecoveryCoordinator(
             withContext(NonCancellable) {
                 stagingDb?.close()
                 stagingDb = null
-                val cleanupComplete = activated || cleanupKnownStaging(stagingName)
                 val latest = activeDb.syncRecoveryJournalDao().get() ?: journal
+                val durablyActivated = activated || activationWasCommitted(
+                    journal = latest,
+                    runId = generationId,
+                    activeScope = activeScope,
+                    deviceId = currentDevice
+                )
+                val cleanupComplete =
+                    durablyActivated || cleanupKnownStaging(stagingName)
                 retryAfterFailure(
                     journal = latest,
                     code = "recovery_cancelled",
-                    keepActivatedPhase = activated,
+                    keepActivatedPhase = durablyActivated,
                     expectedRunId = generationId,
-                    retainStagingDatabase = !cleanupComplete || activated
+                    retainStagingDatabase = !cleanupComplete || durablyActivated
                 )
             }
             throw cancelled
@@ -1996,36 +2011,82 @@ internal class ShopSyncRecoveryCoordinator(
         retainStagingDatabase: Boolean = keepActivatedPhase,
         checkpointADigest: String? = null
     ): ShopSyncRecoveryResult.RetryRequired {
-        val nextAttempt = nextSyncRecoveryAttemptCount(journal.attemptCount)
-        val retryAt = nowMs() + retryBackoffMs(nextAttempt)
-        val current = activeDb.syncRecoveryJournalDao().get()
-        if (
-            current != null &&
-            current.ownerHash == journal.ownerHash &&
-            current.storeScope == journal.storeScope &&
-            current.deviceId == journal.deviceId &&
-            current.runId == expectedRunId
-        ) {
-            activeDb.syncRecoveryJournalDao().upsert(
-                current.copy(
-                    phase = if (keepActivatedPhase) {
-                        SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING
-                    } else {
-                        SyncRecoveryJournalPhases.REQUIRED
-                    },
-                    reason = code,
-                    attemptCount = nextAttempt,
-                    updatedAtMs = nowMs(),
-                    nextRetryAtMs = retryAt,
-                    checkpointADigest = checkpointADigest,
-                    checkpointBDigest = current.checkpointBDigest.takeIf { keepActivatedPhase },
-                    stagingDatabaseName = current.stagingDatabaseName.takeIf {
-                        retainStagingDatabase
-                    }
-                )
-            )
+        var persistedRetryAt: Long? = null
+        var observedRetryJournal: SyncRecoveryJournal? = null
+        ShopSyncRecoveryTestHooks.beforeRetryTransaction?.invoke()
+        activeDb.withTransaction {
+            val current = activeDb.syncRecoveryJournalDao().get()
+            observedRetryJournal = current
+            if (
+                current == journal &&
+                current.ownerHash == journal.ownerHash &&
+                current.storeScope == journal.storeScope &&
+                current.deviceId == journal.deviceId &&
+                current.runId == expectedRunId
+            ) {
+                val nextAttempt = nextSyncRecoveryAttemptCount(current.attemptCount)
+                val retryAt = nowMs() + retryBackoffMs(nextAttempt)
+                ShopSyncRecoveryTestHooks.beforeRetryJournalPersisted?.invoke()
+                if (activeDb.syncRecoveryJournalDao().get() == current) {
+                    activeDb.syncRecoveryJournalDao().upsert(
+                        current.copy(
+                            phase = if (keepActivatedPhase) {
+                                SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING
+                            } else {
+                                SyncRecoveryJournalPhases.REQUIRED
+                            },
+                            reason = code,
+                            attemptCount = nextAttempt,
+                            updatedAtMs = nowMs(),
+                            nextRetryAtMs = retryAt,
+                            checkpointADigest = checkpointADigest,
+                            checkpointBDigest = current.checkpointBDigest.takeIf {
+                                keepActivatedPhase
+                            },
+                            stagingDatabaseName = current.stagingDatabaseName.takeIf {
+                                retainStagingDatabase
+                            }
+                        )
+                    )
+                    persistedRetryAt = retryAt
+                }
+            }
         }
+        val retrySource = observedRetryJournal?.takeIf {
+            it.ownerHash == journal.ownerHash &&
+                it.storeScope == journal.storeScope &&
+                it.deviceId == journal.deviceId
+        } ?: journal
+        val observedNow = nowMs()
+        val retryAt = persistedRetryAt
+            ?: retrySource.nextRetryAtMs?.takeIf { it > observedNow }
+            ?: (
+                observedNow +
+                    retryBackoffMs(nextSyncRecoveryAttemptCount(retrySource.attemptCount))
+                )
         return ShopSyncRecoveryResult.RetryRequired(code, retryAt)
+    }
+
+    private suspend fun activationWasCommitted(
+        journal: SyncRecoveryJournal,
+        runId: String,
+        activeScope: Task126OwnerStoreScope,
+        deviceId: String
+    ): Boolean = activeDb.withTransaction {
+        val current = activeDb.syncRecoveryJournalDao().get()
+        val baseline = activeDb.syncRecoveryBaselineDao().get()
+        current != null &&
+            current == journal &&
+            current.phase == SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING &&
+            current.runId == runId &&
+            current.ownerHash == activeScope.ownerHash &&
+            current.storeScope == activeScope.storeId &&
+            current.deviceId == deviceId &&
+            baseline != null &&
+            baseline.generationId == runId &&
+            baseline.ownerHash == activeScope.ownerHash &&
+            baseline.storeScope == activeScope.storeId &&
+            baseline.deviceId == deviceId
     }
 
     private suspend fun updateJournal(
