@@ -34,12 +34,9 @@ dipendenza nuova, production, Win7POS, TASK-088, commit, push o merge.
 
 ## Evidence
 
-`docs/TASKS/evidence/TASK-139/README.md` e, per l'esecuzione sync/recovery
-corrente, `docs/TASKS/evidence/TASK-139/android-sync-recovery-atomic-addendum.md`.
-L'allineamento al freeze V6 del 2026-07-23 è documentato in
-`docs/TASKS/evidence/TASK-139/android-v6-contract-freeze-alignment-2026-07-23.md`;
-resta `INTERIM / REVIEW` fino all'instrumentation effimera ed E2E isolato;
-JVM, lint e build post-fix sono registrati separatamente nell'evidence.
+I log, i report runtime e le matrici di closeout sono conservati fuori
+repository. Questo file mantiene soltanto l'handoff e lo stato `REVIEW`; JVM,
+lint e build post-fix sono registrati nell'archivio esterno del closeout.
 
 ## Fix post-review — recovery editor Android (2026-07-19)
 
@@ -150,7 +147,7 @@ Esito finale Android:
   `0` failure/error;
 - assemble debug/test APK e lint: PASS.
 
-Evidence: `docs/TASKS/evidence/TASK-139/android-authenticated-runtime-p0.md`.
+Evidence runtime: archivio esterno non versionato del closeout.
 TASK-139 resta `REVIEW`, non `DONE`, per i blocker cross-platform/iOS residui.
 
 ## Addendum final review — quiescenza flight e ShopContext owner-safe (2026-07-19)
@@ -177,8 +174,7 @@ Gate finale: targeted final-review `124/124 PASS`; JVM `687` totali (`682 PASS`,
 Emulator `3/3 PASS`; diff/secret/artifact scan verdi. La suite instrumentation
 globale resta `BLOCKED_INPUT` soltanto sui
 due harness live TASK-072C/D privi di prefisso esplicito; nessun input è stato
-inventato. Evidence completa:
-`docs/TASKS/evidence/TASK-139/android-final-review-scope-flight-race.md`.
+inventato. Evidence completa nell'archivio esterno non versionato del closeout.
 
 TASK-139 resta `READY_FOR_REVIEW / REVIEW`, mai `DONE` senza conferma utente.
 
@@ -215,8 +211,7 @@ check pre/post. La cancellazione non diventa retry; `DatabaseViewModel`
 ripristina lo snapshot UI remove solo se la generation è ancora corrente.
 Coordinator, policy, repository, schema e Room restano invariati.
 
-Evidence e gate reali:
-`docs/TASKS/evidence/TASK-139/android-account-shop-mismatch-dialog-addendum.md`.
+Evidence e gate reali: archivio esterno non versionato del closeout.
 Targeted JVM `182/182 PASS`; JVM completo `697` totali (`692 PASS`, `5` skip
 opt-in/live), `0` failure/error; device UI API 35 isolato `4/4 PASS`;
 `assembleDebug`, `assembleDebugAndroidTest`, `lint` e `git diff --check` verdi.
@@ -249,8 +244,7 @@ aperti allineamento capability/event cursor/cutover/late marker, metadata
 immagini verificabili e runtime autenticato cross-platform. Replace Android in
 questa iterazione: `0`; nessuna installazione o mutazione del DB reale.
 
-Evidence dettagliata:
-`docs/TASKS/evidence/TASK-139/android-sync-recovery-atomic-addendum.md`.
+Evidence dettagliata nell'archivio esterno non versionato del closeout.
 TASK-139 resta `REVIEW_WITH_SYNC_CONTRACT_BLOCKERS / REVIEW`, non `DONE`.
 
 ## Fix continuation — runtime prebound resource e matrice UI (2026-07-23)
@@ -292,9 +286,7 @@ Gate finali dopo il fix UI:
 - `lintDebug`, `assembleDebug`, `assembleDebugAndroidTest`: PASS;
 - `git diff --check`: PASS.
 
-Evidence:
-`docs/TASKS/evidence/TASK-139/android-v6-contract-freeze-alignment-2026-07-23.md`
-e nell'archivio evidence esterno del closeout.
+Evidence nell'archivio esterno non versionato del closeout.
 La fase resta `REVIEW`; nessun `DONE`, deploy o write production.
 
 ## Handoff

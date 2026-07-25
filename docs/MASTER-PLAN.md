@@ -84,8 +84,8 @@ reimplementare TASK-137/TASK-138. Questa lane consuma il contratto canonico
 cross-platform, allinea la ladder e chiude test processor/cache/camera/file
 picker. Worktree pulito da `origin/main` `141ffa07b...`; nessun commit, push,
 merge, production o Win7POS. File task:
-`docs/TASKS/TASK-139-product-image-production-hardening-android.md`; evidence:
-`docs/TASKS/evidence/TASK-139/README.md`. Execution completata; review richiesta,
+`docs/TASKS/TASK-139-product-image-production-hardening-android.md`; evidence
+runtime conservata fuori repository durante il closeout finale. Execution completata; review richiesta,
 mai `DONE` senza conferma utente.
 
 **Addendum P0 TASK-139 — 2026-07-19:** restore Android valida una sessione
@@ -116,8 +116,8 @@ TASK-126 esistente, con stop pre/post per intent, PUT/retry, finalize, remove e
 apply locale e recovery UI su cancellazione; nessuna nuova policy/coordinator o
 modifica repository/Room. Gate addendum: targeted `182/182`, full JVM `697`
 totali (`692 PASS`, `5` skip opt-in/live), build app/test, lint e device UI effimero
-`4/4` verdi; database autenticato reale intatto. Evidence:
-`docs/TASKS/evidence/TASK-139/android-account-shop-mismatch-dialog-addendum.md`.
+`4/4` verdi; database autenticato reale intatto. Evidence runtime conservata
+fuori repository durante il closeout finale.
 
 **Apertura TASK-138 — 2026-07-18:** follow-up runtime/UX/live parity di
 TASK-137. Il contratto canonico resta nel repository Admin Web; questo mirror
