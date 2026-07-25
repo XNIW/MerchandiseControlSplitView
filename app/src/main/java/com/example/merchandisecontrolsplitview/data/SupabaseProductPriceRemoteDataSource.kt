@@ -3,6 +3,8 @@ package com.example.merchandisecontrolsplitview.data
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 
 private const val PRICE_UPSERT_CHUNK = 80
 
@@ -24,7 +26,13 @@ class SupabaseProductPriceRemoteDataSource(
             if (rows.isEmpty()) return@runCatching
             val supabase = requireClient()
             for (chunk in rows.chunked(PRICE_UPSERT_CHUNK)) {
-                supabase.postgrest["inventory_product_prices"].upsert(chunk) {
+                // `price_canonical` belongs to the read-only recovery RPC, not
+                // to public.inventory_product_prices. Use a dedicated writer
+                // shape so a future non-null recovery value can never leak into
+                // ordinary PostgREST upserts.
+                supabase.postgrest["inventory_product_prices"].upsert(
+                    chunk.map(InventoryProductPriceRow::toWriteRow)
+                ) {
                     onConflict = "id"
                 }
             }
@@ -174,3 +182,31 @@ class SupabaseProductPriceRemoteDataSource(
             }
         }
 }
+
+@Serializable
+internal data class InventoryProductPriceWriteRow(
+    val id: String,
+    @SerialName("owner_user_id") val ownerUserId: String,
+    @SerialName("shop_id") val shopId: String? = null,
+    @SerialName("product_id") val productId: String,
+    val type: String,
+    val price: Double,
+    @SerialName("effective_at") val effectiveAt: String,
+    val source: String? = null,
+    val note: String? = null,
+    @SerialName("created_at") val createdAt: String
+)
+
+internal fun InventoryProductPriceRow.toWriteRow(): InventoryProductPriceWriteRow =
+    InventoryProductPriceWriteRow(
+        id = id,
+        ownerUserId = ownerUserId,
+        shopId = shopId,
+        productId = productId,
+        type = type,
+        price = price,
+        effectiveAt = effectiveAt,
+        source = source,
+        note = note,
+        createdAt = createdAt
+    )

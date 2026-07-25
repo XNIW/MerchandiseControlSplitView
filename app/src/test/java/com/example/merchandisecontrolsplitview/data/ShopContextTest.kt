@@ -126,7 +126,8 @@ class ShopContextTest {
                 override suspend fun fetchLinkedShops(): Result<List<LinkedShop>> =
                     Result.failure(IllegalStateException("linked shops unavailable"))
             },
-            selectedShopStore = InMemorySelectedShopStore()
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { OWNER_A }
         )
 
         repository.refresh(OWNER_A)
@@ -143,7 +144,8 @@ class ShopContextTest {
         }
         val repository = ShopContextRepository(
             remote = remote,
-            selectedShopStore = InMemorySelectedShopStore()
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { OWNER_A }
         )
         repository.refresh(OWNER_A)
         assertTrue(repository.state.value.syncAllowed)
@@ -172,9 +174,11 @@ class ShopContextTest {
         val remote = MutableLinkedShopRemoteDataSource {
             Result.success(listOf(shop("shop-a", "Shop A")))
         }
+        var currentOwnerUserId = OWNER_A
         val repository = ShopContextRepository(
             remote = remote,
-            selectedShopStore = InMemorySelectedShopStore()
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { currentOwnerUserId }
         )
         repository.refresh(OWNER_A)
         assertEquals("shop-a", repository.state.value.activeShopId)
@@ -183,6 +187,7 @@ class ShopContextTest {
         remote.fetch = {
             Result.success(gate.await())
         }
+        currentOwnerUserId = OWNER_B
         val refreshJob = launch { repository.refresh(OWNER_B) }
         testScheduler.runCurrent()
 
@@ -197,6 +202,132 @@ class ShopContextTest {
         refreshJob.join()
         assertFalse(repository.state.value.isLoading)
         assertTrue(repository.state.value.syncAllowed)
+    }
+
+    @Test
+    fun refreshDiscardsDeferredResponseWhenAuthOwnerChangesBeforeNextRefresh() = runTest {
+        val ownerAFetchStarted = CompletableDeferred<Unit>()
+        val releaseOwnerAFetch = CompletableDeferred<Unit>()
+        var currentOwnerUserId = OWNER_A
+        val remote = MutableLinkedShopRemoteDataSource {
+            ownerAFetchStarted.complete(Unit)
+            releaseOwnerAFetch.await()
+            Result.success(listOf(shop("shop-a", "Shop A")))
+        }
+        val selectedShopStore = InMemorySelectedShopStore()
+        val repository = ShopContextRepository(
+            remote = remote,
+            selectedShopStore = selectedShopStore,
+            currentOwnerUserId = { currentOwnerUserId }
+        )
+
+        val ownerARefresh = launch { repository.refresh(OWNER_A) }
+        ownerAFetchStarted.await()
+        currentOwnerUserId = OWNER_B
+        releaseOwnerAFetch.complete(Unit)
+        ownerARefresh.join()
+
+        assertEquals(OWNER_A, repository.state.value.ownerUserId)
+        assertTrue(repository.state.value.isLoading)
+        assertFalse(repository.state.value.syncAllowed)
+        assertNull(repository.state.value.activeShopId)
+        assertEquals(0, selectedShopStore.mutationCount(OWNER_A))
+
+        remote.fetch = {
+            Result.success(listOf(shop("shop-b", "Shop B")))
+        }
+        repository.refresh(OWNER_B)
+
+        assertEquals(OWNER_B, repository.state.value.ownerUserId)
+        assertEquals("shop-b", repository.state.value.activeShopId)
+        assertTrue(repository.state.value.syncAllowed)
+    }
+
+    @Test
+    fun latestRefreshGenerationWinsWhenPreviousOwnerResponseArrivesLast() = runTest {
+        val ownerAFetchStarted = CompletableDeferred<Unit>()
+        val releaseOwnerAFetch = CompletableDeferred<Unit>()
+        var currentOwnerUserId = OWNER_A
+        val remote = MutableLinkedShopRemoteDataSource {
+            ownerAFetchStarted.complete(Unit)
+            releaseOwnerAFetch.await()
+            Result.success(listOf(shop("shop-a", "Shop A")))
+        }
+        val repository = ShopContextRepository(
+            remote = remote,
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { currentOwnerUserId }
+        )
+
+        val ownerARefresh = launch { repository.refresh(OWNER_A) }
+        ownerAFetchStarted.await()
+        currentOwnerUserId = OWNER_B
+        remote.fetch = { Result.success(listOf(shop("shop-b", "Shop B"))) }
+        repository.refresh(OWNER_B)
+        releaseOwnerAFetch.complete(Unit)
+        ownerARefresh.join()
+
+        assertEquals(OWNER_B, repository.state.value.ownerUserId)
+        assertEquals("shop-b", repository.state.value.activeShopId)
+    }
+
+    @Test
+    fun staleOwnerRefreshCannotInvalidateCurrentOwnerLoadingGeneration() = runTest {
+        val fetchStarted = CompletableDeferred<Unit>()
+        val releaseFetch = CompletableDeferred<Unit>()
+        var currentOwnerUserId = OWNER_B
+        val remote = MutableLinkedShopRemoteDataSource {
+            fetchStarted.complete(Unit)
+            releaseFetch.await()
+            Result.success(listOf(shop("shop-b", "Shop B")))
+        }
+        val repository = ShopContextRepository(
+            remote = remote,
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { currentOwnerUserId }
+        )
+
+        val ownerBRefresh = launch { repository.refresh(OWNER_B) }
+        fetchStarted.await()
+        repository.refresh(OWNER_A)
+        releaseFetch.complete(Unit)
+        ownerBRefresh.join()
+
+        assertEquals(OWNER_B, repository.state.value.ownerUserId)
+        assertEquals("shop-b", repository.state.value.activeShopId)
+        assertFalse(repository.state.value.isLoading)
+        assertTrue(repository.state.value.syncAllowed)
+    }
+
+    @Test
+    fun shopSelectionDuringRefreshIsRejectedWithoutStrandingLoadingState() = runTest {
+        val remote = MutableLinkedShopRemoteDataSource {
+            Result.success(listOf(shop("shop-a", "Shop A"), shop("shop-b", "Shop B")))
+        }
+        val repository = ShopContextRepository(
+            remote = remote,
+            selectedShopStore = InMemorySelectedShopStore(),
+            currentOwnerUserId = { OWNER_A }
+        )
+        repository.refresh(OWNER_A)
+
+        val releaseFetch = CompletableDeferred<List<LinkedShop>>()
+        remote.fetch = {
+            Result.success(releaseFetch.await())
+        }
+        val refreshJob = launch { repository.refresh(OWNER_A) }
+        testScheduler.runCurrent()
+
+        assertTrue(repository.state.value.isLoading)
+        assertFalse(repository.state.value.shouldShowSelector)
+        assertFalse(repository.selectShop("shop-b"))
+
+        releaseFetch.complete(listOf(shop("shop-a", "Shop A"), shop("shop-b", "Shop B")))
+        refreshJob.join()
+
+        assertFalse(repository.state.value.isLoading)
+        assertTrue(repository.state.value.syncAllowed)
+        assertTrue(repository.state.value.shouldShowSelector)
     }
 
     @Test
@@ -236,16 +367,21 @@ class ShopContextTest {
 
     private class InMemorySelectedShopStore : SelectedShopStore {
         private val values = mutableMapOf<String, String>()
+        private val mutations = mutableMapOf<String, Int>()
 
         override fun getSelectedShopId(ownerUserId: String): String? = values[ownerUserId]
 
         override fun setSelectedShopId(ownerUserId: String, shopId: String) {
             values[ownerUserId] = shopId
+            mutations[ownerUserId] = mutationCount(ownerUserId) + 1
         }
 
         override fun clearSelectedShopId(ownerUserId: String) {
             values.remove(ownerUserId)
+            mutations[ownerUserId] = mutationCount(ownerUserId) + 1
         }
+
+        fun mutationCount(ownerUserId: String): Int = mutations[ownerUserId] ?: 0
     }
 
     private class MutableLinkedShopRemoteDataSource(

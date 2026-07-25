@@ -22,12 +22,20 @@ import com.example.merchandisecontrolsplitview.data.InventoryCategoryRow
 import com.example.merchandisecontrolsplitview.data.InventoryProductPriceRow
 import com.example.merchandisecontrolsplitview.data.InventoryProductRow
 import com.example.merchandisecontrolsplitview.data.InventorySupplierRow
+import com.example.merchandisecontrolsplitview.data.LocalDatabaseStatusSnapshot
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
+import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationSnapshot
+import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationRemote
+import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationResult
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionUpsertRow
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import io.ktor.client.call.HttpClientCall
 import io.ktor.client.plugins.ClientRequestException
@@ -43,8 +51,10 @@ import io.mockk.mockk
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -101,12 +111,212 @@ class CatalogSyncViewModelTest {
             app.getString(R.string.catalog_cloud_auto_status_title),
             viewModel.uiState.value.primaryMessage
         )
+        assertTrue(viewModel.uiState.value.showAutomaticSyncDetail)
         assertTrue(viewModel.uiState.value.canRefresh)
         coVerify(exactly = 1) {
             repository.bootstrapHistorySessionsFromRemote(any())
         }
 
         collectJob.cancel()
+    }
+
+    @Test
+    fun `139 checking review and mismatch states never claim automatic sync active`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val localSnapshot = LocalDatabaseStatusSnapshot(
+            products = 2,
+            suppliers = 1,
+            categories = 1,
+            priceHistoryRows = 3,
+            historySessions = 1,
+            pendingLocalChanges = 2,
+            syncEventOutboxPending = 1
+        )
+        coEvery {
+            repository.getLocalDatabaseStatusSnapshot(any(), any())
+        } returns localSnapshot
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "scope@example.test")
+        )
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.checking())
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = true),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val uiCollectJob = launch { viewModel.uiState.collect {} }
+        val localCollectJob = launch { viewModel.localDatabaseStatusUi.collect {} }
+        val blockedStates = listOf(
+            Task126BusinessDataScopeState.checking(),
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND,
+                localSnapshot = localSnapshot
+            ),
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH
+            ),
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH
+            )
+        )
+
+        blockedStates.forEach { scopeState ->
+            tracker.updateBusinessDataScopeState(scopeState)
+            advanceUntilIdle()
+
+            val ui = viewModel.uiState.value
+            assertEquals(scopeState.status, ui.businessDataScopeStatus)
+            assertFalse(ui.isSyncing)
+            assertFalse(ui.canRefresh)
+            assertFalse(ui.canQuickSync)
+            assertFalse(ui.showAutomaticSyncDetail)
+            assertFalse(ui.primaryMessage == app.getString(R.string.catalog_cloud_auto_status_title))
+            assertEquals(
+                scopeState.status,
+                viewModel.localDatabaseStatusUi.value.businessDataScopeStatus
+            )
+            if (scopeState.status == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND) {
+                assertEquals(2, viewModel.localDatabaseStatusUi.value.productsCount)
+                assertEquals(1, viewModel.localDatabaseStatusUi.value.syncEventOutboxPendingCount)
+            }
+        }
+
+        coVerify(exactly = 0) {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        }
+        uiCollectJob.cancel()
+        localCollectJob.cancel()
+    }
+
+    @Test
+    fun `139 validated network loss surfaces offline immediately and reconnect clears it`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery {
+            repository.getLocalDatabaseStatusSnapshot(any(), any())
+        } returns LocalDatabaseStatusSnapshot(
+            products = 1,
+            suppliers = 0,
+            categories = 0,
+            priceHistoryRows = 1,
+            historySessions = 0,
+            pendingLocalChanges = 0,
+            syncEventOutboxPending = 0
+        )
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "network@example.test")
+        )
+        val tracker = CatalogSyncStateTracker()
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+
+        tracker.updateNetworkAvailability(true)
+        advanceUntilIdle()
+        assertEquals(
+            app.getString(R.string.catalog_cloud_auto_status_title),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(viewModel.uiState.value.showAutomaticSyncDetail)
+
+        tracker.updateNetworkAvailability(false)
+        advanceUntilIdle()
+        assertEquals(
+            app.getString(R.string.catalog_cloud_state_offline),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertFalse(viewModel.uiState.value.isSyncing)
+        assertFalse(viewModel.uiState.value.showAutomaticSyncDetail)
+        assertFalse(
+            viewModel.uiState.value.primaryMessage ==
+                app.getString(R.string.catalog_cloud_auto_status_title)
+        )
+
+        tracker.updateNetworkAvailability(true)
+        advanceUntilIdle()
+        assertEquals(
+            app.getString(R.string.catalog_cloud_auto_status_title),
+            viewModel.uiState.value.primaryMessage
+        )
+        assertTrue(viewModel.uiState.value.showAutomaticSyncDetail)
+
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `139 scope cancellation during manual device preflight releases manual owner`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        val statusStarted = CompletableDeferred<Unit>()
+        val releaseStatus = CompletableDeferred<Unit>()
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(
+                task126ActiveOwnerStoreScope(OWNER_VM_021, selectedShop = null)
+            )
+        )
+        val deviceRemote = object : ShopDeviceRegistrationRemote {
+            override val isConfigured: Boolean = true
+
+            override suspend fun registerCurrentOwnerDevice(
+                reason: String
+            ): Result<ShopDeviceRegistrationResult> =
+                Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
+
+            override suspend fun currentOwnerDeviceStatus(
+                reason: String
+            ): Result<ShopDeviceAuthorizationSnapshot> {
+                statusStarted.complete(Unit)
+                withContext(NonCancellable) { releaseStatus.await() }
+                return Result.success(
+                    ShopDeviceAuthorizationSnapshot(
+                        status = "active",
+                        code = "success",
+                        canWrite = true,
+                        serverTime = null,
+                        lastSeenAt = null,
+                        reasonCode = "active",
+                        recommendedAction = "allow",
+                        checkedAtMs = 0L
+                    )
+                )
+            }
+        }
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow(
+                AuthState.SignedIn(OWNER_VM_021, "preflight@example.test")
+            ),
+            syncStateTracker = tracker,
+            autoSyncRepository = autoRepository,
+            deviceAuthorization = ShopDeviceAuthorizationRepository(
+                remote = deviceRemote,
+                businessDataScopeRuntimeGuard = tracker
+            )
+        )
+
+        viewModel.syncCatalogQuick()
+        statusStarted.await()
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+        releaseStatus.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+        tracker.finish(CatalogSyncFlightOwner.MANUAL)
     }
 
     @Test
@@ -1143,7 +1353,126 @@ class CatalogSyncViewModelTest {
                 app.getString(R.string.catalog_cloud_manual_full_sync_required_hint)
             )
         )
+        collectJob.cancel()
+    }
 
+    @Test
+    fun `139 manual quick sync requests recovery once after releasing manual flight`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val autoRepository = mockk<CatalogAutoSyncRepository>()
+        val syncEventRemote = mockk<SyncEventRemoteDataSource>()
+        val tracker = CatalogSyncStateTracker()
+        val recoveryRequests = mutableListOf<String>()
+        every { syncEventRemote.isConfigured } returns true
+        coEvery {
+            autoRepository.syncCatalogQuickWithEvents(any(), any(), syncEventRemote, OWNER_VM_021, any())
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                syncEventsAvailable = true,
+                manualFullSyncRequired = true,
+                syncEventsGapDetected = true
+            )
+        )
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "139-quick-recovery@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            autoSyncRepository = autoRepository,
+            syncEventRemote = syncEventRemote,
+            syncStateTracker = tracker,
+            onRecoveryRequired = { source ->
+                assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH))
+                tracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
+                recoveryRequests += source
+            }
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.syncCatalogQuick()
+        advanceUntilIdle()
+
+        assertEquals(listOf("manual_quick_sync_recovery_required"), recoveryRequests)
+        assertEquals(
+            "sync_recovery_required",
+            tracker.businessDataScopeState.value.errorCode
+        )
+        advanceUntilIdle()
+        assertEquals(1, recoveryRequests.size)
+        collectJob.cancel()
+    }
+
+    @Test
+    fun `139 manual full sync requests recovery once after releasing manual flight`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        val recoveryRequests = mutableListOf<String>()
+        coEvery {
+            repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021)
+        } returns Result.success(
+            CatalogSyncSummary(
+                pushedSuppliers = 0,
+                pushedCategories = 0,
+                pushedProducts = 0,
+                pulledSuppliers = 0,
+                pulledCategories = 0,
+                pulledProducts = 0,
+                manualFullSyncRequired = true,
+                syncEventsGapDetected = true
+            )
+        )
+        coEvery {
+            repository.bootstrapHistorySessionsFromRemote(any())
+        } returns Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), OWNER_VM_021)
+        } returns Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = OWNER_VM_021, email = "139-recovery@example.test")
+        )
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker,
+            onRecoveryRequired = { source ->
+                assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH))
+                tracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
+                recoveryRequests += source
+            }
+        )
+        val collectJob = launch { viewModel.uiState.collect {} }
+        advanceUntilIdle()
+
+        viewModel.refreshCatalog()
+        advanceUntilIdle()
+
+        assertEquals(listOf("manual_refresh_recovery_required"), recoveryRequests)
+        assertEquals(
+            "sync_recovery_required",
+            tracker.businessDataScopeState.value.errorCode
+        )
+        advanceUntilIdle()
+        assertEquals(1, recoveryRequests.size)
         collectJob.cancel()
     }
 

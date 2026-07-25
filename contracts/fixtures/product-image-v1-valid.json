@@ -1,0 +1,16 @@
+{
+  "intent": {
+    "main": {"bytes": 700000, "height": 1200, "mimeType": "image/jpeg", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "width": 1600},
+    "productId": "20000000-0000-4000-8000-000000000139",
+    "shopId": "10000000-0000-4000-8000-000000000139",
+    "thumb": {"bytes": 80000, "height": 288, "mimeType": "image/jpeg", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "width": 384}
+  },
+  "finalize": {"productId": "20000000-0000-4000-8000-000000000139", "shopId": "10000000-0000-4000-8000-000000000139", "versionId": "30000000-0000-4000-8000-000000000139"},
+  "readUrls": {"refs": [{"productId": "20000000-0000-4000-8000-000000000139", "variant": "thumb", "versionId": "30000000-0000-4000-8000-000000000139"}], "shopId": "10000000-0000-4000-8000-000000000139"},
+  "remove": {"expectedVersionId": "30000000-0000-4000-8000-000000000139", "productId": "20000000-0000-4000-8000-000000000139", "shopId": "10000000-0000-4000-8000-000000000139"},
+  "jpegSegments": [
+    {"id": "jfif-app0", "markerHex": "ffe0", "payloadPrefixHex": "4a46494600", "valid": true},
+    {"id": "baseline-sof0", "markerHex": "ffc0", "valid": true},
+    {"id": "progressive-sof2", "markerHex": "ffc2", "valid": true}
+  ]
+}

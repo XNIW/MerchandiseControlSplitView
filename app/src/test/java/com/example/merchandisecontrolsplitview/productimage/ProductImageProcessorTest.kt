@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,8 +63,8 @@ class ProductImageProcessorTest {
         assertTrue(PRODUCT_IMAGE_SHA256_PATTERN.matches(prepared.thumb.metadata.sha256))
         assertTrue(isJpeg(prepared.main.bytes))
         assertTrue(isJpeg(prepared.thumb.bytes))
-        assertFalse(jpegContainsApp1(prepared.main.bytes))
-        assertFalse(jpegContainsApp1(prepared.thumb.bytes))
+        assertFalse(jpegContainsForbiddenMetadata(prepared.main.bytes))
+        assertFalse(jpegContainsForbiddenMetadata(prepared.thumb.bytes))
 
         val decoded = BitmapFactory.decodeByteArray(
             prepared.main.bytes,
@@ -83,6 +85,69 @@ class ProductImageProcessorTest {
     }
 
     @Test
+    fun `canonicalizer reuses clean buffer and compacts forbidden metadata with one result allocation`() {
+        val metadataBearing = byteArrayOf(
+            0xff.toByte(), 0xd8.toByte(),
+            0xff.toByte(), 0xe2.toByte(), 0x00, 0x07,
+            0x49, 0x43, 0x43, 0x00, 0x01,
+            0xff.toByte(), 0xda.toByte(), 0x00, 0x02,
+            0x11, 0x22,
+            0xff.toByte(), 0xd9.toByte()
+        )
+
+        assertTrue(jpegContainsForbiddenMetadata(metadataBearing))
+        val canonical = canonicalizeJpegMetadata(metadataBearing)
+        assertNotSame(metadataBearing, canonical)
+        assertFalse(jpegContainsForbiddenMetadata(canonical))
+        assertEquals(
+            listOf(0xff, 0xd8, 0xff, 0xda),
+            canonical.take(4).map { it.toInt() and 0xff }
+        )
+
+        val clean = ByteArray(PRODUCT_IMAGE_MAIN_MAX_BYTES).apply {
+            this[0] = 0xff.toByte()
+            this[1] = 0xd8.toByte()
+            this[2] = 0xff.toByte()
+            this[3] = 0xda.toByte()
+            this[4] = 0x00
+            this[5] = 0x02
+            this[lastIndex - 1] = 0xff.toByte()
+            this[lastIndex] = 0xd9.toByte()
+        }
+        val startedAt = System.nanoTime()
+        assertSame(clean, canonicalizeJpegMetadata(clean))
+        val elapsedNanos = System.nanoTime() - startedAt
+        println(
+            "TASK139_ANDROID_CANONICALIZER " +
+                "cleanBytes=${clean.size} strippedInputBytes=${metadataBearing.size} " +
+                "strippedOutputBytes=${canonical.size} " +
+                "cleanIdentity=true elapsedNanos=$elapsedNanos"
+        )
+    }
+
+    @Test
+    fun `jpeg allowlist rejects non canonical JFIF application segment`() {
+        val source = Bitmap.createBitmap(32, 32, Bitmap.Config.ARGB_8888)
+        source.eraseColor(Color.rgb(40, 100, 160))
+        val encoded = try {
+            processor.prepareBitmap(source).main.bytes
+        } finally {
+            source.recycle()
+        }
+        val app0Marker = (2 until encoded.lastIndex - 3).first { offset ->
+            encoded[offset] == 0xff.toByte() &&
+                encoded[offset + 1] == 0xe0.toByte()
+        }
+        val dataStart = app0Marker + 4
+        val nonCanonical = encoded.copyOf().apply {
+            this[dataStart + 7] = 0x03
+        }
+
+        assertFalse(jpegContainsForbiddenMetadata(encoded))
+        assertTrue(jpegContainsForbiddenMetadata(nonCanonical))
+    }
+
+    @Test
     fun `noisy main image stays bounded and reduction sequence has a finite floor`() {
         val random = kotlin.random.Random(137)
         val source = Bitmap.createBitmap(1_600, 1_600, Bitmap.Config.ARGB_8888)
@@ -100,13 +165,9 @@ class ProductImageProcessorTest {
         assertTrue(prepared.main.bytes.size <= PRODUCT_IMAGE_MAIN_MAX_BYTES)
         assertTrue(maxOf(prepared.main.metadata.width, prepared.main.metadata.height) >= 640)
 
-        val reductionSequence = mutableListOf<Int>()
-        var current = 1_600
-        while (true) {
-            val reduced = processor.reducedMaximumSide(current, 640) ?: break
-            reductionSequence += reduced
-            current = reduced
-        }
-        assertEquals(listOf(1_360, 1_156, 982, 834, 708, 640), reductionSequence)
+        assertEquals(
+            listOf(1_600, 1_360, 1_152, 976, 832, 704, 640),
+            processor.outputSideSchedule(1_600, 1_600, 640)
+        )
     }
 }

@@ -102,8 +102,8 @@ class ProductImageDeviceTest {
         assertEquals(384, maxOf(prepared.thumb.metadata.width, prepared.thumb.metadata.height))
         assertTrue(prepared.main.metadata.bytes <= PRODUCT_IMAGE_MAIN_TARGET_BYTES)
         assertTrue(prepared.thumb.metadata.bytes <= PRODUCT_IMAGE_THUMB_MAX_BYTES)
-        assertFalse(jpegContainsApp1(prepared.main.bytes))
-        assertFalse(jpegContainsApp1(prepared.thumb.bytes))
+        assertFalse(jpegContainsForbiddenMetadata(prepared.main.bytes))
+        assertFalse(jpegContainsForbiddenMetadata(prepared.thumb.bytes))
 
         val root = File(context.cacheDir, "task137-product-image-cache-${System.nanoTime()}")
         try {
@@ -177,8 +177,16 @@ class ProductImageDeviceTest {
             assertEquals(cacheScope, intent.cacheScope)
             assertEquals(versionId, intent.versionId)
 
-            api.putSignedJpeg(intent.mainUploadUrl!!, prepared.main.bytes)
-            api.putSignedJpeg(intent.thumbUploadUrl!!, prepared.thumb.bytes)
+            val mainReference = ProductImageReference(
+                accountScope = cacheScope,
+                shopId = "13700000-0000-4000-8000-000000000002",
+                productId = "13700000-0000-4000-8000-000000000003",
+                versionId = versionId,
+                variant = ProductImageVariant.MAIN
+            )
+            val thumbReference = mainReference.copy(variant = ProductImageVariant.THUMB)
+            api.putSignedJpeg(intent.mainUploadUrl!!, prepared.main.bytes, mainReference)
+            api.putSignedJpeg(intent.thumbUploadUrl!!, prepared.thumb.bytes, thumbReference)
             val finalized = api.finalizeImage(
                 accessToken = "fixture-session",
                 body = ProductImageFinalizeBody(
@@ -210,7 +218,7 @@ class ProductImageDeviceTest {
             assertEquals("ready", readItem.status)
             assertArrayEquals(
                 prepared.thumb.bytes,
-                api.downloadSignedJpeg(readItem.signedUrl!!, ProductImageVariant.THUMB)
+                api.downloadSignedJpeg(readItem.signedUrl!!, thumbReference)
             )
 
             val removed = api.removeImage(

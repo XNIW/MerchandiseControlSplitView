@@ -1,0 +1,17 @@
+{
+  "sideScheduleVectors": [
+    {"id": "main-1600", "initialMaximum": 1600, "minimum": 640, "sourceLongestSide": 1600, "expected": [1600, 1360, 1152, 976, 832, 704, 640]},
+    {"id": "thumb-384", "initialMaximum": 384, "minimum": 128, "sourceLongestSide": 384, "expected": [384, 326, 276, 234, 199, 168, 153, 128]},
+    {"id": "main-1000", "initialMaximum": 1600, "minimum": 640, "sourceLongestSide": 1000, "expected": [1000, 850, 720, 640]},
+    {"id": "small-320", "initialMaximum": 1600, "minimum": 640, "sourceLongestSide": 320, "expected": [320]}
+  ],
+  "syntheticImages": [
+    {"id": "landscape-jpeg", "format": "jpeg", "width": 2400, "height": 1600, "alpha": false, "animated": false, "pattern": "rgb-grid"},
+    {"id": "portrait-heic", "format": "heic", "width": 3024, "height": 4032, "alpha": false, "animated": false, "pattern": "rgb-grid"},
+    {"id": "alpha-png", "format": "png", "width": 1200, "height": 1600, "alpha": true, "animated": false, "pattern": "alpha-checker"},
+    {"id": "camera-48mp", "format": "jpeg", "width": 8000, "height": 6000, "alpha": false, "animated": false, "pattern": "rgb-grid"},
+    {"id": "small-jpeg", "format": "jpeg", "width": 320, "height": 200, "alpha": false, "animated": false, "pattern": "solid"},
+    {"id": "animated", "format": "gif", "width": 320, "height": 200, "alpha": false, "animated": true, "pattern": "two-frame"},
+    {"id": "corrupt", "format": "jpeg", "width": 0, "height": 0, "alpha": false, "animated": false, "pattern": "truncated"}
+  ]
+}

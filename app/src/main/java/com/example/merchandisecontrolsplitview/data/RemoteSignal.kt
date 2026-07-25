@@ -10,9 +10,22 @@ package com.example.merchandisecontrolsplitview.data
  * arriva nel segnale (es. postgres_changes con campo `new`), senza fetch separato.
  */
 sealed class RemoteSignal {
+    data class SourceScope(
+        val ownerUserId: String,
+        val shopId: String?
+    ) {
+        companion object {
+            /** Solo per wiring unitario unmanaged; un runtime managed lo rifiuta fail-closed. */
+            fun unspecified(): SourceScope = SourceScope(ownerUserId = "", shopId = null)
+        }
+    }
+
     /**
      * Il payload remoto completo è disponibile nel segnale.
      * Il coordinator può applicarlo direttamente via repository senza round-trip aggiuntivi.
      */
-    data class PayloadAvailable(val payload: SessionRemotePayload) : RemoteSignal()
+    data class PayloadAvailable(
+        val payload: SessionRemotePayload,
+        val sourceScope: SourceScope = SourceScope.unspecified()
+    ) : RemoteSignal()
 }

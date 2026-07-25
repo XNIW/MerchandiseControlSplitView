@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
@@ -14,7 +13,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -30,6 +28,7 @@ class HistorySessionPushCoordinator(
     private val authFlow: StateFlow<AuthState>,
     private val selectedShopProvider: () -> SelectedShop? = { null },
     private val flightOwner: SessionCloudSessionFlightOwner,
+    private val syncStateTracker: CatalogSyncStateTracker? = null,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val debounceMs: Long = DEBOUNCE_MS,
     private val logger: (String) -> Unit = {}
@@ -217,6 +216,14 @@ class HistorySessionPushCoordinator(
             logger("cycle=push outcome=skip reason=skipped_no_auth debounceMs=$debounceMs dirtySetMode=precise")
             return
         }
+        val selectedShop = selectedShopProvider()
+        if (!businessDataScopeAllows(auth.userId, selectedShop)) {
+            logger(
+                "cycle=push outcome=skip reason=business_scope_blocked " +
+                    "scopeStatus=${syncStateTracker?.businessDataScopeState?.value?.status}"
+            )
+            return
+        }
         if (!remote.isConfigured) {
             logger("cycle=push outcome=skip reason=skipped_remote_unconfigured debounceMs=$debounceMs dirtySetMode=precise")
             return
@@ -225,8 +232,11 @@ class HistorySessionPushCoordinator(
             logger("cycle=push outcome=skip reason=skipped_background_policy debounceMs=$debounceMs dirtySetMode=precise")
             return
         }
-        val selectedShop = selectedShopProvider()
-        if (!ensureDeviceActiveForSync(reason, selectedShop)) return
+        if (!ensureDeviceActiveForScopedSync(auth.userId, reason, selectedShop)) return
+        if (!businessDataScopeAllows(auth.userId, selectedShop)) {
+            logger("cycle=push outcome=skip reason=business_scope_changed_after_device_check")
+            return
+        }
 
         val hinted = synchronized(dirtyLock) {
             val copy = dirtyHints.toSet()
@@ -239,74 +249,87 @@ class HistorySessionPushCoordinator(
         val fullReconciliation = isFullReconciliationReason(reason)
         val dirtySetMode = if (fullReconciliation) "full_reconcile" else "precise"
         try {
-            var summary: HistorySessionBackupPushSummary? = null
-            var bootstrap: RemoteSessionBatchResult? = null
-            var emptyPending = false
-            var durationMs = 0L
-            flightOwner.withSessionFlight(SessionCloudFlightOwner.AutoPush) {
-                durationMs = measureTimeMillis {
-                    if (fullReconciliation) {
-                        bootstrap = if (selectedShop == null) {
-                            repository.bootstrapHistorySessionsFromRemote(remote)
-                        } else {
-                            repository.bootstrapHistorySessionsFromRemote(remote, selectedShop)
-                        }.getOrThrow()
-                        val pending = repository.getPendingHistorySessionPushUids().toSet()
-                        pendingSize = pending.size
-                        pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
-                        coalesced = coalesced || pending.size > 1
-                        if (pending.isEmpty()) {
-                            emptyPending = true
-                            pendingLocalHistoryPushSignal = false
-                        } else {
-                            summary = if (selectedShop == null) {
-                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+            withBusinessDataScopeFlight(auth.userId, selectedShop) scopeFlight@{
+                var summary: HistorySessionBackupPushSummary? = null
+                var bootstrap: RemoteSessionBatchResult? = null
+                var emptyPending = false
+                var durationMs = 0L
+                var blockedBeforeRemote = false
+                flightOwner.withSessionFlight(SessionCloudFlightOwner.AutoPush) {
+                    if (!businessDataScopeAllows(auth.userId, selectedShop)) {
+                        blockedBeforeRemote = true
+                        return@withSessionFlight
+                    }
+                    durationMs = measureTimeMillis {
+                        if (fullReconciliation) {
+                            bootstrap = if (selectedShop == null) {
+                                repository.bootstrapHistorySessionsFromRemote(remote)
                             } else {
-                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
+                                repository.bootstrapHistorySessionsFromRemote(remote, selectedShop)
                             }.getOrThrow()
-                        }
-                    } else {
-                        val pending = repository.getPendingHistorySessionPushUids().toSet()
-                        pendingSize = pending.size
-                        pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
-                        coalesced = coalesced || pending.size > 1
-                        if (pending.isEmpty()) {
-                            emptyPending = true
-                            pendingLocalHistoryPushSignal = false
-                        } else {
-                            summary = if (selectedShop == null) {
-                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+                            val pending = repository.getPendingHistorySessionPushUids().toSet()
+                            pendingSize = pending.size
+                            pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
+                            coalesced = coalesced || pending.size > 1
+                            if (pending.isEmpty()) {
+                                emptyPending = true
+                                pendingLocalHistoryPushSignal = false
                             } else {
-                                repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
-                            }.getOrThrow()
+                                summary = if (selectedShop == null) {
+                                    repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+                                } else {
+                                    repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
+                                }.getOrThrow()
+                            }
+                        } else {
+                            val pending = repository.getPendingHistorySessionPushUids().toSet()
+                            pendingSize = pending.size
+                            pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")
+                            coalesced = coalesced || pending.size > 1
+                            if (pending.isEmpty()) {
+                                emptyPending = true
+                                pendingLocalHistoryPushSignal = false
+                            } else {
+                                summary = if (selectedShop == null) {
+                                    repository.pushHistorySessionsToRemote(remote, auth.userId, pending)
+                                } else {
+                                    repository.pushHistorySessionsToRemote(remote, auth.userId, pending, selectedShop)
+                                }.getOrThrow()
+                            }
                         }
                     }
                 }
-            }
-            val b = bootstrap
-            val bootstrapSummary = if (b != null) {
-                " bootstrapInserted=${b.inserted} bootstrapUpdated=${b.updated} " +
-                    "bootstrapSkipped=${b.skipped} bootstrapFailed=${b.failed} bootstrapUnsupported=${b.unsupported}"
-            } else {
-                ""
-            }
-            if (emptyPending) {
+                if (blockedBeforeRemote) {
+                    logger("cycle=push outcome=skip reason=business_scope_changed_before_remote")
+                    return@scopeFlight
+                }
+                val b = bootstrap
+                val bootstrapSummary = if (b != null) {
+                    " bootstrapInserted=${b.inserted} bootstrapUpdated=${b.updated} " +
+                        "bootstrapSkipped=${b.skipped} bootstrapFailed=${b.failed} bootstrapUnsupported=${b.unsupported}"
+                } else {
+                    ""
+                }
+                if (emptyPending) {
+                    logger(
+                        "cycle=push outcome=ok reason=$reason sessionsAttempted=0 sessionsUploaded=0 " +
+                            "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push" +
+                            bootstrapSummary
+                    )
+                    return@scopeFlight
+                }
+                val s = summary
+                recordHistorySyncEventIfNeeded(auth.userId, selectedShop, s)
+                pendingLocalHistoryPushSignal = false
                 logger(
-                    "cycle=push outcome=ok reason=$reason sessionsAttempted=0 sessionsUploaded=0 " +
+                    "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
+                        "sessionsAttempted=${s?.attempted ?: pendingSize} sessionsUploaded=${s?.uploaded ?: 0} " +
                         "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push" +
                         bootstrapSummary
                 )
-                return
             }
-            val s = summary
-            recordHistorySyncEventIfNeeded(auth.userId, selectedShop, s)
-            pendingLocalHistoryPushSignal = false
-            logger(
-                "cycle=push outcome=ok reason=$reason durationMs=$durationMs " +
-                    "sessionsAttempted=${s?.attempted ?: pendingSize} sessionsUploaded=${s?.uploaded ?: 0} " +
-                    "skippedDirtyLocal=0 coalesced=$coalesced dirtySetMode=$dirtySetMode owner=auto_push" +
-                    bootstrapSummary
-            )
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            logger("cycle=push outcome=skip reason=business_scope_changed_during_remote")
         } catch (cancelled: CancellationException) {
             if (scope.coroutineContext[Job]?.isActive != true) {
                 throw cancelled
@@ -345,6 +368,20 @@ class HistorySessionPushCoordinator(
         }
     }
 
+    private fun businessDataScopeAllows(ownerUserId: String, selectedShop: SelectedShop?): Boolean {
+        val currentAuth = authFlow.value as? AuthState.SignedIn ?: return false
+        val currentShop = selectedShopProvider()
+        return currentAuth.userId == ownerUserId &&
+            shopScopedStoreScope(currentShop) == shopScopedStoreScope(selectedShop) &&
+            syncStateTracker?.allowsBusinessDataScope(ownerUserId, currentShop) != false
+    }
+
+    private suspend fun <T> withBusinessDataScopeFlight(
+        ownerUserId: String,
+        selectedShop: SelectedShop?,
+        block: suspend () -> T
+    ): T = syncStateTracker?.withBusinessDataScopeFlight(ownerUserId, selectedShop, block) ?: block()
+
     private suspend fun recordHistorySyncEventIfNeeded(
         ownerUserId: String,
         selectedShop: SelectedShop?,
@@ -357,46 +394,84 @@ class HistorySessionPushCoordinator(
         if (remoteIds.isEmpty() || !syncEventRemote.isConfigured) return
         val batchId = java.util.UUID.randomUUID().toString()
         val storeScope = shopScopedStoreScope(selectedShop)
-        val params = SyncEventRecordRpcParams(
-            domain = SyncEventDomains.HISTORY,
-            eventType = SyncEventTypes.HISTORY_CHANGED,
-            changedCount = remoteIds.size,
-            entityIds = SyncEventEntityIds(sessionIds = remoteIds),
-            storeId = remoteStoreIdFromStoreScope(storeScope),
-            source = "android_history_session_push",
-            sourceDeviceId = null,
-            batchId = batchId,
-            clientEventId = "android-$batchId-history-${remoteIds.joinToString(",").hashCode().toUInt().toString(16)}",
-            shopId = selectedShop?.shopId
+        val chunks = SyncEventContract.chunkPrimaryIds(
+            SyncEventDomains.HISTORY,
+            SyncEventEntityIds(sessionIds = remoteIds)
         )
-        withContext(NonCancellable) {
+        var recordedChunks = 0
+        var outboxInserted = 0
+        var totalAttempts = 0
+        for ((chunkIndex, ids) in chunks.withIndex()) {
+            val changedCount = SyncEventContract.primaryChangedCount(SyncEventDomains.HISTORY, ids)
+            check(
+                SyncEventContract.hasCompletePrimaryIds(
+                    SyncEventDomains.HISTORY,
+                    changedCount,
+                    ids
+                )
+            ) { "history_sync_event_chunk_invalid_primary_ids" }
+            val params = SyncEventRecordRpcParams(
+                domain = SyncEventDomains.HISTORY,
+                eventType = SyncEventTypes.HISTORY_CHANGED,
+                changedCount = changedCount,
+                entityIds = ids,
+                storeId = remoteStoreIdFromStoreScope(storeScope),
+                source = "android_history_session_push",
+                sourceDeviceId = null,
+                batchId = batchId,
+                clientEventId = buildString {
+                    append("android-")
+                    append(batchId)
+                    append("-history-")
+                    append(chunkIndex)
+                    append('-')
+                    append(ids.sessionIds.joinToString(",").hashCode().toUInt().toString(16))
+                },
+                metadata = kotlinx.serialization.json.buildJsonObject {
+                    put("task", "139")
+                    put("chunk_index", chunkIndex)
+                    put("chunk_count", chunks.size)
+                },
+                shopId = selectedShop?.shopId
+            )
             var recorded: Result<SyncEventRemoteRow>? = null
-            var attempts = 0
-            for (index in 0 until HISTORY_SYNC_EVENT_RECORD_ATTEMPTS) {
-                attempts = index + 1
+            for (attemptIndex in 0 until HISTORY_SYNC_EVENT_RECORD_ATTEMPTS) {
+                totalAttempts++
+                syncStateTracker?.requireCurrentBusinessDataScope()
                 val result = syncEventRemote.recordSyncEvent(params)
+                result.exceptionOrNull()?.let { error ->
+                    if (error is CancellationException) throw error
+                }
+                syncStateTracker?.requireCurrentBusinessDataScope()
                 recorded = result
                 if (result.isSuccess) break
-                if (index < HISTORY_SYNC_EVENT_RECORD_ATTEMPTS - 1) {
+                if (attemptIndex < HISTORY_SYNC_EVENT_RECORD_ATTEMPTS - 1) {
                     delay(HISTORY_SYNC_EVENT_RETRY_DELAY_MS)
                 }
             }
-            val recordedResult = recorded
-            val outboxInserted = if (recordedResult?.isSuccess == true) {
-                0
+            if (recorded?.isSuccess == true) {
+                recordedChunks++
             } else {
-                enqueueHistorySyncEvent(ownerUserId, storeScope, params, recordedResult?.exceptionOrNull())
+                syncStateTracker?.requireCurrentBusinessDataScope()
+                outboxInserted += enqueueHistorySyncEvent(
+                    ownerUserId,
+                    storeScope,
+                    params,
+                    recorded?.exceptionOrNull()
+                )
             }
-            val outcome = when {
-                recordedResult?.isSuccess == true -> "ok"
-                outboxInserted > 0 -> "enqueued"
-                else -> "fail"
-            }
-            logger(
-                "cycle=push syncEvent=history outcome=$outcome sessions=${remoteIds.size} " +
-                    "syncType=EVENT_INCREMENTAL fullPull=false attempts=$attempts outboxInserted=$outboxInserted"
-            )
         }
+        val outcome = when {
+            recordedChunks == chunks.size -> "ok"
+            recordedChunks + outboxInserted == chunks.size -> "enqueued"
+            recordedChunks > 0 || outboxInserted > 0 -> "partial"
+            else -> "fail"
+        }
+        logger(
+            "cycle=push syncEvent=history outcome=$outcome sessions=${remoteIds.size} " +
+                "chunks=${chunks.size} recordedChunks=$recordedChunks syncType=EVENT_INCREMENTAL " +
+                "fullPull=false attempts=$totalAttempts outboxInserted=$outboxInserted"
+        )
     }
 
     private suspend fun enqueueHistorySyncEvent(
@@ -409,6 +484,7 @@ class HistorySessionPushCoordinator(
         val ids = params.entityIds ?: SyncEventEntityIds()
         val metadata = params.metadata
         val errorType = error?.let { SyncErrorClassifier.classify(it).category.name } ?: "unknown"
+        syncStateTracker?.requireCurrentBusinessDataScope()
         val inserted = outboxDao.insert(
             SyncEventOutboxEntry(
                 ownerUserId = ownerUserId,
@@ -437,6 +513,7 @@ class HistorySessionPushCoordinator(
     ): Boolean {
         val authorization = deviceAuthorization ?: return true
         val result = authorization.ensureActiveForCloudWrite("history_push:$reason", selectedShop?.shopId)
+        syncStateTracker?.requireCurrentBusinessDataScope()
         if (result.isSuccess) {
             resetDeviceStatusPushRetry()
             return true
@@ -453,6 +530,19 @@ class HistorySessionPushCoordinator(
             schedulePushAfterRetryableDeviceStatus(reason)
         }
         return false
+    }
+
+    private suspend fun ensureDeviceActiveForScopedSync(
+        ownerUserId: String,
+        reason: String,
+        selectedShop: SelectedShop?
+    ): Boolean = try {
+        withBusinessDataScopeFlight(ownerUserId, selectedShop) {
+            ensureDeviceActiveForSync(reason, selectedShop)
+        }
+    } catch (_: Task126BusinessDataScopeChangedException) {
+        logger("cycle=push outcome=skip reason=business_scope_changed_during_device_check")
+        false
     }
 
     private sealed interface DeviceStatusRetryPlan {

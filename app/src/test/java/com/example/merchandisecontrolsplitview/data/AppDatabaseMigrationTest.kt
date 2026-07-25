@@ -180,7 +180,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000012")
         assertNotNull(product)
@@ -525,7 +525,7 @@ class AppDatabaseMigrationTest {
         val migrated = openMigratedDatabase(migratedName)
         val fresh = openFreshDatabase(freshName)
 
-        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
 
         val product = migrated.productDao().findByBarcode("8050000000077")
         assertNotNull(product)
@@ -681,7 +681,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema corrente
-        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
 
         // La nuova tabella bridge è stata creata
         assertTrue(tableExists(migrated, "history_entry_remote_refs"))
@@ -932,7 +932,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
 
         // L'indice unico su remoteId ora esiste
         val bridgeIndexes = indexInfo(migrated, "history_entry_remote_refs")
@@ -1116,7 +1116,7 @@ class AppDatabaseMigrationTest {
         val fresh = openFreshDatabase(freshName)
 
         // Versione aggiornata allo schema Room corrente
-        assertEquals("20", querySingleValue(migrated, "PRAGMA user_version"))
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
 
         // Schema bridge allineato con fresh install (schema Room corrente)
         assertEquals(
@@ -1738,29 +1738,246 @@ class AppDatabaseMigrationTest {
         migrated.close()
     }
 
+    @Test
+    fun `migration 20 to 21 adds empty business scope binding without changing product data`() = runTest {
+        val dbName = "task139-migration-20-21-business-scope-binding.db"
+        createLegacyDatabase(dbName, version = 20) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS products(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    barcode TEXT NOT NULL,
+                    productName TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL("INSERT INTO products(id, barcode, productName) VALUES (1, 'task139', 'Preserved')")
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 21) { database, oldVersion, newVersion ->
+            assertEquals(20, oldVersion)
+            assertEquals(21, newVersion)
+            AppDatabase.MIGRATION_20_21.migrate(database)
+        }
+
+        assertEquals("21", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "business_data_scope_binding"))
+        assertEquals(0, queryCount(migrated, "SELECT COUNT(*) FROM business_data_scope_binding"))
+        assertEquals("Preserved", querySingleValue(migrated, "SELECT productName FROM products WHERE id = 1"))
+        migrated.close()
+    }
+
+    @Test
+    fun `migration 21 to 22 adds empty recovery journal baseline and manifest preserving device`() = runTest {
+        val dbName = "task139-migration-21-22-recovery-journal.db"
+        createLegacyDatabase(dbName, version = 21) { db ->
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS sync_event_device_state(
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    deviceId TEXT NOT NULL,
+                    createdAtMs INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "INSERT INTO sync_event_device_state(id, deviceId, createdAtMs) " +
+                    "VALUES (1, 'device-task139-preserved', 139)"
+            )
+        }
+
+        val migrated = openSupportMigratedDatabase(dbName, targetVersion = 22) {
+                database, oldVersion, newVersion ->
+            assertEquals(21, oldVersion)
+            assertEquals(22, newVersion)
+            AppDatabase.MIGRATION_21_22.migrate(database)
+        }
+
+        assertEquals("22", querySingleValue(migrated, "PRAGMA user_version"))
+        assertTrue(tableExists(migrated, "sync_recovery_journal"))
+        assertTrue(tableExists(migrated, "sync_recovery_baseline"))
+        assertTrue(tableExists(migrated, "sync_recovery_manifest"))
+        assertTrue(columnExists(migrated, "sync_recovery_journal", "authorizationMode"))
+        assertTrue(columnExists(migrated, "sync_recovery_journal", "runId"))
+        assertTrue(columnExists(migrated, "sync_recovery_manifest", "payloadDigest"))
+        assertTrue(
+            indexExists(
+                migrated,
+                "index_sync_recovery_manifest_generationId_domain_idLine"
+            )
+        )
+        listOf(
+            "NULL IS NULL OR idLine > NULL",
+            "'id-before' IS NULL OR idLine > 'id-before'"
+        ).forEach { cursorPredicate ->
+            val plan = buildList {
+                migrated.query(
+                    """
+                    EXPLAIN QUERY PLAN
+                    SELECT * FROM sync_recovery_manifest
+                    WHERE generationId = 'run-139' AND domain = 'images'
+                      AND ($cursorPredicate)
+                    ORDER BY idLine
+                    LIMIT 250
+                    """.trimIndent()
+                ).use { cursor ->
+                    val detail = cursor.getColumnIndexOrThrow("detail")
+                    while (cursor.moveToNext()) add(cursor.getString(detail))
+                }
+            }
+            assertTrue(
+                plan.toString(),
+                plan.any {
+                    it.contains(
+                        "index_sync_recovery_manifest_generationId_domain_idLine"
+                    )
+                }
+            )
+            assertFalse(
+                plan.toString(),
+                plan.any { it.contains("TEMP B-TREE", ignoreCase = true) }
+            )
+        }
+        assertEquals(0, queryCount(migrated, "SELECT COUNT(*) FROM sync_recovery_journal"))
+        assertEquals(0, queryCount(migrated, "SELECT COUNT(*) FROM sync_recovery_baseline"))
+        assertEquals(0, queryCount(migrated, "SELECT COUNT(*) FROM sync_recovery_manifest"))
+        assertEquals(
+            "device-task139-preserved",
+            querySingleValue(migrated, "SELECT deviceId FROM sync_event_device_state WHERE id = 1")
+        )
+        migrated.execSQL(
+            """
+            INSERT INTO sync_recovery_journal(
+                id, ownerHash, storeScope, shopId, deviceId, authorizationMode, runId,
+                phase, reason, blockingEventId, attemptCount, createdAtMs, updatedAtMs,
+                nextRetryAtMs, checkpointADigest, checkpointBDigest, stagingDatabaseName
+            ) VALUES (
+                1, 'owner-hash', 'shop:fixture', 'fixture', 'device-task139-preserved',
+                'mismatch_replace_confirmed', 'run-139', 'staging', 'fixture', 139,
+                0, 1, 2, 3, 'a', 'b', 'stage.db'
+            )
+            """.trimIndent()
+        )
+        migrated.execSQL(
+            """
+            INSERT INTO sync_recovery_manifest(
+                generationId, domain, remoteId, active, idLine, versionLine,
+                identityLine, payloadDigest
+            ) VALUES ('run-139', 'products', 'remote-139', 1, 'id', 'version', 'identity', 'payload')
+            """.trimIndent()
+        )
+        assertEquals(
+            "mismatch_replace_confirmed",
+            querySingleValue(migrated, "SELECT authorizationMode FROM sync_recovery_journal WHERE id = 1")
+        )
+        assertEquals(
+            "run-139",
+            querySingleValue(migrated, "SELECT runId FROM sync_recovery_journal WHERE id = 1")
+        )
+        assertEquals(
+            "payload",
+            querySingleValue(
+                migrated,
+                "SELECT payloadDigest FROM sync_recovery_manifest WHERE generationId = 'run-139'"
+            )
+        )
+        migrated.close()
+    }
+
+    @Test
+    fun `production migration registry is contiguous forward-only through 21 to 22`() {
+        val registeredPaths = AppDatabase.PRODUCTION_MIGRATIONS.map { migration ->
+            migration.startVersion to migration.endVersion
+        }
+
+        assertEquals(
+            (1 until 22).map { version -> version to version + 1 },
+            registeredPaths
+        )
+        assertTrue(registeredPaths.contains(20 to 21))
+        assertTrue(registeredPaths.contains(21 to 22))
+        assertFalse(registeredPaths.any { (start, end) -> start >= end })
+        assertFalse(registeredPaths.contains(22 to 21))
+    }
+
+    @Test
+    fun `fresh current schema opens and Options status DAO queries execute`() = runTest {
+        val db = openFreshDatabase("p05-current-schema-options-status.db")
+
+        assertEquals("22", querySingleValue(db, "PRAGMA user_version"))
+        assertEquals(0, db.productDao().count())
+        assertEquals(0, db.supplierDao().count())
+        assertEquals(0, db.categoryDao().count())
+        assertEquals(0, db.productPriceDao().countAll())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+
+        assertEquals(0, db.pendingCatalogTombstoneDao().count())
+        assertEquals(0, db.productPriceDao().countPriceRowsPendingPriceBridge())
+        assertEquals(0, db.productPriceDao().countPriceRowsWithoutProductRemote())
+        assertEquals(0, db.supplierRemoteRefDao().countLocalRowsMissingRemoteRef())
+        assertEquals(0, db.categoryRemoteRefDao().countLocalRowsMissingRemoteRef())
+        assertEquals(0, db.productRemoteRefDao().countLocalRowsMissingRemoteRef())
+        assertTrue(db.historyEntryDao().getUserVisibleSessionPushCandidateUids().isEmpty())
+        assertEquals(0, db.syncEventOutboxDao().countPendingForScope("p05-owner", "shop:p05"))
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        assertEquals(null, db.businessDataScopeBindingDao().get())
+        assertEquals(null, db.syncRecoveryJournalDao().get())
+        assertEquals(null, db.syncRecoveryBaselineDao().get())
+        assertEquals(0, db.syncRecoveryManifestDao().count("unused", "products"))
+    }
+
+    @Test
+    fun `production builder rejects a future schema without destructive downgrade`() {
+        val dbName = "p05-future-schema-no-destructive-downgrade.db"
+        val current = openFreshDatabase(dbName)
+        current.openHelper.writableDatabase.execSQL(
+            "INSERT INTO products(barcode, productName) VALUES ('p05-sentinel', 'Preserve me')"
+        )
+        current.close()
+        openedDatabases.remove(current)
+
+        SQLiteDatabase.openDatabase(
+            app.getDatabasePath(dbName).path,
+            null,
+            SQLiteDatabase.OPEN_READWRITE
+        ).use { database ->
+            database.version = 23
+        }
+
+        val failure = runCatching {
+            openDatabase(dbName) {
+                addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray())
+            }
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertTrue(
+            generateSequence(failure) { throwable -> throwable.cause }
+                .any { throwable ->
+                    throwable is IllegalStateException &&
+                        throwable.message.orEmpty().contains("migration", ignoreCase = true)
+                }
+        )
+
+        SQLiteDatabase.openDatabase(
+            app.getDatabasePath(dbName).path,
+            null,
+            SQLiteDatabase.OPEN_READONLY
+        ).use { database ->
+            assertEquals(23, database.version)
+            database.rawQuery(
+                "SELECT productName FROM products WHERE barcode = 'p05-sentinel'",
+                null
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Preserve me", cursor.getString(0))
+            }
+        }
+    }
+
     private fun openMigratedDatabase(name: String): AppDatabase =
         openDatabase(name) {
-            addMigrations(
-                AppDatabase.MIGRATION_1_2,
-                AppDatabase.MIGRATION_2_3,
-                AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6,
-                AppDatabase.MIGRATION_6_7,
-                AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9,
-                AppDatabase.MIGRATION_9_10,
-                AppDatabase.MIGRATION_10_11,
-                AppDatabase.MIGRATION_11_12,
-                AppDatabase.MIGRATION_12_13,
-                AppDatabase.MIGRATION_13_14,
-                AppDatabase.MIGRATION_14_15,
-                AppDatabase.MIGRATION_15_16,
-                AppDatabase.MIGRATION_16_17,
-                AppDatabase.MIGRATION_17_18,
-                AppDatabase.MIGRATION_18_19,
-                AppDatabase.MIGRATION_19_20
-            )
+            addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray())
         }
 
     private fun openSupportMigratedDatabase(

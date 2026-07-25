@@ -161,7 +161,11 @@ class ProductImageLocalMutationDeviceTest {
         )
         val localId = requireNotNull(database.productDao().findByBarcode(PRODUCT_BARCODE)).id
         database.productRemoteRefDao().insert(
-            ProductRemoteRef(productId = localId, remoteId = config.productId)
+            ProductRemoteRef(
+                productId = localId,
+                remoteId = config.productId,
+                lastRemoteAppliedAt = 1L
+            )
         )
         return localId
     }

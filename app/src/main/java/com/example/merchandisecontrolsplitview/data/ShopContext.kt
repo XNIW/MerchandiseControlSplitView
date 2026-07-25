@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,7 +65,7 @@ data class ShopContext(
         get() = selectedShop != null
 
     val shouldShowSelector: Boolean
-        get() = selectableShops.size > 1 && selectedShop != null
+        get() = !isLoading && syncAllowed && selectableShops.size > 1 && selectedShop != null
 
     companion object {
         fun legacy(ownerUserId: String? = null): ShopContext =
@@ -142,58 +143,106 @@ class SupabaseLinkedShopRemoteDataSource(
 
 class ShopContextRepository(
     private val remote: LinkedShopRemoteDataSource,
-    private val selectedShopStore: SelectedShopStore
+    private val selectedShopStore: SelectedShopStore,
+    private val currentOwnerUserId: () -> String?
 ) {
+    private val refreshLock = Any()
+    private var refreshGeneration = 0L
     private val mutableState = MutableStateFlow(ShopContext.legacy())
     val state: StateFlow<ShopContext> = mutableState.asStateFlow()
 
     suspend fun refresh(ownerUserId: String?) {
+        val generation = synchronized(refreshLock) {
+            if (currentOwnerUserId() != ownerUserId) return
+            refreshGeneration += 1L
+            refreshGeneration
+        }
         if (ownerUserId.isNullOrBlank() || !remote.isConfigured) {
-            mutableState.value = ShopContext.legacy(ownerUserId)
+            synchronized(refreshLock) {
+                if (isRefreshCurrentLocked(generation, ownerUserId)) {
+                    mutableState.value = ShopContext.legacy(ownerUserId)
+                }
+            }
             return
         }
 
-        val previous = mutableState.value
-        mutableState.value = if (previous.ownerUserId == ownerUserId) {
-            previous.copy(
-                ownerUserId = ownerUserId,
-                isLoading = true,
-                errorMessage = null,
-                syncAllowed = false
-            )
-        } else {
-            ShopContext(
-                ownerUserId = ownerUserId,
-                linkedShops = emptyList(),
-                selectedShop = null,
-                isLoading = true,
-                syncAllowed = false
-            )
+        synchronized(refreshLock) {
+            if (!isRefreshCurrentLocked(generation, ownerUserId)) return
+            val previous = mutableState.value
+            mutableState.value = if (previous.ownerUserId == ownerUserId) {
+                previous.copy(
+                    ownerUserId = ownerUserId,
+                    isLoading = true,
+                    errorMessage = null,
+                    syncAllowed = false
+                )
+            } else {
+                ShopContext(
+                    ownerUserId = ownerUserId,
+                    linkedShops = emptyList(),
+                    selectedShop = null,
+                    isLoading = true,
+                    syncAllowed = false
+                )
+            }
         }
-        val linkedShops = remote.fetchLinkedShops().getOrElse { error ->
-            mutableState.value = ShopContext.blocked(ownerUserId, error.message)
+        val linkedShopsResult = remote.fetchLinkedShops()
+        linkedShopsResult.exceptionOrNull()?.let { error ->
+            if (error is CancellationException) throw error
+        }
+        val linkedShops = linkedShopsResult.getOrNull()
+        if (linkedShops == null) {
+            synchronized(refreshLock) {
+                if (isRefreshCurrentLocked(generation, ownerUserId, requirePublishedOwner = true)) {
+                    mutableState.value = ShopContext.blocked(
+                        ownerUserId,
+                        linkedShopsResult.exceptionOrNull()?.message
+                    )
+                }
+            }
             return
         }
-        val persisted = selectedShopStore.getSelectedShopId(ownerUserId)
-        val resolution = ShopContextResolver.resolve(ownerUserId, linkedShops, persisted)
-        resolution.persistedSelection?.let { selectedShopStore.setSelectedShopId(ownerUserId, it) }
-            ?: selectedShopStore.clearSelectedShopId(ownerUserId)
-        mutableState.value = resolution.context
+        synchronized(refreshLock) {
+            if (!isRefreshCurrentLocked(generation, ownerUserId, requirePublishedOwner = true)) return
+            val persisted = selectedShopStore.getSelectedShopId(ownerUserId)
+            val resolution = ShopContextResolver.resolve(ownerUserId, linkedShops, persisted)
+            resolution.persistedSelection?.let {
+                selectedShopStore.setSelectedShopId(ownerUserId, it)
+            } ?: selectedShopStore.clearSelectedShopId(ownerUserId)
+            mutableState.value = resolution.context
+        }
     }
 
     fun clear() {
-        mutableState.value = ShopContext.legacy()
+        synchronized(refreshLock) {
+            refreshGeneration += 1L
+            mutableState.value = ShopContext.legacy()
+        }
     }
 
     fun selectShop(shopId: String): Boolean {
-        val current = mutableState.value
-        val ownerUserId = current.ownerUserId ?: return false
-        val linked = current.selectableShops.firstOrNull { it.shopId == shopId } ?: return false
-        val selected = linked.toSelectedShop()
-        selectedShopStore.setSelectedShopId(ownerUserId, selected.shopId)
-        mutableState.value = current.copy(selectedShop = selected)
-        return true
+        synchronized(refreshLock) {
+            val current = mutableState.value
+            val ownerUserId = current.ownerUserId ?: return false
+            if (currentOwnerUserId() != ownerUserId) return false
+            if (current.isLoading || !current.syncAllowed) return false
+            val linked = current.selectableShops.firstOrNull { it.shopId == shopId } ?: return false
+            val selected = linked.toSelectedShop()
+            refreshGeneration += 1L
+            selectedShopStore.setSelectedShopId(ownerUserId, selected.shopId)
+            mutableState.value = current.copy(selectedShop = selected)
+            return true
+        }
     }
+
+    private fun isRefreshCurrentLocked(
+        generation: Long,
+        ownerUserId: String?,
+        requirePublishedOwner: Boolean = false
+    ): Boolean =
+        generation == refreshGeneration &&
+            currentOwnerUserId() == ownerUserId &&
+            (!requirePublishedOwner || mutableState.value.ownerUserId == ownerUserId)
 }
 
 class SharedPreferencesSelectedShopStore(

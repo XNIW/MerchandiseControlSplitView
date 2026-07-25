@@ -4,6 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -142,11 +145,16 @@ class ProductImageCacheTest {
     fun `disk cache evicts oldest files by real byte budget`() {
         var now = 1_000L
         val bytes = jpegBytes()
+        val probe = ProductImageCache(temporaryFolder.newFolder("cache-disk-probe"), Unit)
+        val probeReference = reference(probe.accountScope(accountOne), shopOne, versionOne)
+        probe.write(probeReference, bytes)
+        val oneCommittedEntryBytes = probe.snapshot().diskBytes
+
         val root = temporaryFolder.newFolder("cache-disk-lru")
         val cache = ProductImageCache(
             testRoot = root,
             memoryMaxBytes = 10L * 1024L * 1024L,
-            diskMaxBytes = bytes.size.toLong() + 1L,
+            diskMaxBytes = oneCommittedEntryBytes + 1L,
             nowEpochMillis = { now }
         )
         val scope = cache.accountScope(accountOne)
@@ -159,8 +167,181 @@ class ProductImageCacheTest {
 
         assertFalse(cache.fileFor(first).exists())
         assertTrue(cache.fileFor(second).isFile)
+        assertTrue(cache.receiptFileFor(second).isFile)
         assertEquals(1, cache.snapshot().diskEntries)
-        assertEquals(bytes.size.toLong(), cache.snapshot().diskBytes)
+        assertEquals(2, cache.snapshot().diskFiles)
+        assertEquals(
+            cache.fileFor(second).length() + cache.receiptFileFor(second).length(),
+            cache.snapshot().diskBytes
+        )
+    }
+
+    @Test
+    fun `committed jpeg and receipt survive relaunch and receipt drift deletes the pair`() {
+        val root = temporaryFolder.newFolder("cache-relaunch")
+        val bytes = jpegBytes()
+        val firstCache = ProductImageCache(root, Unit)
+        val reference = reference(firstCache.accountScope(accountOne), shopOne, versionOne)
+        firstCache.write(reference, bytes)
+
+        val relaunched = ProductImageCache(root, Unit)
+        assertArrayEquals(bytes, relaunched.read(reference))
+        val jpeg = relaunched.fileFor(reference)
+        val receipt = relaunched.receiptFileFor(reference)
+        val originalReceipt = receipt.readText()
+        val driftedReceipt = originalReceipt.replace(
+            "\"bytes\":${bytes.size}",
+            "\"bytes\":${bytes.size + 1}"
+        )
+        assertFalse(originalReceipt == driftedReceipt)
+        receipt.writeText(driftedReceipt)
+
+        assertNull(relaunched.read(reference))
+        assertFalse(jpeg.exists())
+        assertFalse(receipt.exists())
+        assertEquals(0, relaunched.snapshot().diskEntries)
+    }
+
+    @Test
+    fun `memory hit revalidates same-length disk bytes and deletes drifted pair`() {
+        val cache = ProductImageCache(temporaryFolder.newFolder("cache-memory-drift"), Unit)
+        val bytes = jpegBytes()
+        val reference = reference(cache.accountScope(accountOne), shopOne, versionOne)
+        cache.write(reference, bytes)
+        assertArrayEquals(bytes, cache.read(reference))
+
+        val drifted = bytes.copyOf().also { value ->
+            val offset = value.size / 2
+            value[offset] = (value[offset].toInt() xor 0x01).toByte()
+        }
+        assertEquals(bytes.size, drifted.size)
+        cache.fileFor(reference).writeBytes(drifted)
+
+        assertNull(cache.read(reference))
+        assertFalse(cache.fileFor(reference).exists())
+        assertFalse(cache.receiptFileFor(reference).exists())
+        assertEquals(0, cache.snapshot().memoryEntries)
+        assertEquals(0, cache.snapshot().diskEntries)
+    }
+
+    @Test
+    fun `relaunch validates payload hash before any cache read`() {
+        val root = temporaryFolder.newFolder("cache-startup-drift")
+        val firstCache = ProductImageCache(root, Unit)
+        val reference = reference(firstCache.accountScope(accountOne), shopOne, versionOne)
+        val bytes = jpegBytes()
+        firstCache.write(reference, bytes)
+        val drifted = bytes.copyOf().also { value ->
+            value[value.size / 2] = (value[value.size / 2].toInt() xor 0x01).toByte()
+        }
+        firstCache.fileFor(reference).writeBytes(drifted)
+
+        val relaunched = ProductImageCache(root, Unit)
+
+        assertFalse(relaunched.fileFor(reference).exists())
+        assertFalse(relaunched.receiptFileFor(reference).exists())
+        assertEquals(0, relaunched.snapshot().diskEntries)
+        assertEquals(0, relaunched.snapshot().diskFiles)
+    }
+
+    @Test
+    fun `entry and sidecar file caps hold at cap and cap plus one`() {
+        val cache = ProductImageCache(
+            testRoot = temporaryFolder.newFolder("cache-count-caps"),
+            diskMaxBytes = 10L * 1024L * 1024L,
+            diskMaxEntries = 2,
+            diskMaxFiles = 4
+        )
+        val scope = cache.accountScope(accountOne)
+        val first = reference(scope, shopOne, version(1))
+        val second = reference(scope, shopOne, version(2))
+        val third = reference(scope, shopOne, version(3))
+
+        cache.write(first, jpegBytes())
+        cache.write(second, jpegBytes())
+        assertEquals(2, cache.snapshot().diskEntries)
+        assertEquals(4, cache.snapshot().diskFiles)
+
+        cache.write(third, jpegBytes())
+        assertFalse(cache.fileFor(first).exists())
+        assertFalse(cache.receiptFileFor(first).exists())
+        assertTrue(cache.fileFor(second).isFile)
+        assertTrue(cache.receiptFileFor(second).isFile)
+        assertTrue(cache.fileFor(third).isFile)
+        assertTrue(cache.receiptFileFor(third).isFile)
+        assertEquals(2, cache.snapshot().diskEntries)
+        assertEquals(4, cache.snapshot().diskFiles)
+    }
+
+    @Test
+    fun `concurrent tiny writes remain bounded and restart rebuild preserves caps`() {
+        val root = temporaryFolder.newFolder("cache-concurrent-restart")
+        val maxEntries = 8
+        val maxFiles = maxEntries * 2
+        val cache = ProductImageCache(
+            testRoot = root,
+            diskMaxBytes = 10L * 1024L * 1024L,
+            diskMaxEntries = maxEntries,
+            diskMaxFiles = maxFiles
+        )
+        val scope = cache.accountScope(accountOne)
+        val tinyJpeg = jpegBytes()
+        val executor = Executors.newFixedThreadPool(8)
+        try {
+            val futures = (100 until 140).map { index ->
+                executor.submit {
+                    cache.write(reference(scope, shopOne, version(index)), tinyJpeg)
+                }
+            }
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+            assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
+        }
+
+        assertEquals(maxEntries, cache.snapshot().diskEntries)
+        assertEquals(maxFiles, cache.snapshot().diskFiles)
+        assertTrue(cache.snapshot().diskBytes <= 10L * 1024L * 1024L)
+
+        val relaunched = ProductImageCache(
+            testRoot = root,
+            diskMaxBytes = 10L * 1024L * 1024L,
+            diskMaxEntries = maxEntries,
+            diskMaxFiles = maxFiles
+        )
+        assertEquals(maxEntries, relaunched.snapshot().diskEntries)
+        assertEquals(maxFiles, relaunched.snapshot().diskFiles)
+        assertTrue(relaunched.snapshot().diskBytes <= 10L * 1024L * 1024L)
+    }
+
+    @Test
+    fun `write read and purge never follow a cache symlink to an external sentinel`() {
+        val cache = ProductImageCache(temporaryFolder.newFolder("cache-symlink"), Unit)
+        val reference = reference(cache.accountScope(accountOne), shopOne, versionOne)
+        val external = temporaryFolder.newFolder("external-sentinel")
+        val sentinel = File(external, "sentinel.txt").apply { writeText("do-not-touch") }
+        val productDirectory = cache.fileFor(reference).parentFile!!.parentFile!!
+        assertTrue(productDirectory.parentFile!!.mkdirs())
+        Files.createSymbolicLink(productDirectory.toPath(), external.toPath())
+
+        val error = runCatching { cache.write(reference, jpegBytes()) }.exceptionOrNull()
+        assertTrue(error is ProductImageException)
+        assertEquals("image_reference_invalid", (error as ProductImageException).code)
+        assertEquals("do-not-touch", sentinel.readText())
+
+        cache.purgeProduct(reference.accountScope, reference.shopId, reference.productId)
+        assertFalse(Files.exists(productDirectory.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertEquals("do-not-touch", sentinel.readText())
+
+        cache.write(reference, jpegBytes())
+        val jpeg = cache.fileFor(reference)
+        assertTrue(jpeg.delete())
+        Files.createSymbolicLink(jpeg.toPath(), sentinel.toPath())
+
+        assertNull(cache.read(reference))
+        assertFalse(Files.exists(jpeg.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assertFalse(cache.receiptFileFor(reference).exists())
+        assertEquals("do-not-touch", sentinel.readText())
     }
 
     @Test
@@ -199,6 +380,9 @@ class ProductImageCacheTest {
         versionId = version,
         variant = ProductImageVariant.THUMB
     )
+
+    private fun version(index: Int): String =
+        "00000000-0000-4000-8000-${index.toString().padStart(12, '0')}"
 
     private fun jpegBytes(): ByteArray {
         val bitmap = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)

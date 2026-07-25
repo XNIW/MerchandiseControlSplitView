@@ -2,6 +2,11 @@ package com.example.merchandisecontrolsplitview.data
 
 import com.example.merchandisecontrolsplitview.productimage.ProductImageApiClient
 import com.example.merchandisecontrolsplitview.productimage.ProductImageException
+import com.example.merchandisecontrolsplitview.productimage.ProductImageReadBody
+import com.example.merchandisecontrolsplitview.productimage.ProductImageReadResponse
+import com.example.merchandisecontrolsplitview.productimage.ProductImageReadRefBody
+import com.example.merchandisecontrolsplitview.productimage.ProductImageReference
+import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.productimage.downloadProductImageWithOneAuthRefresh
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.decodeFromString
@@ -77,10 +82,18 @@ class ProductImageCatalogContractTest {
             0xff.toByte(),
             0xd9.toByte()
         )
+        val expectedReference = ProductImageReference(
+            accountScope = "a".repeat(64),
+            shopId = "13700000-0000-4000-8000-000000000002",
+            productId = "13700000-0000-4000-8000-000000000003",
+            versionId = "13700000-0000-4000-8000-000000000004",
+            variant = ProductImageVariant.MAIN
+        )
         try {
             api.putSignedJpeg(
                 "https://attacker.invalid/storage/v1/object/upload/sign/product-images/main.jpg",
-                jpeg
+                jpeg,
+                expectedReference
             )
             fail("Expected the cross-origin signed URL to be rejected")
         } catch (error: ProductImageException) {
@@ -89,11 +102,71 @@ class ProductImageCatalogContractTest {
         try {
             api.putSignedJpeg(
                 "https://project-137.supabase.co/storage/v1/object/upload/sign/product-images/not-canonical/main.jpg",
-                jpeg
+                jpeg,
+                expectedReference
             )
             fail("Expected the non-canonical object path to be rejected")
         } catch (error: ProductImageException) {
             assertEquals("image_signed_url_invalid", error.code)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun `signed storage urls are bound to exact shop product version and variant`() = runTest {
+        val api = ProductImageApiClient(
+            apiBaseUrl = "https://admin.task139.invalid",
+            storageBaseUrl = "https://project-139.supabase.co",
+            debugBuild = false
+        )
+        val jpeg = byteArrayOf(
+            0xff.toByte(),
+            0xd8.toByte(),
+            0xff.toByte(),
+            0xd9.toByte()
+        )
+        val reference = ProductImageReference(
+            accountScope = "b".repeat(64),
+            shopId = "13900000-0000-4000-8000-000000000001",
+            productId = "13900000-0000-4000-8000-000000000002",
+            versionId = "13900000-0000-4000-8000-000000000003",
+            variant = ProductImageVariant.MAIN
+        )
+        val forgedPaths = listOf(
+            "shops/13900000-0000-4000-8000-000000000099/products/" +
+                "${reference.productId}/primary/${reference.versionId}/main.jpg",
+            "shops/${reference.shopId}/products/13900000-0000-4000-8000-000000000099/" +
+                "primary/${reference.versionId}/main.jpg",
+            "shops/${reference.shopId}/products/${reference.productId}/primary/" +
+                "13900000-0000-4000-8000-000000000099/main.jpg",
+            "shops/${reference.shopId}/products/${reference.productId}/primary/" +
+                "${reference.versionId}/thumb.jpg",
+            "shops/${reference.shopId}/products/${reference.productId}/primary/" +
+                "${reference.versionId}/%6dain.jpg"
+        )
+
+        try {
+            for (path in forgedPaths) {
+                val uploadError = runCatching {
+                    api.putSignedJpeg(
+                        "https://project-139.supabase.co/storage/v1/object/upload/sign/" +
+                            "product-images/$path?token=redacted-fixture",
+                        jpeg,
+                        reference
+                    )
+                }.exceptionOrNull() as? ProductImageException
+                assertEquals("image_signed_url_invalid", uploadError?.code)
+
+                val downloadError = runCatching {
+                    api.downloadSignedJpeg(
+                        "https://project-139.supabase.co/storage/v1/object/sign/" +
+                            "product-images/$path?token=redacted-fixture",
+                        reference
+                    )
+                }.exceptionOrNull() as? ProductImageException
+                assertEquals("image_signed_url_invalid", downloadError?.code)
+            }
         } finally {
             api.close()
         }
@@ -113,7 +186,7 @@ class ProductImageCatalogContractTest {
             download = {
                 downloads += 1
                 if (downloads == 1) {
-                    throw ProductImageException("image_download_failed_403")
+                    throw ProductImageException("image_request_failed", 403)
                 }
                 bytes
             }
@@ -122,6 +195,68 @@ class ProductImageCatalogContractTest {
         assertEquals(bytes.toList(), result.toList())
         assertEquals(2, resolves)
         assertEquals(2, downloads)
+    }
+
+    @Test
+    fun `read URLs rejects an oversized V6 batch before transport`() = runTest {
+        val api = ProductImageApiClient(
+            apiBaseUrl = "https://admin.task139.invalid",
+            storageBaseUrl = "https://project-139.supabase.co",
+            debugBuild = false
+        )
+        val body = ProductImageReadBody(
+            shopId = "13900000-0000-4000-8000-000000000001",
+            refs = List(17) {
+                ProductImageReadRefBody(
+                    productId = "13900000-0000-4000-8000-000000000002",
+                    variant = "thumb",
+                    versionId = "13900000-0000-4000-8000-000000000003"
+                )
+            }
+        )
+
+        try {
+            api.readUrls("fixture-token", body)
+            fail("Expected V6 read-URLs cap to fail before transport")
+        } catch (error: ProductImageException) {
+            assertEquals("image_read_contract_invalid", error.code)
+        } finally {
+            api.close()
+        }
+    }
+
+    @Test
+    fun `read URLs decodes integrity metadata only from the nested metadata object`() {
+        val response = json.decodeFromString<ProductImageReadResponse>(
+            """
+            {
+              "cacheScope":"${"a".repeat(64)}",
+              "items":[{
+                "expiresAt":"2026-07-23T12:00:00Z",
+                "metadata":{
+                  "bytes":1371,
+                  "height":96,
+                  "mimeType":"image/jpeg",
+                  "sha256":"${"b".repeat(64)}",
+                  "width":128
+                },
+                "productId":"13900000-0000-4000-8000-000000000002",
+                "signedUrl":"https://project-139.supabase.co/storage/v1/object/sign/product-images/path",
+                "status":"ready",
+                "variant":"thumb",
+                "versionId":"13900000-0000-4000-8000-000000000003"
+              }],
+              "ok":true
+            }
+            """.trimIndent()
+        )
+
+        val metadata = response.items.single().metadata
+        assertEquals(1371L, metadata?.bytes)
+        assertEquals(96, metadata?.height)
+        assertEquals("image/jpeg", metadata?.mimeType)
+        assertEquals("b".repeat(64), metadata?.sha256)
+        assertEquals(128, metadata?.width)
     }
 
     @Test

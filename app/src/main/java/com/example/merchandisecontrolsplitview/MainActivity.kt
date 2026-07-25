@@ -22,6 +22,7 @@ import android.util.Log
 import androidx.lifecycle.lifecycleScope
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
@@ -227,7 +228,23 @@ class MainActivity : ComponentActivity() {
                 return@launch
             }
 
-            app.repository.pullTask087CatalogFromRemote(remote).fold(
+            val shopContext = app.shopContextRepository.state.value
+            if (shopContext.ownerUserId != auth.userId) {
+                Log.w("Task087Smoke", "android_pull outcome=blocked reason=shop_context_owner_mismatch")
+                return@launch
+            }
+            val result = try {
+                app.catalogSyncStateTracker.withBusinessDataScopeFlight(
+                    ownerUserId = auth.userId,
+                    selectedShop = shopContext.selectedShop
+                ) {
+                    app.repository.pullTask087CatalogFromRemote(remote)
+                }
+            } catch (_: Task126BusinessDataScopeChangedException) {
+                Log.w("Task087Smoke", "android_pull outcome=blocked reason=business_scope_changed")
+                return@launch
+            }
+            result.fold(
                 onSuccess = { summary ->
                     Log.i(
                         "Task087Smoke",

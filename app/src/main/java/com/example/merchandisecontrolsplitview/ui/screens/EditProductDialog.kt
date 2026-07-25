@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -141,9 +143,17 @@ internal fun EditProductDialog(
     val thumbImageState = productImageStates[
         ProductImageUiKey(product.id, ProductImageVariant.THUMB)
     ]
+    val observedImageState = mainImageState != null || thumbImageState != null
+    val effectiveImageVersionId = if (observedImageState) {
+        mainImageState?.versionId ?: thumbImageState?.versionId
+    } else {
+        product.primaryImageVersionId
+    }
     var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
     var pendingCaptureUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val captureFiles = remember(product.id) { ProductImageCaptureFileTracker() }
     var confirmImageRemoval by remember { mutableStateOf(false) }
+    var hasSyncedRemoteRef by remember(product.id) { mutableStateOf<Boolean?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -161,10 +171,19 @@ internal fun EditProductDialog(
         pendingCaptureUri = null
         if (captured && uri != null && product.id != 0L) {
             viewModel.uploadProductImage(product.id, uri) {
-                file?.delete()
+                captureFiles.release(file)
             }
         } else {
-            file?.delete()
+            captureFiles.release(file)
+        }
+    }
+
+    LaunchedEffect(product.id) {
+        hasSyncedRemoteRef = if (product.id == 0L) {
+            false
+        } else {
+            runCatching { viewModel.hasSyncedProductImageReference(product.id) }
+                .getOrDefault(false)
         }
     }
 
@@ -179,9 +198,9 @@ internal fun EditProductDialog(
     DisposableEffect(product.id) {
         onDispose {
             if (product.id != 0L) {
-                viewModel.cancelProductImageLoad(product.id, ProductImageVariant.MAIN)
-                viewModel.cancelProductImageOperation(product.id)
+                viewModel.closeProductImageEditor(product.id)
             }
+            captureFiles.cleanup()
         }
     }
 
@@ -202,6 +221,7 @@ internal fun EditProductDialog(
             file.delete()
             return
         }
+        captureFiles.track(file)
         pendingCaptureFile = file
         pendingCaptureUri = uri
         cameraLauncher.launch(uri)
@@ -362,7 +382,8 @@ internal fun EditProductDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .imePadding(),
+                .imePadding()
+                .navigationBarsPadding(),
             contentAlignment = Alignment.Center
         ) {
             Card(
@@ -374,33 +395,48 @@ internal fun EditProductDialog(
             ) {
                 Column(
                     modifier = Modifier
-                        .padding(horizontal = 20.dp, vertical = 20.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text(stringResource(R.string.edit_product_title), style = MaterialTheme.typography.titleLarge)
 
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
                     ProductImageEditorSection(
                         product = product,
                         mainState = mainImageState,
                         thumbState = thumbImageState,
                         apiConfigured = viewModel.productImagesConfigured(),
                         canManage = viewModel.canManageProductImages(),
+                        hasSyncedRemoteRef = hasSyncedRemoteRef == true,
+                        currentImageVersionId = effectiveImageVersionId,
                         onChoosePhoto = {
+                            viewModel.discardFailedProductImageOperation(product.id)
                             photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                             )
                         },
-                        onTakePhoto = ::launchProductCamera,
+                        onTakePhoto = {
+                            viewModel.discardFailedProductImageOperation(product.id)
+                            launchProductCamera()
+                        },
                         onRetry = {
                             viewModel.loadProductImageProgressively(
                                 productId = product.id,
-                                expectedVersionId = product.primaryImageVersionId,
+                                expectedVersionId = effectiveImageVersionId,
                                 force = true
                             )
                         },
                         onCancelOperation = {
                             viewModel.cancelProductImageOperation(product.id)
+                        },
+                        onDiscardFailure = {
+                            viewModel.discardFailedProductImageOperation(product.id)
                         },
                         onRemove = { confirmImageRemoval = true }
                     )
@@ -570,10 +606,12 @@ internal fun EditProductDialog(
                     onClick = { showCategorySelectionDialog = true },
                     modifier = Modifier.fillMaxWidth()
                 )
+                    }
 
+                HorizontalDivider()
                 Row(modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                    .padding(top = 2.dp), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
@@ -656,30 +694,44 @@ internal fun ProductImageEditorSection(
     thumbState: ProductImageUiState?,
     apiConfigured: Boolean,
     canManage: Boolean,
+    hasSyncedRemoteRef: Boolean,
+    currentImageVersionId: String?,
     onChoosePhoto: () -> Unit,
     onTakePhoto: () -> Unit,
     onRetry: () -> Unit,
     onCancelOperation: () -> Unit,
+    onDiscardFailure: () -> Unit,
     onRemove: () -> Unit
 ) {
-    val working = mainState?.status in setOf(
-        ProductImageUiStatus.LOADING,
+    val mutationPhase = mainState?.mutationPhase ?: thumbState?.mutationPhase
+    val mutating = mainState?.status in setOf(
         ProductImageUiStatus.UPLOADING,
         ProductImageUiStatus.REMOVING
     ) || thumbState?.status in setOf(
-        ProductImageUiStatus.LOADING,
         ProductImageUiStatus.UPLOADING,
         ProductImageUiStatus.REMOVING
+    ) || mutationPhase == ProductImageMutationPhase.COMPLETED && (
+        mainState?.status == ProductImageUiStatus.LOADING ||
+            thumbState?.status == ProductImageUiStatus.LOADING
     )
-    val hasImage = product.primaryImageVersionId != null ||
-        mainState?.versionId != null || thumbState?.versionId != null
-    val mutationPhase = mainState?.mutationPhase ?: thumbState?.mutationPhase
+    val hasFailure = mainState?.status == ProductImageUiStatus.ERROR ||
+        thumbState?.status == ProductImageUiStatus.ERROR
+    val hasImage = currentImageVersionId != null
     val cancellable = mutationPhase in setOf(
         ProductImageMutationPhase.PREPROCESSING,
         ProductImageMutationPhase.UPLOAD_MAIN,
         ProductImageMutationPhase.UPLOAD_THUMB
     )
     val previewState = when {
+        mainState?.pendingPreviewBytes != null -> mainState.copy(
+            bytes = mainState.pendingPreviewBytes
+        )
+        thumbState?.pendingPreviewBytes != null -> thumbState.copy(
+            bytes = thumbState.pendingPreviewBytes,
+            status = mainState?.status ?: thumbState.status,
+            errorCode = mainState?.errorCode,
+            mutationPhase = mutationPhase
+        )
         mainState?.bytes != null -> mainState
         thumbState?.bytes != null -> thumbState.copy(
             status = mainState?.status ?: thumbState.status,
@@ -704,10 +756,10 @@ internal fun ProductImageEditorSection(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(190.dp)
             )
             when {
-                product.id == 0L -> Text(
+                product.id == 0L || !hasSyncedRemoteRef -> Text(
                     text = stringResource(R.string.product_image_save_first),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -719,7 +771,7 @@ internal fun ProductImageEditorSection(
                     color = MaterialTheme.colorScheme.error
                 )
 
-                mainState?.status == ProductImageUiStatus.ERROR -> Text(
+                hasFailure -> Text(
                     text = stringResource(R.string.product_image_operation_failed),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
@@ -746,47 +798,72 @@ internal fun ProductImageEditorSection(
                     Text(stringResource(R.string.product_image_cancel_operation))
                 }
             }
-            if (mainState?.status == ProductImageUiStatus.ERROR) {
+            if (hasFailure) {
                 TextButton(
-                    enabled = !working,
+                    enabled = !mutating,
                     onClick = onRetry,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.product_image_retry))
+                }
+                TextButton(
+                    enabled = !mutating,
+                    onClick = onDiscardFailure,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(R.string.product_image_discard_failed_attempt))
                 }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                TextButton(
-                    enabled = product.id != 0L && canManage && !working,
-                    onClick = onChoosePhoto,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.PhotoLibrary, contentDescription = null)
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.product_image_choose))
-                }
-                TextButton(
-                    enabled = product.id != 0L && canManage && !working,
+                Button(
+                    enabled = hasSyncedRemoteRef && canManage && !mutating,
                     onClick = onTakePhoto,
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.product_image_camera))
+                    Text(
+                        stringResource(
+                            if (hasImage) R.string.product_image_camera_new
+                            else R.string.product_image_camera
+                        ),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                TextButton(
+                    enabled = hasSyncedRemoteRef && canManage && !mutating,
+                    onClick = onChoosePhoto,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        stringResource(R.string.product_image_choose),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
             if (hasImage) {
                 TextButton(
-                    enabled = canManage && !working,
+                    enabled = hasSyncedRemoteRef && canManage && !mutating,
                     onClick = onRemove,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
                     Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.product_image_remove))
+                    Text(
+                        stringResource(R.string.product_image_remove),
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         }

@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
+import java.security.MessageDigest
+
 object Task126SyncPolicy {
     const val DEFAULT_STORE_ID = "default"
     const val SYNC_PROTOCOL_VERSION = 126
@@ -106,6 +108,143 @@ object Task126OwnerStoreGate {
 
         return Task126OwnerStoreGateDecision.Allowed
     }
+
+    /**
+     * Gate runtime del binding del database locale. Usa lo stesso contratto
+     * owner/store/local-store/protocollo del gate outbox, senza esporre l'ID
+     * account: il binding persistito contiene soltanto [Task126OwnerStoreScope.ownerHash].
+     */
+    fun validate(
+        boundScope: Task126OwnerStoreScope,
+        activeScope: Task126OwnerStoreScope
+    ): Task126OwnerStoreGateDecision {
+        if (boundScope.ownerHash != activeScope.ownerHash) {
+            return Task126OwnerStoreGateDecision.Blocked(Task126OwnerStoreGateDecision.Reason.OwnerMismatch)
+        }
+        if (boundScope.storeId != activeScope.storeId) {
+            return Task126OwnerStoreGateDecision.Blocked(Task126OwnerStoreGateDecision.Reason.StoreMismatch)
+        }
+        if (boundScope.localStoreId != activeScope.localStoreId) {
+            return Task126OwnerStoreGateDecision.Blocked(Task126OwnerStoreGateDecision.Reason.LocalStoreMismatch)
+        }
+        if (
+            boundScope.syncProtocolVersion != activeScope.syncProtocolVersion ||
+            boundScope.schemaVersion != activeScope.schemaVersion ||
+            boundScope.storeEpoch != activeScope.storeEpoch
+        ) {
+            return Task126OwnerStoreGateDecision.Blocked(Task126OwnerStoreGateDecision.Reason.SchemaMismatch)
+        }
+        return Task126OwnerStoreGateDecision.Allowed
+    }
+
+    fun resolveBinding(
+        boundScope: Task126OwnerStoreScope?,
+        activeScope: Task126OwnerStoreScope,
+        localSnapshot: LocalDatabaseStatusSnapshot
+    ): Task126BusinessDataBindingDecision {
+        if (boundScope == null) {
+            return if (localSnapshot.isCompletelyEmptyForBinding) {
+                Task126BusinessDataBindingDecision.BindEmpty
+            } else {
+                Task126BusinessDataBindingDecision.ReviewRequiredUnbound(localSnapshot)
+            }
+        }
+        return when (val decision = validate(boundScope, activeScope)) {
+            Task126OwnerStoreGateDecision.Allowed -> Task126BusinessDataBindingDecision.AllowExisting
+            is Task126OwnerStoreGateDecision.Blocked ->
+                Task126BusinessDataBindingDecision.Blocked(decision.reason)
+        }
+    }
+}
+
+sealed interface Task126BusinessDataBindingDecision {
+    data object AllowExisting : Task126BusinessDataBindingDecision
+    data object BindEmpty : Task126BusinessDataBindingDecision
+    data class ReviewRequiredUnbound(
+        val localSnapshot: LocalDatabaseStatusSnapshot
+    ) : Task126BusinessDataBindingDecision
+    data class Blocked(
+        val reason: Task126OwnerStoreGateDecision.Reason
+    ) : Task126BusinessDataBindingDecision
+}
+
+interface Task126BusinessDataScopeRepository {
+    suspend fun resolveBusinessDataScope(
+        activeScope: Task126OwnerStoreScope,
+        legacyBoundScope: Task126OwnerStoreScope? = null
+    ): Task126BusinessDataScopeState
+
+    suspend fun discardUnboundBusinessDataAndBind(
+        activeScope: Task126OwnerStoreScope
+    ): Task126BusinessDataScopeState
+
+    suspend fun replaceMismatchedBusinessDataAndBind(
+        activeScope: Task126OwnerStoreScope
+    ): Task126BusinessDataScopeState
+}
+
+enum class Task126BusinessDataScopeStatus {
+    /** Solo per test/unit wiring che non possiede un Application Android reale. */
+    UNMANAGED_ALLOWED,
+    CHECKING,
+    READY,
+    REVIEW_REQUIRED_UNBOUND,
+    BLOCKED_ACCOUNT_MISMATCH,
+    BLOCKED_SHOP_MISMATCH,
+    BLOCKED_SCHEMA_MISMATCH,
+    ERROR_RECOVERABLE
+}
+
+data class Task126BusinessDataScopeState(
+    val status: Task126BusinessDataScopeStatus,
+    val boundScope: Task126OwnerStoreScope? = null,
+    val localSnapshot: LocalDatabaseStatusSnapshot? = null,
+    val errorCode: String? = null
+) {
+    val allowsCloudSync: Boolean
+        get() = status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
+            status == Task126BusinessDataScopeStatus.READY
+
+    companion object {
+        fun unmanagedAllowed(): Task126BusinessDataScopeState =
+            Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED)
+
+        fun checking(): Task126BusinessDataScopeState =
+            Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING)
+
+        fun ready(scope: Task126OwnerStoreScope): Task126BusinessDataScopeState =
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.READY,
+                boundScope = scope
+            )
+    }
+}
+
+val LocalDatabaseStatusSnapshot.isCompletelyEmptyForBinding: Boolean
+    get() = products == 0 &&
+        suppliers == 0 &&
+        categories == 0 &&
+        priceHistoryRows == 0 &&
+        historySessions == 0 &&
+        pendingLocalChanges == 0 &&
+        syncEventOutboxPending == 0
+
+fun task126ActiveOwnerStoreScope(
+    ownerUserId: String,
+    selectedShop: SelectedShop?
+): Task126OwnerStoreScope {
+    val storeScope = shopScopedStoreScope(selectedShop)
+    return Task126OwnerStoreScope(
+        ownerHash = task126OwnerHash(ownerUserId),
+        storeId = storeScope,
+        localStoreId = null
+    )
+}
+
+internal fun task126OwnerHash(ownerUserId: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(ownerUserId.trim().toByteArray(Charsets.UTF_8))
+    return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
 }
 
 data class Task126ConflictMatrixCase(val id: String)

@@ -11,11 +11,14 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.SignOutScope
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.exception.AuthErrorCode
+import io.github.jan.supabase.auth.exception.AuthRestException
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.IDToken
 import io.github.jan.supabase.auth.status.SessionStatus
-import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.SupabaseClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +32,84 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+
+internal data class SupabaseSessionUser(
+    val id: String,
+    val email: String?
+)
+
+internal sealed interface StoredSessionRefreshResult {
+    data object Refreshed : StoredSessionRefreshResult
+    data class Invalid(val code: String) : StoredSessionRefreshResult
+    data object Deferred : StoredSessionRefreshResult
+}
+
+internal interface SupabaseAuthSessionController {
+    val sessionStatus: StateFlow<SessionStatus>
+
+    fun currentUserOrNull(): SupabaseSessionUser?
+    suspend fun refreshStoredSession(): StoredSessionRefreshResult
+    suspend fun clearSession()
+    suspend fun signInWithGoogleIdToken(idToken: String)
+    suspend fun signOut(scope: SignOutScope)
+}
+
+private class SupabaseClientAuthSessionController(
+    private val client: SupabaseClient
+) : SupabaseAuthSessionController {
+    override val sessionStatus: StateFlow<SessionStatus>
+        get() = client.auth.sessionStatus
+
+    override fun currentUserOrNull(): SupabaseSessionUser? =
+        client.auth.currentUserOrNull()?.let { user ->
+            SupabaseSessionUser(id = user.id, email = user.email)
+        }
+
+    override suspend fun refreshStoredSession(): StoredSessionRefreshResult = try {
+        client.auth.refreshCurrentSession()
+        StoredSessionRefreshResult.Refreshed
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: AuthRestException) {
+        val code = error.errorCode?.value ?: error.error
+        if (isDefinitiveStoredSessionFailure(code)) {
+            StoredSessionRefreshResult.Invalid(code.lowercase())
+        } else {
+            StoredSessionRefreshResult.Deferred
+        }
+    } catch (_: Throwable) {
+        StoredSessionRefreshResult.Deferred
+    }
+
+    override suspend fun clearSession() {
+        client.auth.clearSession()
+    }
+
+    override suspend fun signInWithGoogleIdToken(idToken: String) {
+        client.auth.signInWith(IDToken) {
+            provider = Google
+            this.idToken = idToken
+        }
+    }
+
+    override suspend fun signOut(scope: SignOutScope) {
+        client.auth.signOut(scope)
+    }
+}
+
+internal fun isDefinitiveStoredSessionFailure(code: String?): Boolean =
+    code?.lowercase() in setOf(
+        "invalid_grant",
+        AuthErrorCode.BadJwt.value,
+        AuthErrorCode.InvalidCredentials.value,
+        AuthErrorCode.NoAuthorization.value,
+        AuthErrorCode.RefreshTokenAlreadyUsed.value,
+        AuthErrorCode.RefreshTokenNotFound.value,
+        AuthErrorCode.SessionExpired.value,
+        AuthErrorCode.SessionNotFound.value,
+        AuthErrorCode.UserBanned.value,
+        AuthErrorCode.UserNotFound.value
+    )
 
 /**
  * Owner unico del lifecycle auth Supabase (task 011).
@@ -46,18 +127,37 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Percorso dati: sign-in -> Credential Manager -> Google ID Token -> Supabase IDToken exchange.
  * Non scrive Room, non altera repository, non gestisce dati business.
  */
-class SupabaseAuthManager(
-    private val client: io.github.jan.supabase.SupabaseClient?,
+class SupabaseAuthManager private constructor(
+    private val sessionController: SupabaseAuthSessionController?,
     private val googleWebClientId: String,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
+    constructor(
+        client: SupabaseClient?,
+        googleWebClientId: String,
+        scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    ) : this(
+        sessionController = client?.let(::SupabaseClientAuthSessionController),
+        googleWebClientId = googleWebClientId,
+        scope = scope
+    )
+
     companion object {
         private const val TAG = "SupabaseAuth"
         internal const val RESTORE_TIMEOUT_MS = 10_000L
+
+        internal fun createForTest(
+            sessionController: SupabaseAuthSessionController,
+            scope: CoroutineScope
+        ): SupabaseAuthManager = SupabaseAuthManager(
+            sessionController = sessionController,
+            googleWebClientId = "test-client-id",
+            scope = scope
+        )
     }
 
     /** true se il client è stato iniettato con successo e ha il modulo Auth. */
-    val isEnabled: Boolean = client != null
+    val isEnabled: Boolean = sessionController != null
 
     private val _state = MutableStateFlow<AuthState>(
         if (isEnabled) AuthState.Checking else AuthState.SignedOut
@@ -87,7 +187,8 @@ class SupabaseAuthManager(
      * Single-flight: se un restore e' gia' in corso, la chiamata e' ignorata.
      */
     fun restoreSession() {
-        if (!isEnabled || client == null) {
+        val controller = sessionController
+        if (!isEnabled || controller == null) {
             _state.value = AuthState.SignedOut
             Log.i(TAG, "restoreSession: disabled, going SignedOut")
             return
@@ -100,17 +201,48 @@ class SupabaseAuthManager(
             try {
                 Log.d(TAG, "restoreSession: waiting for session status (timeout ${RESTORE_TIMEOUT_MS}ms)")
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
-                    client.auth.sessionStatus.first { it !is SessionStatus.Initializing }
+                    controller.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
                 Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
                 when (status) {
                     is SessionStatus.Authenticated -> {
-                        val user = client.auth.currentUserOrNull()
-                        _state.value = AuthState.SignedIn(
-                            userId = user?.id ?: "",
-                            email = user?.email
-                        )
-                        Log.i(TAG, "Sessione ripristinata")
+                        val localUser = controller.currentUserOrNull()
+                        when (val refresh = controller.refreshStoredSession()) {
+                            StoredSessionRefreshResult.Refreshed -> {
+                                if (publishSignedIn(controller.currentUserOrNull() ?: localUser)) {
+                                    Log.i(TAG, "Sessione ripristinata e validata")
+                                } else {
+                                    try {
+                                        controller.clearSession()
+                                    } catch (_: Throwable) {
+                                        // Fail-closed applicativo anche se il cleanup storage fallisce.
+                                    }
+                                    Log.w(TAG, "Sessione validata senza identita account utilizzabile")
+                                }
+                            }
+
+                            is StoredSessionRefreshResult.Invalid -> {
+                                try {
+                                    controller.clearSession()
+                                } catch (_: Throwable) {
+                                    // Lo stato applicativo viene comunque invalidato; clear locale best-effort.
+                                }
+                                _state.value = AuthState.SignedOut
+                                Log.i(
+                                    TAG,
+                                    "Sessione persistita invalidata dal server code=${refresh.code}"
+                                )
+                            }
+
+                            StoredSessionRefreshResult.Deferred -> {
+                                // Offline-first: un errore rete/5xx non equivale a revoca della sessione.
+                                if (publishSignedIn(localUser)) {
+                                    Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
+                                } else {
+                                    Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
+                                }
+                            }
+                        }
                     }
                     else -> {
                         _state.value = AuthState.SignedOut
@@ -138,7 +270,8 @@ class SupabaseAuthManager(
      * @return true se il login e' riuscito, false se annullato, gia' in corso o fallito.
      */
     suspend fun signInWithGoogle(activityContext: Context): Boolean {
-        if (!isEnabled || client == null) return false
+        val controller = sessionController
+        if (!isEnabled || controller == null) return false
         if (!authMutex.tryLock()) return false
         try {
             _state.value = AuthState.Checking
@@ -150,16 +283,13 @@ class SupabaseAuthManager(
             )
 
             // 2. Scambio token con Supabase Auth
-            client.auth.signInWith(IDToken) {
-                provider = Google
-                idToken = googleIdToken
-            }
+            controller.signInWithGoogleIdToken(googleIdToken)
 
-            val user = client.auth.currentUserOrNull()
-            _state.value = AuthState.SignedIn(
-                userId = user?.id ?: "",
-                email = user?.email
-            )
+            if (!publishSignedIn(controller.currentUserOrNull())) {
+                controller.clearSession()
+                Log.w(TAG, "Sign-in completato senza identita account utilizzabile")
+                return false
+            }
             Log.i(TAG, "Sign-in Google completato")
             return true
         } catch (e: CancellationException) {
@@ -185,10 +315,10 @@ class SupabaseAuthManager(
      * Non effettua wipe di Room ne' dei dati locali (DEC-014, DEC-015).
      */
     suspend fun signOut() {
-        if (client == null) return
+        val controller = sessionController ?: return
         authMutex.withLock {
             try {
-                client.auth.signOut()
+                controller.signOut(SignOutScope.LOCAL)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -264,7 +394,7 @@ class SupabaseAuthManager(
      */
     private fun observeSessionStatus() {
         scope.launch {
-            client!!.auth.sessionStatus.collect { status ->
+            sessionController!!.sessionStatus.collect { status ->
                 when (status) {
                     is SessionStatus.NotAuthenticated -> {
                         if (_state.value is AuthState.SignedIn) {
@@ -284,5 +414,18 @@ class SupabaseAuthManager(
         is SessionStatus.Initializing -> "Initializing"
         is SessionStatus.NotAuthenticated -> "NotAuthenticated"
         else -> this::class.java.simpleName
+    }
+
+    private fun publishSignedIn(user: SupabaseSessionUser?): Boolean {
+        val userId = user?.id?.trim().orEmpty()
+        if (userId.isEmpty()) {
+            _state.value = AuthState.SignedOut
+            return false
+        }
+        _state.value = AuthState.SignedIn(
+            userId = userId,
+            email = user?.email
+        )
+        return true
     }
 }

@@ -26,10 +26,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SyncEventWatermark::class,
         SyncEventDeviceState::class,
         SyncEventOutboxEntry::class,
-        SyncEventApplyStatus::class
+        SyncEventApplyStatus::class,
+        BusinessDataScopeBinding::class,
+        SyncRecoveryJournal::class,
+        SyncRecoveryBaseline::class,
+        SyncRecoveryManifestRow::class
     ],
     views = [ProductPriceSummary::class],
-    version = 20,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(HistoryEntryConverters::class)
@@ -49,6 +53,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncEventDeviceStateDao(): SyncEventDeviceStateDao
     abstract fun syncEventOutboxDao(): SyncEventOutboxDao
     abstract fun syncEventApplyStatusDao(): SyncEventApplyStatusDao
+    abstract fun businessDataScopeBindingDao(): BusinessDataScopeBindingDao
+    abstract fun syncRecoveryJournalDao(): SyncRecoveryJournalDao
+    abstract fun syncRecoveryBaselineDao(): SyncRecoveryBaselineDao
+    abstract fun syncRecoveryManifestDao(): SyncRecoveryManifestDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -422,6 +430,123 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // 20 -> 21: binding account/shop single-row, atomico con il cache business Room.
+        // La migration non adotta dati esistenti: il primo avvio decide fail-closed
+        // usando il binding legacy autorevole oppure i conteggi globali del DB.
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `business_data_scope_binding` (
+                        `id` INTEGER NOT NULL,
+                        `ownerHash` TEXT NOT NULL,
+                        `storeId` TEXT NOT NULL,
+                        `localStoreId` TEXT NOT NULL,
+                        `syncProtocolVersion` INTEGER NOT NULL,
+                        `schemaVersion` INTEGER NOT NULL,
+                        `storeEpoch` INTEGER NOT NULL,
+                        `boundAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        // 21 -> 22: journal durevole del recovery verificato. Nessun dato business,
+        // binding o device identity viene modificato dalla migration.
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_recovery_journal` (
+                        `id` INTEGER NOT NULL,
+                        `ownerHash` TEXT NOT NULL,
+                        `storeScope` TEXT NOT NULL,
+                        `shopId` TEXT,
+                        `deviceId` TEXT NOT NULL,
+                        `authorizationMode` TEXT NOT NULL,
+                        `runId` TEXT,
+                        `phase` TEXT NOT NULL,
+                        `reason` TEXT NOT NULL,
+                        `blockingEventId` INTEGER,
+                        `attemptCount` INTEGER NOT NULL,
+                        `createdAtMs` INTEGER NOT NULL,
+                        `updatedAtMs` INTEGER NOT NULL,
+                        `nextRetryAtMs` INTEGER,
+                        `checkpointADigest` TEXT,
+                        `checkpointBDigest` TEXT,
+                        `stagingDatabaseName` TEXT,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_recovery_baseline` (
+                        `id` INTEGER NOT NULL,
+                        `generationId` TEXT NOT NULL,
+                        `ownerHash` TEXT NOT NULL,
+                        `storeScope` TEXT NOT NULL,
+                        `shopId` TEXT NOT NULL,
+                        `deviceId` TEXT NOT NULL,
+                        `scopeKind` TEXT NOT NULL,
+                        `scopeKey` TEXT NOT NULL,
+                        `checkpointJson` TEXT NOT NULL,
+                        `activatedAtMs` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sync_recovery_manifest` (
+                        `generationId` TEXT NOT NULL,
+                        `domain` TEXT NOT NULL,
+                        `remoteId` TEXT NOT NULL,
+                        `active` INTEGER NOT NULL,
+                        `idLine` TEXT NOT NULL,
+                        `versionLine` TEXT NOT NULL,
+                        `identityLine` TEXT,
+                        `payloadDigest` TEXT,
+                        PRIMARY KEY(`generationId`, `domain`, `remoteId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS
+                    `index_sync_recovery_manifest_generationId_domain_idLine`
+                    ON `sync_recovery_manifest` (`generationId`, `domain`, `idLine`)
+                    """.trimIndent()
+                )
+            }
+        }
+
+        internal val PRODUCTION_MIGRATIONS: List<Migration> = listOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+            MIGRATION_6_7,
+            MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12,
+            MIGRATION_12_13,
+            MIGRATION_13_14,
+            MIGRATION_14_15,
+            MIGRATION_15_16,
+            MIGRATION_16_17,
+            MIGRATION_17_18,
+            MIGRATION_18_19,
+            MIGRATION_19_20,
+            MIGRATION_20_21,
+            MIGRATION_21_22
+        )
+
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -429,27 +554,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_database"
                 )
-                    .addMigrations(
-                        MIGRATION_1_2,
-                        MIGRATION_2_3,
-                        MIGRATION_3_4,
-                        MIGRATION_4_5,
-                        MIGRATION_5_6,
-                        MIGRATION_6_7,
-                        MIGRATION_7_8,
-                        MIGRATION_8_9,
-                        MIGRATION_9_10,
-                        MIGRATION_10_11,
-                        MIGRATION_11_12,
-                        MIGRATION_12_13,
-                        MIGRATION_13_14,
-                        MIGRATION_14_15,
-                        MIGRATION_15_16,
-                        MIGRATION_16_17,
-                        MIGRATION_17_18,
-                        MIGRATION_18_19,
-                        MIGRATION_19_20
-                    )
+                    .addMigrations(*PRODUCTION_MIGRATIONS.toTypedArray())
                     .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                     .build().also { INSTANCE = it }
             }

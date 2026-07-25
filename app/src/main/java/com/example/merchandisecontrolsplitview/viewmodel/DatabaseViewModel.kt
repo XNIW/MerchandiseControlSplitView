@@ -30,6 +30,7 @@ import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
+import com.example.merchandisecontrolsplitview.BuildConfig
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.productimage.ProductImageBatchItem
 import com.example.merchandisecontrolsplitview.productimage.ProductImageException
@@ -43,6 +44,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
@@ -93,6 +95,8 @@ enum class ProductImageUiStatus {
 data class ProductImageUiState(
     val status: ProductImageUiStatus,
     val bytes: ByteArray? = null,
+    /** Preview JPEG bounded prodotta dalla stessa pipeline dell'upload, mai riferimento remoto. */
+    val pendingPreviewBytes: ByteArray? = null,
     val versionId: String? = null,
     val source: ProductImageLoadSource? = null,
     val errorCode: String? = null,
@@ -172,6 +176,11 @@ private const val PRODUCT_IMAGE_VISIBLE_BATCH_WINDOW_MS = 16L
 private val PRICE_HISTORY_MANUAL_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
+private data class ProductImageOwnerShopScope(
+    val accountId: String,
+    val shopId: String?
+)
+
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, FlowPreview::class)
 class DatabaseViewModel(
     app: Application,
@@ -202,14 +211,19 @@ class DatabaseViewModel(
     private val merchandiseApplication =
         getApplication<Application>() as MerchandiseControlApplication
     private var productImageScopeGeneration = 0L
+    private val _productImageScopeEpoch = MutableStateFlow(0L)
+    val productImageScopeEpoch: StateFlow<Long> = _productImageScopeEpoch.asStateFlow()
     private val _productImageStates = MutableStateFlow<Map<ProductImageUiKey, ProductImageUiState>>(emptyMap())
     val productImageStates: StateFlow<Map<ProductImageUiKey, ProductImageUiState>> =
         _productImageStates.asStateFlow()
     private val desiredProductImageVersions = mutableMapOf<ProductImageUiKey, String?>()
     private val productImageLoadJobs = mutableMapOf<ProductImageUiKey, Job>()
     private val productImageMutationJobs = mutableMapOf<Long, Job>()
+    private val failedProductImageRollbackStates =
+        mutableMapOf<Long, Map<ProductImageUiKey, ProductImageUiState?>>()
     private val visibleThumbVersions = linkedMapOf<Long, String?>()
     private val pendingVisibleThumbs = linkedMapOf<Long, String?>()
+    private var inFlightVisibleThumbProductIds = emptySet<Long>()
     private var visibleThumbBatchJob: Job? = null
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
@@ -246,6 +260,9 @@ class DatabaseViewModel(
 
     fun productImagesConfigured(): Boolean = productImageService.isConfigured
 
+    suspend fun hasSyncedProductImageReference(productId: Long): Boolean =
+        productId > 0L && repository.hasSyncedProductRemoteRef(productId)
+
     fun setProductImageVisible(
         productId: Long,
         expectedVersionId: String?,
@@ -258,6 +275,13 @@ class DatabaseViewModel(
             desiredProductImageVersions.remove(key)
             productImageLoadJobs.remove(key)?.cancel()
             _productImageStates.update { current -> current - key }
+            if (inFlightVisibleThumbProductIds.isNotEmpty() &&
+                inFlightVisibleThumbProductIds.none(visibleThumbVersions::containsKey)
+            ) {
+                visibleThumbBatchJob?.cancel()
+                visibleThumbBatchJob = null
+                inFlightVisibleThumbProductIds = emptySet()
+            }
             return
         }
 
@@ -302,8 +326,8 @@ class DatabaseViewModel(
         }
         val current = _productImageStates.value[key]
         if (!force &&
-            ((current?.status == ProductImageUiStatus.LOADING &&
-                current.versionId == expectedVersionId) ||
+            ((productImageLoadJobs[key]?.isActive == true &&
+                current?.versionId == expectedVersionId) ||
                 (current?.status == ProductImageUiStatus.READY && current.versionId == expectedVersionId))
         ) {
             return
@@ -423,6 +447,8 @@ class DatabaseViewModel(
         if (productImageMutationJobs[productId]?.isActive == true) return
         val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
         val previousStates = keys.associateWith { key -> _productImageStates.value[key] }
+        cancelProductImageLoadsForMutation(keys)
+        failedProductImageRollbackStates.remove(productId)
         keys.forEach { key ->
             val current = _productImageStates.value[key]
             updateProductImageState(
@@ -438,8 +464,32 @@ class DatabaseViewModel(
         val job = viewModelScope.launch {
             val generation = productImageScopeGeneration
             try {
-                val result = productImageService.upload(productId, sourceUri) { phase ->
-                    if (generation == productImageScopeGeneration) {
+                val result = productImageService.upload(
+                    localProductId = productId,
+                    sourceUri = sourceUri,
+                    onProgress = { phase ->
+                        if (generation == productImageScopeGeneration) {
+                            keys.forEach { key ->
+                                val current = _productImageStates.value[key]
+                                updateProductImageState(
+                                    key,
+                                    ProductImageUiState(
+                                        status = ProductImageUiStatus.UPLOADING,
+                                        bytes = current?.bytes,
+                                        pendingPreviewBytes = current?.pendingPreviewBytes,
+                                        versionId = current?.versionId,
+                                        mutationPhase = phase
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    onPrepared = onPrepared@{ prepared ->
+                        if (generation != productImageScopeGeneration) return@onPrepared
+                        val pendingByVariant = mapOf(
+                            ProductImageVariant.MAIN to prepared.main.bytes,
+                            ProductImageVariant.THUMB to prepared.thumb.bytes
+                        )
                         keys.forEach { key ->
                             val current = _productImageStates.value[key]
                             updateProductImageState(
@@ -447,13 +497,15 @@ class DatabaseViewModel(
                                 ProductImageUiState(
                                     status = ProductImageUiStatus.UPLOADING,
                                     bytes = current?.bytes,
+                                    pendingPreviewBytes = pendingByVariant.getValue(key.variant),
                                     versionId = current?.versionId,
-                                    mutationPhase = phase
+                                    mutationPhase = current?.mutationPhase
+                                        ?: ProductImageMutationPhase.PREPROCESSING
                                 )
                             )
                         }
                     }
-                }
+                )
                 if (generation != productImageScopeGeneration) return@launch
                 keys.forEach { key ->
                     desiredProductImageVersions[key] = result.versionId
@@ -461,6 +513,8 @@ class DatabaseViewModel(
                         key,
                         ProductImageUiState(
                             status = ProductImageUiStatus.LOADING,
+                            pendingPreviewBytes = _productImageStates.value[key]
+                                ?.pendingPreviewBytes,
                             versionId = result.versionId,
                             mutationPhase = ProductImageMutationPhase.COMPLETED
                         )
@@ -474,25 +528,37 @@ class DatabaseViewModel(
                 }
             } catch (error: CancellationException) {
                 if (generation == productImageScopeGeneration) {
-                    previousStates.forEach { (key, previous) ->
-                        if (previous == null) {
-                            _productImageStates.update { current -> current - key }
-                        } else {
-                            updateProductImageState(key, previous)
-                        }
-                    }
+                    restoreProductImageStates(previousStates)
                 }
+                failedProductImageRollbackStates.remove(productId)
                 throw error
             } catch (error: ProductImageException) {
                 if (generation != productImageScopeGeneration) return@launch
+                if (BuildConfig.DEBUG) {
+                    val failedPhase = keys.asSequence()
+                        .mapNotNull { key -> _productImageStates.value[key]?.mutationPhase }
+                        .firstOrNull()
+                    val retriable = error.code == "image_upload_failed" &&
+                        (error.httpStatus == null || error.httpStatus in 500..599)
+                    Log.w(
+                        "ProductImage",
+                        "operation=upload outcome=failed " +
+                            "errorCode=${error.code} " +
+                            "httpStatus=${error.httpStatus ?: "none"} " +
+                            "phase=${failedPhase?.name ?: "UNKNOWN"} " +
+                            "retriable=$retriable"
+                    )
+                }
+                failedProductImageRollbackStates[productId] = previousStates
                 keys.forEach { key ->
-                    val current = _productImageStates.value[key]
+                    val previous = previousStates[key]
                     updateProductImageState(
                         key,
                         ProductImageUiState(
                             status = ProductImageUiStatus.ERROR,
-                            bytes = current?.bytes,
-                            versionId = current?.versionId,
+                            bytes = previous?.bytes,
+                            versionId = previous?.versionId,
+                            source = previous?.source,
                             errorCode = error.code
                         )
                     )
@@ -506,6 +572,26 @@ class DatabaseViewModel(
             }
         }
         productImageMutationJobs[productId] = job
+    }
+
+    /**
+     * Scarta soltanto lo stato transitorio di un tentativo fallito. L'immagine
+     * corrente resta quella fotografata prima della mutation e il source URI
+     * non viene conservato per un retry implicito.
+     */
+    fun discardFailedProductImageOperation(productId: Long) {
+        if (productImageMutationJobs[productId]?.isActive == true) return
+        val rollback = failedProductImageRollbackStates.remove(productId) ?: return
+        val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        cancelProductImageLoadsForMutation(keys)
+        restoreProductImageStates(rollback)
+    }
+
+    fun closeProductImageEditor(productId: Long) {
+        cancelProductImageOperation(productId)
+        val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        cancelProductImageLoadsForMutation(keys)
+        failedProductImageRollbackStates.remove(productId)?.let(::restoreProductImageStates)
     }
 
     fun cancelProductImageOperation(productId: Long) {
@@ -525,6 +611,9 @@ class DatabaseViewModel(
     fun removeProductImage(productId: Long) {
         if (productImageMutationJobs[productId]?.isActive == true) return
         val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
+        val previousStates = keys.associateWith { key -> _productImageStates.value[key] }
+        cancelProductImageLoadsForMutation(keys)
+        failedProductImageRollbackStates.remove(productId)
         keys.forEach { key ->
             val current = _productImageStates.value[key]
             updateProductImageState(
@@ -545,6 +634,11 @@ class DatabaseViewModel(
                     desiredProductImageVersions[key] = null
                     updateProductImageState(key, ProductImageUiState(ProductImageUiStatus.ABSENT))
                 }
+            } catch (error: CancellationException) {
+                if (generation == productImageScopeGeneration) {
+                    restoreProductImageStates(previousStates)
+                }
+                throw error
             } catch (error: ProductImageException) {
                 if (generation != productImageScopeGeneration) return@launch
                 keys.forEach { key ->
@@ -604,6 +698,8 @@ class DatabaseViewModel(
                         }
                     }
                     if (requests.isEmpty()) continue
+                    inFlightVisibleThumbProductIds = requests
+                        .mapTo(linkedSetOf()) { it.localProductId }
                     requests.forEach { request ->
                         val key = ProductImageUiKey(request.localProductId, request.variant)
                         val current = _productImageStates.value[key]
@@ -625,6 +721,8 @@ class DatabaseViewModel(
                         requests.map { request ->
                             ProductImageBatchItem(request, errorCode = error.code)
                         }
+                    } finally {
+                        inFlightVisibleThumbProductIds = emptySet()
                     }
                     items.forEach { item ->
                         val key = ProductImageUiKey(
@@ -658,6 +756,7 @@ class DatabaseViewModel(
         completedMutation: Boolean = false
     ) {
         if (generation != productImageScopeGeneration ||
+            (!completedMutation && productImageMutationJobs[key.productId]?.isActive == true) ||
             !desiredProductImageVersions.containsKey(key) ||
             desiredProductImageVersions[key] != expectedVersionId
         ) {
@@ -697,13 +796,27 @@ class DatabaseViewModel(
 
     private fun observeProductImageScope() {
         viewModelScope.launch {
-            var previousScope: Pair<String, String?>? = null
+            var previousScope: ProductImageOwnerShopScope? = null
             combine(
                 merchandiseApplication.authManager.state,
                 merchandiseApplication.shopContextRepository.state
             ) { auth, shopContext ->
-                val accountId = (auth as? AuthState.SignedIn)?.userId.orEmpty()
-                accountId to shopContext.activeShopId
+                when (auth) {
+                    AuthState.Checking -> ProductImageOwnerShopScope("", null)
+                    AuthState.SignedOut,
+                    is AuthState.ErrorRecoverable -> ProductImageOwnerShopScope("", null)
+                    is AuthState.SignedIn -> {
+                        if (
+                            shopContext.ownerUserId != auth.userId ||
+                            shopContext.isLoading ||
+                            !shopContext.syncAllowed
+                        ) {
+                            ProductImageOwnerShopScope("", null)
+                        } else {
+                            ProductImageOwnerShopScope(auth.userId, shopContext.activeShopId)
+                        }
+                    }
+                }
             }
                 .distinctUntilChanged()
                 .collect { currentScope ->
@@ -712,22 +825,32 @@ class DatabaseViewModel(
                     if (oldScope == null || oldScope == currentScope) return@collect
 
                     productImageScopeGeneration += 1
-                    productImageLoadJobs.values.forEach(Job::cancel)
+                    _productImageScopeEpoch.value = productImageScopeGeneration
+                    val jobsToJoin = buildSet {
+                        addAll(productImageLoadJobs.values)
+                        addAll(productImageMutationJobs.values)
+                        visibleThumbBatchJob?.let { add(it) }
+                    }
+                    jobsToJoin.forEach(Job::cancel)
                     productImageLoadJobs.clear()
-                    productImageMutationJobs.values.forEach(Job::cancel)
                     productImageMutationJobs.clear()
+                    failedProductImageRollbackStates.clear()
                     visibleThumbBatchJob?.cancel()
                     visibleThumbBatchJob = null
+                    inFlightVisibleThumbProductIds = emptySet()
                     desiredProductImageVersions.clear()
                     visibleThumbVersions.clear()
                     pendingVisibleThumbs.clear()
                     _productImageStates.value = emptyMap()
 
-                    val oldAccountId = oldScope.first
+                    jobsToJoin.joinAll()
+
+                    val oldAccountId = oldScope.accountId
                     if (oldAccountId.isNotBlank()) {
                         try {
-                            val oldShopOnly = oldScope.second.takeIf {
-                                currentScope.first == oldAccountId && currentScope.first.isNotBlank()
+                            val oldShopOnly = oldScope.shopId.takeIf {
+                                currentScope.accountId == oldAccountId &&
+                                    currentScope.accountId.isNotBlank()
                             }
                             productImageService.purgeScope(oldAccountId, oldShopOnly)
                         } catch (_: ProductImageException) {
@@ -740,6 +863,21 @@ class DatabaseViewModel(
 
     private fun updateProductImageState(key: ProductImageUiKey, state: ProductImageUiState) {
         _productImageStates.update { current -> current + (key to state) }
+    }
+
+    private fun cancelProductImageLoadsForMutation(keys: List<ProductImageUiKey>) {
+        keys.mapNotNull(productImageLoadJobs::remove).toSet().forEach(Job::cancel)
+        keys.forEach(desiredProductImageVersions::remove)
+    }
+
+    private fun restoreProductImageStates(
+        states: Map<ProductImageUiKey, ProductImageUiState?>
+    ) {
+        _productImageStates.update { current ->
+            states.entries.fold(current) { restored, (key, state) ->
+                if (state == null) restored - key else restored + (key to state)
+            }
+        }
     }
 
     private val _supplierInputText = MutableStateFlow("")

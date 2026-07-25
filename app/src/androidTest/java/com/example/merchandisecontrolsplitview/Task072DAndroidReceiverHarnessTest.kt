@@ -45,8 +45,8 @@ class Task072DAndroidReceiverHarnessTest {
     @Test
     fun androidReceiverCatalogHistoryMatrixDbSnapshotAndOutbox() = runBlocking {
         val args = InstrumentationRegistry.getArguments()
-        val fixture = fixture(args.getString("task072DRunPrefix"))
         val runtime = runtime()
+        val fixture = fixture(args.getString("task072DRunPrefix"))
         val startedAt = System.currentTimeMillis()
 
         runtime.app.catalogAutoSyncCoordinator.onAppBackground()
@@ -255,7 +255,10 @@ class Task072DAndroidReceiverHarnessTest {
         assertTrue(app.productPriceRemoteDataSource.isConfigured)
         assertTrue(app.sessionBackupRemoteDataSource.isConfigured)
         assertTrue(app.syncEventRemoteDataSource.isConfigured)
-        app.syncEventRealtimeSubscriber.start(signedIn.userId)
+        // TASK-139 revoca il canale realtime/SELECT diretto su sync_events.
+        // Il receiver viene attivato dal coordinator lifecycle e legge soltanto
+        // tramite l'envelope RPC shop-scoped; il live harness non deve riaprire
+        // il subscriber legacy rimosso.
         assertDeviceActiveForHarness(app)
         withTimeoutOrNull(5_000) {
             app.catalogSyncStateTracker.state.first { !it.isBusy }

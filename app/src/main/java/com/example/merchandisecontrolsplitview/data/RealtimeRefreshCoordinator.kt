@@ -61,6 +61,9 @@ class RealtimeRefreshCoordinator(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     val debounceMs: Long = DEBOUNCE_MS,
     private val sessionFlightOwner: SessionCloudSessionFlightOwner = SessionCloudSessionFlightOwner(),
+    private val businessDataScopeAllowed: () -> Boolean = { true },
+    private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
+        Task126UnmanagedBusinessDataScopeRuntimeGuard,
     // Logger diagnostico iniettato: default no-op per restare compatibile con i test JVM
     // esistenti che non includono Robolectric (il coordinator non usa android.util.Log
     // direttamente). L'app reale inietta un wrapper su android.util.Log in
@@ -74,7 +77,12 @@ class RealtimeRefreshCoordinator(
 
     // Buffer coalescing: remoteId → payload (l'ultimo payload vince per ogni remoteId).
     // Accesso diretto da onRemoteSignal (chiamato dall'adapter Realtime) e da runDrain (coroutine).
-    private val pendingBuffer = LinkedHashMap<String, SessionRemotePayload>()
+    private data class ScopedPendingPayload(
+        val payload: SessionRemotePayload,
+        val signalToken: Task126BusinessDataScopeSignalToken
+    )
+
+    private val pendingBuffer = LinkedHashMap<String, ScopedPendingPayload>()
     private val bufferLock = Any()
 
     /**
@@ -103,16 +111,32 @@ class RealtimeRefreshCoordinator(
      * Thread-safe. Non blocca il chiamante.
      */
     fun onRemoteSignal(signal: RemoteSignal) {
+        if (!businessDataScopeAllowed()) {
+            logger("onRemoteSignal ignorato: business_scope_blocked")
+            return
+        }
         when (signal) {
             is RemoteSignal.PayloadAvailable -> {
+                val signalToken = try {
+                    businessDataScopeRuntimeGuard.captureBusinessDataScopeSignal(
+                        ownerUserId = signal.sourceScope.ownerUserId,
+                        shopId = signal.sourceScope.shopId
+                    )
+                } catch (_: Task126BusinessDataScopeChangedException) {
+                    logger("onRemoteSignal ignorato: source_scope_mismatch")
+                    return
+                }
                 val bufferedSize = synchronized(bufferLock) {
-                    pendingBuffer[signal.payload.remoteId] = signal.payload // coalescing: l'ultimo vince
+                    pendingBuffer[signal.payload.remoteId] = ScopedPendingPayload(
+                        payload = signal.payload,
+                        signalToken = signalToken
+                    )
                     pendingBuffer.size
                 }
                 _tickle.tryEmit(Unit)
                 logger(
-                    "onRemoteSignal accettato: remoteId=${signal.payload.remoteId} " +
-                        "payloadVersion=${signal.payload.payloadVersion} bufferSize=$bufferedSize " +
+                    "onRemoteSignal accettato: payloadVersion=${signal.payload.payloadVersion} " +
+                        "bufferSize=$bufferedSize " +
                         "isForeground=$isForeground"
                 )
             }
@@ -138,6 +162,15 @@ class RealtimeRefreshCoordinator(
         isForeground = false
     }
 
+    fun clearPendingForBusinessScopeChange() {
+        val cleared = synchronized(bufferLock) {
+            val size = pendingBuffer.size
+            pendingBuffer.clear()
+            size
+        }
+        logger("business_scope bufferCleared=$cleared")
+    }
+
     /**
      * Chiude il coordinator e cancella il suo CoroutineScope.
      * Chiamare al teardown del componente owner (es. Application.onTerminate nei test).
@@ -156,18 +189,42 @@ class RealtimeRefreshCoordinator(
      * (il collect blocca finché runDrain non ritorna), quindi non ci sono catene concorrenti.
      */
     internal suspend fun runDrain() {
-        if (!isForeground) {
-            logger("runDrain saltato: app in background (buffer trattenuto)")
-            return
+        try {
+            businessDataScopeRuntimeGuard.withCurrentBusinessDataScopeFlight drain@{
+                if (!businessDataScopeAllowed()) {
+                    clearPendingForBusinessScopeChange()
+                    logger("runDrain saltato: business_scope_blocked")
+                    return@drain
+                }
+                if (!isForeground) {
+                    logger("runDrain saltato: app in background (buffer trattenuto)")
+                    return@drain
+                }
+                val pending: List<ScopedPendingPayload>
+                synchronized(bufferLock) {
+                    if (pendingBuffer.isEmpty()) return@drain
+                    pending = pendingBuffer.values.toList()
+                    pendingBuffer.clear()
+                }
+                val toApply = pending
+                    .filter { scoped ->
+                        businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(
+                            scoped.signalToken
+                        )
+                    }
+                    .map { it.payload }
+                val rejected = pending.size - toApply.size
+                if (rejected > 0) {
+                    logger("runDrain: source_scope_stale rejected=$rejected")
+                }
+                if (toApply.isEmpty()) return@drain
+                logger("runDrain: applying batch size=${toApply.size}")
+                applyBatch(toApply)
+            }
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            clearPendingForBusinessScopeChange()
+            logger("runDrain saltato: business_scope_changed_during_apply")
         }
-        val toApply: List<SessionRemotePayload>
-        synchronized(bufferLock) {
-            if (pendingBuffer.isEmpty()) return
-            toApply = pendingBuffer.values.toList()
-            pendingBuffer.clear()
-        }
-        logger("runDrain: applying batch size=${toApply.size}")
-        applyBatch(toApply)
     }
 
     @OptIn(FlowPreview::class)
@@ -185,7 +242,18 @@ class RealtimeRefreshCoordinator(
     private suspend fun applyBatch(payloads: List<SessionRemotePayload>) {
         try {
             val result = sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
-                repository.applyRemoteSessionPayloadBatch(payloads)
+                // Il gate iniziale di runDrain impedisce di consumare un buffer gia'
+                // bloccato. Questo secondo controllo chiude il cambio account/shop
+                // che puo' avvenire mentre attendiamo il single-flight condiviso.
+                if (!businessDataScopeAllowed()) {
+                    null
+                } else {
+                    repository.applyRemoteSessionPayloadBatch(payloads)
+                }
+            }
+            if (result == null) {
+                logger("applyBatch saltato: business_scope_changed_before_room_apply")
+                return
             }
             logger(
                 "applyBatch done: inserted=${result.inserted} updated=${result.updated} " +
@@ -197,6 +265,8 @@ class RealtimeRefreshCoordinator(
                     "skipped=${result.skipped} dirtyLocalSkips=${result.skipped} failed=${result.failed} " +
                     "source=realtime"
             )
+        } catch (e: Task126BusinessDataScopeChangedException) {
+            throw e
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

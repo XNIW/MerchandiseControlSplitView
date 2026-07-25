@@ -2,10 +2,16 @@ package com.example.merchandisecontrolsplitview.data
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -183,6 +189,183 @@ class HistorySessionPushCoordinatorTest {
     }
 
     @Test
+    fun `139 checking business scope blocks history repository and remote`() = runTest {
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState.checking(),
+            expectedStatus = Task126BusinessDataScopeStatus.CHECKING
+        )
+    }
+
+    @Test
+    fun `139 unbound review blocks history repository and remote`() = runTest {
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND,
+                localSnapshot = LocalDatabaseStatusSnapshot(
+                    products = 1,
+                    suppliers = 0,
+                    categories = 0,
+                    priceHistoryRows = 1,
+                    historySessions = 1,
+                    pendingLocalChanges = 1,
+                    syncEventOutboxPending = 1
+                )
+            ),
+            expectedStatus = Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND
+        )
+    }
+
+    @Test
+    fun `139 owner mismatch state and bound scope gate block history repository and remote`() = runTest {
+        val shop = selectedShop("00000000-0000-4000-8000-000000000739")
+        val differentOwner = "00000000-0000-4000-8000-000000000938"
+        val mismatchedScope = task126ActiveOwnerStoreScope(differentOwner, shop)
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH,
+                boundScope = mismatchedScope
+            ),
+            expectedStatus = Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH,
+            shop = shop
+        )
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState.ready(mismatchedScope),
+            expectedStatus = Task126BusinessDataScopeStatus.READY,
+            shop = shop
+        )
+    }
+
+    @Test
+    fun `139 shop mismatch state and bound scope gate block history repository and remote`() = runTest {
+        val boundShop = selectedShop("00000000-0000-4000-8000-000000000738")
+        val activeShop = selectedShop("00000000-0000-4000-8000-000000000739")
+        val mismatchedScope = task126ActiveOwnerStoreScope(HISTORY_SCOPE_OWNER_139, boundShop)
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH,
+                boundScope = mismatchedScope
+            ),
+            expectedStatus = Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH,
+            shop = activeShop
+        )
+        assertBusinessScopeBlocksHistoryPush(
+            state = Task126BusinessDataScopeState.ready(mismatchedScope),
+            expectedStatus = Task126BusinessDataScopeStatus.READY,
+            shop = activeShop
+        )
+    }
+
+    @Test
+    fun `139 same owner and shop binding allows history push`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val remote = mockk<SessionBackupRemoteDataSource>()
+        val logs = mutableListOf<String>()
+        val shop = selectedShop("00000000-0000-4000-8000-000000000739")
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(
+                userId = HISTORY_SCOPE_OWNER_139,
+                email = "user@example.test"
+            )
+        )
+        every { remote.isConfigured } returns true
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(139L)
+        coEvery {
+            repository.pushHistorySessionsToRemote(
+                remote,
+                HISTORY_SCOPE_OWNER_139,
+                setOf(139L),
+                shop
+            )
+        } returns Result.success(
+            HistorySessionBackupPushSummary(
+                uploaded = 1,
+                skippedAlreadySynced = 0,
+                attempted = 1
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = remote,
+            authFlow = auth,
+            selectedShopProvider = { shop },
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            syncStateTracker = CatalogSyncStateTracker(
+                Task126BusinessDataScopeState.ready(
+                    task126ActiveOwnerStoreScope(HISTORY_SCOPE_OWNER_139, shop)
+                )
+            ),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("debounce_fired")
+
+        verify(exactly = 1) { remote.isConfigured }
+        coVerify(exactly = 1) { repository.getPendingHistorySessionPushUids() }
+        coVerify(exactly = 1) {
+            repository.pushHistorySessionsToRemote(
+                remote,
+                HISTORY_SCOPE_OWNER_139,
+                setOf(139L),
+                shop
+            )
+        }
+        assertTrue(logs.any { it.contains("cycle=push outcome=ok") })
+        assertTrue(logs.none { it.contains("reason=business_scope_blocked") })
+    }
+
+    @Test
+    fun `139 scope change while waiting for session flight performs zero history calls`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val remote = mockk<SessionBackupRemoteDataSource>()
+        val shop = selectedShop("00000000-0000-4000-8000-000000000739")
+        var currentShop = shop
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(
+                task126ActiveOwnerStoreScope(HISTORY_SCOPE_OWNER_139, shop)
+            )
+        )
+        val flightOwner = SessionCloudSessionFlightOwner()
+        every { remote.isConfigured } returns true
+        val holderEntered = CompletableDeferred<Unit>()
+        val releaseHolder = CompletableDeferred<Unit>()
+        val holder = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            flightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
+                holderEntered.complete(Unit)
+                releaseHolder.await()
+            }
+        }
+        holderEntered.await()
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = remote,
+            authFlow = MutableStateFlow<AuthState>(
+                AuthState.SignedIn(HISTORY_SCOPE_OWNER_139, "user@example.test")
+            ),
+            selectedShopProvider = { currentShop },
+            flightOwner = flightOwner,
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L
+        )
+
+        val cycle = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.runPushCycle("debounce_fired")
+        }
+        currentShop = selectedShop("00000000-0000-4000-8000-000000000839")
+        releaseHolder.complete(Unit)
+        holder.await()
+        cycle.await()
+
+        verify(exactly = 1) { remote.isConfigured }
+        coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
+        coVerify(exactly = 0) {
+            repository.pushHistorySessionsToRemote(any(), any(), any<Set<Long>>(), any())
+        }
+    }
+
+    @Test
     fun `040 failed push cycle logs classification and pending uid sample`() = runTest {
         val repository = mockk<InventoryRepository>()
         val logs = mutableListOf<String>()
@@ -238,7 +421,10 @@ class HistorySessionPushCoordinatorTest {
                 uploaded = 2,
                 skippedAlreadySynced = 0,
                 attempted = 2,
-                remoteIds = listOf(" SESSION-A ", "SESSION-B")
+                remoteIds = listOf(
+                    " 00000000-0000-4000-8000-000000000131 ",
+                    "00000000-0000-4000-8000-000000000132"
+                )
             )
         )
         val coordinator = HistorySessionPushCoordinator(
@@ -260,10 +446,77 @@ class HistorySessionPushCoordinatorTest {
         assertEquals(SyncEventDomains.HISTORY, event.domain)
         assertEquals(SyncEventTypes.HISTORY_CHANGED, event.eventType)
         assertEquals(2, event.changedCount)
-        assertEquals(listOf("session-a", "session-b"), event.entityIds?.sessionIds)
+        assertEquals(
+            listOf(
+                "00000000-0000-4000-8000-000000000131",
+                "00000000-0000-4000-8000-000000000132"
+            ),
+            event.entityIds?.sessionIds
+        )
         assertEquals(shop.shopId, event.storeId)
         assertEquals(shop.shopId, event.shopId)
         assertTrue(logs.any { it.contains("cycle=push syncEvent=history outcome=ok") })
+    }
+
+    @Test
+    fun `139 history push chunks complete events at the V6 25 session id cap`() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val logs = mutableListOf<String>()
+        val owner = "00000000-0000-4000-8000-000000000139"
+        val shop = selectedShop("00000000-0000-4000-8000-000000000739")
+        val syncEvents = CapturingSyncEventRemote131()
+        val auth = MutableStateFlow<AuthState>(
+            AuthState.SignedIn(userId = owner, email = "user@example.test")
+        )
+        val pendingUids = (1L..260L).toList()
+        val remoteIds = pendingUids.map {
+            "00000000-0000-4000-8000-${it.toString().padStart(12, '0')}"
+        }
+        coEvery { repository.getPendingHistorySessionPushUids() } returns pendingUids
+        coEvery {
+            repository.pushHistorySessionsToRemote(any(), owner, pendingUids.toSet(), shop)
+        } returns Result.success(
+            HistorySessionBackupPushSummary(
+                uploaded = remoteIds.size,
+                skippedAlreadySynced = 0,
+                attempted = remoteIds.size,
+                remoteIds = remoteIds
+            )
+        )
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            syncEventRemote = syncEvents,
+            authFlow = auth,
+            selectedShopProvider = { shop },
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("debounce_fired")
+
+        assertEquals(
+            List(10) { 25 } + listOf(10),
+            syncEvents.recorded.map { it.changedCount }
+        )
+        assertEquals(
+            List(10) { 25 } + listOf(10),
+            syncEvents.recorded.map { it.entityIds!!.sessionIds.size }
+        )
+        assertEquals(260, syncEvents.recorded.flatMap { it.entityIds!!.sessionIds }.distinct().size)
+        assertEquals(1, syncEvents.recorded.map { it.batchId }.distinct().size)
+        assertEquals(11, syncEvents.recorded.map { it.clientEventId }.distinct().size)
+        assertTrue(syncEvents.recorded.none { it.entityIds!!.isEmpty })
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push syncEvent=history outcome=ok") &&
+                    it.contains("sessions=260") &&
+                    it.contains("chunks=11") &&
+                    it.contains("recordedChunks=11")
+            }
+        )
     }
 
     @Test
@@ -288,7 +541,7 @@ class HistorySessionPushCoordinatorTest {
                 uploaded = 1,
                 skippedAlreadySynced = 0,
                 attempted = 1,
-                remoteIds = listOf(" SESSION-A ")
+                remoteIds = listOf(" 00000000-0000-4000-8000-000000000231 ")
             )
         )
         coEvery { outbox.insert(any()) } returns 7L
@@ -316,7 +569,7 @@ class HistorySessionPushCoordinatorTest {
                         it.eventType == SyncEventTypes.HISTORY_CHANGED &&
                         it.storeScope == "shop:${shop.shopId}" &&
                         it.changedCount == 1 &&
-                        it.entityIdsJson.contains("session-a") &&
+                        it.entityIdsJson.contains("00000000-0000-4000-8000-000000000231") &&
                         it.lastErrorType != null
                 }
             )
@@ -560,6 +813,48 @@ class HistorySessionPushCoordinatorTest {
 
         coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
         assertTrue(logs.any { it.contains("cycle=push outcome=device_status_retry_suppressed") })
+    }
+
+    private suspend fun TestScope.assertBusinessScopeBlocksHistoryPush(
+        state: Task126BusinessDataScopeState,
+        expectedStatus: Task126BusinessDataScopeStatus,
+        shop: SelectedShop = selectedShop("00000000-0000-4000-8000-000000000739")
+    ) {
+        val repository = mockk<InventoryRepository>()
+        val remote = mockk<SessionBackupRemoteDataSource>()
+        val logs = mutableListOf<String>()
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository,
+            remote = remote,
+            authFlow = MutableStateFlow<AuthState>(
+                AuthState.SignedIn(
+                    userId = HISTORY_SCOPE_OWNER_139,
+                    email = "user@example.test"
+                )
+            ),
+            selectedShopProvider = { shop },
+            flightOwner = SessionCloudSessionFlightOwner(logger = logs::add),
+            syncStateTracker = CatalogSyncStateTracker(state),
+            scope = backgroundScope,
+            debounceMs = 1L,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("debounce_fired")
+
+        verify(exactly = 0) { remote.isConfigured }
+        coVerify(exactly = 0) { repository.getPendingHistorySessionPushUids() }
+        assertTrue(
+            logs.any {
+                it.contains("cycle=push outcome=skip") &&
+                    it.contains("reason=business_scope_blocked") &&
+                    it.contains("scopeStatus=$expectedStatus")
+            }
+        )
+    }
+
+    private companion object {
+        const val HISTORY_SCOPE_OWNER_139 = "00000000-0000-4000-8000-000000000139"
     }
 }
 

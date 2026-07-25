@@ -11,15 +11,18 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsBytes
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.contentType
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.cancel
+import io.ktor.utils.io.readRemaining
 import java.net.URI
 import kotlinx.coroutines.CancellationException
+import kotlinx.io.readByteArray
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -57,17 +60,41 @@ internal class ProductImageApiClient(
     override suspend fun readUrls(
         accessToken: String,
         body: ProductImageReadBody
-    ): ProductImageReadResponse = postJson("read-urls", accessToken, body)
-
-    override suspend fun putSignedJpeg(signedUrl: String, bytes: ByteArray) {
-        if (bytes.isEmpty() ||
-            bytes.size > PRODUCT_IMAGE_MAIN_MAX_BYTES ||
-            !isJpeg(bytes) ||
-            jpegContainsApp1(bytes)
-        ) {
-            throw ProductImageException("image_upload_bytes_invalid")
+    ): ProductImageReadResponse {
+        // Keep the V6 fan-out boundary at the transport entry point too. The
+        // service already chunks requests, but a future gateway caller must
+        // not be able to bypass the server/client contract or grow a signed
+        // URL response past the bounded decoder budget.
+        if (body.refs.size !in 1..PRODUCT_IMAGE_READ_URLS_MAX_REFS) {
+            throw ProductImageException("image_read_contract_invalid")
         }
-        val safeUrl = validateSignedUrl(signedUrl, upload = true)
+        return postJson(
+            operation = "read-urls",
+            accessToken = accessToken,
+            body = body,
+            maximumResponseBytes = PRODUCT_IMAGE_READ_URLS_RESPONSE_MAX_BYTES
+        )
+    }
+
+    override suspend fun putSignedJpeg(
+        signedUrl: String,
+        bytes: ByteArray,
+        expectedReference: ProductImageReference
+    ) {
+        if (bytes.isEmpty() ||
+            bytes.size > expectedReference.variant.maxBytes ||
+            !isJpeg(bytes)
+        ) {
+            throw ProductImageException("image_encode_failed")
+        }
+        if (jpegContainsForbiddenMetadata(bytes)) {
+            throw ProductImageException("image_metadata_forbidden")
+        }
+        val safeUrl = validateSignedUrl(
+            signedUrl,
+            upload = true,
+            expectedReference = expectedReference
+        )
         val response = try {
             http.submitFormWithBinaryData(
                 url = safeUrl,
@@ -92,15 +119,20 @@ internal class ProductImageApiClient(
             throw ProductImageException("image_upload_failed")
         }
         if (response.status.value !in 200..299) {
-            throw ProductImageException("image_upload_failed_${response.status.value}")
+            throw ProductImageException("image_upload_failed", response.status.value)
         }
     }
 
     override suspend fun downloadSignedJpeg(
         signedUrl: String,
-        variant: ProductImageVariant
+        expectedReference: ProductImageReference
     ): ByteArray {
-        val safeUrl = validateSignedUrl(signedUrl, upload = false)
+        val variant = expectedReference.variant
+        val safeUrl = validateSignedUrl(
+            signedUrl,
+            upload = false,
+            expectedReference = expectedReference
+        )
         val response = try {
             http.get(safeUrl) {
                 accept(ContentType.Image.JPEG)
@@ -108,10 +140,10 @@ internal class ProductImageApiClient(
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {
-            throw ProductImageException("image_download_failed")
+            throw ProductImageException("image_request_failed")
         }
         if (response.status.value !in 200..299) {
-            throw ProductImageException("image_download_failed_${response.status.value}")
+            throw ProductImageException("image_request_failed", response.status.value)
         }
         val declaredLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
         if (declaredLength != null && declaredLength !in 1..variant.maxBytes.toLong()) {
@@ -125,16 +157,18 @@ internal class ProductImageApiClient(
             throw ProductImageException("image_download_invalid")
         }
         val bytes = try {
-            response.bodyAsBytes()
+            readProductImageBodyBounded(response.bodyAsChannel(), variant.maxBytes)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: ProductImageException) {
+            throw error
         } catch (_: Throwable) {
-            throw ProductImageException("image_download_failed")
+            throw ProductImageException("image_request_failed")
         }
         if (bytes.isEmpty() ||
             bytes.size > variant.maxBytes ||
             !isJpeg(bytes) ||
-            jpegContainsApp1(bytes)
+            jpegContainsForbiddenMetadata(bytes)
         ) {
             throw ProductImageException("image_download_invalid")
         }
@@ -148,9 +182,10 @@ internal class ProductImageApiClient(
     private suspend inline fun <reified Request : Any, reified Response : Any> postJson(
         operation: String,
         accessToken: String,
-        body: Request
+        body: Request,
+        maximumResponseBytes: Int = PRODUCT_IMAGE_API_BODY_MAX_BYTES
     ): Response {
-        val root = baseUrl ?: throw ProductImageException("image_api_not_configured")
+        val root = baseUrl ?: throw ProductImageException("image_request_failed")
         if (accessToken.isBlank()) throw ProductImageException("image_session_missing")
         val response = try {
             http.post("$root/api/shop/product-images/$operation") {
@@ -165,22 +200,28 @@ internal class ProductImageApiClient(
             throw ProductImageException("image_request_failed")
         }
         if (response.status.value !in 200..299) {
-            throw ProductImageException("image_request_failed_${response.status.value}")
+            throw ProductImageException("image_request_failed", response.status.value)
         }
         val text = try {
-            response.bodyAsText()
+            readProductImageBodyBounded(
+                response.bodyAsChannel(),
+                maximumResponseBytes,
+                overflowCode = "image_request_failed"
+            ).toString(Charsets.UTF_8)
         } catch (error: CancellationException) {
             throw error
+        } catch (error: ProductImageException) {
+            throw error
         } catch (_: Throwable) {
-            throw ProductImageException("image_response_invalid")
+            throw ProductImageException("image_request_failed")
         }
-        if (text.isBlank() || text.encodeToByteArray().size > PRODUCT_IMAGE_API_BODY_MAX_BYTES) {
-            throw ProductImageException("image_response_invalid")
+        if (text.isBlank()) {
+            throw ProductImageException("image_request_failed")
         }
         return try {
             json.decodeFromString<Response>(text)
         } catch (_: Throwable) {
-            throw ProductImageException("image_response_invalid")
+            throw ProductImageException("image_request_failed")
         }
     }
 
@@ -190,16 +231,20 @@ internal class ProductImageApiClient(
         val uri = try {
             URI(trimmed)
         } catch (_: Throwable) {
-            throw ProductImageException("image_api_url_invalid")
+            throw ProductImageException("image_request_failed")
         }
         if (uri.userInfo != null || uri.query != null || uri.fragment != null || uri.host.isNullOrBlank()) {
-            throw ProductImageException("image_api_url_invalid")
+            throw ProductImageException("image_request_failed")
         }
-        if (!isAllowedTransport(uri)) throw ProductImageException("image_api_url_invalid")
+        if (!isAllowedTransport(uri)) throw ProductImageException("image_request_failed")
         return trimmed
     }
 
-    private fun validateSignedUrl(value: String, upload: Boolean): String {
+    private fun validateSignedUrl(
+        value: String,
+        upload: Boolean,
+        expectedReference: ProductImageReference
+    ): String {
         val expectedStorageRoot = storageRoot
             ?: throw ProductImageException("image_signed_url_invalid")
         val uri = try {
@@ -220,13 +265,25 @@ internal class ProductImageApiClient(
         } else {
             "/storage/v1/object/sign/product-images/"
         }
-        val objectPath = uri.rawPath.orEmpty().removePrefix(marker)
-        val uuid = PRODUCT_IMAGE_UUID_PATTERN.pattern.removePrefix("^").removeSuffix("$")
-        val canonicalPath = Regex(
-            "^shops/$uuid/products/$uuid/primary/$uuid/(main|thumb)\\.jpg$",
-            RegexOption.IGNORE_CASE
-        )
-        if (!uri.rawPath.orEmpty().startsWith(marker) || !canonicalPath.matches(objectPath)) {
+        val expectedObjectPath = buildString {
+            append("shops/")
+            append(expectedReference.shopId)
+            append("/products/")
+            append(expectedReference.productId)
+            append("/primary/")
+            append(expectedReference.versionId)
+            append('/')
+            append(expectedReference.variant.wireName)
+            append(".jpg")
+        }
+        val rawPath = uri.rawPath.orEmpty()
+        if (!PRODUCT_IMAGE_CACHE_SCOPE_PATTERN.matches(expectedReference.accountScope) ||
+            !PRODUCT_IMAGE_UUID_PATTERN.matches(expectedReference.shopId) ||
+            !PRODUCT_IMAGE_UUID_PATTERN.matches(expectedReference.productId) ||
+            !PRODUCT_IMAGE_UUID_PATTERN.matches(expectedReference.versionId) ||
+            !rawPath.startsWith(marker) ||
+            !rawPath.removePrefix(marker).equals(expectedObjectPath, ignoreCase = true)
+        ) {
             throw ProductImageException("image_signed_url_invalid")
         }
         return uri.toASCIIString()
@@ -263,4 +320,18 @@ internal class ProductImageApiClient(
             }
         }
     }
+}
+
+internal suspend fun readProductImageBodyBounded(
+    channel: ByteReadChannel,
+    maximumBytes: Int,
+    overflowCode: String = "image_download_invalid"
+): ByteArray {
+    require(maximumBytes > 0)
+    val bytes = channel.readRemaining(maximumBytes.toLong() + 1L).readByteArray()
+    if (bytes.size > maximumBytes) {
+        channel.cancel()
+        throw ProductImageException(overflowCode)
+    }
+    return bytes
 }

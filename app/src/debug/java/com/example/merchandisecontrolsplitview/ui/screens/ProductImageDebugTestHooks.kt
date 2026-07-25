@@ -15,10 +15,13 @@ fun ProductImageEditorSectionDebugTestHook(
     thumbState: ProductImageUiState?,
     apiConfigured: Boolean,
     canManage: Boolean,
+    hasSyncedRemoteRef: Boolean = product.id != 0L,
+    currentImageVersionId: String? = product.primaryImageVersionId,
     onChoosePhoto: () -> Unit,
     onTakePhoto: () -> Unit,
     onRetry: () -> Unit,
     onCancelOperation: () -> Unit,
+    onDiscardFailure: () -> Unit = {},
     onRemove: () -> Unit
 ) {
     ProductImageEditorSection(
@@ -27,10 +30,13 @@ fun ProductImageEditorSectionDebugTestHook(
         thumbState = thumbState,
         apiConfigured = apiConfigured,
         canManage = canManage,
+        hasSyncedRemoteRef = hasSyncedRemoteRef,
+        currentImageVersionId = currentImageVersionId,
         onChoosePhoto = onChoosePhoto,
         onTakePhoto = onTakePhoto,
         onRetry = onRetry,
         onCancelOperation = onCancelOperation,
+        onDiscardFailure = onDiscardFailure,
         onRemove = onRemove
     )
 }

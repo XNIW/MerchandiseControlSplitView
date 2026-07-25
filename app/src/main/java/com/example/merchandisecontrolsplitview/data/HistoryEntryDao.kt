@@ -12,6 +12,14 @@ internal const val USER_VISIBLE_HISTORY_WHERE_CLAUSE = """
     AND (deletedAt IS NULL OR syncStatus = 'NOT_ATTEMPTED')
 """
 
+data class HistoryRecoveryPhysicalRow(
+    @Embedded val entry: HistoryEntry,
+    @ColumnInfo(name = "recoveryRemoteId") val remoteId: String,
+    @ColumnInfo(name = "recoveryLocalRevision") val localRevision: Int,
+    @ColumnInfo(name = "recoverySyncedRevision") val syncedRevision: Int,
+    @ColumnInfo(name = "recoveryPayloadFingerprint") val payloadFingerprint: String?
+)
+
 @Dao
 interface HistoryEntryDao {
     @Query(
@@ -70,6 +78,14 @@ interface HistoryEntryDao {
     @Delete
     suspend fun delete(entry: HistoryEntry)
 
+    /**
+     * Usato solo dal recovery V6 sul database staging isolato: una tombstone
+     * remota non deve restare una riga fisica nella generation pubblicabile.
+     * Il FK del bridge remote ha ON DELETE CASCADE.
+     */
+    @Query("DELETE FROM history_entries WHERE uid = :uid")
+    suspend fun deleteByUid(uid: Long): Int
+
     @Query("SELECT * FROM history_entries WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): HistoryEntry?
 
@@ -96,6 +112,25 @@ interface HistoryEntryDao {
             " ORDER BY timestamp DESC"
     )
     suspend fun getAllUserVisibleSnapshot(): List<HistoryEntry>
+
+    @Query(
+        """
+        SELECT h.*,
+               r.remoteId AS recoveryRemoteId,
+               r.localChangeRevision AS recoveryLocalRevision,
+               r.lastSyncedLocalRevision AS recoverySyncedRevision,
+               r.lastRemotePayloadFingerprint AS recoveryPayloadFingerprint
+        FROM history_entries h
+        INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE (:afterRemoteId IS NULL OR r.remoteId > :afterRemoteId)
+        ORDER BY r.remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecoveryPhysicalPage(
+        afterRemoteId: String?,
+        limit: Int
+    ): List<HistoryRecoveryPhysicalRow>
 
     @Query(
         "SELECT * FROM history_entries WHERE uid IN (:uids) AND " +

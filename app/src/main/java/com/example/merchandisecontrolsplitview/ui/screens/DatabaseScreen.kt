@@ -96,6 +96,7 @@ fun DatabaseScreen(
     val categoryOptions by viewModel.categories.collectAsState()
     val productDetailsOverrides by viewModel.productDetailsOverrides.collectAsState()
     val productImageStates by viewModel.productImageStates.collectAsState()
+    val productImageScopeEpoch by viewModel.productImageScopeEpoch.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val productListState = key(filter.orEmpty()) { rememberLazyListState() }
     val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
@@ -120,6 +121,10 @@ fun DatabaseScreen(
     var catalogGuidedDeleteTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
     var catalogReplacementTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
     var catalogClearAssignmentsTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
+
+    LaunchedEffect(productImageScopeEpoch) {
+        itemToEdit = null
+    }
 
     fun openNewProductEditor(barcode: String = "") {
         itemToEdit = Product(

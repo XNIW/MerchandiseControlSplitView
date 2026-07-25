@@ -22,6 +22,153 @@ class CatalogAutoSyncCoordinatorTest {
     @Test
     fun `123 default catalog auto push debounce stays within warm autosync budget`() {
         assertEquals(500L, CatalogAutoSyncCoordinator.DEBOUNCE_MS)
+        assertEquals(2_000L, CatalogAutoSyncCoordinator.FOREGROUND_SYNC_EVENT_INTERVAL_MS)
+    }
+
+    @Test
+    fun `139 checking review and owner or shop mismatch block every automatic catalog path`() = runTest {
+        val selectedShop = selectedShop(SHOP_ID)
+        val activeScope = task126ActiveOwnerStoreScope(USER_ID, selectedShop)
+        val blockedStates = listOf(
+            Task126BusinessDataScopeState.checking(),
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND
+            ),
+            Task126BusinessDataScopeState.ready(
+                Task126OwnerStoreScope(
+                    ownerHash = "synthetic-other-owner-hash",
+                    storeId = activeScope.storeId,
+                    localStoreId = activeScope.localStoreId
+                )
+            ),
+            Task126BusinessDataScopeState.ready(
+                Task126OwnerStoreScope(
+                    ownerHash = activeScope.ownerHash,
+                    storeId = "shop:synthetic-other-shop",
+                    localStoreId = null
+                )
+            )
+        )
+
+        blockedStates.forEach { blockedState ->
+            val repository = FakeCatalogAutoSyncRepository043().apply {
+                shouldBootstrap = false
+                hasPendingWork = true
+            }
+            val tracker = CatalogSyncStateTracker(blockedState)
+            val catalogRemote = FakeCatalogRemote043()
+            val syncEventRemote = FakeSyncEventRemote043()
+            val deviceRemote = FakeShopDeviceRegistrationRemote072(status = "active")
+            val logs = mutableListOf<String>()
+            val coordinator = CatalogAutoSyncCoordinator(
+                repository = repository,
+                remote = catalogRemote,
+                priceRemote = FakePriceRemote043(),
+                syncEventRemote = syncEventRemote,
+                deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote),
+                authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+                selectedShopProvider = { selectedShop },
+                syncStateTracker = tracker,
+                scope = backgroundScope,
+                debounceMs = Long.MAX_VALUE,
+                logger = { logs += it }
+            )
+
+            coordinator.runBootstrapCycle("auth_signed_in")
+            coordinator.runPushCycle("local_catalog_commit")
+            coordinator.runSyncEventDrainCycle("foreground")
+
+            assertEquals(0, repository.bootstrapCalls)
+            assertEquals(0, repository.pushCalls)
+            assertEquals(0, repository.quickWithEventsCalls)
+            assertEquals(0, repository.drainCalls)
+            assertEquals(0, deviceRemote.statusCalls)
+            assertEquals(0, catalogRemote.configurationReads)
+            assertEquals(0, syncEventRemote.configurationReads)
+            assertEquals(3, logs.count { it.contains("reason=business_scope_blocked") })
+            coordinator.shutdown()
+        }
+    }
+
+    @Test
+    fun `139 same owner and shop scope allows bootstrap push drain and device checks`() = runTest {
+        val selectedShop = selectedShop(SHOP_ID)
+        val activeScope = task126ActiveOwnerStoreScope(USER_ID, selectedShop)
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = true
+            hasPendingWork = true
+        }
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(activeScope))
+        tracker.updateNetworkAvailability(true)
+        val catalogRemote = FakeCatalogRemote043()
+        val syncEventRemote = FakeSyncEventRemote043()
+        val deviceRemote = FakeShopDeviceRegistrationRemote072(status = "active")
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = catalogRemote,
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = syncEventRemote,
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE
+        )
+
+        coordinator.runBootstrapCycle("auth_signed_in")
+        repository.shouldBootstrap = false
+        coordinator.runPushCycle("local_catalog_commit")
+        coordinator.runSyncEventDrainCycle("foreground")
+
+        assertEquals(1, repository.bootstrapCalls)
+        assertEquals(0, repository.pushCalls)
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(1, repository.drainCalls)
+        assertEquals(3, deviceRemote.statusCalls)
+        assertTrue(catalogRemote.configurationReads > 0)
+        assertTrue(syncEventRemote.configurationReads > 0)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `139 scope change during device check blocks catalog remote write`() = runTest {
+        val selectedShop = selectedShop(SHOP_ID)
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(
+                task126ActiveOwnerStoreScope(USER_ID, selectedShop)
+            )
+        )
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+        }
+        val deviceRemote = FakeShopDeviceRegistrationRemote072(status = "active").apply {
+            onStatusCall = {
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            }
+        }
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = logs::add
+        )
+
+        coordinator.runPushCycle("local_catalog_commit")
+
+        assertEquals(1, deviceRemote.statusCalls)
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("business_scope_changed_during_device_check") })
+        coordinator.shutdown()
     }
 
     @Test
@@ -194,6 +341,7 @@ class CatalogAutoSyncCoordinatorTest {
     fun `043 auto push skips while a manual catalog flight owns the tracker`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043()
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
             remote = FakeCatalogRemote043(),
@@ -226,6 +374,7 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L,
@@ -253,6 +402,7 @@ class CatalogAutoSyncCoordinatorTest {
             clearPendingOnPush = true
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val logs = mutableListOf<String>()
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
@@ -260,6 +410,7 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L,
@@ -287,12 +438,14 @@ class CatalogAutoSyncCoordinatorTest {
             shouldBootstrap = false
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
             remote = FakeCatalogRemote043(),
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L
@@ -314,6 +467,7 @@ class CatalogAutoSyncCoordinatorTest {
             shouldBootstrap = true
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val logs = mutableListOf<String>()
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
@@ -321,6 +475,7 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = Long.MAX_VALUE,
@@ -347,6 +502,7 @@ class CatalogAutoSyncCoordinatorTest {
             )
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val logs = mutableListOf<String>()
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
@@ -354,6 +510,7 @@ class CatalogAutoSyncCoordinatorTest {
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = Long.MAX_VALUE,
@@ -366,6 +523,44 @@ class CatalogAutoSyncCoordinatorTest {
         assertEquals(0, repository.quickWithEventsCalls)
         assertEquals(null, tracker.lastOutcome.value?.source)
         assertTrue(logs.any { it.contains("automatic_push_safety_guard") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `139 quick push gap closes scope and does not enqueue another drain`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            hasPendingWork = true
+            nextQuickSummary = emptySummary(pushedProducts = 1).copy(
+                manualFullSyncRequired = true,
+                syncEventsGapDetected = true
+            )
+        }
+        val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L
+        )
+
+        coordinator.runPushCycle("local_commit")
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertEquals(0, repository.drainCalls)
+        assertEquals(
+            Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+            tracker.businessDataScopeState.value.status
+        )
+        assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
         coordinator.shutdown()
     }
 
@@ -383,16 +578,20 @@ class CatalogAutoSyncCoordinatorTest {
             )
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val logs = mutableListOf<String>()
+        val recoveryTriggers = mutableListOf<String>()
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
             remote = FakeCatalogRemote043(),
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = Long.MAX_VALUE,
+            onRecoveryRequired = { recoveryTriggers += it },
             logger = { logs += it }
         )
 
@@ -406,6 +605,44 @@ class CatalogAutoSyncCoordinatorTest {
         assertTrue(logs.any { it.contains("syncEventsGapDetected=true") })
         assertTrue(logs.any { it.contains("syncEventOutboxRetried=1") })
         assertTrue(logs.any { it.contains("outboxPending=1") })
+        assertEquals(
+            Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+            tracker.businessDataScopeState.value.status
+        )
+        assertEquals("sync_recovery_required", tracker.businessDataScopeState.value.errorCode)
+        assertEquals(listOf("sync_events_drain"), recoveryTriggers)
+        assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
+        assertTrue(logs.any { it.contains("outcome=blocked_recovery_required") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `139 dirty local event blocks completion without forcing destructive recovery`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            nextDrainSummary = emptySummary().copy(syncEventsSkippedDirtyLocal = 1)
+        }
+        val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE,
+            logger = { logs += it }
+        )
+
+        coordinator.runSyncEventDrainCycle("dirty_local")
+
+        assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
+        assertEquals(Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED, tracker.businessDataScopeState.value.status)
+        assertTrue(logs.any { it.contains("outcome=blocked_dirty_local") })
         coordinator.shutdown()
     }
 
@@ -441,18 +678,20 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     @Test
-    fun `114 sync event gap can force bootstrap even when normal foreground bootstrap is not needed`() = runTest {
+    fun `139 sync event gap persists fail closed without ordinary bootstrap loop`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = false
             nextDrainSummary = emptySummary().copy(manualFullSyncRequired = true)
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
             remote = FakeCatalogRemote043(),
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L
@@ -464,22 +703,36 @@ class CatalogAutoSyncCoordinatorTest {
         advanceUntilIdle()
 
         assertEquals(1, repository.drainCalls)
-        assertEquals(1, repository.bootstrapCalls)
+        assertEquals(0, repository.bootstrapCalls)
+        assertEquals(
+            Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+            tracker.businessDataScopeState.value.status
+        )
+
+        coordinator.onNetworkAvailable()
+        coordinator.onAppForeground()
+        advanceTimeBy(2L)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.drainCalls)
+        assertEquals(0, repository.bootstrapCalls)
         coordinator.shutdown()
     }
 
     @Test
-    fun `114 foreground sync event fallback keeps draining while app stays active`() = runTest {
+    fun `139 bounded rpc poll runs near two second cadence and stops in background`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = false
         }
         val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
         val coordinator = CatalogAutoSyncCoordinator(
             repository = repository,
             remote = FakeCatalogRemote043(),
             priceRemote = FakePriceRemote043(),
             syncEventRemote = FakeSyncEventRemote043(),
             authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
             syncStateTracker = tracker,
             scope = backgroundScope,
             debounceMs = 1L,
@@ -492,15 +745,93 @@ class CatalogAutoSyncCoordinatorTest {
         repository.drainCalls = 0
 
         coordinator.onAppForeground()
-        advanceTimeBy(12L)
-        advanceUntilIdle()
+        advanceTimeBy(35L)
+        runCurrent()
 
-        assertTrue(repository.drainCalls >= 1)
+        assertTrue(repository.drainCalls in 3..5)
+        coordinator.onAppBackground()
+        val callsAtBackground = repository.drainCalls
+        advanceTimeBy(100L)
+        runCurrent()
+        assertEquals(callsAtBackground, repository.drainCalls)
         coordinator.shutdown()
     }
 
     @Test
-    fun `136 automatic bootstrap yields to pending local catalog push`() = runTest {
+    fun `139 bounded rpc poll requires verified network and resolved shop`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+        val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(false)
+        var currentShop: SelectedShop? = null
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { currentShop },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            foregroundSyncEventIntervalMs = 10L
+        )
+
+        runCurrent()
+        coordinator.onAppForeground()
+        advanceTimeBy(25L)
+        runCurrent()
+        assertEquals(0, repository.drainCalls)
+
+        currentShop = selectedShop(SHOP_ID)
+        advanceTimeBy(25L)
+        runCurrent()
+        assertEquals(0, repository.drainCalls)
+
+        tracker.updateNetworkAvailability(true)
+        coordinator.onNetworkAvailable()
+        advanceTimeBy(2L)
+        runCurrent()
+        assertEquals(1, repository.drainCalls)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `139 bounded rpc poll backs off after transport failures`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false
+            failDrain = IllegalStateException("fixture_transport_failure")
+        }
+        val tracker = CatalogSyncStateTracker()
+        tracker.updateNetworkAvailability(true)
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = FakeCatalogRemote043(),
+            priceRemote = FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+            selectedShopProvider = { selectedShop(SHOP_ID) },
+            syncStateTracker = tracker,
+            scope = backgroundScope,
+            debounceMs = 1L,
+            foregroundSyncEventIntervalMs = 10L,
+            foregroundSyncEventMaxBackoffMs = 40L,
+            logger = { logs += it }
+        )
+
+        runCurrent()
+        coordinator.onAppForeground()
+        advanceTimeBy(35L)
+        runCurrent()
+
+        assertTrue(repository.drainCalls in 2..3)
+        assertTrue(logs.any { it.contains("nextPollMs=20") })
+        assertTrue(logs.any { it.contains("nextPollMs=40") })
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `139 automatic login scope pulls before pending local catalog push`() = runTest {
         val repository = FakeCatalogAutoSyncRepository043().apply {
             shouldBootstrap = false
             hasPendingWork = true
@@ -523,8 +854,9 @@ class CatalogAutoSyncCoordinatorTest {
         coordinator.onLocalProductChanged(42L)
         coordinator.runBootstrapCycle("device_active_direct")
 
-        assertEquals(0, repository.bootstrapCalls)
-        assertTrue(logs.any { it.contains("yield_to_local_push") })
+        assertEquals(1, repository.bootstrapCalls)
+        assertEquals(0, repository.quickWithEventsCalls)
+        assertTrue(logs.any { it.contains("cycle=catalog_bootstrap outcome=ok") })
 
         advanceTimeBy(CatalogAutoSyncCoordinator.RETRY_AFTER_BUSY_MS + 2L)
         advanceUntilIdle()
@@ -746,6 +1078,7 @@ class CatalogAutoSyncCoordinatorTest {
         var nextDrainSummary: CatalogSyncSummary = emptySummary(pulledProducts = 1)
         var failQuick: Throwable? = null
         var failQuickOnce: Throwable? = null
+        var failDrain: Throwable? = null
         var clearPendingOnPush = false
 
         override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = shouldBootstrap
@@ -793,6 +1126,7 @@ class CatalogAutoSyncCoordinatorTest {
         ): Result<CatalogSyncSummary> {
             drainCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
+            failDrain?.let { return Result.failure(it) }
             return Result.success(nextDrainSummary)
         }
 
@@ -808,8 +1142,16 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     private class FakeCatalogRemote043(
-        override val isConfigured: Boolean = true
+        private val configured: Boolean = true
     ) : CatalogRemoteDataSource {
+        var configurationReads = 0
+
+        override val isConfigured: Boolean
+            get() {
+                configurationReads += 1
+                return configured
+            }
+
         override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> = Result.success(Unit)
         override suspend fun upsertCategories(rows: List<InventoryCategoryRow>): Result<Unit> = Result.success(Unit)
         override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> = Result.success(Unit)
@@ -836,8 +1178,16 @@ class CatalogAutoSyncCoordinatorTest {
     }
 
     private class FakeSyncEventRemote043(
-        override val isConfigured: Boolean = true
+        private val configured: Boolean = true
     ) : SyncEventRemoteDataSource {
+        var configurationReads = 0
+
+        override val isConfigured: Boolean
+            get() {
+                configurationReads += 1
+                return configured
+            }
+
         override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =
             Result.success(
                 SyncEventRemoteCapabilities(
@@ -864,12 +1214,16 @@ class CatalogAutoSyncCoordinatorTest {
     ) : ShopDeviceRegistrationRemote {
         override val isConfigured: Boolean = true
         var nextStatus: Result<ShopDeviceAuthorizationSnapshot>? = null
+        var onStatusCall: (() -> Unit)? = null
+        var statusCalls = 0
 
         override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
             Result.success(ShopDeviceRegistrationResult(ok = true, code = "success"))
 
-        override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
-            nextStatus?.also { nextStatus = null } ?: Result.success(
+        override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> {
+            statusCalls += 1
+            onStatusCall?.invoke()
+            return nextStatus?.also { nextStatus = null } ?: Result.success(
                 ShopDeviceAuthorizationSnapshot(
                     status = status,
                     code = if (status == "active") "success" else status,
@@ -881,10 +1235,22 @@ class CatalogAutoSyncCoordinatorTest {
                     checkedAtMs = System.currentTimeMillis()
                 )
             )
+        }
     }
 
     private companion object {
         const val USER_ID = "00000000-0000-4000-8000-000000000043"
+        const val SHOP_ID = "00000000-0000-4000-8000-000000000139"
+
+        fun selectedShop(shopId: String): SelectedShop =
+            SelectedShop(
+                shopId = shopId,
+                code = "synthetic-shop",
+                name = "Synthetic shop",
+                role = "owner",
+                status = "active",
+                canWrite = true
+            )
 
         fun emptySummary(
             pushedProducts: Int = 0,

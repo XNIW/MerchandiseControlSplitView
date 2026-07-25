@@ -25,6 +25,12 @@ data class SharedSheetSessionRecord(
     val data: List<List<String>>,
     @SerialName("session_overlay")
     val sessionOverlay: SessionOverlay? = null,
+    /** Digest PostgreSQL redatto del JSON data, usato solo dal checkpoint recovery V6. */
+    @SerialName("data_checkpoint_digest")
+    val dataCheckpointDigest: String? = null,
+    /** Digest PostgreSQL redatto del JSON overlay, usato solo dal checkpoint recovery V6. */
+    @SerialName("overlay_checkpoint_digest")
+    val overlayCheckpointDigest: String? = null,
     /** Presente nelle SELECT PostgREST; ignorato nel mapping verso [SessionRemotePayload]. */
     @SerialName("owner_user_id")
     val ownerUserId: String? = null,

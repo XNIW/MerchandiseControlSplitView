@@ -1,12 +1,16 @@
 package com.example.merchandisecontrolsplitview.data
 
 import androidx.paging.PagingSource
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.UUID
@@ -196,6 +200,140 @@ class RealtimeRefreshCoordinatorTest {
     }
 
     @Test
+    fun `blocked business scope rejects and clears realtime payloads before Room apply`() = runTest {
+        val fakeRepo = FakeInventoryRepository()
+        var allowed = true
+        val coordinator = RealtimeRefreshCoordinator(
+            repository = fakeRepo,
+            scope = backgroundScope,
+            debounceMs = 100L,
+            businessDataScopeAllowed = { allowed }
+        )
+
+        coordinator.onRemoteSignal(
+            RemoteSignal.PayloadAvailable(remotePayload(remoteId = "old-scope", supplier = "Old"))
+        )
+        allowed = false
+        coordinator.runDrain()
+        allowed = true
+        coordinator.runDrain()
+
+        assertEquals(0, fakeRepo.batchCallCount)
+        assertTrue(fakeRepo.appliedBatches.isEmpty())
+    }
+
+    @Test
+    fun `scope change while waiting for shared flight prevents Room apply`() = runTest {
+        val fakeRepo = FakeInventoryRepository()
+        val flightOwner = SessionCloudSessionFlightOwner()
+        var allowed = true
+        val coordinator = RealtimeRefreshCoordinator(
+            repository = fakeRepo,
+            scope = backgroundScope,
+            debounceMs = 100L,
+            sessionFlightOwner = flightOwner,
+            businessDataScopeAllowed = { allowed }
+        )
+        val holderEntered = CompletableDeferred<Unit>()
+        val releaseHolder = CompletableDeferred<Unit>()
+        val holder = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            flightOwner.withSessionFlight(SessionCloudFlightOwner.AutoPush) {
+                holderEntered.complete(Unit)
+                releaseHolder.await()
+            }
+        }
+        holderEntered.await()
+
+        coordinator.onRemoteSignal(
+            RemoteSignal.PayloadAvailable(remotePayload(remoteId = "old-scope", supplier = "Old"))
+        )
+        val drain = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.runDrain()
+        }
+        allowed = false
+        releaseHolder.complete(Unit)
+        holder.await()
+        drain.await()
+
+        assertEquals(0, fakeRepo.batchCallCount)
+        assertTrue(fakeRepo.appliedBatches.isEmpty())
+    }
+
+    @Test
+    fun `managed realtime rejects payload provenance from another shop`() = runTest {
+        val fakeRepo = FakeInventoryRepository()
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_A, SHOP_A))
+        )
+        val coordinator = RealtimeRefreshCoordinator(
+            repository = fakeRepo,
+            scope = backgroundScope,
+            debounceMs = 100L,
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        coordinator.onRemoteSignal(
+            RemoteSignal.PayloadAvailable(
+                payload = remotePayload(remoteId = "wrong-shop", supplier = "Shop B"),
+                sourceScope = RemoteSignal.SourceScope(OWNER_A, SHOP_B)
+            )
+        )
+        coordinator.runDrain()
+
+        assertEquals(0, fakeRepo.batchCallCount)
+        assertTrue(fakeRepo.appliedBatches.isEmpty())
+    }
+
+    @Test
+    fun `managed realtime discards old receipt across ABA scope cycle`() = runTest {
+        val fakeRepo = FakeInventoryRepository()
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_A, SHOP_A))
+        )
+        val coordinator = RealtimeRefreshCoordinator(
+            repository = fakeRepo,
+            scope = backgroundScope,
+            debounceMs = 100L,
+            businessDataScopeRuntimeGuard = tracker
+        )
+
+        coordinator.onRemoteSignal(
+            RemoteSignal.PayloadAvailable(
+                payload = remotePayload(remoteId = "old-a", supplier = "Old A"),
+                sourceScope = RemoteSignal.SourceScope(OWNER_A, SHOP_A)
+            )
+        )
+        tracker.updateBusinessDataScopeState(
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_B, SHOP_B))
+        )
+        tracker.updateBusinessDataScopeState(
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_A, SHOP_A))
+        )
+        coordinator.runDrain()
+
+        assertEquals(0, fakeRepo.batchCallCount)
+        assertTrue(fakeRepo.appliedBatches.isEmpty())
+    }
+
+    @Test
+    fun `realtime diagnostics do not log raw remote identifier`() = runTest {
+        val sensitiveRemoteId = "139-sensitive-remote-identifier"
+        val logs = mutableListOf<String>()
+        val coordinator = RealtimeRefreshCoordinator(
+            repository = FakeInventoryRepository(),
+            scope = backgroundScope,
+            debounceMs = 100L,
+            logger = logs::add
+        )
+
+        coordinator.onRemoteSignal(
+            RemoteSignal.PayloadAvailable(remotePayload(remoteId = sensitiveRemoteId))
+        )
+
+        assertFalse(logs.joinToString("\n").contains(sensitiveRemoteId))
+    }
+
+    @Test
     fun `coordinator isForeground is true by default`() = runTest {
         val coordinator = RealtimeRefreshCoordinator(
             repository = FakeInventoryRepository(),
@@ -204,6 +342,20 @@ class RealtimeRefreshCoordinatorTest {
         )
         // Default: foreground-first — nessun blocco senza aggancio esplicito al lifecycle
         assertEquals(true, coordinator.isForeground)
+    }
+
+    private fun ownerScope(ownerUserId: String, shopId: String): Task126OwnerStoreScope =
+        Task126OwnerStoreScope(
+            ownerHash = task126OwnerHash(ownerUserId),
+            storeId = "shop:$shopId",
+            localStoreId = null
+        )
+
+    private companion object {
+        const val OWNER_A = "00000000-0000-4000-8000-000000000139"
+        const val OWNER_B = "00000000-0000-4000-8000-000000000239"
+        const val SHOP_A = "task139-shop-a"
+        const val SHOP_B = "task139-shop-b"
     }
 
     // --- Fake repository ---

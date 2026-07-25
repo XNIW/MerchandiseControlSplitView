@@ -255,7 +255,9 @@ class ShopDeviceAuthorizationBlockedException(
 class ShopDeviceAuthorizationRepository(
     private val remote: ShopDeviceRegistrationRemote,
     private val cacheTtlMs: Long = DEVICE_STATUS_CACHE_TTL_MS,
-    private val clockMs: () -> Long = { System.currentTimeMillis() }
+    private val clockMs: () -> Long = { System.currentTimeMillis() },
+    private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
+        Task126UnmanagedBusinessDataScopeRuntimeGuard
 ) {
     private val snapshotCache = mutableMapOf<String?, ShopDeviceAuthorizationSnapshot>()
     private val statusCheckMutex = Mutex()
@@ -265,7 +267,9 @@ class ShopDeviceAuthorizationRepository(
         shopId: String? = null
     ): Result<ShopDeviceAuthorizationSnapshot> {
         val normalizedShopId = normalizeShopId(shopId)
+        businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
         remote.registerDevice(reason, normalizedShopId)
+        businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
         return checkStatus(reason = reason, force = true, shopId = normalizedShopId)
     }
 
@@ -274,6 +278,7 @@ class ShopDeviceAuthorizationRepository(
         force: Boolean = false,
         shopId: String? = null
     ): Result<ShopDeviceAuthorizationSnapshot> {
+        businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
         val normalizedShopId = normalizeShopId(shopId)
         val now = clockMs()
         val cached = cachedSnapshot(normalizedShopId)
@@ -288,7 +293,9 @@ class ShopDeviceAuthorizationRepository(
                 return@withLock Result.success(lockedCached)
             }
 
-            remote.deviceStatus(reason, normalizedShopId)
+            val remoteResult = remote.deviceStatus(reason, normalizedShopId)
+            businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
+            remoteResult
                 .onSuccess { snapshot ->
                     cacheSnapshot(normalizedShopId, snapshot.copy(checkedAtMs = lockedNow))
                 }
