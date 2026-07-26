@@ -2,11 +2,11 @@
 
 ## Stato
 
-- Stato: `REVIEW`
-- Fase: `REVIEW`
-- Responsabile: `Claude/ChatGPT / Reviewer`
+- Stato: `DONE`
+- Fase: `DONE`
+- Responsabile: `USER / FINAL REVIEW APPROVED`
 - Apertura: `2026-07-18`, brief esplicito utente cross-platform.
-- Handoff: `REVIEW`, mai `DONE` senza conferma utente.
+- Handoff: `DONE`; conferma utente ricevuta il `2026-07-25`.
 - Baseline: `origin/main` `141ffa07b4ee2b556387ec194fb82b7b76e6a626`.
 
 ## Scope lane Android
@@ -35,8 +35,9 @@ dipendenza nuova, production, Win7POS, TASK-088, commit, push o merge.
 ## Evidence
 
 I log, i report runtime e le matrici di closeout sono conservati fuori
-repository. Questo file mantiene soltanto l'handoff e lo stato `REVIEW`; JVM,
-lint e build post-fix sono registrati nell'archivio esterno del closeout.
+repository. Questo file mantiene l'handoff finale `DONE`; JVM, lint e build
+post-fix sono registrati nell'archivio esterno del closeout e nella CI GitHub
+indicata nella sezione finale.
 
 ## Fix post-review — recovery editor Android (2026-07-19)
 
@@ -148,7 +149,8 @@ Esito finale Android:
 - assemble debug/test APK e lint: PASS.
 
 Evidence runtime: archivio esterno non versionato del closeout.
-TASK-139 resta `REVIEW`, non `DONE`, per i blocker cross-platform/iOS residui.
+A quel checkpoint TASK-139 restava `REVIEW` per blocker cross-platform/iOS poi
+superseduti dall'integrazione finale.
 
 ## Addendum final review — quiescenza flight e ShopContext owner-safe (2026-07-19)
 
@@ -176,7 +178,8 @@ globale resta `BLOCKED_INPUT` soltanto sui
 due harness live TASK-072C/D privi di prefisso esplicito; nessun input è stato
 inventato. Evidence completa nell'archivio esterno non versionato del closeout.
 
-TASK-139 resta `READY_FOR_REVIEW / REVIEW`, mai `DONE` senza conferma utente.
+A quel checkpoint TASK-139 restava `READY_FOR_REVIEW / REVIEW`; la conferma
+utente è stata poi ricevuta nel final closeout.
 
 ## Addendum UX account/shop mismatch Android (2026-07-19)
 
@@ -245,7 +248,8 @@ immagini verificabili e runtime autenticato cross-platform. Replace Android in
 questa iterazione: `0`; nessuna installazione o mutazione del DB reale.
 
 Evidence dettagliata nell'archivio esterno non versionato del closeout.
-TASK-139 resta `REVIEW_WITH_SYNC_CONTRACT_BLOCKERS / REVIEW`, non `DONE`.
+Quello stato intermedio era `REVIEW_WITH_SYNC_CONTRACT_BLOCKERS / REVIEW`; i
+blocker sono stati superseduti dall'integrazione finale.
 
 ## Fix continuation — runtime prebound resource e matrice UI (2026-07-23)
 
@@ -287,16 +291,27 @@ Gate finali dopo il fix UI:
 - `git diff --check`: PASS.
 
 Evidence nell'archivio esterno non versionato del closeout.
-La fase resta `REVIEW`; nessun `DONE`, deploy o write production.
+La fase tornava allora a `REVIEW`; nessun deploy o write production.
 
 ## Handoff
 
-Baseline hardening completata con unit mirati `39/39` (`34` Product Images e
-`5` regressioni catalogo), allowlist runtime identica ai 17 error code canonici,
-canonicalizer JPEG in-place, `assembleDebug`, `assembleDebugAndroidTest`, lint,
-Emulator API 35 e visual/performance sintetico verdi. Il fix recovery aggiunge
-`48/48` JVM mirati e il run Product Image esteso `89/89`, oltre alla prova UI
-autenticata in-place. Staging Android è ora configurato: recovery editor e
-preservazione dati sono PASS, ma upload/finalize/thumbnail restano
-`BLOCKED_AUTH` sul `401` server documentato. Device fisico `NOT_RUN`. Review
-cross-platform richiesta prima della conferma utente `DONE`.
+L'handoff storico ha registrato baseline hardening, recovery editor, lease
+owner/shop/device, quiescenza, recovery atomico e runtime pre-bound resource.
+Il `401` del candidato era un blocker di staging storico ed è superseduto
+dall'integrazione finale cross-repository; non resta un blocker Android
+TASK-139. Device fisico e camera fisica restano `NOT_RUN` come evidence esterna
+opzionale, non come requisito software di chiusura.
+
+## Final review closeout — 2026-07-25
+
+- Stato finale: `DONE`, con approvazione esplicita dell'utente.
+- SHA codice verificata:
+  `28f45bbfb34fd5771de8e964470d5de597588a11`.
+- La SHA coincideva con `main`, `origin/main` e GitHub `main` al preflight ed è
+  antenata del successivo commit documentale.
+- CI GitHub `30174297767`: `SUCCESS` sull'esatta SHA.
+- Report JUnit riusato dal run: `834` test totali, `829` eseguiti, `5` skipped,
+  `0` failure e `0` error; assemble e lint verdi.
+- Acceptance A-01…A-05: chiusa; P0/P1/P2 aperti `0/0/0`.
+- Nessun replace autenticato, clear-data, deploy, write production, migrazione
+  o nuovo scan Codex Security è stato eseguito nel closeout.
