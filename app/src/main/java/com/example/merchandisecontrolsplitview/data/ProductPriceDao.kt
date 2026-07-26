@@ -58,6 +58,46 @@ interface ProductPriceDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertAllReturningIds(points: List<ProductPrice>): List<Long>
 
+    @Query(
+        """
+        SELECT p.id
+        FROM products p
+        WHERE p.id IN (:candidateProductIds)
+          AND NOT EXISTS (
+              SELECT 1 FROM product_prices pr WHERE pr.productId = p.id
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM product_remote_refs pref WHERE pref.productId = p.id
+          )
+        """
+    )
+    suspend fun getProductIdsStillEligibleForBackfill(
+        candidateProductIds: List<Long>
+    ): List<Long>
+
+    /**
+     * Revalida e inserisce il backfill nella stessa transazione, evitando che un pull cloud
+     * o un altro writer renda obsoleto lo snapshot calcolato dal Worker.
+     */
+    @Transaction
+    suspend fun insertBackfillIfStillEligible(points: List<ProductPrice>): Int {
+        if (points.isEmpty()) return 0
+        val pointsByProduct = points.groupBy { it.productId }
+        val eligibleProductIds = pointsByProduct.keys
+            .chunked(BACKFILL_ELIGIBILITY_QUERY_CHUNK)
+            .flatMap { getProductIdsStillEligibleForBackfill(it) }
+            .toSet()
+        val eligiblePoints = points.filter { it.productId in eligibleProductIds }
+        if (eligiblePoints.isEmpty()) return 0
+        val insertedIds = insertAllReturningIds(eligiblePoints)
+        return eligiblePoints.zip(insertedIds)
+            .asSequence()
+            .filter { (_, insertedId) -> insertedId > 0L }
+            .map { (point, _) -> point.productId }
+            .distinct()
+            .count()
+    }
+
     @Query("SELECT COUNT(*) FROM product_prices")
     suspend fun countAll(): Int
 
@@ -245,4 +285,8 @@ JOIN (
     // Convenience wrapper (nessuna @Query qui, chiama quella sopra)
     suspend fun getLatestPerProductAndType(): List<LatestPriceRow> =
         getLatestPerProductAndType(listOf("PURCHASE", "RETAIL"))
+
+    companion object {
+        private const val BACKFILL_ELIGIBILITY_QUERY_CHUNK = 500
+    }
 }
