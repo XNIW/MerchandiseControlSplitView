@@ -522,9 +522,10 @@ private suspend inline fun <T> withStagedWorkbook(
 private fun stageWorkbookToCache(context: Context, uri: Uri): File {
     val tempFile = File.createTempFile("full-import-", ".xlsx", context.cacheDir)
     try {
+        ImportResourcePolicy.validateSourceSizeIfAvailable(context.contentResolver, uri)
         context.contentResolver.openInputStream(uri)?.use { input ->
             tempFile.outputStream().use { output ->
-                input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                ImportResourcePolicy.copy(input, output)
             }
         } ?: throw IOException("Unable to open input stream for $uri")
     } catch (t: Throwable) {

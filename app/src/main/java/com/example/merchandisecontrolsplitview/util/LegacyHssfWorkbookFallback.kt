@@ -67,7 +67,7 @@ private fun sanitizeLegacyObjRecords(bytes: ByteArray): ByteArray? {
     POIFSFileSystem(ByteArrayInputStream(bytes)).use { sourceFs ->
         val workbookEntryName = findWorkbookEntryName(sourceFs) ?: return null
         val workbookBytes = sourceFs.root.createDocumentInputStream(workbookEntryName).use { input ->
-            input.readBytes()
+            ImportResourcePolicy.readBytes(input)
         }
         val patchedCount = patchMalformedObjSubRecords(workbookBytes)
         if (patchedCount == 0) return null

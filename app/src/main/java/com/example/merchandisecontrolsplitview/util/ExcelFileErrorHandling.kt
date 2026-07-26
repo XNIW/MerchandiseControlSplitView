@@ -31,6 +31,9 @@ internal fun classifyExcelFileUserError(
     throwable: Throwable
 ): ExcelFileUserError {
     return when {
+        throwable.selfAndCauses().any { cause ->
+            cause is ImportResourceLimitExceededException
+        } -> ExcelFileUserError.FileTooLargeOrComplex
         matchesKnownMessage(context, throwable, R.string.error_different_columns) ->
             ExcelFileUserError.DifferentColumns
         matchesKnownMessage(context, throwable, R.string.error_incompatible_file_structure) ->

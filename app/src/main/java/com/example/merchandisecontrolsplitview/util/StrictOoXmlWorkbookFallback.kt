@@ -38,6 +38,7 @@ internal fun looksLikeZipArchive(bytes: ByteArray): Boolean {
 
 internal fun sanitizeStrictOoXmlPackage(bytes: ByteArray): ByteArray? {
     var changed = false
+    val archiveBudget = ImportResourcePolicy.ArchiveBudget()
 
     ByteArrayInputStream(bytes).use { input ->
         ZipInputStream(input).use { zipInput ->
@@ -45,11 +46,10 @@ internal fun sanitizeStrictOoXmlPackage(bytes: ByteArray): ByteArray? {
                 ZipOutputStream(output).use { zipOutput ->
                     var entry = zipInput.nextEntry
                     while (entry != null) {
-                        val entryBytes = if (entry.isDirectory) {
-                            byteArrayOf()
-                        } else {
-                            zipInput.readBytes()
-                        }
+                        val entryBytes = archiveBudget.readEntry(
+                            input = zipInput,
+                            declaredSizeBytes = if (entry.isDirectory) 0L else entry.size
+                        )
                         val rewrittenBytes = if (shouldRewriteStrictOoXmlEntry(entry.name)) {
                             rewriteStrictOoXmlXmlEntry(entryBytes).also { candidate ->
                                 changed = changed || !candidate.contentEquals(entryBytes)

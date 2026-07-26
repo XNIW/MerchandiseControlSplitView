@@ -35,7 +35,8 @@ internal fun readAndAnalyzeExcelDetailed(
         ?: throw ExcelInputStreamUnavailableException()
 
     inputStream.use { inStream ->
-        val bytes = inStream.readBytes()
+        ImportResourcePolicy.validateSourceSizeIfAvailable(context.contentResolver, uri)
+        val bytes = ImportResourcePolicy.readBytes(inStream)
         if (bytes.isEmpty()) {
             throw IllegalArgumentException(emptyFileMessage)
         }

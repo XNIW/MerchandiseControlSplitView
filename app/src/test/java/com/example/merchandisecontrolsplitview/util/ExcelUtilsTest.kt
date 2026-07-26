@@ -899,6 +899,20 @@ class ExcelUtilsTest {
         assertEquals(context.getString(R.string.error_file_read_failed), message)
     }
 
+    @Test
+    fun `resolveExcelFileErrorMessage maps nested resource limit to localized copy`() {
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = IOException(
+                "wrapper",
+                ImportResourceLimitExceededException("source", 32L)
+            ),
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.getString(R.string.error_file_too_large_or_complex), message)
+    }
+
     private fun withSheet(vararg rows: List<Any?>, block: (Sheet) -> Unit) {
         XSSFWorkbook().use { workbook ->
             val sheet = workbook.createSheet("test")
