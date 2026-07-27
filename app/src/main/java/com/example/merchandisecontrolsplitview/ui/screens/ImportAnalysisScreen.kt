@@ -34,6 +34,7 @@ import com.example.merchandisecontrolsplitview.data.ImportAnalysis
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductUpdate
 import com.example.merchandisecontrolsplitview.data.RowImportError
+import com.example.merchandisecontrolsplitview.util.CatalogTextField
 import com.example.merchandisecontrolsplitview.util.ErrorExporter
 import com.example.merchandisecontrolsplitview.util.formatClCount
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
@@ -83,6 +84,7 @@ fun ImportAnalysisScreen(
     var updatedProductsExpanded by remember { mutableStateOf(true) }
     var errorsExpanded by remember { mutableStateOf(true) }
     var warningsExpanded by remember { mutableStateOf(true) }
+    var textWarningsExpanded by remember { mutableStateOf(true) }
 
     var itemToEdit by remember { mutableStateOf<Pair<Int, Product>?>(null) }
     var updateToEdit by remember { mutableStateOf<Pair<Int, ProductUpdate>?>(null) }
@@ -220,6 +222,36 @@ fun ImportAnalysisScreen(
                     }
                 }
             }
+            if (importAnalysis.textNormalizationWarnings.isNotEmpty()) {
+                item {
+                    ExpandableSection(
+                        title = stringResource(R.string.catalog_text_normalization_warning_title),
+                        isExpanded = textWarningsExpanded,
+                        onToggle = { textWarningsExpanded = !textWarningsExpanded }
+                    ) {
+                        Text(
+                            text = stringResource(
+                                R.string.catalog_text_normalization_summary,
+                                importAnalysis.normalizedRowCount,
+                                importAnalysis.normalizedFieldCount
+                            ),
+                            modifier = Modifier.padding(vertical = spacing.xs),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+                if (textWarningsExpanded) {
+                    items(
+                        importAnalysis.textNormalizationWarnings,
+                        key = { warning -> "text-normalized-${warning.source}-${warning.rowNumber}" }
+                    ) { warning ->
+                        TextNormalizationWarningRow(
+                            rowNumber = warning.rowNumber,
+                            fields = warning.fields
+                        )
+                    }
+                }
+            }
             if (importAnalysis.warnings.isNotEmpty()) {
                 item {
                     ExpandableSection(
@@ -291,7 +323,7 @@ fun ImportAnalysisScreen(
 
             item {
                 ExpandableSection(
-                    title = stringResource(R.string.errors_found, importAnalysis.errors.size),
+                    title = stringResource(R.string.errors_found, importAnalysis.totalErrorCount),
                     isExpanded = errorsExpanded,
                     onToggle = { errorsExpanded = !errorsExpanded }
                 ) {
@@ -683,6 +715,45 @@ private fun ExpandableSection(
 }
 
 @Composable
+internal fun TextNormalizationWarningRow(
+    rowNumber: Int,
+    fields: Set<CatalogTextField>
+) {
+    val spacing = MaterialTheme.appSpacing
+    val fieldLabels = fields.map { field ->
+        stringResource(
+            when (field) {
+                CatalogTextField.BARCODE -> R.string.header_barcode
+                CatalogTextField.ITEM_NUMBER -> R.string.header_item_number
+                CatalogTextField.PRODUCT_NAME -> R.string.field_product_name
+                CatalogTextField.SECOND_PRODUCT_NAME -> R.string.field_second_product_name
+                CatalogTextField.SUPPLIER_NAME -> R.string.field_supplier
+                CatalogTextField.CATEGORY_NAME -> R.string.field_category
+                CatalogTextField.REMOTE_ID -> R.string.catalog_text_field_remote_id
+            }
+        )
+    }
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Text(
+            text = stringResource(
+                R.string.catalog_text_normalization_row,
+                rowNumber,
+                fieldLabels.joinToString(", ")
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(spacing.md),
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
 private fun ErrorRow(error: RowImportError) {
     val spacing = MaterialTheme.appSpacing
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
@@ -702,11 +773,15 @@ private fun ErrorRow(error: RowImportError) {
                 else -> null
             }
 
-            val barcode = error.rowContent["barcode"] ?: "-"
-            val productName = error.rowContent["productName"] ?: "-"
-            val secondProductName = error.rowContent["secondProductName"] ?: "-"
-            val quantity = error.rowContent["quantity"] ?: "-"
-            val retailPrice = error.rowContent["RetailPrice"] ?: "-"
+            val redactedMarker = stringResource(R.string.catalog_text_redacted_value)
+            fun errorValue(key: String): String =
+                error.valueForPresentation(key, redactedMarker).ifEmpty { "-" }
+
+            val barcode = errorValue("barcode")
+            val productName = errorValue("productName")
+            val secondProductName = errorValue("secondProductName")
+            val quantity = errorValue("quantity")
+            val retailPrice = errorValue("RetailPrice")
 
             val highlightNames = problematicKey == "productName"
 

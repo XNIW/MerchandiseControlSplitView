@@ -3,6 +3,9 @@ package com.example.merchandisecontrolsplitview.data
 import android.content.Context
 import androidx.room.Room
 import androidx.room.withTransaction
+import com.example.merchandisecontrolsplitview.util.CatalogTextField
+import com.example.merchandisecontrolsplitview.util.CatalogTextPolicy
+import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.io.IOException
 import java.time.LocalDate
@@ -90,6 +93,227 @@ class DefaultInventoryRepositoryTest {
         assertEquals("MANUAL", retailHistory.single().source)
         assertTrue(timestampPattern.matches(purchaseHistory.single().effectiveAt))
         assertTrue(timestampPattern.matches(retailHistory.single().effectiveAt))
+    }
+
+    @Test
+    fun `manual product boundary persists canonical text without price history for text only edit`() = runTest {
+        repository.addProduct(
+            Product(
+                barcode = "  TEXT-001  ",
+                itemNumber = "  ITEM-001  ",
+                productName = "  Caffè\tCasa  ",
+                secondProductName = " Línea\nDos ",
+                purchasePrice = 10.0,
+                retailPrice = 15.0
+            )
+        )
+        val inserted = checkNotNull(repository.findProductByBarcode("TEXT-001"))
+        assertEquals("ITEM-001", inserted.itemNumber)
+        assertEquals("Caffè Casa", inserted.productName)
+        assertEquals("Línea Dos", inserted.secondProductName)
+        val historyBefore = repository.getAllPriceHistoryRows()
+
+        repository.updateProduct(inserted.copy(productName = "Caffè\nCasa"))
+
+        val updated = checkNotNull(repository.findProductByBarcode("TEXT-001"))
+        assertEquals("Caffè Casa", updated.productName)
+        assertEquals(historyBefore, repository.getAllPriceHistoryRows())
+    }
+
+    @Test
+    fun `manual supplier and category boundaries persist canonical display names`() = runTest {
+        val supplier = repository.addSupplier("  Proveedor\nUno\u00a0 ")!!
+        val category = repository.addCategory("  Té\tVerde  ")!!
+
+        assertEquals("Proveedor Uno", supplier.name)
+        assertEquals("Té Verde", category.name)
+        assertEquals("Proveedor Uno", db.supplierDao().getById(supplier.id)?.name)
+        assertEquals("Té Verde", db.categoryDao().getById(category.id)?.name)
+    }
+
+    @Test
+    fun `pending product preflight repairs canonical text before payload without price history`() = runTest {
+        db.productDao().insert(
+            Product(
+                barcode = "  PENDING-001  ",
+                itemNumber = " ITEM-001 ",
+                productName = "  Café\nCasa\u00a0 ",
+                retailPrice = 12.0
+            )
+        )
+        val product = checkNotNull(db.productDao().findByBarcode("  PENDING-001  "))
+        val remote = FakeCatalogRemote016()
+
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = "00000000-0000-4000-8000-000000000140",
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        val payload = remote.upsertedProducts.flatten().single()
+        assertEquals("PENDING-001", payload.barcode)
+        assertEquals("ITEM-001", payload.itemNumber)
+        assertEquals("Café Casa", payload.productName)
+        assertEquals("Café Casa", db.productDao().getById(product.id)?.productName)
+        assertTrue(repository.getAllPriceHistoryRows().isEmpty())
+    }
+
+    @Test
+    fun `remote existing partial patch includes every text field repaired by pre push`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000143"
+        val product = seedSyncedProductWithPriceBridge(
+            barcode = "PATCH-REPAIR-001",
+            itemNumber = "ITEM-REPAIR-001",
+            productName = "Remote Product",
+            purchasePrice = 10.0,
+            retailPrice = 20.0
+        )
+        val remoteRef = checkNotNull(db.productRemoteRefDao().getByProductId(product.id))
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = remoteRef.remoteId,
+                        ownerUserId = owner,
+                        barcode = product.barcode,
+                        itemNumber = product.itemNumber,
+                        productName = product.productName,
+                        purchasePrice = product.purchasePrice,
+                        retailPrice = product.retailPrice
+                    )
+                )
+            )
+        )
+
+        repository.updateProduct(product.copy(retailPrice = 25.0))
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE products SET productName = ? WHERE id = ?",
+            arrayOf<Any>("  Repaired\nProduct  ", product.id)
+        )
+        assertEquals(
+            "retailprice",
+            db.productRemoteRefDao().getByProductId(product.id)?.localChangedFields
+        )
+
+        val summary = repository.pushDirtyCatalogDeltaToRemote(
+            remote = remote,
+            priceRemote = RecordingPriceRemote016(configured = false),
+            ownerUserId = owner,
+            progressReporter = CatalogSyncProgressReporter { }
+        ).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        assertTrue(remote.upsertedProducts.isEmpty())
+        val patch = remote.patchedProducts.single().patch
+        assertEquals(setOf("productname", "retailprice"), patch.changedFields)
+        assertEquals("Repaired Product", patch.productName)
+        assertEquals(25.0, patch.retailPrice!!, 0.0001)
+        assertEquals("Repaired Product", db.productDao().getById(product.id)?.productName)
+        val syncedRef = checkNotNull(db.productRemoteRefDao().getByProductId(product.id))
+        assertEquals(syncedRef.localChangeRevision, syncedRef.lastSyncedLocalRevision)
+        assertNull(syncedRef.localChangedFields)
+    }
+
+    @Test
+    fun `apply import collision preflight rolls back before any product write`() = runTest {
+        val result = repository.applyImport(
+            importRequest(
+                newProducts = listOf(
+                    Product(
+                        barcode = " APPLY-COLLISION ",
+                        itemNumber = "ITEM-1",
+                        productName = "First",
+                        retailPrice = 10.0
+                    ),
+                    Product(
+                        barcode = "APPLY-COLLISION",
+                        itemNumber = "ITEM-2",
+                        productName = "Second",
+                        retailPrice = 12.0
+                    )
+                )
+            )
+        )
+
+        assertTrue(result is ImportApplyResult.Failure)
+        val failure = (result as ImportApplyResult.Failure).cause
+        assertTrue(failure is CatalogTextValidationException)
+        failure as CatalogTextValidationException
+        assertEquals(CatalogTextField.BARCODE, failure.rejection.field)
+        assertEquals(
+            CatalogTextPolicy.RejectionReason.IDENTITY_COLLISION_AFTER_TRIM,
+            failure.rejection.reason
+        )
+        assertTrue(db.productDao().getAll().isEmpty())
+        assertTrue(db.supplierDao().getAll().isEmpty())
+        assertTrue(db.categoryDao().getAll().isEmpty())
+    }
+
+    @Test
+    fun `remote clean pull canonicalizes display text and remains a sync no op on retry`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000141"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = "00000000-0000-4000-8000-000000000142",
+                        ownerUserId = owner,
+                        barcode = "REMOTE-001",
+                        itemNumber = " ITEM-REMOTE ",
+                        productName = "  Té\nVerde\u00a0 ",
+                        retailPrice = 20.0
+                    )
+                )
+            )
+        )
+        val priceRemote = RecordingPriceRemote016(configured = false)
+
+        repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+        val saved = checkNotNull(repository.findProductByBarcode("REMOTE-001"))
+        assertEquals("ITEM-REMOTE", saved.itemNumber)
+        assertEquals("Té Verde", saved.productName)
+        assertFalse(repository.hasCatalogCloudPendingWorkInclusive())
+
+        val retry = repository.syncCatalogWithRemote(remote, priceRemote, owner).getOrThrow()
+        assertEquals(0, retry.pushedProducts)
+        assertEquals("Té Verde", repository.findProductByBarcode("REMOTE-001")?.productName)
+        assertTrue(repository.getAllPriceHistoryRows().isEmpty())
+    }
+
+    @Test
+    fun `remote pull rejects strict identity controls without partial product write`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000143"
+        val remote = FakeCatalogRemote016(
+            InventoryCatalogFetchBundle(
+                suppliers = emptyList(),
+                categories = emptyList(),
+                products = listOf(
+                    InventoryProductRow(
+                        id = "00000000-0000-4000-8000-000000000144",
+                        ownerUserId = owner,
+                        barcode = "REMOTE\nINVALID",
+                        productName = "Valid display",
+                        retailPrice = 20.0
+                    )
+                )
+            )
+        )
+
+        val outcome = repository.syncCatalogWithRemote(
+            remote,
+            RecordingPriceRemote016(configured = false),
+            owner
+        )
+
+        assertTrue(outcome.isFailure)
+        assertEquals(0, db.productDao().count())
+        assertTrue(repository.getAllPriceHistoryRows().isEmpty())
     }
 
     @Test
@@ -6884,7 +7108,8 @@ class DefaultInventoryRepositoryTest {
                     id = productRemoteId,
                     ownerUserId = owner,
                     barcode = "044a-dirty",
-                    productName = "Remote V2 overwrite attempt",
+                    // Targeted image updates can decode as a partial product row.
+                    productName = null,
                     retailPrice = 99.0,
                     supplierId = supplierRemoteId,
                     categoryId = categoryRemoteId,

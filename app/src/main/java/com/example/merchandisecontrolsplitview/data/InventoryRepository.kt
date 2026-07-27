@@ -8,6 +8,9 @@ import com.example.merchandisecontrolsplitview.BuildConfig
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
+import com.example.merchandisecontrolsplitview.util.CatalogTextField
+import com.example.merchandisecontrolsplitview.util.CatalogTextPolicy
+import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -604,16 +607,21 @@ class DefaultInventoryRepository(
         }
 
     override suspend fun addProduct(product: Product) = withLocalBusinessMutation {
+        val canonicalProduct = CatalogTextCanonicalizer.product(product).product
         DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert?.invoke()
         requireCurrentBusinessDataScope()
         val persistedId = withContext(Dispatchers.IO) {
-            productDao.insert(product)
-            val persisted = productDao.findByBarcode(product.barcode) ?: return@withContext null
+            productDao.insert(canonicalProduct)
+            val persisted = productDao.findByBarcode(canonicalProduct.barcode) ?: return@withContext null
 
             val now = LocalDateTime.now().format(tSFMT)
 
-            product.purchasePrice?.let { priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL") }
-            product.retailPrice  ?.let { priceDao.insertIfChanged(persisted.id, "RETAIL",   it, now, "MANUAL") }
+            canonicalProduct.purchasePrice?.let {
+                priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL")
+            }
+            canonicalProduct.retailPrice?.let {
+                priceDao.insertIfChanged(persisted.id, "RETAIL", it, now, "MANUAL")
+            }
             touchProductDirty(persisted.id)
             persisted.id
         }
@@ -621,20 +629,27 @@ class DefaultInventoryRepository(
         Unit
     }
     override suspend fun updateProduct(product: Product) = withLocalBusinessMutation {
+        val canonicalProduct = CatalogTextCanonicalizer.product(product).product
         withContext(Dispatchers.IO) {
-            val existing = productDao.getById(product.id)
-            productDao.update(product)
+            val existing = productDao.getById(canonicalProduct.id)
+            productDao.update(canonicalProduct)
 
             val now = LocalDateTime.now().format(tSFMT)
 
-            product.purchasePrice?.let { priceDao.insertIfChanged(product.id, "PURCHASE", it, now, "MANUAL") }
-            product.retailPrice  ?.let { priceDao.insertIfChanged(product.id, "RETAIL",   it, now, "MANUAL") }
-            val changedFields = existing?.let { productChangedFields(it, product) }.orEmpty()
+            canonicalProduct.purchasePrice?.let {
+                priceDao.insertIfChanged(canonicalProduct.id, "PURCHASE", it, now, "MANUAL")
+            }
+            canonicalProduct.retailPrice?.let {
+                priceDao.insertIfChanged(canonicalProduct.id, "RETAIL", it, now, "MANUAL")
+            }
+            val changedFields = existing
+                ?.let { productChangedFields(it, canonicalProduct) }
+                .orEmpty()
             if (changedFields.isNotEmpty()) {
-                touchProductDirty(product.id, changedFields)
+                touchProductDirty(canonicalProduct.id, changedFields)
             }
         }
-        notifyProductCatalogChanged(product.id)
+        notifyProductCatalogChanged(canonicalProduct.id)
     }
 
     override suspend fun updateCurrentPriceFromHistory(
@@ -759,8 +774,7 @@ class DefaultInventoryRepository(
     private val supplierMutex = Mutex()
     override suspend fun addSupplier(name: String): Supplier? = withLocalBusinessMutation {
         val (supplier, didCreate) = withContext(Dispatchers.IO) {
-            val normalizedName = name.trim()
-            if (normalizedName.isBlank()) return@withContext null to false
+            val normalizedName = CatalogTextCanonicalizer.supplierName(name)
             val lookupKey = normalizedName.lowercase(Locale.ROOT)
             supplierMutex.withLock {
                 supplierDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
@@ -1001,8 +1015,7 @@ class DefaultInventoryRepository(
     private val categoryMutex = Mutex()
     override suspend fun addCategory(name: String): Category? = withLocalBusinessMutation {
         val (category, didCreate) = withContext(Dispatchers.IO) {
-            val normalizedName = name.trim()
-            if (normalizedName.isBlank()) return@withContext null to false
+            val normalizedName = CatalogTextCanonicalizer.categoryName(name)
             val lookupKey = normalizedName.lowercase(Locale.ROOT)
             categoryMutex.withLock {
                 categoryDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
@@ -1691,6 +1704,7 @@ class DefaultInventoryRepository(
     }
 
     private suspend fun applyImportAtomically(request: ImportApplyRequest): Set<Long> {
+        validateImportIdentityCollisions(request)
         val existingSuppliers = supplierDao.getAll()
         val existingCategories = categoryDao.getAll()
         val supplierIdsByName = existingSuppliers
@@ -1709,9 +1723,8 @@ class DefaultInventoryRepository(
         val createdCategoryIds = mutableSetOf<Long>()
 
         suspend fun resolveSupplierIdByName(name: String): Long? {
-            val normalizedName = name.trim()
+            val normalizedName = CatalogTextCanonicalizer.supplierName(name)
             val key = normalizedRelationKey(normalizedName)
-            if (key.isBlank()) return null
             supplierIdsByName[key]?.let { return it }
 
             supplierDao.findByNormalizedName(key)?.let { existing ->
@@ -1735,9 +1748,8 @@ class DefaultInventoryRepository(
         }
 
         suspend fun resolveCategoryIdByName(name: String): Long? {
-            val normalizedName = name.trim()
+            val normalizedName = CatalogTextCanonicalizer.categoryName(name)
             val key = normalizedRelationKey(normalizedName)
-            if (key.isBlank()) return null
             categoryIdsByName[key]?.let { return it }
 
             categoryDao.findByNormalizedName(key)?.let { existing ->
@@ -1852,9 +1864,13 @@ class DefaultInventoryRepository(
         request.pendingSupplierNames.forEach { resolveSupplierIdByName(it) }
         request.pendingCategoryNames.forEach { resolveCategoryIdByName(it) }
 
-        val resolvedNewProducts = request.newProducts.map { resolveProduct(it) }
+        val resolvedNewProducts = request.newProducts.map {
+            CatalogTextCanonicalizer.product(resolveProduct(it)).product
+        }
         val resolvedUpdatedProducts = request.updatedProducts.map { update ->
-            val resolved = resolveProduct(update.newProduct, update.oldProduct).copy(id = update.oldProduct.id)
+            val resolved = CatalogTextCanonicalizer.product(
+                resolveProduct(update.newProduct, update.oldProduct).copy(id = update.oldProduct.id)
+            ).product
             update.oldProduct to resolved
         }
         val relationDirtySummary = buildRelationDirtySummary(request.updatedProducts)
@@ -2070,6 +2086,45 @@ class DefaultInventoryRepository(
         return touchedProductIds
     }
 
+    private fun validateImportIdentityCollisions(request: ImportApplyRequest) {
+        val incomingProducts = buildList {
+            addAll(request.newProducts)
+            request.updatedProducts.forEach { add(it.newProduct) }
+        }
+        validateStrictIdentityCollision(
+            rawValues = incomingProducts.map { it.barcode } +
+                request.pendingPriceHistory.map { it.barcode },
+            field = CatalogTextField.BARCODE,
+            required = true,
+            maxLength = CatalogTextPolicy.Limits.BARCODE
+        )
+        validateStrictIdentityCollision(
+            rawValues = incomingProducts.mapNotNull { it.itemNumber },
+            field = CatalogTextField.ITEM_NUMBER,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.ITEM_NUMBER
+        )
+    }
+
+    private fun validateStrictIdentityCollision(
+        rawValues: List<String>,
+        field: CatalogTextField,
+        required: Boolean,
+        maxLength: Int
+    ) {
+        val rejection = CatalogTextPolicy.validateDistinctStrictIdentities(
+            rawValues = rawValues,
+            required = required,
+            maxLength = maxLength
+        ) ?: return
+        throw CatalogTextValidationException(
+            CatalogTextPolicy.FieldRejection(
+                field = field,
+                reason = rejection.reason
+            )
+        )
+    }
+
     private fun productsEquivalentForImportDirty(old: Product, new: Product): Boolean =
         normalizedImportText(old.barcode).equals(normalizedImportText(new.barcode), ignoreCase = true) &&
             normalizedImportText(old.itemNumber).equals(normalizedImportText(new.itemNumber), ignoreCase = true) &&
@@ -2234,9 +2289,9 @@ class DefaultInventoryRepository(
         rawName: String,
         currentId: Long? = null
     ): String {
-        val normalizedName = rawName.trim()
-        if (normalizedName.isBlank()) {
-            throw CatalogBlankNameException
+        val normalizedName = when (kind) {
+            CatalogEntityKind.SUPPLIER -> CatalogTextCanonicalizer.supplierName(rawName)
+            CatalogEntityKind.CATEGORY -> CatalogTextCanonicalizer.categoryName(rawName)
         }
 
         val existing = findCatalogEntityByName(kind, normalizedName)
@@ -2951,13 +3006,14 @@ class DefaultInventoryRepository(
         progressReporter: CatalogSyncProgressReporter,
         selectedShop: SelectedShop?
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
-        val shopId = selectedShop?.shopId
+        val canonicalOwnerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId)
+        val shopId = CatalogTextCanonicalizer.optionalRemoteId(selectedShop?.shopId)
         val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
         try {
             val recoveryCache = CatalogConflictRecoveryCache()
             val deferredPrices = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
                 progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
-                drainPendingCatalogTombstones(remote, ownerUserId, shopId)
+                drainPendingCatalogTombstones(remote, canonicalOwnerUserId, shopId)
                 // Snapshot iniziale (prima di ensure/push catalogo): righe prezzo senza bridge prodotto.
                 val deferred = priceDao.countPriceRowsWithoutProductRemote()
                 // Bridge realign pre-push: se il locale ha righe catalogo senza `*_remote_refs`
@@ -2969,13 +3025,31 @@ class DefaultInventoryRepository(
                 deferred
             }
             val pushedSuppliers = measureCatalogSyncPhase(CatalogSyncStage.PUSH_SUPPLIERS, phaseDurationsMs) {
-                pushCatalogSuppliers(remote, ownerUserId, recoveryCache, progressReporter, shopId)
+                pushCatalogSuppliers(
+                    remote,
+                    canonicalOwnerUserId,
+                    recoveryCache,
+                    progressReporter,
+                    shopId
+                )
             }
             val pushedCategories = measureCatalogSyncPhase(CatalogSyncStage.PUSH_CATEGORIES, phaseDurationsMs) {
-                pushCatalogCategories(remote, ownerUserId, recoveryCache, progressReporter, shopId)
+                pushCatalogCategories(
+                    remote,
+                    canonicalOwnerUserId,
+                    recoveryCache,
+                    progressReporter,
+                    shopId
+                )
             }
             val pushedProducts = measureCatalogSyncPhase(CatalogSyncStage.PUSH_PRODUCTS, phaseDurationsMs) {
-                pushCatalogProducts(remote, ownerUserId, recoveryCache, progressReporter, shopId)
+                pushCatalogProducts(
+                    remote,
+                    canonicalOwnerUserId,
+                    recoveryCache,
+                    progressReporter,
+                    shopId
+                )
             }
             var pulledSuppliers = 0
             var pulledCategories = 0
@@ -3025,7 +3099,7 @@ class DefaultInventoryRepository(
                         remoteAppliedProductIds += pullOutcome.appliedProductIds
                         pushedPrices = pushProductPricesToRemote(
                             priceRemote,
-                            ownerUserId,
+                            canonicalOwnerUserId,
                             progressReporter,
                             shopId = shopId
                         ).count
@@ -3099,20 +3173,21 @@ class DefaultInventoryRepository(
         progressReporter: CatalogSyncProgressReporter,
         selectedShop: SelectedShop?
     ): Result<CatalogSyncSummary> = withContext(Dispatchers.IO) {
-        val shopId = selectedShop?.shopId
+        val canonicalOwnerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId)
+        val shopId = CatalogTextCanonicalizer.optionalRemoteId(selectedShop?.shopId)
         // 044A: lane rapida — vietato fetchCatalog / pull prezzi full-page; solo push delta e metriche oneste.
         val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
         try {
             val recoveryCache = CatalogConflictRecoveryCache(allowRemoteFetch = false)
             val tombstonedIds = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
                 progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
-                drainPendingCatalogTombstones(remote, ownerUserId, shopId)
+                drainPendingCatalogTombstones(remote, canonicalOwnerUserId, shopId)
             }
             val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
             val pushedProducts = measureCatalogSyncPhase(CatalogSyncStage.PUSH_PRODUCTS, phaseDurationsMs) {
                 pushCatalogProducts(
                     remote = remote,
-                    ownerUserId = ownerUserId,
+                    ownerUserId = canonicalOwnerUserId,
                     recoveryCache = recoveryCache,
                     progressReporter = progressReporter,
                     shopId = shopId,
@@ -3127,7 +3202,7 @@ class DefaultInventoryRepository(
                         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PUSH))
                         pushedPrices = pushProductPricesToRemote(
                             priceRemote = priceRemote,
-                            ownerUserId = ownerUserId,
+                            ownerUserId = canonicalOwnerUserId,
                             progressReporter = progressReporter,
                             shopId = shopId,
                             requireProductSynced = true
@@ -6301,7 +6376,7 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_SUPPLIERS, current = 0, total = candidates.size)
         )
         for ((index, candidate) in candidates.withIndex()) {
-            val s = candidate.supplier
+            val s = canonicalizeSupplierForCatalogPush(candidate.supplier)
             val ref = candidate.remoteRef ?: ensureSupplierRefForPush(s.id)
             if (supplierNeedsPush(ref)) {
                 dirty++
@@ -6346,7 +6421,7 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_CATEGORIES, current = 0, total = candidates.size)
         )
         for ((index, candidate) in candidates.withIndex()) {
-            val c = candidate.category
+            val c = canonicalizeCategoryForCatalogPush(candidate.category)
             val ref = candidate.remoteRef ?: ensureCategoryRefForPush(c.id)
             if (categoryNeedsPush(ref)) {
                 dirty++
@@ -6393,12 +6468,12 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 0, total = candidates.size)
         )
         for (candidate in candidates) {
-            val p = candidate.product
+            val p = canonicalizeProductForCatalogPush(candidate.product)
             val productForPush = p.copy(
                 purchasePrice = candidate.lastPurchase ?: p.purchasePrice,
                 retailPrice = candidate.lastRetail ?: p.retailPrice
             )
-            val ref = candidate.remoteRef ?: ensureProductRefForPush(p.id)
+            val ref = productRemoteRefDao.getByProductId(p.id) ?: ensureProductRefForPush(p.id)
             if (productNeedsPush(ref)) {
                 dirty++
                 if (canPatchProduct(ref)) {
@@ -6412,7 +6487,12 @@ class DefaultInventoryRepository(
                     } else if (!patch.isEmpty) {
                         val startedAt = System.currentTimeMillis()
                         businessScopedRemoteCall {
-                            remote.patchProduct(ref.remoteId, ownerUserId, shopId, patch)
+                            remote.patchProduct(
+                                CatalogTextCanonicalizer.remoteId(ref.remoteId),
+                                CatalogTextCanonicalizer.remoteId(ownerUserId),
+                                CatalogTextCanonicalizer.optionalRemoteId(shopId),
+                                patch
+                            )
                         }.getOrThrow()
                         accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
                         accumulator.batchCount++
@@ -6490,6 +6570,42 @@ class DefaultInventoryRepository(
                 "singleFallbackCount=${accumulator.singleFallbackCount}"
         )
         return CatalogEntityPushResult(count = accumulator.pushed, remoteIds = accumulator.remoteIds.distinct())
+    }
+
+    /**
+     * Repairs only the current pending/dirty candidate. The existing bridge
+     * revision remains dirty and no outbox or PriceHistory row is created.
+     */
+    private suspend fun canonicalizeSupplierForCatalogPush(supplier: Supplier): Supplier {
+        val canonicalName = CatalogTextCanonicalizer.supplierName(supplier.name)
+        if (canonicalName == supplier.name) return supplier
+        return db.withTransaction {
+            requireCurrentBusinessDataScope()
+            supplierDao.rename(supplier.id, canonicalName)
+            supplier.copy(name = canonicalName)
+        }
+    }
+
+    private suspend fun canonicalizeCategoryForCatalogPush(category: Category): Category {
+        val canonicalName = CatalogTextCanonicalizer.categoryName(category.name)
+        if (canonicalName == category.name) return category
+        return db.withTransaction {
+            requireCurrentBusinessDataScope()
+            categoryDao.rename(category.id, canonicalName)
+            category.copy(name = canonicalName)
+        }
+    }
+
+    private suspend fun canonicalizeProductForCatalogPush(product: Product): Product {
+        val canonical = CatalogTextCanonicalizer.product(product).product
+        if (canonical == product) return product
+        val repairedFields = productChangedFields(product, canonical)
+        return db.withTransaction {
+            requireCurrentBusinessDataScope()
+            productDao.update(canonical)
+            touchProductDirty(canonical.id, repairedFields)
+            canonical
+        }
     }
 
     private suspend fun pushPreparedProductBatches(
@@ -6702,9 +6818,9 @@ class DefaultInventoryRepository(
         shopId: String?
     ): InventorySupplierRow =
         InventorySupplierRow(
-            id = ref.remoteId,
-            ownerUserId = ownerUserId,
-            shopId = shopId,
+            id = CatalogTextCanonicalizer.remoteId(ref.remoteId),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(shopId),
             name = supplier.name,
             deletedAt = null
         )
@@ -6716,9 +6832,9 @@ class DefaultInventoryRepository(
         shopId: String?
     ): InventoryCategoryRow =
         InventoryCategoryRow(
-            id = ref.remoteId,
-            ownerUserId = ownerUserId,
-            shopId = shopId,
+            id = CatalogTextCanonicalizer.remoteId(ref.remoteId),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(shopId),
             name = category.name,
             deletedAt = null
         )
@@ -6732,22 +6848,28 @@ class DefaultInventoryRepository(
     ): InventoryProductRow? {
         val supplierRemoteId = product.supplierId?.let { supplierId ->
             if (allowCreatingDependencyRefs) {
-                ensureSupplierRefForPush(supplierId).remoteId
+                CatalogTextCanonicalizer.remoteId(ensureSupplierRefForPush(supplierId).remoteId)
             } else {
-                supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId ?: return null
+                supplierRemoteRefDao.getBySupplierId(supplierId)
+                    ?.remoteId
+                    ?.let(CatalogTextCanonicalizer::remoteId)
+                    ?: return null
             }
         }
         val categoryRemoteId = product.categoryId?.let { categoryId ->
             if (allowCreatingDependencyRefs) {
-                ensureCategoryRefForPush(categoryId).remoteId
+                CatalogTextCanonicalizer.remoteId(ensureCategoryRefForPush(categoryId).remoteId)
             } else {
-                categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId ?: return null
+                categoryRemoteRefDao.getByCategoryId(categoryId)
+                    ?.remoteId
+                    ?.let(CatalogTextCanonicalizer::remoteId)
+                    ?: return null
             }
         }
         return InventoryProductRow(
-            id = ref.remoteId,
-            ownerUserId = ownerUserId,
-            shopId = shopId,
+            id = CatalogTextCanonicalizer.remoteId(ref.remoteId),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(shopId),
             barcode = product.barcode,
             itemNumber = product.itemNumber,
             productName = product.productName,
@@ -6776,9 +6898,12 @@ class DefaultInventoryRepository(
         val supplierRemoteId = if ("supplier" in fields) {
             product.supplierId?.let { supplierId ->
                 if (allowCreatingDependencyRefs) {
-                    ensureSupplierRefForPush(supplierId).remoteId
+                    CatalogTextCanonicalizer.remoteId(ensureSupplierRefForPush(supplierId).remoteId)
                 } else {
-                    supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId ?: return null
+                    supplierRemoteRefDao.getBySupplierId(supplierId)
+                        ?.remoteId
+                        ?.let(CatalogTextCanonicalizer::remoteId)
+                        ?: return null
                 }
             }
         } else {
@@ -6787,9 +6912,12 @@ class DefaultInventoryRepository(
         val categoryRemoteId = if ("category" in fields) {
             product.categoryId?.let { categoryId ->
                 if (allowCreatingDependencyRefs) {
-                    ensureCategoryRefForPush(categoryId).remoteId
+                    CatalogTextCanonicalizer.remoteId(ensureCategoryRefForPush(categoryId).remoteId)
                 } else {
-                    categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId ?: return null
+                    categoryRemoteRefDao.getByCategoryId(categoryId)
+                        ?.remoteId
+                        ?.let(CatalogTextCanonicalizer::remoteId)
+                        ?: return null
                 }
             }
         } else {
@@ -7069,39 +7197,48 @@ class DefaultInventoryRepository(
     }
 
     private suspend fun attachSupplierBridgeForRetry(supplierId: Long, remoteId: String): Boolean {
-        val existingRemote = supplierRemoteRefDao.getByRemoteId(remoteId)
+        val canonicalRemoteId = CatalogTextCanonicalizer.remoteId(remoteId)
+        val existingRemote = supplierRemoteRefDao.getByRemoteId(canonicalRemoteId)
         if (existingRemote != null && existingRemote.supplierId != supplierId) return false
         val existingLocal = supplierRemoteRefDao.getBySupplierId(supplierId)
         if (existingLocal == null) {
-            supplierRemoteRefDao.insert(SupplierRemoteRef(supplierId = supplierId, remoteId = remoteId))
-            return supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId == remoteId
+            supplierRemoteRefDao.insert(
+                SupplierRemoteRef(supplierId = supplierId, remoteId = canonicalRemoteId)
+            )
+            return supplierRemoteRefDao.getBySupplierId(supplierId)?.remoteId == canonicalRemoteId
         }
-        if (existingLocal.remoteId == remoteId) return true
-        return supplierRemoteRefDao.updateRemoteId(supplierId, remoteId) > 0
+        if (existingLocal.remoteId == canonicalRemoteId) return true
+        return supplierRemoteRefDao.updateRemoteId(supplierId, canonicalRemoteId) > 0
     }
 
     private suspend fun attachCategoryBridgeForRetry(categoryId: Long, remoteId: String): Boolean {
-        val existingRemote = categoryRemoteRefDao.getByRemoteId(remoteId)
+        val canonicalRemoteId = CatalogTextCanonicalizer.remoteId(remoteId)
+        val existingRemote = categoryRemoteRefDao.getByRemoteId(canonicalRemoteId)
         if (existingRemote != null && existingRemote.categoryId != categoryId) return false
         val existingLocal = categoryRemoteRefDao.getByCategoryId(categoryId)
         if (existingLocal == null) {
-            categoryRemoteRefDao.insert(CategoryRemoteRef(categoryId = categoryId, remoteId = remoteId))
-            return categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId == remoteId
+            categoryRemoteRefDao.insert(
+                CategoryRemoteRef(categoryId = categoryId, remoteId = canonicalRemoteId)
+            )
+            return categoryRemoteRefDao.getByCategoryId(categoryId)?.remoteId == canonicalRemoteId
         }
-        if (existingLocal.remoteId == remoteId) return true
-        return categoryRemoteRefDao.updateRemoteId(categoryId, remoteId) > 0
+        if (existingLocal.remoteId == canonicalRemoteId) return true
+        return categoryRemoteRefDao.updateRemoteId(categoryId, canonicalRemoteId) > 0
     }
 
     private suspend fun attachProductBridgeForRetry(productId: Long, remoteId: String): Boolean {
-        val existingRemote = productRemoteRefDao.getByRemoteId(remoteId)
+        val canonicalRemoteId = CatalogTextCanonicalizer.remoteId(remoteId)
+        val existingRemote = productRemoteRefDao.getByRemoteId(canonicalRemoteId)
         if (existingRemote != null && existingRemote.productId != productId) return false
         val existingLocal = productRemoteRefDao.getByProductId(productId)
         if (existingLocal == null) {
-            productRemoteRefDao.insert(ProductRemoteRef(productId = productId, remoteId = remoteId))
-            return productRemoteRefDao.getByProductId(productId)?.remoteId == remoteId
+            productRemoteRefDao.insert(
+                ProductRemoteRef(productId = productId, remoteId = canonicalRemoteId)
+            )
+            return productRemoteRefDao.getByProductId(productId)?.remoteId == canonicalRemoteId
         }
-        if (existingLocal.remoteId == remoteId) return true
-        return productRemoteRefDao.updateRemoteId(productId, remoteId) > 0
+        if (existingLocal.remoteId == canonicalRemoteId) return true
+        return productRemoteRefDao.updateRemoteId(productId, canonicalRemoteId) > 0
     }
 
     private fun logCatalogBridgeRecovery(
@@ -7174,7 +7311,10 @@ class DefaultInventoryRepository(
         db.withTransaction {
             requireCurrentBusinessDataScope()
             if (suppliersMissing > 0 || suppliersNeverApplied) {
-                for (row in bundle.suppliers.filter { it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId) }) {
+                for (rawRow in bundle.suppliers.filter {
+                    it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId)
+                }) {
+                    val row = canonicalSupplierInboundRow(rawRow)
                     supplierStats.remoteRowsSeen++
                     // Task 041 (hardening): normalizzazione Kotlin unicode-aware su entrambi
                     // i lati. Senza trim lato locale righe importate da Excel con spazi
@@ -7229,7 +7369,10 @@ class DefaultInventoryRepository(
                 }
             }
             if (categoriesMissing > 0 || categoriesNeverApplied) {
-                for (row in bundle.categories.filter { it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId) }) {
+                for (rawRow in bundle.categories.filter {
+                    it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId)
+                }) {
+                    val row = canonicalCategoryInboundRow(rawRow)
                     categoryStats.remoteRowsSeen++
                     // Task 041 (hardening): normalizzazione Kotlin unicode-aware su entrambi
                     // i lati (case + whitespace). Prima `findByName` era case-sensitive
@@ -7285,7 +7428,10 @@ class DefaultInventoryRepository(
                 }
             }
             if (productsMissing > 0 || productsNeverApplied) {
-                for (row in bundle.products.filter { it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId) }) {
+                for (rawRow in bundle.products.filter {
+                    it.deletedAt.isNullOrBlank() && (shopId == null || it.shopId == shopId)
+                }) {
+                    val row = canonicalProductInboundRow(rawRow)
                     productStats.remoteRowsSeen++
                     // Task 041 (hardening): barcode normalizzato lato locale via `TRIM()`,
                     // per agganciare righe con whitespace accidentale (es. Excel) che
@@ -7367,9 +7513,9 @@ class DefaultInventoryRepository(
         for (row in pending) {
             val deletedAt = java.time.Instant.now().toString()
             val patch = CatalogTombstonePatch(
-                id = row.remoteId,
-                ownerUserId = ownerUserId,
-                shopId = shopId,
+                id = CatalogTextCanonicalizer.remoteId(row.remoteId),
+                ownerUserId = CatalogTextCanonicalizer.remoteId(ownerUserId),
+                shopId = CatalogTextCanonicalizer.optionalRemoteId(shopId),
                 deletedAt = deletedAt,
                 updatedAt = deletedAt
             )
@@ -7402,9 +7548,48 @@ class DefaultInventoryRepository(
         )
     }
 
+    private fun canonicalSupplierInboundRow(row: InventorySupplierRow): InventorySupplierRow =
+        row.copy(
+            id = CatalogTextCanonicalizer.remoteId(row.id),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(row.ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(row.shopId),
+            name = CatalogTextCanonicalizer.supplierName(row.name)
+        )
+
+    private fun canonicalCategoryInboundRow(row: InventoryCategoryRow): InventoryCategoryRow =
+        row.copy(
+            id = CatalogTextCanonicalizer.remoteId(row.id),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(row.ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(row.shopId),
+            name = CatalogTextCanonicalizer.categoryName(row.name)
+        )
+
+    private fun canonicalProductInboundRow(row: InventoryProductRow): InventoryProductRow =
+        row.copy(
+            id = CatalogTextCanonicalizer.remoteId(row.id),
+            ownerUserId = CatalogTextCanonicalizer.remoteId(row.ownerUserId),
+            shopId = CatalogTextCanonicalizer.optionalRemoteId(row.shopId),
+            barcode = CatalogTextCanonicalizer.barcode(row.barcode),
+            itemNumber = row.itemNumber
+                ?.let(CatalogTextCanonicalizer::itemNumber)
+                ?.takeIf { it.isNotEmpty() },
+            productName = row.productName
+                ?.let(CatalogTextCanonicalizer::productName)
+                ?.takeIf { it.isNotEmpty() },
+            secondProductName = row.secondProductName
+                ?.let(CatalogTextCanonicalizer::secondProductName)
+                ?.takeIf { it.isNotEmpty() },
+            supplierId = CatalogTextCanonicalizer.optionalRemoteId(row.supplierId),
+            categoryId = CatalogTextCanonicalizer.optionalRemoteId(row.categoryId),
+            primaryImageVersionId = CatalogTextCanonicalizer.optionalRemoteId(
+                row.primaryImageVersionId
+            )
+        )
+
     private suspend fun applyInboundSupplierTombstone(row: InventorySupplierRow): Boolean {
         if (row.deletedAt.isNullOrBlank()) return false
-        val ref = supplierRemoteRefDao.getByRemoteId(row.id) ?: return false
+        val remoteId = CatalogTextCanonicalizer.remoteId(row.id)
+        val ref = supplierRemoteRefDao.getByRemoteId(remoteId) ?: return false
         if (ref.localChangeRevision > ref.lastSyncedLocalRevision) return false
         return try {
             deleteCatalogEntity(CatalogEntityKind.SUPPLIER, ref.supplierId, enqueueCloudTombstone = false)
@@ -7416,7 +7601,8 @@ class DefaultInventoryRepository(
 
     private suspend fun applyInboundCategoryTombstone(row: InventoryCategoryRow): Boolean {
         if (row.deletedAt.isNullOrBlank()) return false
-        val ref = categoryRemoteRefDao.getByRemoteId(row.id) ?: return false
+        val remoteId = CatalogTextCanonicalizer.remoteId(row.id)
+        val ref = categoryRemoteRefDao.getByRemoteId(remoteId) ?: return false
         if (ref.localChangeRevision > ref.lastSyncedLocalRevision) return false
         return try {
             deleteCatalogEntity(CatalogEntityKind.CATEGORY, ref.categoryId, enqueueCloudTombstone = false)
@@ -7428,7 +7614,8 @@ class DefaultInventoryRepository(
 
     private suspend fun applyInboundProductTombstone(row: InventoryProductRow): Long? {
         if (row.deletedAt.isNullOrBlank()) return null
-        val ref = productRemoteRefDao.getByRemoteId(row.id) ?: return null
+        val remoteId = CatalogTextCanonicalizer.remoteId(row.id)
+        val ref = productRemoteRefDao.getByRemoteId(remoteId) ?: return null
         if (ref.localChangeRevision > ref.lastSyncedLocalRevision) return null
         val p = productDao.getById(ref.productId) ?: return null
         productDao.delete(p)
@@ -7437,8 +7624,9 @@ class DefaultInventoryRepository(
 
     private suspend fun applyRemoteSupplierInbound(row: InventorySupplierRow): Boolean {
         if (!row.deletedAt.isNullOrBlank()) return false
-        val fp = fingerprintSupplierInbound(row)
-        val existingRef = supplierRemoteRefDao.getByRemoteId(row.id)
+        val canonicalRow = canonicalSupplierInboundRow(row)
+        val fp = fingerprintSupplierInbound(canonicalRow)
+        val existingRef = supplierRemoteRefDao.getByRemoteId(canonicalRow.id)
         if (existingRef != null) {
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
                 return false
@@ -7449,7 +7637,7 @@ class DefaultInventoryRepository(
                 return false
             }
             supplierDao.getById(existingRef.supplierId) ?: return false
-            val name = row.name.trim()
+            val name = canonicalRow.name
             try {
                 supplierDao.rename(existingRef.supplierId, name)
             } catch (_: SQLiteConstraintException) {
@@ -7460,11 +7648,11 @@ class DefaultInventoryRepository(
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
                 fp,
-                row.updatedAt
+                canonicalRow.updatedAt
             )
             return true
         }
-        val name = row.name.trim()
+        val name = canonicalRow.name
         val local = supplierDao.findByNameIgnoreCase(name)
         val localId = local?.id ?: run {
             val ins = supplierDao.insert(Supplier(name = name))
@@ -7474,17 +7662,17 @@ class DefaultInventoryRepository(
             }
         }
         val bridgeForRow = supplierRemoteRefDao.getBySupplierId(localId)
-        if (bridgeForRow != null && bridgeForRow.remoteId != row.id) return false
+        if (bridgeForRow != null && bridgeForRow.remoteId != canonicalRow.id) return false
         if (bridgeForRow != null) return false
         supplierRemoteRefDao.insert(
             SupplierRemoteRef(
                 supplierId = localId,
-                remoteId = row.id,
+                remoteId = canonicalRow.id,
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
                 lastRemotePayloadFingerprint = fp,
-                remoteUpdatedAt = row.updatedAt
+                remoteUpdatedAt = canonicalRow.updatedAt
             )
         )
         return true
@@ -7492,8 +7680,9 @@ class DefaultInventoryRepository(
 
     private suspend fun applyRemoteCategoryInbound(row: InventoryCategoryRow): Boolean {
         if (!row.deletedAt.isNullOrBlank()) return false
-        val fp = fingerprintCategoryInbound(row)
-        val existingRef = categoryRemoteRefDao.getByRemoteId(row.id)
+        val canonicalRow = canonicalCategoryInboundRow(row)
+        val fp = fingerprintCategoryInbound(canonicalRow)
+        val existingRef = categoryRemoteRefDao.getByRemoteId(canonicalRow.id)
         if (existingRef != null) {
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
                 return false
@@ -7504,7 +7693,7 @@ class DefaultInventoryRepository(
                 return false
             }
             categoryDao.getById(existingRef.categoryId) ?: return false
-            val name = row.name.trim()
+            val name = canonicalRow.name
             try {
                 categoryDao.rename(existingRef.categoryId, name)
             } catch (_: SQLiteConstraintException) {
@@ -7515,11 +7704,11 @@ class DefaultInventoryRepository(
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
                 fp,
-                row.updatedAt
+                canonicalRow.updatedAt
             )
             return true
         }
-        val name = row.name.trim()
+        val name = canonicalRow.name
         val local = categoryDao.findByName(name)
         val localId = local?.id ?: run {
             val ins = categoryDao.insert(Category(name = name))
@@ -7529,17 +7718,17 @@ class DefaultInventoryRepository(
             }
         }
         val bridgeForRow = categoryRemoteRefDao.getByCategoryId(localId)
-        if (bridgeForRow != null && bridgeForRow.remoteId != row.id) return false
+        if (bridgeForRow != null && bridgeForRow.remoteId != canonicalRow.id) return false
         if (bridgeForRow != null) return false
         categoryRemoteRefDao.insert(
             CategoryRemoteRef(
                 categoryId = localId,
-                remoteId = row.id,
+                remoteId = canonicalRow.id,
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
                 lastRemotePayloadFingerprint = fp,
-                remoteUpdatedAt = row.updatedAt
+                remoteUpdatedAt = canonicalRow.updatedAt
             )
         )
         return true
@@ -7547,16 +7736,17 @@ class DefaultInventoryRepository(
 
     private suspend fun applyRemoteProductInbound(row: InventoryProductRow): Long? {
         if (!row.deletedAt.isNullOrBlank()) return null
-        val fp = fingerprintProductInbound(row)
-        val existingRef = productRemoteRefDao.getByRemoteId(row.id)
+        val canonicalRow = canonicalProductInboundRow(row)
+        val fp = fingerprintProductInbound(canonicalRow)
+        val existingRef = productRemoteRefDao.getByRemoteId(canonicalRow.id)
         if (existingRef != null) {
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
                 // L'immagine e' un sottodominio remoto-autoritativo: applicarla non
                 // deve sovrascrivere i campi prodotto dirty ne' marcare la revisione synced.
                 productDao.updateRemoteImageReference(
                     existingRef.productId,
-                    row.primaryImageVersionId,
-                    row.primaryImageUpdatedAt
+                    canonicalRow.primaryImageVersionId,
+                    canonicalRow.primaryImageUpdatedAt
                 )
                 return null
             }
@@ -7565,22 +7755,26 @@ class DefaultInventoryRepository(
             ) {
                 return null
             }
-            val supLocal = row.supplierId?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
-            val catLocal = row.categoryId?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }
+            val supLocal = canonicalRow.supplierId
+                ?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
+            val catLocal = canonicalRow.categoryId
+                ?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }
             val cur = productDao.getById(existingRef.productId) ?: return null
-            val merged = cur.copy(
-                barcode = row.barcode.trim(),
-                itemNumber = row.itemNumber,
-                productName = row.productName,
-                secondProductName = row.secondProductName,
-                purchasePrice = row.purchasePrice,
-                retailPrice = row.retailPrice,
-                supplierId = supLocal,
-                categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: cur.stockQuantity,
-                primaryImageVersionId = row.primaryImageVersionId,
-                primaryImageUpdatedAt = row.primaryImageUpdatedAt
-            )
+            val merged = CatalogTextCanonicalizer.product(
+                cur.copy(
+                    barcode = canonicalRow.barcode,
+                    itemNumber = canonicalRow.itemNumber,
+                    productName = canonicalRow.productName,
+                    secondProductName = canonicalRow.secondProductName,
+                    purchasePrice = canonicalRow.purchasePrice,
+                    retailPrice = canonicalRow.retailPrice,
+                    supplierId = supLocal,
+                    categoryId = catLocal,
+                    stockQuantity = canonicalRow.stockQuantity ?: cur.stockQuantity,
+                    primaryImageVersionId = canonicalRow.primaryImageVersionId,
+                    primaryImageUpdatedAt = canonicalRow.primaryImageUpdatedAt
+                )
+            ).product
             try {
                 productDao.update(merged)
             } catch (_: SQLiteConstraintException) {
@@ -7591,51 +7785,57 @@ class DefaultInventoryRepository(
                 existingRef.localChangeRevision,
                 System.currentTimeMillis(),
                 fp,
-                row.updatedAt
+                canonicalRow.updatedAt
             )
             return existingRef.productId
         }
-        val supLocal = row.supplierId?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
-        val catLocal = row.categoryId?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }
-        val bc = row.barcode.trim()
+        val supLocal = canonicalRow.supplierId
+            ?.let { supplierRemoteRefDao.getByRemoteId(it)?.supplierId }
+        val catLocal = canonicalRow.categoryId
+            ?.let { categoryRemoteRefDao.getByRemoteId(it)?.categoryId }
+        val bc = canonicalRow.barcode
         val localByBarcode = productDao.findByBarcode(bc)
         val targetId: Long
         if (localByBarcode != null) {
             val other = productRemoteRefDao.getByProductId(localByBarcode.id)
-            if (other != null && other.remoteId != row.id) return null
+            if (other != null && other.remoteId != canonicalRow.id) return null
             if (other != null && other.localChangeRevision > other.lastSyncedLocalRevision) return null
             targetId = localByBarcode.id
-            val merged = localByBarcode.copy(
-                itemNumber = row.itemNumber,
-                productName = row.productName,
-                secondProductName = row.secondProductName,
-                purchasePrice = row.purchasePrice,
-                retailPrice = row.retailPrice,
-                supplierId = supLocal,
-                categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: localByBarcode.stockQuantity,
-                primaryImageVersionId = row.primaryImageVersionId,
-                primaryImageUpdatedAt = row.primaryImageUpdatedAt
-            )
+            val merged = CatalogTextCanonicalizer.product(
+                localByBarcode.copy(
+                    itemNumber = canonicalRow.itemNumber,
+                    productName = canonicalRow.productName,
+                    secondProductName = canonicalRow.secondProductName,
+                    purchasePrice = canonicalRow.purchasePrice,
+                    retailPrice = canonicalRow.retailPrice,
+                    supplierId = supLocal,
+                    categoryId = catLocal,
+                    stockQuantity = canonicalRow.stockQuantity ?: localByBarcode.stockQuantity,
+                    primaryImageVersionId = canonicalRow.primaryImageVersionId,
+                    primaryImageUpdatedAt = canonicalRow.primaryImageUpdatedAt
+                )
+            ).product
             try {
                 productDao.update(merged)
             } catch (_: SQLiteConstraintException) {
                 return null
             }
         } else {
-            val inserted = Product(
-                barcode = bc,
-                itemNumber = row.itemNumber,
-                productName = row.productName,
-                secondProductName = row.secondProductName,
-                purchasePrice = row.purchasePrice,
-                retailPrice = row.retailPrice,
-                supplierId = supLocal,
-                categoryId = catLocal,
-                stockQuantity = row.stockQuantity ?: 0.0,
-                primaryImageVersionId = row.primaryImageVersionId,
-                primaryImageUpdatedAt = row.primaryImageUpdatedAt
-            )
+            val inserted = CatalogTextCanonicalizer.product(
+                Product(
+                    barcode = bc,
+                    itemNumber = canonicalRow.itemNumber,
+                    productName = canonicalRow.productName,
+                    secondProductName = canonicalRow.secondProductName,
+                    purchasePrice = canonicalRow.purchasePrice,
+                    retailPrice = canonicalRow.retailPrice,
+                    supplierId = supLocal,
+                    categoryId = catLocal,
+                    stockQuantity = canonicalRow.stockQuantity ?: 0.0,
+                    primaryImageVersionId = canonicalRow.primaryImageVersionId,
+                    primaryImageUpdatedAt = canonicalRow.primaryImageUpdatedAt
+                )
+            ).product
             try {
                 productDao.insert(inserted)
             } catch (_: SQLiteConstraintException) {
@@ -7647,12 +7847,12 @@ class DefaultInventoryRepository(
         productRemoteRefDao.insert(
             ProductRemoteRef(
                 productId = targetId,
-                remoteId = row.id,
+                remoteId = canonicalRow.id,
                 localChangeRevision = 0,
                 lastSyncedLocalRevision = 0,
                 lastRemoteAppliedAt = System.currentTimeMillis(),
                 lastRemotePayloadFingerprint = fp,
-                remoteUpdatedAt = row.updatedAt
+                remoteUpdatedAt = canonicalRow.updatedAt
             )
         )
         return targetId

@@ -391,12 +391,131 @@ class ImportAnalyzerTest {
     }
 
     @Test
-    fun `analyze truncates product names beyond the maximum length`() = runTest {
-        val longName = "N".repeat(150)
+    fun `analyze rejects product names beyond the common contract limit`() = runTest {
+        val longName = "N".repeat(CatalogTextPolicy.Limits.PRODUCT_NAME + 1)
 
         val analysis = analyze(importedRows = listOf(importedRow(productName = longName)))
 
-        assertEquals(100, analysis.newProducts.single().productName!!.length)
+        assertTrue(analysis.newProducts.isEmpty())
+        val error = analysis.errors.single()
+        assertEquals(R.string.error_catalog_text_rejected, error.errorReasonResId)
+        assertTrue(
+            error.formatArgs.contains(context.getString(R.string.catalog_text_error_too_long))
+        )
+    }
+
+    @Test
+    fun `analyze canonicalizes display text in preview and reports fields without raw values`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    productName = "  Café\t\nCasa\u00a0 ",
+                    supplier = "  Proveedor\nUno ",
+                    category = " Té\t "
+                )
+            )
+        )
+
+        val product = analysis.newProducts.single()
+        assertEquals("Café Casa", product.productName)
+        val warning = analysis.textNormalizationWarnings.single()
+        assertEquals(
+            setOf(
+                CatalogTextField.PRODUCT_NAME,
+                CatalogTextField.SUPPLIER_NAME,
+                CatalogTextField.CATEGORY_NAME
+            ),
+            warning.fields
+        )
+        assertEquals(1, analysis.normalizedRowCount)
+        assertEquals(3, analysis.normalizedFieldCount)
+    }
+
+    @Test
+    fun `analyze rejects strict barcode controls before dedupe`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(importedRow(barcode = "1234\n5678"))
+        )
+
+        assertTrue(analysis.newProducts.isEmpty())
+        assertTrue(analysis.warnings.isEmpty())
+        assertEquals(R.string.error_catalog_text_rejected, analysis.errors.single().errorReasonResId)
+    }
+
+    @Test
+    fun `analyze blocks distinct raw barcodes that collide after trim instead of last wins`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(barcode = " CODE-001 ", productName = "First"),
+                importedRow(barcode = "CODE-001", productName = "Second")
+            )
+        )
+
+        assertTrue(analysis.newProducts.isEmpty())
+        assertTrue(analysis.updatedProducts.isEmpty())
+        val error = analysis.errors.single()
+        assertEquals(R.string.error_catalog_text_rejected, error.errorReasonResId)
+        assertTrue(
+            error.formatArgs.contains(context.getString(R.string.catalog_text_error_identity_collision))
+        )
+    }
+
+    @Test
+    fun `analyze blocks every product in an item number trim collision`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(barcode = "CODE-101", itemNumber = " ITEM-001 "),
+                importedRow(barcode = "CODE-102", itemNumber = "ITEM-001")
+            )
+        )
+
+        assertTrue(analysis.newProducts.isEmpty())
+        assertEquals(2, analysis.errors.size)
+        assertTrue(
+            analysis.errors.all {
+                it.formatArgs.contains(context.getString(R.string.catalog_text_error_identity_collision))
+            }
+        )
+    }
+
+    @Test
+    fun `analyze catches item number trim collision before same barcode last row wins`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(
+                    barcode = "CODE-SAME",
+                    productName = "First",
+                    itemNumber = " ITEM-SAME "
+                ),
+                importedRow(
+                    barcode = "CODE-SAME",
+                    productName = "Last",
+                    itemNumber = "ITEM-SAME"
+                )
+            )
+        )
+
+        assertTrue(analysis.newProducts.isEmpty())
+        assertTrue(analysis.updatedProducts.isEmpty())
+        assertTrue(analysis.warnings.isEmpty())
+        val error = analysis.errors.single()
+        assertEquals(2, error.rowNumber)
+        assertTrue(
+            error.formatArgs.contains(context.getString(R.string.catalog_text_error_identity_collision))
+        )
+    }
+
+    @Test
+    fun `analyze keeps strict identity collision detection case sensitive`() = runTest {
+        val analysis = analyze(
+            importedRows = listOf(
+                importedRow(barcode = "CASE-A", itemNumber = "ITEM-A"),
+                importedRow(barcode = "case-a", itemNumber = "item-a")
+            )
+        )
+
+        assertEquals(2, analysis.newProducts.size)
+        assertTrue(analysis.errors.isEmpty())
     }
 
     @Test

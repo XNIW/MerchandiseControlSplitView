@@ -72,6 +72,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import com.example.merchandisecontrolsplitview.PortraitCaptureActivity
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.CatalogTextCanonicalizer
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.Supplier
@@ -81,6 +82,9 @@ import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.util.formatClPriceInput
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityInput
+import com.example.merchandisecontrolsplitview.util.CatalogTextField
+import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
+import com.example.merchandisecontrolsplitview.util.catalogTextErrorMessage
 import com.example.merchandisecontrolsplitview.util.normalizeClPriceInput
 import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
@@ -351,8 +355,19 @@ internal fun EditProductDialog(
             },
             onAddNewSupplier = { name ->
                 scope.launch {
-                    onResolveSupplierId(name)?.let { supplierId = it }
-                    showSupplierSelectionDialog = false
+                    val canonicalName = runCatching {
+                        CatalogTextCanonicalizer.supplierName(name)
+                    }.getOrElse { throwable ->
+                        val rejection = (throwable as? CatalogTextValidationException)?.rejection
+                        if (rejection != null) {
+                            productNameError = context.catalogTextErrorMessage(rejection)
+                        }
+                        return@launch
+                    }
+                    onResolveSupplierId(canonicalName)?.let {
+                        supplierId = it
+                        showSupplierSelectionDialog = false
+                    }
                 }
             }
         )
@@ -368,8 +383,19 @@ internal fun EditProductDialog(
             },
             onAddNewCategory = { name ->
                 scope.launch {
-                    onResolveCategoryId(name)?.let { categoryId = it }
-                    showCategorySelectionDialog = false
+                    val canonicalName = runCatching {
+                        CatalogTextCanonicalizer.categoryName(name)
+                    }.getOrElse { throwable ->
+                        val rejection = (throwable as? CatalogTextValidationException)?.rejection
+                        if (rejection != null) {
+                            productNameError = context.catalogTextErrorMessage(rejection)
+                        }
+                        return@launch
+                    }
+                    onResolveCategoryId(canonicalName)?.let {
+                        categoryId = it
+                        showCategorySelectionDialog = false
+                    }
                 }
             }
         )
@@ -616,17 +642,33 @@ internal fun EditProductDialog(
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
                         if (validate()) {
-                            val productToSave = product.copy(
-                                barcode = barcode.trim(),
-                                productName = productName.trim(),
-                                secondProductName = secondProductName.trim().takeIf { it.isNotBlank() },
-                                itemNumber = itemNumber.trim().takeIf { it.isNotBlank() },
-                                purchasePrice = parseUserPriceInput(purchasePrice),
-                                retailPrice = parseUserPriceInput(retailPrice),
-                                supplierId = supplierId,
-                                categoryId = categoryId,
-                                stockQuantity = parseUserQuantityInput(stockQuantity)
-                            )
+                            val productToSave = runCatching {
+                                CatalogTextCanonicalizer.product(
+                                    product.copy(
+                                        barcode = barcode,
+                                        productName = productName,
+                                        secondProductName = secondProductName,
+                                        itemNumber = itemNumber,
+                                        purchasePrice = parseUserPriceInput(purchasePrice),
+                                        retailPrice = parseUserPriceInput(retailPrice),
+                                        supplierId = supplierId,
+                                        categoryId = categoryId,
+                                        stockQuantity = parseUserQuantityInput(stockQuantity)
+                                    )
+                                ).product
+                            }.getOrElse { throwable ->
+                                val rejection = (throwable as? CatalogTextValidationException)?.rejection
+                                if (rejection != null) {
+                                    val message = context.catalogTextErrorMessage(rejection)
+                                    when (rejection.field) {
+                                        CatalogTextField.BARCODE,
+                                        CatalogTextField.ITEM_NUMBER,
+                                        CatalogTextField.REMOTE_ID -> barcodeError = message
+                                        else -> productNameError = message
+                                    }
+                                }
+                                return@Button
+                            }
                             onSave(productToSave)
                         }
                     }) { Text(stringResource(R.string.save)) }

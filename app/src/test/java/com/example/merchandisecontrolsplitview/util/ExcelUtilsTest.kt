@@ -913,6 +913,25 @@ class ExcelUtilsTest {
         assertEquals(context.getString(R.string.error_file_too_large_or_complex), message)
     }
 
+    @Test
+    fun `resolveExcelFileErrorMessage maps nested catalog rejection without raw text`() {
+        val rejection = CatalogTextPolicy.FieldRejection(
+            field = CatalogTextField.SUPPLIER_NAME,
+            reason = CatalogTextPolicy.RejectionReason.PROHIBITED_CONTROL
+        )
+        val message = resolveExcelFileErrorMessage(
+            context = context,
+            throwable = IOException(
+                "full import wrapper",
+                CatalogTextValidationException(rejection)
+            ),
+            unknownFallbackResId = R.string.error_data_analysis_generic
+        )
+
+        assertEquals(context.catalogTextErrorMessage(rejection), message)
+        assertFalse(message.contains("catalog_text_rejected"))
+    }
+
     private fun withSheet(vararg rows: List<Any?>, block: (Sheet) -> Unit) {
         XSSFWorkbook().use { workbook ->
             val sheet = workbook.createSheet("test")

@@ -32,7 +32,14 @@ object ErrorExporter {
                     context.getString(R.string.import_error_export_sheet_name)
                 )
 
-                val headers = errors.first().rowContent.keys.toList() + errorReasonColumnKey
+                val headers = buildList {
+                    errors.forEach { error ->
+                        error.rowContent.keys.forEach { key ->
+                            if (key !in this) add(key)
+                        }
+                    }
+                    add(errorReasonColumnKey)
+                }
                 val headerRow = sheet.createRow(0)
                 headers.forEachIndexed { index, headerKey ->
                     val headerText = if (headerKey == errorReasonColumnKey) {
@@ -45,11 +52,11 @@ object ErrorExporter {
 
                 errors.forEachIndexed { rowIndex, error ->
                     val dataRow = sheet.createRow(rowIndex + 1)
-                    val rowDataMap = error.rowContent
+                    val redactedMarker = context.getString(R.string.catalog_text_redacted_value)
 
                     headers.forEachIndexed { colIndex, headerKey ->
                         if (headerKey != errorReasonColumnKey) {
-                            val cellValue = rowDataMap[headerKey] ?: ""
+                            val cellValue = error.valueForPresentation(headerKey, redactedMarker)
                             dataRow.createCell(colIndex).setCellValue(cellValue)
                         }
                     }

@@ -24,6 +24,8 @@ import com.example.merchandisecontrolsplitview.util.buildDatabaseSnapshotFingerp
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportSchema
 import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
 import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
+import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
+import com.example.merchandisecontrolsplitview.util.catalogTextErrorMessage
 import com.example.merchandisecontrolsplitview.util.writeDatabaseExportStreaming
 import java.io.IOException
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
@@ -1154,6 +1156,9 @@ class DatabaseViewModel(
         kind: CatalogEntityKind,
         throwable: Throwable
     ): String = when (throwable) {
+        is CatalogTextValidationException ->
+            appContext.catalogTextErrorMessage(throwable.rejection)
+
         is CatalogBlankNameException -> appContext.getString(
             R.string.database_catalog_name_required,
             catalogEntityLabel(kind)

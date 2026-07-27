@@ -42,6 +42,10 @@ import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkboo
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import com.example.merchandisecontrolsplitview.util.DatabaseExportConstants
 import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
+import com.example.merchandisecontrolsplitview.util.CatalogTextField
+import com.example.merchandisecontrolsplitview.util.CatalogTextPolicy
+import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
+import com.example.merchandisecontrolsplitview.util.catalogTextErrorMessage
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -162,6 +166,28 @@ class DatabaseViewModelTest {
                     app.getString(R.string.database_catalog_entity_category)
                 )
             ),
+            viewModel.uiState.value
+        )
+    }
+
+    @Test
+    fun `createCatalogEntry catalog text rejection emits localized reason`() = runTest {
+        val rejection = CatalogTextPolicy.FieldRejection(
+            field = CatalogTextField.CATEGORY_NAME,
+            reason = CatalogTextPolicy.RejectionReason.PROHIBITED_ZERO_WIDTH
+        )
+        coEvery {
+            repository.createCatalogEntry(CatalogEntityKind.CATEGORY, any())
+        } throws CatalogTextValidationException(rejection)
+
+        val result = viewModel.createCatalogEntry(
+            CatalogEntityKind.CATEGORY,
+            "invalid hidden text"
+        )
+
+        assertNull(result)
+        assertEquals(
+            UiState.Error(app.catalogTextErrorMessage(rejection)),
             viewModel.uiState.value
         )
     }
