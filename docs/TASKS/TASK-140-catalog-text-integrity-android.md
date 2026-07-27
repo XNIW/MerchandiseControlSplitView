@@ -2,13 +2,14 @@
 
 ## Stato
 
-- Stato: `REVIEW`
-- Fase: `REVIEW`
+- Stato: `DONE`
+- Fase: `DONE / USER_CONFIRMED_CLOSURE`
 - Coordination key: `CATALOG-TEXT-001`
 - Repository: `XNIW/MerchandiseControlSplitView`
 - Baseline: `origin/main` `ca0a58d8f63fa6447427c2e06846b4c9198e4be5`
 - Branch implementazione: `codex/catalog-text-integrity-android-20260727`
 - Branch closeout: `codex/catalog-text-integrity-closeout-android-20260727`
+- Branch chiusura: `codex/catalog-text-integrity-done-android-20260727`
 - Apertura: `2026-07-27`
 - Ultimo aggiornamento: `2026-07-27`
 - Autorizzazione: richiesta utente cross-platform esplicita del `2026-07-27`.
@@ -27,9 +28,9 @@
   [XNIW/MerchandiseControlSplitView#3](https://github.com/XNIW/MerchandiseControlSplitView/pull/3).
 - PR iOS:
   [XNIW/iOSMerchandiseControl#1](https://github.com/XNIW/iOSMerchandiseControl/pull/1).
-- Acceptance finale e passaggio a `DONE` restano cross-platform: richiedono
-  review indipendente, CI, merge normali, repair/acceptance staging e gate
-  Win7POS-equivalente verdi.
+- Review indipendente, CI, merge normali, repair/acceptance staging e gate
+  Win7POS-equivalente sono verdi; l'utente ha confermato esplicitamente la
+  chiusura a `DONE` il `2026-07-27`.
 
 ## Scopo Android
 
@@ -300,9 +301,9 @@ local-dirty image-only e bounded preflight.
   codice integrato: full JVM `873`, assemble, lint e connected API 35 `8/8`
   `PASS`.
 
-## Handoff
+## Chiusura
 
-Task in `REVIEW / READY_FOR_USER_CONFIRMATION`, mai `DONE` in questa lane.
+Task `DONE / USER_CONFIRMED_CLOSURE` su conferma esplicita dell'utente.
 
 - Risultato: A-01–A-15 verificati nel perimetro autorizzato; implementazione
   integrata, acceptance staging bidirezionale e cleanup esatto completati.
@@ -314,5 +315,4 @@ Task in `REVIEW / READY_FOR_USER_CONFIRMATION`, mai `DONE` in questa lane.
   locale, ma i flussi pubblici staging richiesti sono stati verificati nella
   acceptance coordinata; nessun P0/P1/P2/P3 aperto.
 - Production e Win7POS: `NOT_MODIFIED`.
-- Prossima fase: review finale e conferma esplicita dell'utente per l'eventuale
-  passaggio a `DONE`.
+- Prossima fase: nessuna; eventuali nuovi gap richiedono un task separato.
