@@ -1,5 +1,6 @@
 package com.example.merchandisecontrolsplitview.data
 
+import java.util.Locale
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -255,9 +256,11 @@ object CatalogIncrementalRemoteContract044A {
         "no_realtime_inventory_publication;inventory_product_prices_no_updated_at;products_updated_at_untrusted"
 }
 
-internal fun fingerprintSupplierName(name: String): String = "s:" + name.trim().lowercase()
+internal fun fingerprintSupplierName(name: String): String =
+    "s:" + CatalogTextCanonicalizer.supplierName(name).lowercase(Locale.ROOT)
 
-internal fun fingerprintCategoryName(name: String): String = "c:" + name.trim().lowercase()
+internal fun fingerprintCategoryName(name: String): String =
+    "c:" + CatalogTextCanonicalizer.categoryName(name).lowercase(Locale.ROOT)
 
 internal fun fingerprintSupplierInbound(row: InventorySupplierRow): String =
     fingerprintSupplierName(row.name) + "|u:" + row.updatedAt + "|d:" + row.deletedAt
@@ -266,49 +269,61 @@ internal fun fingerprintCategoryInbound(row: InventoryCategoryRow): String =
     fingerprintCategoryName(row.name) + "|u:" + row.updatedAt + "|d:" + row.deletedAt
 
 internal fun fingerprintProductRow(p: Product, supplierRemoteId: String?, categoryRemoteId: String?): String =
-    buildString {
-        append("p:")
-        append(p.barcode)
-        append('|')
-        append(p.itemNumber)
-        append('|')
-        append(p.productName)
-        append('|')
-        append(p.secondProductName)
-        append('|')
-        append(p.purchasePrice)
-        append('|')
-        append(p.retailPrice)
-        append('|')
-        append(supplierRemoteId)
-        append('|')
-        append(categoryRemoteId)
-        append('|')
-        append(p.stockQuantity)
+    CatalogTextCanonicalizer.product(p).product.let { canonical ->
+        buildString {
+            append("p:")
+            append(canonical.barcode)
+            append('|')
+            append(canonical.itemNumber)
+            append('|')
+            append(canonical.productName)
+            append('|')
+            append(canonical.secondProductName)
+            append('|')
+            append(canonical.purchasePrice)
+            append('|')
+            append(canonical.retailPrice)
+            append('|')
+            append(CatalogTextCanonicalizer.optionalRemoteId(supplierRemoteId))
+            append('|')
+            append(CatalogTextCanonicalizer.optionalRemoteId(categoryRemoteId))
+            append('|')
+            append(canonical.stockQuantity)
+        }
     }
 
-internal fun fingerprintProductInbound(row: InventoryProductRow): String =
-    buildString {
+internal fun fingerprintProductInbound(row: InventoryProductRow): String {
+    val canonicalBarcode = CatalogTextCanonicalizer.barcode(row.barcode)
+    val canonicalItemNumber = row.itemNumber
+        ?.let(CatalogTextCanonicalizer::itemNumber)
+        ?.takeIf { it.isNotEmpty() }
+    val canonicalProductName = row.productName
+        ?.let(CatalogTextCanonicalizer::productName)
+        ?.takeIf { it.isNotEmpty() }
+    val canonicalSecondProductName = row.secondProductName
+        ?.let(CatalogTextCanonicalizer::secondProductName)
+        ?.takeIf { it.isNotEmpty() }
+    return buildString {
         append("p:")
-        append(row.barcode)
+        append(canonicalBarcode)
         append('|')
-        append(row.itemNumber)
+        append(canonicalItemNumber)
         append('|')
-        append(row.productName)
+        append(canonicalProductName)
         append('|')
-        append(row.secondProductName)
+        append(canonicalSecondProductName)
         append('|')
         append(row.purchasePrice)
         append('|')
         append(row.retailPrice)
         append('|')
-        append(row.supplierId)
+        append(CatalogTextCanonicalizer.optionalRemoteId(row.supplierId))
         append('|')
-        append(row.categoryId)
+        append(CatalogTextCanonicalizer.optionalRemoteId(row.categoryId))
         append('|')
         append(row.stockQuantity)
         append("|iv:")
-        append(row.primaryImageVersionId)
+        append(CatalogTextCanonicalizer.optionalRemoteId(row.primaryImageVersionId))
         append("|iu:")
         append(row.primaryImageUpdatedAt)
         append("|u:")
@@ -316,3 +331,4 @@ internal fun fingerprintProductInbound(row: InventoryProductRow): String =
         append("|d:")
         append(row.deletedAt)
     }
+}

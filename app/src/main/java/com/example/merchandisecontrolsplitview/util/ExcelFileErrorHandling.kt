@@ -10,6 +10,10 @@ import java.util.IdentityHashMap
 import java.io.IOException
 
 internal sealed interface ExcelFileUserError {
+    data class CatalogTextRejected(
+        val rejection: CatalogTextPolicy.FieldRejection
+    ) : ExcelFileUserError
+
     data object DifferentColumns : ExcelFileUserError
     data object IncompatibleFileStructure : ExcelFileUserError
     data object MainFileNeeded : ExcelFileUserError
@@ -30,7 +34,13 @@ internal fun classifyExcelFileUserError(
     context: Context,
     throwable: Throwable
 ): ExcelFileUserError {
+    val catalogTextRejection = throwable.selfAndCauses()
+        .filterIsInstance<CatalogTextValidationException>()
+        .firstOrNull()
+        ?.rejection
     return when {
+        catalogTextRejection != null ->
+            ExcelFileUserError.CatalogTextRejected(catalogTextRejection)
         throwable.selfAndCauses().any { cause ->
             cause is ImportResourceLimitExceededException
         } -> ExcelFileUserError.FileTooLargeOrComplex
@@ -65,7 +75,9 @@ internal fun resolveExcelFileErrorMessage(
     throwable: Throwable,
     unknownFallbackResId: Int
 ): String {
-    return when (classifyExcelFileUserError(context, throwable)) {
+    return when (val error = classifyExcelFileUserError(context, throwable)) {
+        is ExcelFileUserError.CatalogTextRejected ->
+            context.catalogTextErrorMessage(error.rejection)
         ExcelFileUserError.DifferentColumns ->
             context.getString(R.string.error_different_columns)
         ExcelFileUserError.IncompatibleFileStructure ->

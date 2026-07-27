@@ -134,10 +134,47 @@ fun buildDatabaseSnapshotFingerprint(
 }
 
 private fun normalizeFingerprintValue(key: String, value: String?): String {
-    val normalized = value
-        ?.trim()
-        ?.replace(Regex("\\s+"), " ")
-        .orEmpty()
+    val raw = value.orEmpty()
+    val policyOutcome = when (key) {
+        "productName" -> CatalogTextPolicy.display(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.PRODUCT_NAME
+        )
+        "secondProductName" -> CatalogTextPolicy.display(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.SECOND_PRODUCT_NAME
+        )
+        "supplier", "name" -> CatalogTextPolicy.display(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.SUPPLIER_NAME
+        )
+        "category" -> CatalogTextPolicy.display(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.CATEGORY_NAME
+        )
+        "barcode" -> CatalogTextPolicy.strict(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.BARCODE
+        )
+        "itemNumber" -> CatalogTextPolicy.strict(
+            raw,
+            required = false,
+            maxLength = CatalogTextPolicy.Limits.ITEM_NUMBER
+        )
+        else -> null
+    }
+    val normalized = when (policyOutcome) {
+        is CatalogTextPolicy.Outcome.Unchanged -> policyOutcome.value
+        is CatalogTextPolicy.Outcome.Normalized -> policyOutcome.value
+        is CatalogTextPolicy.Outcome.Rejected ->
+            "rejected:${policyOutcome.reason.contractValue}"
+        null -> raw.trim().replace(Regex("\\s+"), " ")
+    }
     return if (key in NUMERIC_KEYS) {
         normalized.replace(",", ".").toDoubleOrNull()?.let(::fingerprintNumber) ?: normalized
     } else {

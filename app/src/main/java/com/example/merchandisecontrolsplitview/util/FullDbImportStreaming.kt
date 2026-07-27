@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.ImportPriceHistoryEntry
+import com.example.merchandisecontrolsplitview.data.ImportRowSource
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
 import com.example.merchandisecontrolsplitview.data.Product
+import com.example.merchandisecontrolsplitview.data.CatalogTextNormalizationWarning
+import com.example.merchandisecontrolsplitview.data.RowImportError
 import com.example.merchandisecontrolsplitview.util.canonicalExcelHeaderKey
 import com.example.merchandisecontrolsplitview.util.normalizeExcelHeader
 import kotlinx.coroutines.runBlocking
@@ -25,6 +28,8 @@ import java.util.Locale
 import javax.xml.parsers.SAXParserFactory
 
 private const val PRICE_HISTORY_BATCH_SIZE = 500
+private const val MAX_ENTITY_TEXT_DIAGNOSTICS = 500
+private const val MAX_ALL_ENTITY_TEXT_DIAGNOSTICS = MAX_ENTITY_TEXT_DIAGNOSTICS * 2
 enum class ImportWorkbookRoute {
     SINGLE_SHEET,
     FULL_DATABASE
@@ -70,7 +75,57 @@ private data class PriceHistoryHeaderIndexes(
     val sourceIndex: Int
 )
 
+private data class ParsedEntityNamesSheet(
+    val names: Set<String>,
+    val rowCount: Int,
+    val warnings: List<CatalogTextNormalizationWarning>,
+    val warningCount: Int,
+    val errors: List<RowImportError>,
+    val errorCount: Int
+)
+
+private class StrictIdentityCollisionTracker(
+    private val field: CatalogTextField,
+    private val required: Boolean,
+    private val maxLength: Int
+) {
+    private val firstRawByCanonical = linkedMapOf<String, String>()
+
+    fun canonicalize(raw: String): String {
+        val canonical = when (
+            val outcome = CatalogTextPolicy.strict(
+                raw = raw,
+                required = required,
+                maxLength = maxLength
+            )
+        ) {
+            is CatalogTextPolicy.Outcome.Unchanged -> outcome.value
+            is CatalogTextPolicy.Outcome.Normalized -> outcome.value
+            is CatalogTextPolicy.Outcome.Rejected -> throw CatalogTextValidationException(
+                CatalogTextPolicy.FieldRejection(field, outcome.reason)
+            )
+        }
+        if (!required && canonical.isEmpty()) return canonical
+
+        val firstRaw = firstRawByCanonical.putIfAbsent(canonical, raw)
+        if (firstRaw != null && firstRaw != raw) {
+            throw CatalogTextValidationException(
+                CatalogTextPolicy.FieldRejection(
+                    field,
+                    CatalogTextPolicy.RejectionReason.IDENTITY_COLLISION_AFTER_TRIM
+                )
+            )
+        }
+        return canonical
+    }
+}
+
 private class StopAfterFirstParsedRow : RuntimeException(null, null, false, false)
+
+private fun <T> MutableList<T>.appendBounded(values: List<T>) {
+    val remaining = (MAX_ALL_ENTITY_TEXT_DIAGNOSTICS - size).coerceAtLeast(0)
+    if (remaining > 0) addAll(values.take(remaining))
+}
 
 internal suspend fun analyzeSmartImportWorkbook(
     context: Context,
@@ -149,6 +204,10 @@ private suspend fun analyzeFullDbImportStreaming(
     var categoryRowCount = 0
     val supplierNames = linkedSetOf<String>()
     val categoryNames = linkedSetOf<String>()
+    val entityWarnings = mutableListOf<CatalogTextNormalizationWarning>()
+    val entityErrors = mutableListOf<RowImportError>()
+    var entityWarningCount = 0
+    var entityErrorCount = 0
     var hasPriceHistorySheet = false
     val priceHistoryRows = mutableListOf<ImportPriceHistoryEntry>()
     val fingerprintBuilder = ImportDatasetFingerprintBuilder()
@@ -156,17 +215,39 @@ private suspend fun analyzeFullDbImportStreaming(
     forEachWorkbookSheet(reader) { sheetName, sheetStream ->
         when (normalizeExcelHeader(sheetName)) {
             normalizeExcelHeader("Suppliers") -> {
-                val parsedNames = parseEntityNamesSheet(sheetStream, styles, sharedStrings)
-                supplierRowCount += parsedNames.size
-                supplierNames += parsedNames
-                parsedNames.forEach(fingerprintBuilder::addSupplierName)
+                val parsedNames = parseEntityNamesSheet(
+                    context,
+                    sheetStream,
+                    styles,
+                    sharedStrings,
+                    field = CatalogTextField.SUPPLIER_NAME,
+                    source = ImportRowSource.SUPPLIERS
+                )
+                supplierRowCount += parsedNames.rowCount
+                supplierNames += parsedNames.names
+                entityWarnings.appendBounded(parsedNames.warnings)
+                entityErrors.appendBounded(parsedNames.errors)
+                entityWarningCount += parsedNames.warningCount
+                entityErrorCount += parsedNames.errorCount
+                parsedNames.names.forEach(fingerprintBuilder::addSupplierName)
             }
 
             normalizeExcelHeader("Categories") -> {
-                val parsedNames = parseEntityNamesSheet(sheetStream, styles, sharedStrings)
-                categoryRowCount += parsedNames.size
-                categoryNames += parsedNames
-                parsedNames.forEach(fingerprintBuilder::addCategoryName)
+                val parsedNames = parseEntityNamesSheet(
+                    context,
+                    sheetStream,
+                    styles,
+                    sharedStrings,
+                    field = CatalogTextField.CATEGORY_NAME,
+                    source = ImportRowSource.CATEGORIES
+                )
+                categoryRowCount += parsedNames.rowCount
+                categoryNames += parsedNames.names
+                entityWarnings.appendBounded(parsedNames.warnings)
+                entityErrors.appendBounded(parsedNames.errors)
+                entityWarningCount += parsedNames.warningCount
+                entityErrorCount += parsedNames.errorCount
+                parsedNames.names.forEach(fingerprintBuilder::addCategoryName)
             }
 
             normalizeExcelHeader("Products") -> {
@@ -203,8 +284,19 @@ private suspend fun analyzeFullDbImportStreaming(
     val analysis = productsAnalysis
         ?: throw IllegalArgumentException(context.getString(R.string.error_file_empty_or_invalid))
 
+    val productAnalysis = analysis.analysis
+    val mergedAnalysis = productAnalysis.copy(
+        errors = productAnalysis.errors + entityErrors,
+        textNormalizationWarnings = productAnalysis.textNormalizationWarnings + entityWarnings,
+        totalErrorCount = productAnalysis.totalErrorCount + entityErrorCount,
+        totalTextNormalizationRowCount =
+            productAnalysis.totalTextNormalizationRowCount + entityWarningCount,
+        totalTextNormalizationFieldCount =
+            productAnalysis.totalTextNormalizationFieldCount + entityWarningCount
+    )
+
     FullDbImportStreamingResult(
-        analysis = analysis,
+        analysis = analysis.copy(analysis = mergedAnalysis),
         pendingSupplierNames = (supplierNames + analysis.pendingSuppliers.values).toSet(),
         pendingCategoryNames = (categoryNames + analysis.pendingCategories.values).toSet(),
         pendingPriceHistory = priceHistoryRows,
@@ -234,7 +326,9 @@ suspend fun applyFullDbPriceHistoryStreaming(
     context: Context,
     uri: Uri,
     repository: InventoryRepository
-): Int = withWorkbookReader(context, uri) { reader, styles, sharedStrings ->
+): Int = withStagedWorkbook(context, uri) { stagedFile ->
+    validatePriceHistoryIdentityCollisions(stagedFile)
+    withWorkbookReader(stagedFile) { reader, styles, sharedStrings ->
     var importedRows = 0
 
     forEachWorkbookSheet(reader) { sheetName, sheetStream ->
@@ -245,6 +339,11 @@ suspend fun applyFullDbPriceHistoryStreaming(
         var headerIndexes: PriceHistoryHeaderIndexes? = null
         var headerRow: List<String>? = null
         val batch = mutableListOf<ParsedPriceHistoryRow>()
+        val barcodeTracker = StrictIdentityCollisionTracker(
+            field = CatalogTextField.BARCODE,
+            required = true,
+            maxLength = CatalogTextPolicy.Limits.BARCODE
+        )
 
         fun flushBatch() {
             if (batch.isEmpty()) return
@@ -274,7 +373,9 @@ suspend fun applyFullDbPriceHistoryStreaming(
             }
 
             val indexes = requireNotNull(headerIndexes)
-            val barcode = row.getOrNull(indexes.barcodeIndex)?.trim().orEmpty()
+            val barcode = barcodeTracker.canonicalize(
+                row.getOrNull(indexes.barcodeIndex).orEmpty()
+            )
             val timestamp = row.getOrNull(indexes.timestampIndex)?.trim().orEmpty()
             val rawType = row.getOrNull(indexes.typeIndex)?.trim()?.lowercase(Locale.ROOT).orEmpty()
             val newPrice = row.getOrNull(indexes.newPriceIndex)
@@ -308,6 +409,39 @@ suspend fun applyFullDbPriceHistoryStreaming(
     }
 
     importedRows
+    }
+}
+
+private suspend fun validatePriceHistoryIdentityCollisions(stagedFile: File) {
+    withWorkbookReader(stagedFile) { reader, styles, sharedStrings ->
+        forEachWorkbookSheet(reader) { sheetName, sheetStream ->
+            if (normalizeExcelHeader(sheetName) != normalizeExcelHeader("PriceHistory")) {
+                return@forEachWorkbookSheet
+            }
+
+            var headerIndexes: PriceHistoryHeaderIndexes? = null
+            var headerRow: List<String>? = null
+            val barcodeTracker = StrictIdentityCollisionTracker(
+                field = CatalogTextField.BARCODE,
+                required = true,
+                maxLength = CatalogTextPolicy.Limits.BARCODE
+            )
+            parseSheetRows(sheetStream, styles, sharedStrings) { row ->
+                if (headerIndexes == null) {
+                    headerRow = row
+                    headerIndexes = requirePriceHistoryHeaderIndexes(row)
+                    return@parseSheetRows
+                }
+                val indexes = requireNotNull(headerIndexes)
+                barcodeTracker.canonicalize(
+                    row.getOrNull(indexes.barcodeIndex).orEmpty()
+                )
+            }
+            if (headerRow == null) {
+                requirePriceHistoryHeaderIndexes(null)
+            }
+        }
+    }
 }
 
 private data class ProductsSheetAnalysis(
@@ -359,27 +493,83 @@ private suspend fun analyzeProductsSheet(
 }
 
 private fun parseEntityNamesSheet(
+    context: Context,
     sheetStream: InputStream,
     styles: StylesTable,
-    sharedStrings: ReadOnlySharedStringsTable
-): Set<String> {
+    sharedStrings: ReadOnlySharedStringsTable,
+    field: CatalogTextField,
+    source: ImportRowSource
+): ParsedEntityNamesSheet {
     var nameIndex: Int? = null
     val names = linkedSetOf<String>()
+    val warnings = mutableListOf<CatalogTextNormalizationWarning>()
+    val errors = mutableListOf<RowImportError>()
+    var warningCount = 0
+    var errorCount = 0
+    var rowCount = 0
 
-    parseSheetRows(sheetStream, styles, sharedStrings) { row ->
+    parseSheetRowsIndexed(sheetStream, styles, sharedStrings) { sheetRowNumber, row ->
         if (nameIndex == null) {
             nameIndex = row.indexOfFirst { normalizeExcelHeader(it) == "name" }
-            return@parseSheetRows
+            return@parseSheetRowsIndexed
         }
 
         val idx = requireNotNull(nameIndex)
-        row.getOrNull(idx)
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let(names::add)
+        val rawName = row.getOrNull(idx)?.takeIf { it.isNotBlank() }
+            ?: return@parseSheetRowsIndexed
+        rowCount++
+        val maxLength = when (field) {
+            CatalogTextField.SUPPLIER_NAME -> CatalogTextPolicy.Limits.SUPPLIER_NAME
+            CatalogTextField.CATEGORY_NAME -> CatalogTextPolicy.Limits.CATEGORY_NAME
+            else -> error("Unsupported full database entity field: $field")
+        }
+        when (
+            val outcome = CatalogTextPolicy.display(
+                raw = rawName,
+                required = true,
+                maxLength = maxLength
+            )
+        ) {
+            is CatalogTextPolicy.Outcome.Unchanged -> names += outcome.value
+            is CatalogTextPolicy.Outcome.Normalized -> {
+                names += outcome.value
+                warningCount++
+                if (warnings.size < MAX_ENTITY_TEXT_DIAGNOSTICS) {
+                    warnings += CatalogTextNormalizationWarning(
+                        rowNumber = sheetRowNumber,
+                        fields = setOf(field),
+                        source = source
+                    )
+                }
+            }
+            is CatalogTextPolicy.Outcome.Rejected -> {
+                errorCount++
+                if (errors.size < MAX_ENTITY_TEXT_DIAGNOSTICS) {
+                    val key = when (field) {
+                        CatalogTextField.SUPPLIER_NAME -> "supplier"
+                        CatalogTextField.CATEGORY_NAME -> "category"
+                    }
+                    errors += catalogTextRowError(
+                        context = context,
+                        rowNumber = sheetRowNumber,
+                        row = mapOf(key to rawName),
+                        field = field,
+                        reason = outcome.reason,
+                        source = source
+                    )
+                }
+            }
+        }
     }
 
-    return names
+    return ParsedEntityNamesSheet(
+        names = names,
+        rowCount = rowCount,
+        warnings = warnings,
+        warningCount = warningCount,
+        errors = errors,
+        errorCount = errorCount
+    )
 }
 
 private fun parsePriceHistorySheet(
@@ -390,6 +580,11 @@ private fun parsePriceHistorySheet(
     var headerIndexes: PriceHistoryHeaderIndexes? = null
     var headerRow: List<String>? = null
     val rows = mutableListOf<ImportPriceHistoryEntry>()
+    val barcodeTracker = StrictIdentityCollisionTracker(
+        field = CatalogTextField.BARCODE,
+        required = true,
+        maxLength = CatalogTextPolicy.Limits.BARCODE
+    )
 
     parseSheetRows(sheetStream, styles, sharedStrings) { row ->
         if (headerIndexes == null) {
@@ -399,7 +594,9 @@ private fun parsePriceHistorySheet(
         }
 
         val indexes = requireNotNull(headerIndexes)
-        val barcode = row.getOrNull(indexes.barcodeIndex)?.trim().orEmpty()
+        val barcode = barcodeTracker.canonicalize(
+            row.getOrNull(indexes.barcodeIndex).orEmpty()
+        )
         val timestamp = row.getOrNull(indexes.timestampIndex)?.trim().orEmpty()
         val rawType = row.getOrNull(indexes.typeIndex)?.trim()?.lowercase(Locale.ROOT).orEmpty()
         val newPrice = row.getOrNull(indexes.newPriceIndex)
@@ -582,6 +779,17 @@ private fun parseSheetRows(
     sharedStrings: ReadOnlySharedStringsTable,
     onRow: (List<String>) -> Unit
 ) {
+    parseSheetRowsIndexed(sheetStream, styles, sharedStrings) { _, row ->
+        onRow(row)
+    }
+}
+
+private fun parseSheetRowsIndexed(
+    sheetStream: InputStream,
+    styles: StylesTable,
+    sharedStrings: ReadOnlySharedStringsTable,
+    onRow: (rowNumber: Int, cells: List<String>) -> Unit
+) {
     val sheetHandler = object : XSSFSheetXMLHandler.SheetContentsHandler {
         private val currentRow = linkedMapOf<Int, String>()
         private var lastColumnIndex = -1
@@ -600,7 +808,7 @@ private fun parseSheetRows(
             }
             val trimmedCells = cells.dropLastWhile { it.isEmpty() }
             if (trimmedCells.any { it.isNotBlank() }) {
-                onRow(trimmedCells)
+                onRow(rowNum + 1, trimmedCells)
             }
         }
 
@@ -608,7 +816,9 @@ private fun parseSheetRows(
             val columnIndex = cellReference
                 ?.let { CellReference(it).col.toInt() }
                 ?: (lastColumnIndex + 1)
-            currentRow[columnIndex] = formattedValue?.trim().orEmpty()
+            // Preserve source text until the field-specific policy runs. Trimming
+            // here would erase the evidence for strict identity collisions.
+            currentRow[columnIndex] = formattedValue.orEmpty()
             lastColumnIndex = maxOf(lastColumnIndex, columnIndex)
         }
 
