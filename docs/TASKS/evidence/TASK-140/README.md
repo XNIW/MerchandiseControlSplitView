@@ -11,6 +11,7 @@ raw.
 - Baseline: `ca0a58d8f63fa6447427c2e06846b4c9198e4be5`
 - Branch implementazione: `codex/catalog-text-integrity-android-20260727`
 - Branch closeout: `codex/catalog-text-integrity-closeout-android-20260727`
+- Branch chiusura: `codex/catalog-text-integrity-done-android-20260727`
 - Coordination key: `CATALOG-TEXT-001`
 - Golden fixture SHA-256 atteso:
   `139d63eedea47b54bb63a9289bef5fc6f7372668f209aac7753b586da7ccd9f8`
@@ -164,4 +165,5 @@ sono eseguiti sul device API 35.
 Production e Win7POS: `NOT_MODIFIED`. Commit fix/rereview:
 `06d865abd59f0d9d1ab4aa6881f69a271b1c5e34` e
 `334603a7515b349ae2000489f229ca0c38ace2bb`. Stato:
-`REVIEW / READY_FOR_USER_CONFIRMATION`, non `DONE`.
+`DONE / USER_CONFIRMED_CLOSURE` dopo conferma esplicita dell'utente del
+`2026-07-27`.
