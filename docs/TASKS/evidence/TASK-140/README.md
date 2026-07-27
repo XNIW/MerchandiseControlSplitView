@@ -9,7 +9,8 @@ raw.
 
 - Repository: `XNIW/MerchandiseControlSplitView`
 - Baseline: `ca0a58d8f63fa6447427c2e06846b4c9198e4be5`
-- Branch: `codex/catalog-text-integrity-android-20260727`
+- Branch implementazione: `codex/catalog-text-integrity-android-20260727`
+- Branch closeout: `codex/catalog-text-integrity-closeout-android-20260727`
 - Coordination key: `CATALOG-TEXT-001`
 - Golden fixture SHA-256 atteso:
   `139d63eedea47b54bb63a9289bef5fc6f7372668f209aac7753b586da7ccd9f8`
@@ -45,6 +46,9 @@ Tutti i comandi Gradle sono stati eseguiti con l’SDK locale esplicito:
 | `git diff --check` | PASS |
 | Connected API 35 | `8/8` PASS su `Medium_Phone_API_35` |
 | Independent rereview | `APPROVED_PRE_PR`; SHA `334603a7`; P0/P1/P2/P3 `0/0/0/0` |
+| PR/CI/merge | [PR #3](https://github.com/XNIW/MerchandiseControlSplitView/pull/3) `PASS`; CI verde; merge normale `ec858d0bd75b9d06ff7cbabeebcca9b25be21070` |
+| Staging cross-platform | `PASS`; Android write → iOS/Admin read e iOS write → Android/Admin read, con quattro prezzi per prodotto |
+| Cleanup staging | `PASS`; fixture/eventi rimossi per ID esatti, residue fixture e shop QA `0` |
 
 I cinque skip full JVM sono preesistenti e intenzionali: Supabase realtime
 senza configurazione live, tre audit/oracle opt-in e una fixture locale
@@ -135,12 +139,29 @@ sono eseguiti sul device API 35.
 - Eccezioni/log non contengono il valore raw; nessun token, payload catalogo
   completo o dato reale aggiunto all’evidence.
 
-## Gate esterni pendenti
+## Closeout esterno coordinato
 
-- staging QA e matrice Admin ↔ Android ↔ iOS;
-- repair dati staging, paging Win7POS-equivalente e cleanup;
-- CI, PR, merge normale e closeout documentale cross-platform.
+- Admin PR
+  [#42](https://github.com/XNIW/merchandise-control-admin-web/pull/42),
+  Android PR [#3](https://github.com/XNIW/MerchandiseControlSplitView/pull/3)
+  e iOS PR [#1](https://github.com/XNIW/iOSMerchandiseControl/pull/1):
+  review finali P0/P1/P2/P3 `0/0/0/0`, CI verdi e merge normali verificati.
+- Staging allowlisted `merchandisecontrol-dev`: backup verificato, migration
+  remota `20260727084040`, repair atomico esatto `345`, invalidi post-repair
+  `0` e invarianti business preservati.
+- Android API 35 ha scritto tramite trasporto pubblico un prodotto con quattro
+  prezzi; iOS e Admin hanno letto il valore canonico. Dopo il write pubblico
+  iOS, Android ha letto prodotto e quattro prezzi canonicali nello scope
+  owner/shop atteso.
+- Paging Win7POS-equivalente read-only: categorie `71`, supplier `102`,
+  prodotti `19.763`, prezzi `41.228`; snapshot pinned, duplicate ID/cursor e
+  valori invalidi `0`; delta/tombstone drain completo.
+- Cleanup esatto: `3` prodotti, `8` prezzi, `1` supplier, `1` categoria e `7`
+  eventi rimossi; residue fixture, eventi, identity e shop QA `0`.
+- Gli artefatti effimeri di sessione/build Android sono stati eliminati; la
+  rimozione e il cleanup fixture non sono recuperabili.
 
-Production e Win7POS: `NOT_MODIFIED`. Staging: `NOT_MODIFIED` da questa lane.
-Commit fix/rereview: `06d865abd59f0d9d1ab4aa6881f69a271b1c5e34` e
-`334603a7515b349ae2000489f229ca0c38ace2bb`. Push/PR: `NOT_RUN_PRE_PR`.
+Production e Win7POS: `NOT_MODIFIED`. Commit fix/rereview:
+`06d865abd59f0d9d1ab4aa6881f69a271b1c5e34` e
+`334603a7515b349ae2000489f229ca0c38ace2bb`. Stato:
+`REVIEW / READY_FOR_USER_CONFIRMATION`, non `DONE`.

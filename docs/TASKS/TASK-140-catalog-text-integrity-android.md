@@ -7,7 +7,8 @@
 - Coordination key: `CATALOG-TEXT-001`
 - Repository: `XNIW/MerchandiseControlSplitView`
 - Baseline: `origin/main` `ca0a58d8f63fa6447427c2e06846b4c9198e4be5`
-- Branch: `codex/catalog-text-integrity-android-20260727`
+- Branch implementazione: `codex/catalog-text-integrity-android-20260727`
+- Branch closeout: `codex/catalog-text-integrity-closeout-android-20260727`
 - Apertura: `2026-07-27`
 - Ultimo aggiornamento: `2026-07-27`
 - Autorizzazione: richiesta utente cross-platform esplicita del `2026-07-27`.
@@ -20,9 +21,12 @@
 - Contratto comune: `catalog_text_policy_v1`.
 - Fixture golden canonica: repository Admin Web, SHA-256 atteso
   `139d63eedea47b54bb63a9289bef5fc6f7372668f209aac7753b586da7ccd9f8`.
-- PR Admin: da collegare.
-- PR Android: da collegare.
-- PR iOS: da collegare.
+- PR Admin:
+  [XNIW/merchandise-control-admin-web#42](https://github.com/XNIW/merchandise-control-admin-web/pull/42).
+- PR Android:
+  [XNIW/MerchandiseControlSplitView#3](https://github.com/XNIW/MerchandiseControlSplitView/pull/3).
+- PR iOS:
+  [XNIW/iOSMerchandiseControl#1](https://github.com/XNIW/iOSMerchandiseControl/pull/1).
 - Acceptance finale e passaggio a `DONE` restano cross-platform: richiedono
   review indipendente, CI, merge normali, repair/acceptance staging e gate
   Win7POS-equivalente verdi.
@@ -271,10 +275,44 @@ local-dirty image-only e bounded preflight.
 | R-04 | P2 | Supplier/category full DB non conserva warning/error tipizzati per riga/campo. | `FIXED_VERIFIED` |
 | R-05 | P2 | Copertura connected dei flussi production incompleta. | `FIXED_VERIFIED_POST_REREVIEW` |
 
+## Closeout cross-platform — 2026-07-27
+
+- Implementazione Android pubblicata nel PR
+  [#3](https://github.com/XNIW/MerchandiseControlSplitView/pull/3), CI verde e
+  merge normale a due parent `ec858d0bd75b9d06ff7cbabeebcca9b25be21070`.
+- PR Admin #42 e iOS #1 collegati, CI verdi e merge normali verificati. Review
+  indipendenti finali dei tre repository: P0/P1/P2/P3 `0/0/0/0`.
+- Migration e repair applicati soltanto a `merchandisecontrol-dev`: `345`
+  prodotti riparati atomicamente, invalidi post-repair `0`, invarianti
+  business preservati. Production `NOT_MODIFIED`.
+- Acceptance pubblica sul solo shop QA: Android API 35 ha scritto un prodotto
+  con quattro prezzi; iOS e Admin lo hanno letto canonico. Dopo il write iOS,
+  Android ha letto prodotto e quattro prezzi canonicali, nello stesso
+  owner/shop scope e con identity strict invariata.
+- Gate Win7POS-equivalente read-only completato sull'intero catalogo staging:
+  `71` categorie, `102` supplier, `19.763` prodotti e `41.228` prezzi;
+  snapshot pinned, duplicate ID/cursor e valori invalidi `0`.
+- Cleanup transazionale esatto: fixture mobile/Admin, prezzi ed eventi rimossi;
+  residue fixture e catalogo shop QA `0`. Nessun dato production o Win7POS
+  modificato.
+- I check del closeout sono documentali (`git diff --check` e verifica link/
+  stato); i gate Android completi restano quelli già eseguiti sul medesimo
+  codice integrato: full JVM `873`, assemble, lint e connected API 35 `8/8`
+  `PASS`.
+
 ## Handoff
 
-Task in `REVIEW`, mai `DONE` in questa lane. I finding ricevuti sono corretti
-e verificati dal reviewer indipendente; P0/P1/P2/P3 aperti `0/0/0/0`.
-Implementazione e fix sono committati fino a `334603a7`; push/PR/CI risultano
-`NOT_RUN_PRE_PR`. Production e Win7POS `NOT_MODIFIED`; nessuna scrittura
-staging eseguita.
+Task in `REVIEW / READY_FOR_USER_CONFIRMATION`, mai `DONE` in questa lane.
+
+- Risultato: A-01–A-15 verificati nel perimetro autorizzato; implementazione
+  integrata, acceptance staging bidirezionale e cleanup esatto completati.
+- File closeout toccati: questo task e
+  `docs/TASKS/evidence/TASK-140/README.md`.
+- Evidence: gate locali, PR/merge, staging e cleanup sono sintetizzati nel
+  README evidence.
+- Rischi residui: picker documenti/auth live non erano parte del connected
+  locale, ma i flussi pubblici staging richiesti sono stati verificati nella
+  acceptance coordinata; nessun P0/P1/P2/P3 aperto.
+- Production e Win7POS: `NOT_MODIFIED`.
+- Prossima fase: review finale e conferma esplicita dell'utente per l'eventuale
+  passaggio a `DONE`.
