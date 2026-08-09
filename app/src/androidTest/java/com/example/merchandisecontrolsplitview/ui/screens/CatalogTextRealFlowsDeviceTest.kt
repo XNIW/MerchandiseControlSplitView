@@ -3,14 +3,22 @@ package com.example.merchandisecontrolsplitview.ui.screens
 import android.net.Uri
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
@@ -101,6 +109,100 @@ class CatalogTextRealFlowsDeviceTest {
         withRepository { repository ->
             val supplier = repository.addSupplier(checkNotNull(confirmedName))
             assertEquals("Supplier One", supplier?.name)
+        }
+    }
+
+    @Test
+    fun manualEntryDialogBlocksInvalidNumbersAndPreservesBlankFallbackSemantics() {
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val repository = DefaultInventoryRepository(db)
+        val application = context.applicationContext as MerchandiseControlApplication
+        val viewModelStoreOwner = object : ViewModelStoreOwner {
+            override val viewModelStore = ViewModelStore()
+        }
+        val viewModelFactory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = when {
+                modelClass.isAssignableFrom(DatabaseViewModel::class.java) ->
+                    DatabaseViewModel(application, repository) as T
+                modelClass.isAssignableFrom(ExcelViewModel::class.java) ->
+                    ExcelViewModel(application, repository) as T
+                else -> error("Unsupported test ViewModel: ${modelClass.name}")
+            }
+        }
+        val viewModelProvider = ViewModelProvider(viewModelStoreOwner, viewModelFactory)
+        val databaseViewModel = viewModelProvider[DatabaseViewModel::class.java]
+        val excelViewModel = viewModelProvider[ExcelViewModel::class.java]
+        excelViewModel.excelData.add(
+            listOf(
+                "barcode",
+                "productName",
+                "purchasePrice",
+                "retailPrice",
+                "quantity",
+                "category",
+            )
+        )
+        val showDialog = mutableStateOf(true)
+
+        try {
+            composeRule.setContent {
+                MerchandiseControlTheme(darkTheme = false) {
+                    if (showDialog.value) {
+                        ManualEntryDialog(
+                            viewModel = excelViewModel,
+                            databaseViewModel = databaseViewModel,
+                            rowIndexToEdit = null,
+                            entryUid = 0L,
+                            initialBarcode = "MANUAL-ENTRY-001",
+                            productToPrefill = null,
+                            onDismiss = { showDialog.value = false },
+                            onScanNext = {},
+                        )
+                    }
+                }
+            }
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag("task141.manual.retail-price")
+                .performTextReplacement("100")
+            composeRule.onNodeWithTag("task141.manual.purchase-price")
+                .performTextReplacement("not-a-price")
+            composeRule.onNodeWithTag("task141.manual.quantity")
+                .performTextReplacement("-1")
+
+            composeRule.onNodeWithText(context.getString(R.string.error_invalid_purchase_price))
+                .assertExists()
+            composeRule.onNodeWithText(context.getString(R.string.error_negative_quantity))
+                .assertExists()
+            composeRule.onNodeWithText(context.getString(R.string.confirm))
+                .assertIsNotEnabled()
+            assertEquals(1, excelViewModel.excelData.size)
+
+            composeRule.onNodeWithTag("task141.manual.purchase-price")
+                .performTextReplacement("")
+            composeRule.onNodeWithTag("task141.manual.quantity")
+                .performTextReplacement("")
+            composeRule.onNodeWithText(context.getString(R.string.confirm))
+                .assertIsEnabled()
+                .performClick()
+
+            composeRule.waitUntil(timeoutMillis = 10_000) {
+                excelViewModel.excelData.size == 2
+            }
+            val persistedRow = excelViewModel.excelData[1]
+            assertEquals("MANUAL-ENTRY-001", persistedRow[0])
+            assertEquals("50", persistedRow[2])
+            assertEquals("100", persistedRow[3])
+            assertEquals("", persistedRow[4])
+            assertFalse(persistedRow.contains("not-a-price"))
+            assertFalse(persistedRow.contains("-1"))
+        } finally {
+            composeRule.runOnIdle { showDialog.value = false }
+            composeRule.waitForIdle()
+            viewModelStoreOwner.viewModelStore.clear()
+            db.close()
         }
     }
 
@@ -265,6 +367,35 @@ class CatalogTextRealFlowsDeviceTest {
             composeRule.onNodeWithText("Device Existing").performClick()
             composeRule.onNodeWithText(context.getString(R.string.product_image_title))
                 .assertExists()
+            composeRule.onNodeWithTag("task141.edit.purchase-price")
+                .performTextReplacement("not-a-price")
+            composeRule.onNodeWithTag("task141.edit.stock-quantity")
+                .performTextReplacement("1..2")
+            composeRule.onNodeWithText(context.getString(R.string.save)).performClick()
+            composeRule.onNodeWithText(context.getString(R.string.error_invalid_purchase_price))
+                .assertExists()
+            composeRule.onNodeWithText(context.getString(R.string.error_invalid_quantity))
+                .assertExists()
+            composeRule.onNodeWithTag("task141.edit.stock-quantity").assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.Error,
+                    context.getString(R.string.error_invalid_quantity),
+                )
+            )
+            val evidenceRoot = requireNotNull(context.getExternalFilesDir("task141-evidence"))
+            File(evidenceRoot, "task141-edit-invalid.png").outputStream().use { output ->
+                composeRule.onNodeWithTag("task141.edit.dialog-root")
+                    .captureToImage().asAndroidBitmap().compress(
+                    android.graphics.Bitmap.CompressFormat.PNG,
+                    100,
+                    output,
+                )
+            }
+
+            composeRule.onNodeWithTag("task141.edit.purchase-price")
+                .performTextReplacement("10")
+            composeRule.onNodeWithTag("task141.edit.stock-quantity")
+                .performTextReplacement("2")
             composeRule.onNode(
                 hasSetTextAction() and hasText("Device Existing")
             ).performTextReplacement("  Café\nCasa  ")
@@ -279,6 +410,8 @@ class CatalogTextRealFlowsDeviceTest {
             }
             assertEquals("Café Casa", persistedProduct?.productName)
             assertEquals("DEVICE-ITEM-EDITOR", persistedProduct?.itemNumber)
+            assertEquals(10.0, persistedProduct?.purchasePrice ?: Double.NaN, 0.0001)
+            assertEquals(2.0, persistedProduct?.stockQuantity ?: Double.NaN, 0.0001)
         } finally {
             composeRule.runOnIdle {
                 visibleScreen.value = ProductionScreen.NONE

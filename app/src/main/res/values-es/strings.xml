@@ -177,6 +177,7 @@
     <string name="new_retail_price_short_label">Nuevo precio v.</string>
     <string name="error_import_row_processing_failed">No se pudo procesar esta fila.</string>
     <string name="error_invalid_retail_price">El precio de venta no es un número válido.</string>
+    <string name="error_invalid_purchase_price">El precio de compra no es un número válido.</string>
     <string name="error_negative_prices">Los precios no pueden ser negativos.</string>
     <string name="error_invalid_quantity">La cantidad no es un número válido.</string>
     <string name="field_product_name">Nombre del Producto</string>
@@ -289,7 +290,7 @@
     <string name="duplicate_warnings_found">Avisos de duplicados encontrados (%1$s)</string>
     <string name="warning_duplicate_barcode">Código de barras: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Encontrado en las filas: %1$s</string>
-    <string name="warning_duplicate_resolution">Se utilizarán los datos de la última fila y las cantidades se sumarán.</string>
+    <string name="warning_duplicate_resolution">Se usarán los datos de la última fila; las cantidades no se sumarán.</string>
     <plurals name="warning_duplicate_rows_truncated">
         <item quantity="one">Lista de filas truncada: 1 fila más no mostrada (total %2$d).</item>
         <item quantity="other">Lista de filas truncada: %1$d filas más no mostradas (total %2$d).</item>

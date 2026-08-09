@@ -62,22 +62,62 @@
 
 | Campo               | Valore                                           |
 |---------------------|--------------------------------------------------|
-| Task attivo          | **Nessuno — ultimo completato TASK-140 CATALOG-TEXT-001** |
-| Fase task attivo     | **IDLE — TASK-140 DONE / USER_CONFIRMED_CLOSURE** |
+| Task attivo          | **TASK-141 — MOBILE-CATALOG-INTEGRITY-001** |
+| Fase task attivo     | **ACTIVE / REVIEW — re-review APPROVED, attesa conferma utente** |
 | Backlog documentale  | Audit UX/UI 2026-04-04 (TASK-030 → TASK-041); **TASK-030** `DONE`; **TASK-031** `DONE`; **TASK-032** `DONE`; **TASK-034** `DONE`; **TASK-035** `DONE`; **TASK-037** `DONE`; **TASK-038** `DONE` (review repo-grounded APPROVED senza fix, build/lint verdi, smoke execution e call site audit verificati 2026-04-05); **TASK-039** `DONE` (2026-04-05 — rollback esplicito al dialog precedente con preset + checkbox, review veloce positiva, build/lint verdi); **TASK-040** `DONE` (2026-04-05 — chiusura documentale; review repo-grounded + micro-fix FAB overlay; `assembleDebug` / `lint` / `ExcelViewModelTest` verdi; file `docs/TASKS/TASK-040-pregenerate-supplier-category-e-feedback-qualita.md`); **TASK-041** `DONE` (2026-04-11 — chiusura esplicita utente; review APPROVED; banner completamento + quick export `GeneratedScreen`; rischio residuo non bloccante: build/lint e smoke UI non eseguibili per limite JDK; file `docs/TASKS/TASK-041-completamento-workflow-celebrazione-quick-export.md`); **TASK-042** `DONE` (2026-04-04); **TASK-043** `DONE` (2026-04-10 — esclusione righe footer/totali da `dataRows`; review APPROVED; `docs/TASKS/TASK-043-robustezza-esclusione-righe-totali-footer-preview-import-analysis.md`); **TASK-044** `DONE` (2026-04-11 — History senza entry tecniche `APPLY_IMPORT_*` + `FULL_IMPORT_*`; review planner APPROVED repo-grounded; filtro centralizzato `USER_VISIBLE_HISTORY_WHERE_CLAUSE` DAO + stop insert VM + baseline JVM + build/lint verdi; file `docs/TASKS/TASK-044-history-cronologia-utente-senza-entry-tecniche-apply-import.md`); **TASK-045** `DONE` (2026-04-11); **TASK-046** `DONE` (2026-04-11 — PreGenerateScreen UX full iOS-style; file `docs/TASKS/TASK-046-pregenerate-ios-style-full-ux-rewrite.md`); **TASK-047** `DONE` (2026-04-12 — GeneratedScreen gerarchia iOS-like: progress card, toggle errori, top bar minimale; review planner FIX APPLIED → APPROVED; dead strings rimossi, overflow semplificato, kdoc aggiornato; build/lint verdi; file `docs/TASKS/TASK-047-generated-screen-ios-hierarchy-progress-summary.md`); **TASK-048** `DONE` (2026-04-12 — HistoryScreen UX: inset, card rhythm, display title leggibile; execution non documentata in tempo, ricostruita da review repo-grounded; 21/21 criteri ✅; `HistoryEntryUiFormatters.kt` nuovo file + `HistoryScreen.kt`; build/lint verdi impliciti da TASK-049/TASK-050); **TASK-049** `DONE` (2026-04-12 — filtro Cronologia fornitore/categoria; HistoryFilter, historyDisplayEntries, setHistoryFilter in ViewModel; HistoryFilterSheet + NavGraph wiring; build/lint/test verdi; layer chip UI superseded da TASK-050; file `docs/TASKS/TASK-049-history-filter-supplier-category.md`); **TASK-050** `DONE` (2026-04-12 — picker con ricerca per fornitore/categoria sostituisce FlowRow chip; HistoryFilterSelector + HistoryValuePickerDialog; build/lint verdi; file `docs/TASKS/TASK-050-history-filter-supplier-category-picker-search.md`); **TASK-051** `DONE` (2026-04-12 — Database hub Prodotti/Fornitori/Categorie: CRUD anagrafiche, delete guidata atomica, hub a tre tab, import/export globali header, search field unificato, localizzazione 4 lingue; review planner: fix dead code + stringhe orfane + badge ridondante; build/lint verdi; file `docs/TASKS/TASK-051-database-hub-gestione-fornitori-categorie.md`); **TASK-052** `DONE` (2026-04-12); **TASK-053** `DONE` (2026-04-14 — completion card swipe-dismiss + CTA sync/export + dialog Fine su sync pendente; review planner APPROVED + fix spacing dialog; build/lint non eseguiti per limite env; file task dedicato); **TASK-054** `DONE` (2026-04-14 — progress card compatta/espandibile + grid polish + preview alignment; review planner APPROVED + fix copy/barra; build/lint non eseguibili per limite ambiente; file `docs/TASKS/TASK-054-generated-screen-progress-card-compact-expandable.md`); **TASK-058** `DONE` (2026-04-25 — fix refresh locale prodotto modificato + scroll lista stabile; review planner APPROVED senza fix; build/lint/test JVM verdi; remoto puntuale N/A motivato; file `docs/TASKS/TASK-058-database-screen-refresh-locale-scroll-stabile.md`); **TASK-066** `DONE` (2026-04-27 — fix navigazione `ImportAnalysis` / `DatabaseScreen` / `GeneratedScreen`; resolver + test JVM + NavGraph no-restore + micro UX; build/lint/test/smoke verdi; `docs/TASKS/TASK-066-fix-importanalysis-database-return-navigation.md`); **TASK-067** `DONE ACCEPTABLE` (2026-04-27 — dirty marking delta-safe post full DB import + osservabilità/UX; build/lint/test JVM verdi; smoke live non eseguito per safety; `docs/TASKS/TASK-067-ottimizzazione-sync-cloud-post-full-import.md`); **TASK-068** `PARTIAL` (2026-04-28 — quinta passata: bulk product push batch 100 + fallback 50/25/singolo, sync events compatti, price-aware/fingerprint preservati, full JVM/build/lint verdi; ciclo B live con stesso file pending); **TASK-069** `DONE` (2026-04-27 — audit diagnostico sync residui chiuso dopo review repo-grounded APPROVED senza fix codice; root cause P0 = backlog `PayloadValidation` + blocco FIFO retry head-of-line; nessun cleanup outbox; follow-up TASK-070/TASK-071 creati; file `docs/TASKS/TASK-069-audit-sync-residui-outbox-price-generated-history.md`); **TASK-070** `DONE` (2026-04-28 — review tecnica chiusa; retry outbox head-of-line + logging strutturato app side; file `docs/TASKS/TASK-070-outbox-retry-head-of-line-logging-strutturato.md`); **TASK-071** `DONE` (2026-04-28 — contratto RPC `record_sync_event` / `PayloadValidation` chiarito; follow-up TASK-072 backend separato; file `docs/TASKS/TASK-071-backend-rpc-record-sync-event-payload-validation.md`); **TASK-073** `DONE` (2026-05-17 — review end-to-end APPROVED con fix applicati; file `docs/TASKS/TASK-073-excel-footer-summary-row-filter.md`) |
 | Nota TASK-068       | 2026-04-28 — quinta passata `PARTIAL`: bulk product push client-side implementato e testato su JVM, sync events massivi compatti, no schema/RPC/outbox cleanup; ciclo B live con lo stesso file pending. |
 | Nota TASK-069       | 2026-04-27 — `DONE` dopo review repo-grounded APPROVED senza fix codice; audit diagnostico chiuso, follow-up TASK-070 (app) e TASK-071 (backend) creati in `BACKLOG`. |
 | Nota TASK-070       | 2026-04-28 — `DONE`: retry outbox head-of-line risolto app-side con query retryable, outcome/log privacy-safe e test JVM/build/lint verdi; nessun cleanup outbox, nessuna UI, nessun backend/schema/RPC/RLS/trigger/migration. |
 | Nota TASK-071       | 2026-04-28 — `DONE`: contratto RPC locale vs payload Android chiarito; mismatch su `p_changed_count > 1000` con eventi compatti massivi, follow-up backend separato proposto. |
 | Milestone            | **TASK-055** **`DONE`** (2026-04-26 — audit Supabase/UX chiuso con follow-up principali coperti). **TASK-063** **`DONE`** (2026-04-26 — `ACCEPTABLE`, non `FULL`: S1-S5 PASS, S6 motivato/coperto da TASK-061, S7/S8 non bloccanti). **TASK-065**/**TASK-064**/**TASK-060**/**TASK-062**/**TASK-061**/**TASK-059** `DONE`. **TASK-069** **`DONE`** (2026-04-27 — audit diagnostico repo-grounded). |
-| Prossimo passo operativo | Nessuno; progetto `IDLE`. Nuovi gap richiedono un task separato. |
-| Ultimo aggiornamento | 2026-07-27 — **TASK-140 DONE / USER_CONFIRMED_CLOSURE**: implementazione e closeout integrati con merge normali, CI verdi, acceptance staging cross-platform e cleanup esatto completati; P0/P1/P2/P3 `0/0/0/0`. Production e Win7POS `NOT_MODIFIED`. |
+| Prossimo passo operativo | Attendere la conferma esplicita del `USER_APPROVER`; `APPROVED` non equivale a `DONE` e non autorizza autonomamente merge. |
+| Ultimo aggiornamento | 2026-08-09 — **TASK-141 ACTIVE / REVIEW**: re-review indipendente `APPROVED`, R141-01…R141-04 `FIXED_VERIFIED`, handoff `CODEX_REVIEW_APPROVED_AWAITING_USER_CONFIRMATION`; Client TASK-033 resta intatto. |
 
 **Promemoria antiambiguità (governance):** **TASK-040** è **`DONE`** (2026-04-05 — file task chiuso, 22/22 criteri con smoke visivo non bloccante documentato). **TASK-016** è **`DONE`** (2026-04-05). **TASK-024** è **`DONE`** (2026-03-30). **TASK-023** è **`DONE`** (2026-03-30). **TASK-022** è **`DONE`** (2026-03-30). **TASK-019** è **`DONE`** (2026-03-30). **TASK-018** è **`DONE`** (2026-03-29). **TASK-014** è **`DONE`** (2026-03-29). **TASK-009** **`DONE`**. **TASK-021** **`DONE`**. **TASK-012** **`DONE`**. **TASK-006** / **TASK-011** **`BLOCKED`**. **TASK-010** **`DONE`**. **TASK-025** è **`DONE`** (2026-04-03, review planner APPROVED, conferma utente).
 
 ---
 
 ## Workflow — task attivo
+
+**Avvio TASK-141 — 2026-08-09:** coordination key
+`MOBILE-CATALOG-INTEGRITY-001`; il prompt utente autorizza il pass completo con
+separazione logica dei ruoli. Baseline pulita `origin/main` `4b2b4a93...`, branch
+`agent/mobile-catalog-data-integrity-20260809`, file task
+`docs/TASKS/TASK-141-mobile-catalog-data-integrity-android.md`. Scope: impedire
+clear silenziosi da input numerici invalidi nei due editor, rendere atomiche le
+mutazioni prodotto/history/dirty, preservare cambi prezzo same-second e
+correggere la copy last-row-wins nelle quattro lingue. Client TASK-033,
+security review, release PR, production e Supabase restano fuori scope.
+
+**Handoff TASK-141 a review — 2026-08-09:** execution completata nel worktree
+isolato; full unit/Robolectric 879 test (0 failure/error, 5 skip), lint canonico e
+build PASS, instrumentation API 35 5/5 PASS, visual QA stato invalido PASS.
+Handoff `CODEX_EXECUTION_COMPLETE_TO_REVIEW`; task resta ACTIVE, fase REVIEW,
+senza claim physical-device e senza toccare Client TASK-033 o release train.
+
+**Review indipendente TASK-141 → FIX — 2026-08-09:** esito
+`CHANGES_REQUIRED`. Finding aperti: resolver price-history con limite non sicuro
+oltre 60 collisioni; assenza di regressione reale `ManualEntryDialog`; associazione
+semantica dell'errore stock compatto non dimostrata; claim API/evidence da
+riallineare. Gate autonomi reviewer verdi: targeted 266, full JVM/Robolectric 879
+(5 skip), lint/build, instrumentation API 35 5/5 e diff hygiene; physical device e
+TalkBack `NOT_RUN`. Handoff `CODEX_REVIEW_CHANGES_REQUIRED_TO_FIX`; TASK-141 resta
+`ACTIVE`, fase `FIX`, senza modifiche a Client TASK-033, release train o produzione.
+
+**Handoff fix TASK-141 → re-review — 2026-08-09:** R141-01…R141-04 corretti
+senza estensione di scope. Gate post-fix: targeted 233, full JVM/Robolectric 880
+(5 skip), lint/build `PASS`, instrumentation API 35 6/6 e diff hygiene `PASS`;
+physical device/TalkBack reale `NOT_RUN`. Handoff
+`CODEX_FIX_COMPLETE_TO_RE_REVIEW`; task `ACTIVE / REVIEW`, mai `DONE` senza
+conferma utente.
+
+**Re-review indipendente TASK-141 — 2026-08-09:** `APPROVED`; R141-01…R141-04
+`FIXED_VERIFIED`, nessun nuovo finding. Gate autonomi: targeted esteso 267, full
+JVM/Robolectric 880 (5 skip), build/lint, connected API 35 6/6, focused visual QA
+1/1 e diff hygiene tutti `PASS`; physical device/TalkBack reale `NOT_RUN`.
+Handoff `CODEX_REVIEW_APPROVED_AWAITING_USER_CONFIRMATION`: task ancora
+`ACTIVE / REVIEW`, non `DONE`, senza commit/PR/merge del re-reviewer e senza
+modifiche a Client TASK-033, release train, Supabase o produzione.
 
 **Avvio TASK-140 — 2026-07-27:** coordination key `CATALOG-TEXT-001`;
 contratto comune `catalog_text_policy_v1`; policy Android centralizzata sui

@@ -67,6 +67,9 @@ class DefaultInventoryRepositoryTest {
     @After
     fun teardown() {
         DefaultInventoryRepositoryTestHooks.afterProductsPersisted = null
+        DefaultInventoryRepositoryTestHooks.afterLocalProductWrite = null
+        DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert = null
+        DefaultInventoryRepositoryTestHooks.localProductMutationNow = null
         db.close()
     }
 
@@ -93,6 +96,144 @@ class DefaultInventoryRepositoryTest {
         assertEquals("MANUAL", retailHistory.single().source)
         assertTrue(timestampPattern.matches(purchaseHistory.single().effectiveAt))
         assertTrue(timestampPattern.matches(retailHistory.single().effectiveAt))
+    }
+
+    @Test
+    fun `addProduct rolls back product history dirty marker and notification on intermediate failure`() =
+        runTest {
+            var notifications = 0
+            repository.onProductCatalogChanged = { notifications++ }
+            DefaultInventoryRepositoryTestHooks.afterLocalProductWrite = {
+                throw IOException("forced failure after product insert")
+            }
+
+            try {
+                repository.addProduct(
+                    Product(
+                        barcode = "ATOMIC-ADD-001",
+                        productName = "Atomic add",
+                        purchasePrice = 10.0,
+                        retailPrice = 15.0,
+                    )
+                )
+                fail("Expected the injected failure")
+            } catch (expected: IOException) {
+                assertEquals("forced failure after product insert", expected.message)
+            }
+
+            assertNull(repository.findProductByBarcode("ATOMIC-ADD-001"))
+            assertEquals(0, db.productPriceDao().countAll())
+            assertEquals(0, notifications)
+        }
+
+    @Test
+    fun `updateProduct rolls back entity history dirty marker and notification on intermediate failure`() =
+        runTest {
+            repository.addProduct(
+                Product(
+                    barcode = "ATOMIC-UPDATE-001",
+                    productName = "Before",
+                    purchasePrice = 10.0,
+                    retailPrice = 15.0,
+                )
+            )
+            val before = checkNotNull(repository.findProductByBarcode("ATOMIC-UPDATE-001"))
+            val historyBefore = repository.getAllPriceHistoryRows()
+            val refBefore = checkNotNull(db.productRemoteRefDao().getByProductId(before.id))
+            var notifications = 0
+            repository.onProductCatalogChanged = { notifications++ }
+            DefaultInventoryRepositoryTestHooks.afterLocalProductWrite = {
+                throw IOException("forced failure after product update")
+            }
+
+            try {
+                repository.updateProduct(
+                    before.copy(
+                        productName = "After",
+                        purchasePrice = 20.0,
+                        stockQuantity = 3.0,
+                    )
+                )
+                fail("Expected the injected failure")
+            } catch (expected: IOException) {
+                assertEquals("forced failure after product update", expected.message)
+            }
+
+            val afterFailure = checkNotNull(repository.findProductByBarcode("ATOMIC-UPDATE-001"))
+            assertEquals("Before", afterFailure.productName)
+            assertEquals(10.0, afterFailure.purchasePrice!!, 0.0001)
+            assertEquals(before.stockQuantity, afterFailure.stockQuantity)
+            assertEquals(historyBefore, repository.getAllPriceHistoryRows())
+            assertEquals(refBefore, db.productRemoteRefDao().getByProductId(before.id))
+            assertEquals(0, notifications)
+        }
+
+    @Test
+    fun `rapid manual price updates retain every same second history point`() = runTest {
+        val fixedNow = LocalDateTime.parse("2026-08-09 12:00:00", timestampFormatter)
+        DefaultInventoryRepositoryTestHooks.localProductMutationNow = { fixedNow }
+        repository = DefaultInventoryRepository(
+            db = db,
+            shopSyncReadRemoteDataSource = shopSyncReader,
+        )
+        repository.addProduct(
+            Product(
+                barcode = "RAPID-PRICE-001",
+                productName = "Rapid price",
+                purchasePrice = 10.0,
+            )
+        )
+        val inserted = checkNotNull(repository.findProductByBarcode("RAPID-PRICE-001"))
+
+        repository.updateProduct(inserted.copy(purchasePrice = 20.0))
+        val second = checkNotNull(repository.findProductByBarcode("RAPID-PRICE-001"))
+        repository.updateProduct(second.copy(purchasePrice = 30.0))
+
+        val history = repository.getPriceSeries(inserted.id, "PURCHASE").first()
+        assertEquals(listOf(30.0, 20.0, 10.0), history.map { it.price })
+        assertEquals(
+            listOf(
+                "2026-08-09 12:00:02",
+                "2026-08-09 12:00:01",
+                "2026-08-09 12:00:00",
+            ),
+            history.map { it.effectiveAt },
+        )
+    }
+
+    @Test
+    fun `manual price history remains collision safe beyond sixty same second updates`() = runTest {
+        val fixedNow = LocalDateTime.parse("2026-08-09 13:00:00", timestampFormatter)
+        DefaultInventoryRepositoryTestHooks.localProductMutationNow = { fixedNow }
+        repository = DefaultInventoryRepository(
+            db = db,
+            shopSyncReadRemoteDataSource = shopSyncReader,
+        )
+        repository.addProduct(
+            Product(
+                barcode = "RAPID-PRICE-OVER-60",
+                productName = "Rapid price over sixty",
+                purchasePrice = 10.0,
+            )
+        )
+        var current = checkNotNull(repository.findProductByBarcode("RAPID-PRICE-OVER-60"))
+
+        repeat(61) { index ->
+            current = current.copy(purchasePrice = 11.0 + index)
+            repository.updateProduct(current)
+        }
+
+        val history = repository.getPriceSeries(current.id, "PURCHASE").first()
+        assertEquals(62, history.size)
+        assertEquals(62, history.map { it.effectiveAt }.toSet().size)
+        assertEquals(71.0, history.first().price, 0.0001)
+        assertEquals("2026-08-09 13:01:01", history.first().effectiveAt)
+        assertEquals(
+            71.0,
+            checkNotNull(repository.findProductByBarcode("RAPID-PRICE-OVER-60"))
+                .purchasePrice ?: Double.NaN,
+            0.0001,
+        )
     }
 
     @Test

@@ -308,6 +308,12 @@ internal object DefaultInventoryRepositoryTestHooks {
 
     @Volatile
     var beforeLocalProductInsert: (suspend () -> Unit)? = null
+
+    @Volatile
+    var afterLocalProductWrite: (suspend () -> Unit)? = null
+
+    @Volatile
+    var localProductMutationNow: (() -> LocalDateTime)? = null
 }
 
 internal data class ShopSyncRecoveryStageApplyResult(
@@ -321,7 +327,7 @@ class DefaultInventoryRepository(
     private val db: AppDatabase,
     private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
         Task126UnmanagedBusinessDataScopeRuntimeGuard,
-    private val shopSyncReadRemoteDataSource: ShopSyncReadRemoteDataSource? = null
+    private val shopSyncReadRemoteDataSource: ShopSyncReadRemoteDataSource? = null,
 ) :
     InventoryRepository,
     CatalogSyncProgressRepository,
@@ -611,19 +617,36 @@ class DefaultInventoryRepository(
         DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert?.invoke()
         requireCurrentBusinessDataScope()
         val persistedId = withContext(Dispatchers.IO) {
-            productDao.insert(canonicalProduct)
-            val persisted = productDao.findByBarcode(canonicalProduct.barcode) ?: return@withContext null
+            db.withTransaction {
+                productDao.insert(canonicalProduct)
+                DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
+                val persisted = productDao.findByBarcode(canonicalProduct.barcode)
+                    ?: return@withTransaction null
 
-            val now = LocalDateTime.now().format(tSFMT)
+                val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
+                    ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
 
-            canonicalProduct.purchasePrice?.let {
-                priceDao.insertIfChanged(persisted.id, "PURCHASE", it, now, "MANUAL")
+                canonicalProduct.purchasePrice?.let {
+                    priceDao.insertIfChanged(
+                        persisted.id,
+                        "PURCHASE",
+                        it,
+                        uniquePriceEffectiveAtLocked(persisted.id, "PURCHASE", requestedAt),
+                        "MANUAL",
+                    )
+                }
+                canonicalProduct.retailPrice?.let {
+                    priceDao.insertIfChanged(
+                        persisted.id,
+                        "RETAIL",
+                        it,
+                        uniquePriceEffectiveAtLocked(persisted.id, "RETAIL", requestedAt),
+                        "MANUAL",
+                    )
+                }
+                touchProductDirty(persisted.id)
+                persisted.id
             }
-            canonicalProduct.retailPrice?.let {
-                priceDao.insertIfChanged(persisted.id, "RETAIL", it, now, "MANUAL")
-            }
-            touchProductDirty(persisted.id)
-            persisted.id
         }
         persistedId?.let(::notifyProductCatalogChanged)
         Unit
@@ -631,22 +654,38 @@ class DefaultInventoryRepository(
     override suspend fun updateProduct(product: Product) = withLocalBusinessMutation {
         val canonicalProduct = CatalogTextCanonicalizer.product(product).product
         withContext(Dispatchers.IO) {
-            val existing = productDao.getById(canonicalProduct.id)
-            productDao.update(canonicalProduct)
+            db.withTransaction {
+                val existing = productDao.getById(canonicalProduct.id)
+                productDao.update(canonicalProduct)
+                DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
 
-            val now = LocalDateTime.now().format(tSFMT)
+                val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
+                    ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
 
-            canonicalProduct.purchasePrice?.let {
-                priceDao.insertIfChanged(canonicalProduct.id, "PURCHASE", it, now, "MANUAL")
-            }
-            canonicalProduct.retailPrice?.let {
-                priceDao.insertIfChanged(canonicalProduct.id, "RETAIL", it, now, "MANUAL")
-            }
-            val changedFields = existing
-                ?.let { productChangedFields(it, canonicalProduct) }
-                .orEmpty()
-            if (changedFields.isNotEmpty()) {
-                touchProductDirty(canonicalProduct.id, changedFields)
+                canonicalProduct.purchasePrice?.let {
+                    priceDao.insertIfChanged(
+                        canonicalProduct.id,
+                        "PURCHASE",
+                        it,
+                        uniquePriceEffectiveAtLocked(canonicalProduct.id, "PURCHASE", requestedAt),
+                        "MANUAL",
+                    )
+                }
+                canonicalProduct.retailPrice?.let {
+                    priceDao.insertIfChanged(
+                        canonicalProduct.id,
+                        "RETAIL",
+                        it,
+                        uniquePriceEffectiveAtLocked(canonicalProduct.id, "RETAIL", requestedAt),
+                        "MANUAL",
+                    )
+                }
+                val changedFields = existing
+                    ?.let { productChangedFields(it, canonicalProduct) }
+                    .orEmpty()
+                if (changedFields.isNotEmpty()) {
+                    touchProductDirty(canonicalProduct.id, changedFields)
+                }
             }
         }
         notifyProductCatalogChanged(canonicalProduct.id)
@@ -967,15 +1006,13 @@ class DefaultInventoryRepository(
             LocalDateTime.parse(requestedAt, tSFMT)
         }.getOrDefault(LocalDateTime.now())
 
-        repeat(60) {
+        while (true) {
             val candidate = timestamp.format(tSFMT)
             if (priceDao.findByBusinessKey(productId, type, candidate) == null) {
                 return candidate
             }
             timestamp = timestamp.plusSeconds(1)
         }
-
-        return timestamp.format(tSFMT)
     }
 
     override suspend fun getLastPrice(productId: Long, type: String): Double? =

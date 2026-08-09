@@ -177,6 +177,7 @@
     <string name="new_retail_price_short_label">新售价</string>
     <string name="error_import_row_processing_failed">无法处理这一行。</string>
     <string name="error_invalid_retail_price">售价不是有效数字。</string>
+    <string name="error_invalid_purchase_price">进价不是有效数字。</string>
     <string name="error_negative_prices">价格不能为负数。</string>
     <string name="error_invalid_quantity">数量不是有效数字。</string>
     <string name="field_product_name">产品名称</string>
@@ -289,7 +290,7 @@
     <string name="duplicate_warnings_found">发现重复警告（%1$s）</string>
     <string name="warning_duplicate_barcode">条码：%1$s</string>
     <string name="warning_duplicate_found_in_rows">出现在行：%1$s</string>
-    <string name="warning_duplicate_resolution">将使用最后一行的数据，并且数量将被合并。</string>
+    <string name="warning_duplicate_resolution">将使用最后一行的数据；数量不会相加。</string>
     <plurals name="warning_duplicate_rows_truncated">
         <item quantity="other">行列表已截断：另有 %1$d 行未显示（共 %2$d 行）。</item>
     </plurals>
