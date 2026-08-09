@@ -91,4 +91,48 @@ class ClNumberFormattersTest {
     fun `parseUserNumericInput returns null for blank input`() {
         assertNull(parseUserNumericInput("   "))
     }
+
+    @Test
+    fun `optional price validation distinguishes clear valid invalid and negative input`() {
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.EMPTY),
+            validateOptionalUserPriceInput("  "),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.VALID, 1234.5),
+            validateOptionalUserPriceInput("1.234,5"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.INVALID),
+            validateOptionalUserPriceInput("abc"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.INVALID),
+            validateOptionalUserPriceInput("1..2..3..4"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.NEGATIVE, -1.0),
+            validateOptionalUserPriceInput("-1"),
+        )
+    }
+
+    @Test
+    fun `optional quantity validation rejects malformed negative and non finite input`() {
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.VALID, 1234.5),
+            validateOptionalUserQuantityInput("1.234,5"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.INVALID),
+            validateOptionalUserQuantityInput("1..2"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.INVALID),
+            validateOptionalUserQuantityInput("NaN"),
+        )
+        assertEquals(
+            OptionalNumericInputValidation(OptionalNumericInputStatus.NEGATIVE, -0.5),
+            validateOptionalUserQuantityInput("-0,5"),
+        )
+    }
 }

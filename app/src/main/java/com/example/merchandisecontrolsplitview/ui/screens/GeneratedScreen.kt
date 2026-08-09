@@ -35,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -77,6 +78,9 @@ import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
+import com.example.merchandisecontrolsplitview.util.OptionalNumericInputStatus
+import com.example.merchandisecontrolsplitview.util.validateOptionalUserPriceInput
+import com.example.merchandisecontrolsplitview.util.validateOptionalUserQuantityInput
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import androidx.compose.material.icons.filled.CheckCircle
@@ -3416,6 +3420,11 @@ fun ManualEntryDialog(
     val productAlreadyInListText = stringResource(R.string.product_already_in_list)
     val productFoundInDbText = stringResource(R.string.product_found_in_db)
     val scanPromptText = stringResource(R.string.scan_prompt)
+    val invalidPurchasePriceText = stringResource(R.string.error_invalid_purchase_price)
+    val negativePriceText = stringResource(R.string.error_negative_prices)
+    val invalidRetailPriceText = stringResource(R.string.error_invalid_or_missing_retail_price)
+    val invalidQuantityText = stringResource(R.string.error_invalid_quantity)
+    val negativeQuantityText = stringResource(R.string.error_negative_quantity)
 
     val quantityFocusRequester = remember { FocusRequester() }
     val priceFocusRequester = remember { FocusRequester() }
@@ -3458,10 +3467,18 @@ fun ManualEntryDialog(
     }
 
     val purchIdx = remember(header) { header.indexOf("purchasePrice") }
-    val currentNormalized = remember(barcode, productName, retailPrice, quantity, selectedCategory) {
+    val currentNormalized = remember(
+        barcode,
+        productName,
+        purchasePrice,
+        retailPrice,
+        quantity,
+        selectedCategory,
+    ) {
         toNormalizedProduct(
             barcode = barcode,
             name = productName,
+            purchasePriceStr = purchasePrice,
             retailPriceStr = retailPrice.text,
             qtyStr = quantity.text,
             categoryId = selectedCategory?.id
@@ -3486,6 +3503,7 @@ fun ManualEntryDialog(
 
     LaunchedEffect(rowIndexToEdit, productToPrefill, initialBarcode) {
         productName = ""
+        purchasePrice = ""
         retailPrice = TextFieldValue("")
         quantity = TextFieldValue("1")
         selectedCategory = null
@@ -3518,6 +3536,7 @@ fun ManualEntryDialog(
                         originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                             barcode = barcode,
                             productName = productName,
+                            purchasePrice = parseUserPriceInput(purchasePrice),
                             retailPrice = parseUserPriceInput(retailPrice.text),
                             stockQuantity = parseUserQuantityInput(quantity.text),
                             categoryId = foundCategory.id
@@ -3529,6 +3548,7 @@ fun ManualEntryDialog(
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = barcode,
                     productName = productName,
+                    purchasePrice = parseUserPriceInput(purchasePrice),
                     retailPrice = parseUserPriceInput(retailPrice.text),
                     stockQuantity = parseUserQuantityInput(quantity.text),
                     categoryId = null
@@ -3538,12 +3558,15 @@ fun ManualEntryDialog(
         } else if (productToPrefill != null) {
             val initialBarcode = productToPrefill.barcode
             val initialProductName = productToPrefill.productName ?: ""
+            val initialPurchasePrice =
+                formatClPriceInput(productToPrefill.purchasePrice)
             val initialRetailPrice =
                 formatClPriceInput(productToPrefill.retailPrice)
             val initialQuantity = "1"
 
             barcode = initialBarcode
             productName = initialProductName
+            purchasePrice = initialPurchasePrice
             retailPrice = TextFieldValue(initialRetailPrice, TextRange(initialRetailPrice.length))
             quantity = TextFieldValue(initialQuantity)
 
@@ -3556,6 +3579,7 @@ fun ManualEntryDialog(
                     originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                         barcode = initialBarcode,
                         productName = initialProductName,
+                        purchasePrice = parseUserPriceInput(initialPurchasePrice),
                         retailPrice = parseUserPriceInput(initialRetailPrice),
                         stockQuantity = parseUserQuantityInput(initialQuantity),
                         categoryId = category?.id,
@@ -3566,6 +3590,7 @@ fun ManualEntryDialog(
                 originalProductData = com.example.merchandisecontrolsplitview.data.Product(
                     barcode = initialBarcode,
                     productName = initialProductName,
+                    purchasePrice = parseUserPriceInput(initialPurchasePrice),
                     retailPrice = parseUserPriceInput(initialRetailPrice),
                     stockQuantity = parseUserQuantityInput(initialQuantity),
                     categoryId = null,
@@ -3644,9 +3669,33 @@ fun ManualEntryDialog(
         }
     }
 
+    val purchaseValidation = validateOptionalUserPriceInput(purchasePrice)
+    val quantityValidation = validateOptionalUserQuantityInput(quantity.text)
+    val retailPriceValue = parseUserPriceInput(retailPrice.text)
+    val purchasePriceError = when (purchaseValidation.status) {
+        OptionalNumericInputStatus.INVALID -> invalidPurchasePriceText
+        OptionalNumericInputStatus.NEGATIVE -> negativePriceText
+        OptionalNumericInputStatus.EMPTY,
+        OptionalNumericInputStatus.VALID -> null
+    }
+    val retailPriceError = when {
+        retailPrice.text.isBlank() -> null
+        retailPriceValue == null || retailPriceValue <= 0.0 -> invalidRetailPriceText
+        else -> null
+    }
+    val quantityError = when (quantityValidation.status) {
+        OptionalNumericInputStatus.INVALID -> invalidQuantityText
+        OptionalNumericInputStatus.NEGATIVE -> negativeQuantityText
+        OptionalNumericInputStatus.EMPTY,
+        OptionalNumericInputStatus.VALID -> null
+    }
+
     val basicValid = barcode.isNotBlank() &&
-            barcodeError == null &&
-            (parseUserPriceInput(retailPrice.text) ?: 0.0) > 0.0
+        barcodeError == null &&
+        retailPriceValue != null &&
+        retailPriceValue > 0.0 &&
+        purchaseValidation.isAccepted &&
+        quantityValidation.isAccepted
 
     val passChangesGate = when {
         // Prodotto esiste in DB → consenti solo se diverso dal DB
@@ -3662,6 +3711,7 @@ fun ManualEntryDialog(
     fun resetFieldsForNext() {
         barcode = ""
         quantity = TextFieldValue("1")
+        purchasePrice = ""
         retailPrice = TextFieldValue("")
         productName = ""
         productFromDb = null
@@ -3761,10 +3811,13 @@ fun ManualEntryDialog(
                 ManualEntryPriceQuantityBlock(
                     purchasePrice = purchasePrice,
                     onPurchasePriceChange = { purchasePrice = it },
+                    purchasePriceError = purchasePriceError,
                     retailPrice = retailPrice,
                     onRetailPriceChange = { retailPrice = it },
+                    retailPriceError = retailPriceError,
                     quantity = quantity,
                     onQuantityChange = { quantity = it },
+                    quantityError = quantityError,
                     priceFocusRequester = priceFocusRequester,
                     quantityFocusRequester = quantityFocusRequester,
                     nameFocusRequester = nameFocusRequester
@@ -3795,6 +3848,7 @@ fun ManualEntryDialog(
                                 )
                             )
                             TextButton(onClick = {
+                                purchasePrice = formatClPriceInput(productFromDb?.purchasePrice)
                                 retailPrice = TextFieldValue(retailPriceInput, TextRange(retailPriceInput.length))
                                 productName = productFromDb?.productName ?: ""
                             }) { Text(stringResource(R.string.copy_data)) }
@@ -3871,10 +3925,13 @@ fun ManualEntryDialog(
 private fun ManualEntryPriceQuantityBlock(
     purchasePrice: String,
     onPurchasePriceChange: (String) -> Unit,
+    purchasePriceError: String?,
     retailPrice: TextFieldValue,
     onRetailPriceChange: (TextFieldValue) -> Unit,
+    retailPriceError: String?,
     quantity: TextFieldValue,
     onQuantityChange: (TextFieldValue) -> Unit,
+    quantityError: String?,
     priceFocusRequester: FocusRequester,
     quantityFocusRequester: FocusRequester,
     nameFocusRequester: FocusRequester
@@ -3889,13 +3946,17 @@ private fun ManualEntryPriceQuantityBlock(
                 value = purchasePrice,
                 onValueChange = onPurchasePriceChange,
                 label = { Text(stringResource(R.string.header_purchase_price)) },
-                modifier = modifier.onFocusChanged { state ->
-                    if (!state.isFocused) {
-                        onPurchasePriceChange(normalizeClPriceInput(purchasePrice))
-                    }
-                },
+                modifier = modifier
+                    .testTag("task141.manual.purchase-price")
+                    .onFocusChanged { state ->
+                        if (!state.isFocused) {
+                            onPurchasePriceChange(normalizeClPriceInput(purchasePrice))
+                        }
+                    },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() }),
+                isError = purchasePriceError != null,
+                supportingText = { purchasePriceError?.let { Text(it) } },
             )
         }
 
@@ -3905,6 +3966,7 @@ private fun ManualEntryPriceQuantityBlock(
                 onValueChange = onRetailPriceChange,
                 label = { Text(stringResource(R.string.header_retail_price) + "*") },
                 modifier = modifier
+                    .testTag("task141.manual.retail-price")
                     .focusRequester(priceFocusRequester)
                     .onFocusChanged { state ->
                         if (!state.isFocused) {
@@ -3913,7 +3975,9 @@ private fun ManualEntryPriceQuantityBlock(
                         }
                     },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() })
+                keyboardActions = KeyboardActions(onNext = { quantityFocusRequester.requestFocus() }),
+                isError = retailPriceError != null,
+                supportingText = { retailPriceError?.let { Text(it) } },
             )
         }
 
@@ -3923,6 +3987,7 @@ private fun ManualEntryPriceQuantityBlock(
                 onValueChange = onQuantityChange,
                 label = { Text(stringResource(R.string.header_quantity)) },
                 modifier = modifier
+                    .testTag("task141.manual.quantity")
                     .focusRequester(quantityFocusRequester)
                     .onFocusChanged { state ->
                         if (!state.isFocused) {
@@ -3931,7 +3996,9 @@ private fun ManualEntryPriceQuantityBlock(
                         }
                     },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-                keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() })
+                keyboardActions = KeyboardActions(onNext = { nameFocusRequester.requestFocus() }),
+                isError = quantityError != null,
+                supportingText = { quantityError?.let { Text(it) } },
             )
         }
 
@@ -3960,6 +4027,7 @@ private fun ManualEntryPriceQuantityBlock(
 fun toNormalizedProduct(
     barcode: String,
     name: String,
+    purchasePriceStr: String,
     retailPriceStr: String,
     qtyStr: String,
     categoryId: Long?
@@ -3967,6 +4035,7 @@ fun toNormalizedProduct(
     return com.example.merchandisecontrolsplitview.data.Product(
         barcode = barcode,
         productName = name.ifBlank { null },
+        purchasePrice = parseUserPriceInput(purchasePriceStr),
         retailPrice = parseUserPriceInput(retailPriceStr),
         stockQuantity = parseUserQuantityInput(qtyStr),
         categoryId = categoryId
@@ -3986,6 +4055,7 @@ fun equalProducts(
     if (a == null || b == null) return false
     return a.barcode == b.barcode &&
             (a.productName.orEmpty() == b.productName.orEmpty()) &&
+            almostEqual(a.purchasePrice, b.purchasePrice) &&
             almostEqual(a.retailPrice, b.retailPrice) &&
             almostEqual(a.stockQuantity, b.stockQuantity) &&
             a.categoryId == b.categoryId
@@ -3999,6 +4069,7 @@ private fun equalProductsForDb(
     // come equalProducts ma IGNORA stockQuantity
     return a.barcode == b.barcode &&
             (a.productName.orEmpty() == b.productName.orEmpty()) &&
+            almostEqual(a.purchasePrice, b.purchasePrice) &&
             almostEqual(a.retailPrice, b.retailPrice) &&
             a.categoryId == b.categoryId
 }

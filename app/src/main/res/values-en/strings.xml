@@ -178,6 +178,7 @@
     <string name="new_retail_price_short_label">New retail p.</string>
     <string name="error_import_row_processing_failed">Could not process this row.</string>
     <string name="error_invalid_retail_price">Retail price is not a valid number.</string>
+    <string name="error_invalid_purchase_price">Purchase price is not a valid number.</string>
     <string name="error_negative_prices">Prices cannot be negative.</string>
     <string name="error_invalid_quantity">The quantity is not a valid number.</string>
     <string name="field_product_name">Product Name</string>
@@ -290,7 +291,7 @@
     <string name="duplicate_warnings_found">Duplicate warnings found (%1$s)</string>
     <string name="warning_duplicate_barcode">Barcode: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Found in rows: %1$s</string>
-    <string name="warning_duplicate_resolution">The data from the last row will be used and the quantities will be summed.</string>
+    <string name="warning_duplicate_resolution">The data from the last row will be used; quantities will not be summed.</string>
     <plurals name="warning_duplicate_rows_truncated">
         <item quantity="one">Row list truncated: 1 more row not shown (total %2$d).</item>
         <item quantity="other">Row list truncated: %1$d more rows not shown (total %2$d).</item>

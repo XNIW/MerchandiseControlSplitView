@@ -180,9 +180,10 @@
     <string name="new_retail_price_short_label">Nuovo prezzo v.</string>
     <string name="error_import_row_processing_failed">Impossibile elaborare questa riga.</string>
     <string name="error_invalid_retail_price">Il prezzo di vendita non è un numero valido.</string>
+    <string name="error_invalid_purchase_price">Il prezzo di acquisto non è un numero valido.</string>
     <string name="error_negative_prices">I prezzi non possono essere negativi.</string>
     <string name="field_product_name">Nome Prodotto</string>
-    <string name="error_invalid_quantity">La quanità non è un numero valido.</string>
+    <string name="error_invalid_quantity">La quantità non è un numero valido.</string>
     <string name="field_supplier">Fornitore</string>
     <string name="sync_analysis_started">Analisi per la sincronizzazione avviata.</string>
     <string name="calculate_new_value">Calcola nuovo valore</string>
@@ -302,7 +303,7 @@
     <string name="duplicate_warnings_found">Avvisi duplicati trovati (%1$s)</string>
     <string name="warning_duplicate_barcode">Barcode: %1$s</string>
     <string name="warning_duplicate_found_in_rows">Trovato nelle righe: %1$s</string>
-    <string name="warning_duplicate_resolution">I dati dell\'ultima riga verranno usati e le quantità verranno sommate.</string>
+    <string name="warning_duplicate_resolution">Verranno usati i dati dell\'ultima riga; le quantità non verranno sommate.</string>
     <plurals name="warning_duplicate_rows_truncated">
         <item quantity="one">Elenco righe troncato: 1 altra riga non mostrata (totale %2$d).</item>
         <item quantity="other">Elenco righe troncato: altre %1$d righe non mostrate (totale %2$d).</item>

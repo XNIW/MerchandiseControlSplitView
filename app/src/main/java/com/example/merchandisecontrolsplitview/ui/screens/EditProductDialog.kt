@@ -57,10 +57,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -89,6 +93,9 @@ import com.example.merchandisecontrolsplitview.util.normalizeClPriceInput
 import com.example.merchandisecontrolsplitview.util.normalizeClQuantityInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
+import com.example.merchandisecontrolsplitview.util.OptionalNumericInputStatus
+import com.example.merchandisecontrolsplitview.util.validateOptionalUserPriceInput
+import com.example.merchandisecontrolsplitview.util.validateOptionalUserQuantityInput
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
@@ -120,10 +127,32 @@ internal fun EditProductDialog(
 
     var barcodeError by remember { mutableStateOf<String?>(null) }
     var productNameError by remember { mutableStateOf<String?>(null) }
+    var purchasePriceError by remember { mutableStateOf<String?>(null) }
     var retailPriceError by remember { mutableStateOf<String?>(null) }
+    var stockQuantityError by remember { mutableStateOf<String?>(null) }
     val barcodeRequiredErrorText = stringResource(id = R.string.error_barcode_required)
     val productNameRequiredAtLeastOneErrorText = stringResource(id = R.string.error_productname_required_at_least_one)
+    val purchasePriceInvalidErrorText = stringResource(id = R.string.error_invalid_purchase_price)
+    val negativePriceErrorText = stringResource(id = R.string.error_negative_prices)
     val retailPriceErrorText = stringResource(id = R.string.error_invalid_or_missing_retail_price)
+    val quantityInvalidErrorText = stringResource(id = R.string.error_invalid_quantity)
+    val negativeQuantityErrorText = stringResource(id = R.string.error_negative_quantity)
+
+    fun purchasePriceValidationMessage(value: String): String? =
+        when (validateOptionalUserPriceInput(value).status) {
+            OptionalNumericInputStatus.INVALID -> purchasePriceInvalidErrorText
+            OptionalNumericInputStatus.NEGATIVE -> negativePriceErrorText
+            OptionalNumericInputStatus.EMPTY,
+            OptionalNumericInputStatus.VALID -> null
+        }
+
+    fun stockQuantityValidationMessage(value: String): String? =
+        when (validateOptionalUserQuantityInput(value).status) {
+            OptionalNumericInputStatus.INVALID -> quantityInvalidErrorText
+            OptionalNumericInputStatus.NEGATIVE -> negativeQuantityErrorText
+            OptionalNumericInputStatus.EMPTY,
+            OptionalNumericInputStatus.VALID -> null
+        }
 
     var showSecondNameField by remember(product) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
     var showItemNumberField by remember(product) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
@@ -244,6 +273,8 @@ internal fun EditProductDialog(
     fun validate(): Boolean {
         barcodeError = if (barcode.isBlank()) barcodeRequiredErrorText else null
         productNameError = if (productName.isBlank() && secondProductName.isBlank()) productNameRequiredAtLeastOneErrorText else null
+        purchasePriceError = purchasePriceValidationMessage(purchasePrice)
+        stockQuantityError = stockQuantityValidationMessage(stockQuantity)
 
         val retailPriceValue = parseUserPriceInput(retailPrice)
         retailPriceError = if (retailPriceValue == null || retailPriceValue <= 0) {
@@ -252,10 +283,15 @@ internal fun EditProductDialog(
             null
         }
 
-        return barcodeError == null && productNameError == null && retailPriceError == null
+        return barcodeError == null &&
+            productNameError == null &&
+            purchasePriceError == null &&
+            retailPriceError == null &&
+            stockQuantityError == null
     }
 
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     val fieldScanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val scanned = result?.contents
@@ -322,7 +358,9 @@ internal fun EditProductDialog(
         showItemNumberField = !product.itemNumber.isNullOrBlank()
         barcodeError = null
         productNameError = null
+        purchasePriceError = null
         retailPriceError = null
+        stockQuantityError = null
         askedKeyboard = false
     }
 
@@ -409,7 +447,8 @@ internal fun EditProductDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .imePadding()
-                .navigationBarsPadding(),
+                .navigationBarsPadding()
+                .testTag("task141.edit.dialog-root"),
             contentAlignment = Alignment.Center
         ) {
             Card(
@@ -507,19 +546,29 @@ internal fun EditProductDialog(
                 ) {
                     OutlinedTextField(
                         value = purchasePrice,
-                        onValueChange = { purchasePrice = it },
+                        onValueChange = {
+                            purchasePrice = it
+                            if (purchasePriceError != null) {
+                                purchasePriceError = purchasePriceValidationMessage(it)
+                            }
+                        },
                         label = { CompactFieldLabel(R.string.purchase_price_label) },
                         modifier = Modifier
                             .weight(1f)
+                            .testTag("task141.edit.purchase-price")
                             .onFocusChanged { state ->
                                 if (!state.isFocused) {
                                     purchasePrice = normalizeClPriceInput(purchasePrice)
+                                    if (purchasePriceError != null) {
+                                        purchasePriceError = purchasePriceValidationMessage(purchasePrice)
+                                    }
                                 }
                             },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
+                        isError = purchasePriceError != null,
                         supportingText = {
-                            PriceHistorySupportingText(
+                            purchasePriceError?.let { Text(it) } ?: PriceHistorySupportingText(
                                 lastPrice = lastPurchase,
                                 previousPrice = prevPurchase
                             )
@@ -586,34 +635,58 @@ internal fun EditProductDialog(
 
                         OutlinedTextField(
                             value = stockQuantity,
-                            onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                            onValueChange = {
+                                stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '-' }
+                                if (stockQuantityError != null) {
+                                    stockQuantityError = stockQuantityValidationMessage(stockQuantity)
+                                }
+                            },
                             label = { CompactFieldLabel(R.string.header_stock_quantity) },
                             modifier = Modifier
                                 .weight(1f)
+                                .testTag("task141.edit.stock-quantity")
+                                .semantics {
+                                    stockQuantityError?.let(::error)
+                                }
                                 .onFocusChanged { state ->
                                     if (!state.isFocused) {
                                         stockQuantity = normalizeClQuantityInput(stockQuantity)
+                                        if (stockQuantityError != null) {
+                                            stockQuantityError = stockQuantityValidationMessage(stockQuantity)
+                                        }
                                     }
                                 },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            singleLine = true
+                            singleLine = true,
+                            isError = stockQuantityError != null,
                         )
                     }
                 } else {
                     TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
                     OutlinedTextField(
                         value = stockQuantity,
-                        onValueChange = { stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                        onValueChange = {
+                            stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '-' }
+                            if (stockQuantityError != null) {
+                                stockQuantityError = stockQuantityValidationMessage(stockQuantity)
+                            }
+                        },
                         label = { CompactFieldLabel(R.string.header_stock_quantity) },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .testTag("task141.edit.stock-quantity")
                             .onFocusChanged { state ->
                                 if (!state.isFocused) {
                                     stockQuantity = normalizeClQuantityInput(stockQuantity)
+                                    if (stockQuantityError != null) {
+                                        stockQuantityError = stockQuantityValidationMessage(stockQuantity)
+                                    }
                                 }
                             },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true
+                        singleLine = true,
+                        isError = stockQuantityError != null,
+                        supportingText = { stockQuantityError?.let { Text(it) } }
                     )
                 }
 
@@ -634,6 +707,19 @@ internal fun EditProductDialog(
                 )
                     }
 
+                if (showItemNumberField) {
+                    stockQuantityError?.let { message ->
+                        Text(
+                            text = message,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("task141.edit.stock-quantity-error"),
+                        )
+                    }
+                }
+
                 HorizontalDivider()
                 Row(modifier = Modifier
                     .fillMaxWidth()
@@ -641,6 +727,8 @@ internal fun EditProductDialog(
                     TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
                         if (validate()) {
                             val productToSave = runCatching {
                                 CatalogTextCanonicalizer.product(
