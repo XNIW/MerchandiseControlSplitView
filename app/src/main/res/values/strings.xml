@@ -125,6 +125,8 @@
     <string name="no_supplier">Nessun fornitore</string>
     <string name="select_supplier">Seleziona fornitore</string>
     <string name="edit_product_title">Modifica prodotto</string>
+    <string name="product_editor_saving">Salvataggio…</string>
+    <string name="product_editor_save_failed">Impossibile salvare il prodotto. La bozza è ancora disponibile: riprova.</string>
     <string name="product_name_label">Nome prodotto</string>
     <string name="second_product_name_label">Secondo nome prodotto</string>
     <string name="field_second_product_name">Secondo Nome Prodotto</string>
@@ -137,6 +139,10 @@
     <string name="select_supplier_title">Seleziona fornitore</string>
     <string name="search_or_add_supplier">Cerca o aggiungi fornitore</string>
     <string name="add_new_supplier_prompt">Aggiungi \"%1$s\" come nuovo fornitore</string>
+    <string name="quick_create_supplier_saving">Creazione di “%1$s”…</string>
+    <string name="quick_create_supplier_retry">Riprova a creare “%1$s”</string>
+    <string name="quick_create_supplier_failed">Impossibile creare il fornitore. Il nome inserito è stato conservato: riprova.</string>
+    <string name="quick_create_in_progress">Salvataggio in corso…</string>
     <string name="save">Salva</string>
     <string name="file_exported_successfully">File esportato con successo</string>
 
@@ -253,6 +259,9 @@
     <string name="select_category_title">Seleziona Categoria</string>
     <string name="search_or_add_category">Cerca o aggiungi categoria</string>
     <string name="add_new_category_prompt">Aggiungi nuova categoria: %1$s</string>
+    <string name="quick_create_category_saving">Creazione di “%1$s”…</string>
+    <string name="quick_create_category_retry">Riprova a creare “%1$s”</string>
+    <string name="quick_create_category_failed">Impossibile creare la categoria. Il nome inserito è stato conservato: riprova.</string>
 
     <string name="header_category_id">ID Categoria</string>
 
@@ -495,6 +504,12 @@
     </plurals>
     <string name="database_catalog_manage_actions">Rinomina o elimina</string>
     <string name="database_catalog_retry_body">Riprova a caricare la sezione. Se il problema persiste, chiudi e riapri il Database hub.</string>
+    <string name="database_products_load_failed_title">Impossibile caricare i prodotti</string>
+    <string name="database_products_load_failed_body">Impossibile determinare l’elenco prodotti. Riprova.</string>
+    <string name="scanner_product_lookup_failed">Impossibile cercare il codice nel catalogo. Riprova.</string>
+    <string name="product_image_staged_before_save">Puoi scegliere l’immagine ora: resterà nella bozza e verrà caricata una sola volta dopo il salvataggio e la sincronizzazione del prodotto.</string>
+    <string name="database_products_refresh_failed">I prodotti visibili restano disponibili, ma l’aggiornamento non è riuscito.</string>
+    <string name="database_products_append_failed">Impossibile caricare altri prodotti.</string>
     <string name="database_catalog_empty_title">Nessun %1$s</string>
     <string name="database_catalog_empty_body">Aggiungi il primo %1$s per rendere piu chiara la gestione dei prodotti.</string>
     <string name="database_catalog_add_first">Aggiungi %1$s</string>
@@ -683,7 +698,7 @@
     <string name="business_scope_shop_mismatch_short">Database collegato a un altro negozio</string>
     <string name="business_scope_schema_mismatch_short">Binding database da verificare</string>
     <string name="business_scope_pending_local_changes">Modifiche locali</string>
-    <string name="business_scope_pending_outbox">Outbox in attesa</string>
+    <string name="business_scope_pending_outbox">Notifiche di sincronizzazione in attesa</string>
     <string name="business_scope_review_details">Rivedi dettagli</string>
     <string name="business_scope_continue_discard">Continua e scarta i dati non associati</string>
     <string name="business_scope_keep_local">Mantieni i dati locali</string>

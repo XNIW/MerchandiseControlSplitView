@@ -122,6 +122,8 @@
     <string name="no_supplier">无供应商</string>
     <string name="select_supplier">选择供应商</string>
     <string name="edit_product_title">编辑产品</string>
+    <string name="product_editor_saving">正在保存…</string>
+    <string name="product_editor_save_failed">无法保存商品。草稿仍然保留，请重试。</string>
     <string name="product_name_label">产品名称</string>
     <string name="second_product_name_label">产品第二名称</string>
     <string name="field_second_product_name">产品第二名称</string>
@@ -134,6 +136,10 @@
     <string name="select_supplier_title">选择供应商</string>
     <string name="search_or_add_supplier">搜索或添加供应商</string>
     <string name="add_new_supplier_prompt">将“%1$s”添加为新供应商</string>
+    <string name="quick_create_supplier_saving">正在创建“%1$s”…</string>
+    <string name="quick_create_supplier_retry">重试创建“%1$s”</string>
+    <string name="quick_create_supplier_failed">无法创建供应商。输入的名称已保留，请重试。</string>
+    <string name="quick_create_in_progress">正在保存…</string>
     <string name="save">保存</string>
     <string name="file_exported_successfully">文件导出成功</string>
 
@@ -244,6 +250,9 @@
     <string name="select_category_title">选择类别</string>
     <string name="search_or_add_category">搜索或添加类别</string>
     <string name="add_new_category_prompt">添加新类别：%1$s</string>
+    <string name="quick_create_category_saving">正在创建“%1$s”…</string>
+    <string name="quick_create_category_retry">重试创建“%1$s”</string>
+    <string name="quick_create_category_failed">无法创建类别。输入的名称已保留，请重试。</string>
     <string name="header_category_id">类别ID</string>
     <string name="add_item_code">添加商品编码</string>
     <string name="loading_ellipsis">加载中…</string>
@@ -477,6 +486,12 @@
     </plurals>
     <string name="database_catalog_manage_actions">重命名或删除</string>
     <string name="database_catalog_retry_body">请重试加载此分区。如果问题持续存在，请关闭后重新打开数据库中心。</string>
+    <string name="database_products_load_failed_title">无法加载商品</string>
+    <string name="database_products_load_failed_body">无法确定商品列表。请重试。</string>
+    <string name="scanner_product_lookup_failed">无法在目录中查找该条码。请重试。</string>
+    <string name="product_image_staged_before_save">你可以现在选择图片。图片会随草稿保留，并在商品保存和同步后仅上传一次。</string>
+    <string name="database_products_refresh_failed">现有商品仍可查看，但刷新失败。</string>
+    <string name="database_products_append_failed">无法加载更多商品。</string>
     <string name="database_catalog_empty_title">还没有%1$s</string>
     <string name="database_catalog_empty_body">添加第一个%1$s，让产品组织更清晰。</string>
     <string name="database_catalog_add_first">添加%1$s</string>
@@ -656,7 +671,7 @@
     <string name="business_scope_shop_mismatch_short">数据库已关联其他店铺</string>
     <string name="business_scope_schema_mismatch_short">需要检查数据库绑定</string>
     <string name="business_scope_pending_local_changes">本地更改</string>
-    <string name="business_scope_pending_outbox">待处理发件箱</string>
+    <string name="business_scope_pending_outbox">等待同步的通知</string>
     <string name="business_scope_review_details">查看详情</string>
     <string name="business_scope_continue_discard">继续并丢弃未关联数据</string>
     <string name="business_scope_keep_local">保留本地数据</string>

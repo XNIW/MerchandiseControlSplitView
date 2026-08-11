@@ -69,6 +69,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -290,6 +291,246 @@ class DatabaseViewModelTest {
 
         assertFalse(viewModel.productDetailsOverrides.value.containsKey(product.id))
         coVerify(exactly = 0) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `editor save failure is recoverable and retry succeeds without an implicit second write`() = runTest {
+        val product = sampleProduct(id = 9L, barcode = "22223333", productName = "Draft kept")
+        var attempts = 0
+        coEvery { repository.updateProduct(product) } coAnswers {
+            attempts += 1
+            if (attempts == 1) {
+                throw IllegalStateException("db unavailable")
+            }
+        }
+
+        val failed = viewModel.saveProductFromEditor(product)
+
+        assertEquals(
+            ProductEditorSaveResult.Failed(app.getString(R.string.error_product_updated)),
+            failed
+        )
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+        assertEquals(1, attempts)
+
+        val recovered = viewModel.saveProductFromEditor(product)
+
+        assertEquals(ProductEditorSaveResult.Saved, recovered)
+        assertEquals(
+            UiState.Success(app.getString(R.string.success_product_updated)),
+            viewModel.uiState.value
+        )
+        assertEquals(2, attempts)
+        coVerify(exactly = 2) { repository.updateProduct(product) }
+    }
+
+    @Test
+    fun `editor repeated retry performs exactly one repository attempt per explicit save`() = runTest {
+        val product = sampleProduct(id = 10L, barcode = "33334444", productName = "Retry draft")
+        var attempts = 0
+        coEvery { repository.updateProduct(product) } coAnswers {
+            attempts += 1
+            if (attempts < 3) {
+                throw IllegalStateException("temporary failure $attempts")
+            }
+        }
+
+        assertTrue(viewModel.saveProductFromEditor(product) is ProductEditorSaveResult.Failed)
+        assertTrue(viewModel.saveProductFromEditor(product) is ProductEditorSaveResult.Failed)
+        assertEquals(ProductEditorSaveResult.Saved, viewModel.saveProductFromEditor(product))
+
+        assertEquals(3, attempts)
+        coVerify(exactly = 3) { repository.updateProduct(product) }
+    }
+
+    @Test
+    fun `editor treats a post commit details refresh failure as saved without retrying the write`() = runTest {
+        val product = sampleProduct(id = 11L, barcode = "44445555", productName = "Committed")
+        coEvery { repository.updateProduct(product) } returns Unit
+        coEvery { repository.getProductDetailsById(product.id) } throws
+            IllegalStateException("read-through unavailable")
+
+        val result = viewModel.saveProductFromEditor(product)
+
+        assertEquals(ProductEditorSaveResult.Saved, result)
+        assertEquals(
+            UiState.Success(app.getString(R.string.success_product_updated)),
+            viewModel.uiState.value
+        )
+        coVerify(exactly = 1) { repository.updateProduct(product) }
+        coVerify(exactly = 1) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `editor save job and draft target survive UI recreation with one write`() = runTest {
+        val product = sampleProduct(id = 12L, barcode = "55556666", productName = "Lifecycle draft")
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        viewModel.openProductEditor(product)
+
+        viewModel.startProductEditorSave(product) {
+            writes += 1
+            started.complete(Unit)
+            release.await()
+            ProductEditorSaveResult.Saved
+        }
+        runCurrent()
+        started.await()
+
+        assertEquals(product, viewModel.productEditorTarget.value)
+        assertEquals(ProductEditorOperationState.Saving, viewModel.productEditorOperationState.value)
+        viewModel.startProductEditorSave(product) {
+            writes += 1
+            ProductEditorSaveResult.Saved
+        }
+        runCurrent()
+        assertEquals(1, writes)
+
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(ProductEditorOperationState.Saved, viewModel.productEditorOperationState.value)
+        assertEquals(product, viewModel.productEditorTarget.value)
+        assertEquals(1, writes)
+
+        viewModel.dismissProductEditor()
+        assertNull(viewModel.productEditorTarget.value)
+    }
+
+    @Test
+    fun `scanner lookup reports repository failure and discards stale scope result`() = runTest {
+        val barcode = "780000000042"
+        coEvery { repository.findProductByBarcode(barcode) } throws
+            IllegalStateException("database unavailable")
+
+        assertEquals(
+            ScannedBarcodeLookupResult.Failed,
+            viewModel.lookupScannedBarcode(barcode, viewModel.currentProductImageScopeEpoch())
+        )
+
+        val product = sampleProduct(id = 42L, barcode = barcode)
+        coEvery { repository.findProductByBarcode(barcode) } returns product
+        assertEquals(
+            ScannedBarcodeLookupResult.StaleScope,
+            viewModel.lookupScannedBarcode(
+                barcode,
+                viewModel.currentProductImageScopeEpoch() - 1L
+            )
+        )
+    }
+
+    @Test
+    fun `new product staged image survives save failure and transfers once after retry`() = runTest {
+        val prepared = PreparedProductImage(
+            main = PreparedProductImageVariant(
+                bytes = byteArrayOf(1, 2, 3),
+                metadata = ProductImageMetadata(3, 1, sha256 = "a".repeat(64), width = 1)
+            ),
+            thumb = PreparedProductImageVariant(
+                bytes = byteArrayOf(4, 5),
+                metadata = ProductImageMetadata(2, 1, sha256 = "b".repeat(64), width = 1)
+            )
+        )
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val imageViewModel = DatabaseViewModel(
+            app = app,
+            repository = repository,
+            productImageService = imageService,
+            stagedImagePreparer = { _, _ -> prepared },
+            stagedImageWriter = { _, _ -> Uri.parse("file:///tmp/staged-product-image.jpg") },
+            canStageProductImages = { true }
+        )
+        val draft = sampleProduct(id = 0L, barcode = "STAGED-IMAGE-1")
+        val persisted = draft.copy(id = 101L)
+        coEvery { repository.findProductByBarcode(draft.barcode) } returns persisted
+        coEvery { repository.hasSyncedProductRemoteRef(persisted.id) } returns false
+        imageViewModel.openProductEditor(draft)
+        imageViewModel.stageNewProductImage(Uri.EMPTY)
+        advanceUntilIdle()
+        assertTrue(imageViewModel.stagedProductImageState.value is StagedProductImageState.Ready)
+
+        imageViewModel.startProductEditorSave(draft) {
+            ProductEditorSaveResult.Failed("retry")
+        }
+        advanceUntilIdle()
+        assertEquals(
+            ProductEditorOperationState.Failed("retry"),
+            imageViewModel.productEditorOperationState.value
+        )
+        assertTrue(imageViewModel.stagedProductImageState.value is StagedProductImageState.Ready)
+
+        imageViewModel.startProductEditorSave(draft) { ProductEditorSaveResult.Saved }
+        advanceUntilIdle()
+        assertEquals(ProductEditorOperationState.Saved, imageViewModel.productEditorOperationState.value)
+        assertEquals(StagedProductImageState.Empty, imageViewModel.stagedProductImageState.value)
+        assertTrue(imageViewModel.hasPendingStagedProductImage(persisted.id))
+        coVerify(exactly = 0) { imageService.upload(any(), any(), any(), any()) }
+
+        coEvery { repository.hasSyncedProductRemoteRef(persisted.id) } returns true
+        coEvery { imageService.upload(persisted.id, any(), any(), any()) } returns
+            ProductImageMutationResult(
+                status = "published",
+                versionId = "00000000-0000-4000-8000-000000000101",
+                imageUpdatedAt = "now"
+            )
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            firstArg<List<ProductImageLoadRequest>>().map { request ->
+                ProductImageBatchItem(
+                    request = request,
+                    result = ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(9),
+                        source = ProductImageLoadSource.NETWORK,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            }
+        }
+        remoteAppliedProductIds.emit(setOf(persisted.id))
+        advanceUntilIdle()
+        remoteAppliedProductIds.emit(setOf(persisted.id))
+        advanceUntilIdle()
+
+        assertFalse(imageViewModel.hasPendingStagedProductImage(persisted.id))
+        coVerify(exactly = 1) { imageService.upload(persisted.id, any(), any(), any()) }
+    }
+
+    @Test
+    fun `staged image writer persists normalized bytes in application cache`() = runTest {
+        val bytes = byteArrayOf(7, 8, 9, 10)
+
+        val uri = writeStagedProductImage(app, bytes)
+        val stagedFile = File(requireNotNull(uri.path))
+
+        assertTrue(stagedFile.isFile)
+        assertArrayEquals(bytes, stagedFile.readBytes())
+        assertTrue(stagedFile.delete())
+    }
+
+    @Test
+    fun `product search cancels obsolete debounce windows and clear is immediate`() = runTest {
+        viewModel.appliedProductFilter.test {
+            assertNull(awaitItem())
+
+            viewModel.setFilter("a")
+            runCurrent()
+            advanceTimeBy(80)
+            viewModel.setFilter("ab")
+            runCurrent()
+            advanceTimeBy(80)
+            viewModel.setFilter("abc")
+            runCurrent()
+
+            advanceTimeBy(249)
+            expectNoEvents()
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals("abc", awaitItem())
+
+            viewModel.setFilter("")
+            runCurrent()
+            assertNull(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

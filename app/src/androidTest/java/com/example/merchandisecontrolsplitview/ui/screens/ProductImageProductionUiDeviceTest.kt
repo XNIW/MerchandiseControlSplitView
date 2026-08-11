@@ -276,9 +276,9 @@ class ProductImageProductionUiDeviceTest {
         val remove = context.getString(R.string.product_image_remove)
         val retry = context.getString(R.string.product_image_retry)
         val discard = context.getString(R.string.product_image_discard_failed_attempt)
-        composeRule.onNodeWithText(context.getString(R.string.product_image_save_first)).assertExists()
-        composeRule.onNodeWithText(takePhoto).assertIsNotEnabled()
-        composeRule.onNodeWithText(library).assertIsNotEnabled()
+        composeRule.onNodeWithText(context.getString(R.string.product_image_staged_before_save)).assertExists()
+        composeRule.onNodeWithText(takePhoto).assertIsEnabled()
+        composeRule.onNodeWithText(library).assertIsEnabled()
         composeRule.onNodeWithText(remove).assertDoesNotExist()
 
         composeRule.runOnIdle { scenario.value = EditorScenario.READY }
