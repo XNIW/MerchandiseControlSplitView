@@ -86,6 +86,8 @@
     <string name="import_file">导入</string>
     <string name="export_file">导出</string>
     <string name="retry">重试</string>
+    <string name="product_image_zoom_in">放大图片</string>
+    <string name="product_image_zoom_out">缩小图片</string>
     <string name="scan_barcode">扫描条码</string>
 
     <!-- viewmodel DatabaseViewModel -->

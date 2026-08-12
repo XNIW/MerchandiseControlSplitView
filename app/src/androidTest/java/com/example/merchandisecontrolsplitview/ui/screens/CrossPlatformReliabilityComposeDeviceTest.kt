@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -28,6 +29,8 @@ import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.ui.theme.MerchandiseControlTheme
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorSaveResult
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
+import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
@@ -163,7 +166,7 @@ class CrossPlatformReliabilityComposeDeviceTest {
                                 viewModel.addSupplier(name)?.id
                             },
                             onDismiss = { visible.value = false },
-                            onSave = { ProductEditorSaveResult.Saved }
+                            onSave = { ProductEditorSaveResult.Saved() }
                         )
                     }
                 }
@@ -210,7 +213,7 @@ class CrossPlatformReliabilityComposeDeviceTest {
                                 viewModel.addCategory(name)?.id
                             },
                             onDismiss = { visible.value = false },
-                            onSave = { ProductEditorSaveResult.Saved }
+                            onSave = { ProductEditorSaveResult.Saved() }
                         )
                     }
                 }
@@ -239,6 +242,46 @@ class CrossPlatformReliabilityComposeDeviceTest {
 
         assertEquals(1, attempts.get())
         assertNotNull(runBlocking { repository.findCategoryByName("Category Once") })
+    }
+
+    @Test
+    fun fullscreenImageOffersRetryAndBoundedZoomControls() {
+        val state = mutableStateOf(
+            ProductImageUiState(
+                status = ProductImageUiStatus.ERROR,
+                errorCode = "temporary"
+            )
+        )
+        val retries = AtomicInteger()
+
+        composeRule.setContent {
+            MerchandiseControlTheme(darkTheme = false) {
+                ProductImageFullscreenDialog(
+                    state = state.value,
+                    contentDescription = context.getString(R.string.product_image_main),
+                    onDismiss = {},
+                    onRetry = {
+                        retries.incrementAndGet()
+                        state.value = ProductImageUiState(
+                            status = ProductImageUiStatus.READY,
+                            bytes = byteArrayOf(1)
+                        )
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithText(context.getString(R.string.retry)).performClick()
+        assertEquals(1, retries.get())
+        composeRule.onNodeWithContentDescription(
+            context.getString(R.string.product_image_zoom_out)
+        ).assertIsNotEnabled()
+        composeRule.onNodeWithContentDescription(
+            context.getString(R.string.product_image_zoom_in)
+        ).assertIsEnabled().performClick()
+        composeRule.onNodeWithContentDescription(
+            context.getString(R.string.product_image_zoom_out)
+        ).assertIsEnabled()
     }
 
     private fun newProduct(barcode: String) = Product(

@@ -501,7 +501,14 @@ fun DatabaseScreen(
         ProductImageFullscreenDialog(
             state = mainState?.takeIf { it.bytes != null } ?: thumbState,
             contentDescription = stringResource(R.string.product_image_main),
-            onDismiss = { imagePreviewProduct = null }
+            onDismiss = { imagePreviewProduct = null },
+            onRetry = {
+                viewModel.loadProductImageProgressively(
+                    productId = previewProduct.id,
+                    expectedVersionId = previewProduct.primaryImageVersionId,
+                    force = true
+                )
+            }
         )
     }
 

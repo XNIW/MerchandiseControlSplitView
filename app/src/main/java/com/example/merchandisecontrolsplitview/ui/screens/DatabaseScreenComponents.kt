@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,9 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Image as ProductImageIcon
 import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -54,12 +58,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -986,8 +996,30 @@ internal fun ProductImagePreview(
 internal fun ProductImageFullscreenDialog(
     state: ProductImageUiState?,
     contentDescription: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onRetry: (() -> Unit)? = null
 ) {
+    val imageKey = state?.bytes?.contentHashCode() ?: state?.versionId
+    var scale by remember(imageKey) { mutableFloatStateOf(1f) }
+    var offsetX by remember(imageKey) { mutableFloatStateOf(0f) }
+    var offsetY by remember(imageKey) { mutableFloatStateOf(0f) }
+    var viewportWidth by remember { mutableFloatStateOf(0f) }
+    var viewportHeight by remember { mutableFloatStateOf(0f) }
+
+    fun updateScale(requestedScale: Float, panX: Float = 0f, panY: Float = 0f) {
+        val nextScale = requestedScale.coerceIn(1f, 5f)
+        scale = nextScale
+        if (nextScale == 1f) {
+            offsetX = 0f
+            offsetY = 0f
+        } else {
+            val maxX = viewportWidth * (nextScale - 1f) / 2f
+            val maxY = viewportHeight * (nextScale - 1f) / 2f
+            offsetX = (offsetX + panX).coerceIn(-maxX, maxX)
+            offsetY = (offsetY + panY).coerceIn(-maxY, maxY)
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1003,7 +1035,23 @@ internal fun ProductImageFullscreenDialog(
                 state = state,
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size ->
+                        viewportWidth = size.width.toFloat()
+                        viewportHeight = size.height.toFloat()
+                    }
+                    .pointerInput(imageKey) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            updateScale(scale * zoom, pan.x, pan.y)
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    }
             )
             IconButton(
                 onClick = onDismiss,
@@ -1016,6 +1064,45 @@ internal fun ProductImageFullscreenDialog(
                     contentDescription = stringResource(R.string.close),
                     tint = Color.White
                 )
+            }
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(20.dp)
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(24.dp)),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    enabled = state?.bytes != null && scale > 1f,
+                    onClick = { updateScale(scale - 0.5f) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ZoomOut,
+                        contentDescription = stringResource(R.string.product_image_zoom_out),
+                        tint = Color.White
+                    )
+                }
+                IconButton(
+                    enabled = state?.bytes != null && scale < 5f,
+                    onClick = { updateScale(scale + 0.5f) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ZoomIn,
+                        contentDescription = stringResource(R.string.product_image_zoom_in),
+                        tint = Color.White
+                    )
+                }
+                if (state?.status == ProductImageUiStatus.ERROR && onRetry != null) {
+                    TextButton(onClick = onRetry) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.retry), color = Color.White)
+                    }
+                }
             }
         }
     }

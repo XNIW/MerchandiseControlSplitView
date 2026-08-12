@@ -86,6 +86,8 @@
     <string name="import_file">Importar</string>
     <string name="export_file">Exportar</string>
     <string name="retry">Reintentar</string>
+    <string name="product_image_zoom_in">Ampliar imagen</string>
+    <string name="product_image_zoom_out">Reducir imagen</string>
     <string name="scan_barcode">Escanear código de barras</string>
 
     <!-- viewmodel DatabaseViewModel -->

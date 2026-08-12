@@ -232,9 +232,7 @@ internal fun EditProductDialog(
     val displayedMainImageState = if (product.id == 0L) stagedPreviewState else mainImageState
     val displayedPreviewState = productImagePreviewState(displayedMainImageState, thumbImageState)
     val imageMutationBusy = productImageMutationBusy(displayedMainImageState, thumbImageState)
-    var pendingCaptureFile by remember(sessionId) { mutableStateOf<File?>(null) }
-    var pendingCaptureUri by remember(sessionId) { mutableStateOf<android.net.Uri?>(null) }
-    val captureFiles = remember(product.id) { ProductImageCaptureFileTracker() }
+    var pendingCapturePath by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
     var confirmImageRemoval by rememberSaveable(sessionId) { mutableStateOf(false) }
     var showImagePreview by rememberSaveable(sessionId) { mutableStateOf(false) }
     var hasSyncedRemoteRef by remember(product.id) { mutableStateOf<Boolean?>(null) }
@@ -253,20 +251,27 @@ internal fun EditProductDialog(
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { captured ->
-        val file = pendingCaptureFile
-        val uri = pendingCaptureUri
-        pendingCaptureFile = null
-        pendingCaptureUri = null
+        val file = pendingCapturePath?.let(::File)
+        val uri = file?.takeIf(File::isFile)?.let { captureFile ->
+            runCatching {
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    captureFile
+                )
+            }.getOrNull()
+        }
+        pendingCapturePath = null
         if (captured && uri != null) {
             if (product.id == 0L) {
-                viewModel.stageNewProductImage(uri) { captureFiles.release(file) }
+                viewModel.stageNewProductImage(uri) { file.delete() }
             } else {
                 viewModel.uploadProductImage(product.id, uri) {
-                    captureFiles.release(file)
+                    file.delete()
                 }
             }
         } else {
-            captureFiles.release(file)
+            file?.delete()
         }
     }
 
@@ -290,6 +295,11 @@ internal fun EditProductDialog(
     fun launchProductCamera() {
         val directory = File(context.cacheDir, "product-image-capture")
         if (!directory.exists() && !directory.mkdirs()) return
+        directory.listFiles()
+            ?.filter { file ->
+                file.isFile && System.currentTimeMillis() - file.lastModified() > 86_400_000L
+            }
+            ?.forEach(File::delete)
         val file = runCatching {
             File.createTempFile("product-", ".jpg", directory)
         }.getOrNull() ?: return
@@ -303,9 +313,7 @@ internal fun EditProductDialog(
             file.delete()
             return
         }
-        captureFiles.track(file)
-        pendingCaptureFile = file
-        pendingCaptureUri = uri
+        pendingCapturePath = file.absolutePath
         cameraLauncher.launch(uri)
     }
 
@@ -983,7 +991,14 @@ internal fun EditProductDialog(
                 ProductImageFullscreenDialog(
                     state = displayedPreviewState,
                     contentDescription = stringResource(R.string.product_image_main),
-                    onDismiss = { showImagePreview = false }
+                    onDismiss = { showImagePreview = false },
+                    onRetry = if (product.id == 0L) null else ({
+                        viewModel.loadProductImageProgressively(
+                            productId = product.id,
+                            expectedVersionId = effectiveImageVersionId,
+                            force = true
+                        )
+                    })
                 )
             }
     }

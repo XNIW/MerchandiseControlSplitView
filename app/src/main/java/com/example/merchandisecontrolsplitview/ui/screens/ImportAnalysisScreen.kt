@@ -116,7 +116,7 @@ fun ImportAnalysisScreen(
             onDismiss = { itemToEdit = null },
             onSave = { updatedProduct ->
                 editableNewProducts[index] = updatedProduct
-                ProductEditorSaveResult.Saved
+                ProductEditorSaveResult.Saved()
             }
         )
     }
@@ -131,7 +131,7 @@ fun ImportAnalysisScreen(
             onDismiss = { updateToEdit = null },
             onSave = { updatedProduct ->
                 editableUpdatedProducts[index] = productUpdate.copy(newProduct = updatedProduct)
-                ProductEditorSaveResult.Saved
+                ProductEditorSaveResult.Saved()
             }
         )
     }
