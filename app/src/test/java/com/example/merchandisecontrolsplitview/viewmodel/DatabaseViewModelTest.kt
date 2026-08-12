@@ -36,6 +36,7 @@ import com.example.merchandisecontrolsplitview.productimage.ProductImageMutation
 import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationResult
 import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
+import com.example.merchandisecontrolsplitview.productimage.SharedPreferencesPendingStagedProductImageStore
 import com.example.merchandisecontrolsplitview.testutil.createMalformedLegacyObjWorkbookFile
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import com.example.merchandisecontrolsplitview.testutil.createStrictOoXmlWorkbookFile
@@ -69,6 +70,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -195,12 +197,12 @@ class DatabaseViewModelTest {
     @Test
     fun `addProduct success emits success state`() = runTest {
         val product = sampleProduct(barcode = "12345678")
-        coEvery { repository.addProduct(product) } just runs
+        coEvery { repository.addProductAndReturnId(product) } returns 41L
 
         viewModel.addProduct(product)
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { repository.addProduct(product) }
+        coVerify(exactly = 1) { repository.addProductAndReturnId(product) }
         viewModel.uiState.test {
             assertEquals(
                 UiState.Success(app.getString(R.string.success_product_added)),
@@ -213,7 +215,8 @@ class DatabaseViewModelTest {
     @Test
     fun `addProduct duplicate barcode emits duplicate error`() = runTest {
         val product = sampleProduct(barcode = "12345678")
-        coEvery { repository.addProduct(product) } throws SQLiteConstraintException("duplicate")
+        coEvery { repository.addProductAndReturnId(product) } throws
+            SQLiteConstraintException("duplicate")
 
         viewModel.addProduct(product)
         advanceUntilIdle()
@@ -290,6 +293,426 @@ class DatabaseViewModelTest {
 
         assertFalse(viewModel.productDetailsOverrides.value.containsKey(product.id))
         coVerify(exactly = 0) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `editor save failure is recoverable and retry succeeds without an implicit second write`() = runTest {
+        val product = sampleProduct(id = 9L, barcode = "22223333", productName = "Draft kept")
+        var attempts = 0
+        coEvery { repository.updateProduct(product) } coAnswers {
+            attempts += 1
+            if (attempts == 1) {
+                throw IllegalStateException("db unavailable")
+            }
+        }
+
+        val failed = viewModel.saveProductFromEditor(product)
+
+        assertEquals(
+            ProductEditorSaveResult.Failed(app.getString(R.string.error_product_updated)),
+            failed
+        )
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+        assertEquals(1, attempts)
+
+        val recovered = viewModel.saveProductFromEditor(product)
+
+        assertEquals(ProductEditorSaveResult.Saved(product.id), recovered)
+        assertEquals(
+            UiState.Success(app.getString(R.string.success_product_updated)),
+            viewModel.uiState.value
+        )
+        assertEquals(2, attempts)
+        coVerify(exactly = 2) { repository.updateProduct(product) }
+    }
+
+    @Test
+    fun `editor repeated retry performs exactly one repository attempt per explicit save`() = runTest {
+        val product = sampleProduct(id = 10L, barcode = "33334444", productName = "Retry draft")
+        var attempts = 0
+        coEvery { repository.updateProduct(product) } coAnswers {
+            attempts += 1
+            if (attempts < 3) {
+                throw IllegalStateException("temporary failure $attempts")
+            }
+        }
+
+        assertTrue(viewModel.saveProductFromEditor(product) is ProductEditorSaveResult.Failed)
+        assertTrue(viewModel.saveProductFromEditor(product) is ProductEditorSaveResult.Failed)
+        assertEquals(ProductEditorSaveResult.Saved(product.id), viewModel.saveProductFromEditor(product))
+
+        assertEquals(3, attempts)
+        coVerify(exactly = 3) { repository.updateProduct(product) }
+    }
+
+    @Test
+    fun `editor treats a post commit details refresh failure as saved without retrying the write`() = runTest {
+        val product = sampleProduct(id = 11L, barcode = "44445555", productName = "Committed")
+        coEvery { repository.updateProduct(product) } returns Unit
+        coEvery { repository.getProductDetailsById(product.id) } throws
+            IllegalStateException("read-through unavailable")
+
+        val result = viewModel.saveProductFromEditor(product)
+
+        assertEquals(ProductEditorSaveResult.Saved(product.id), result)
+        assertEquals(
+            UiState.Success(app.getString(R.string.success_product_updated)),
+            viewModel.uiState.value
+        )
+        coVerify(exactly = 1) { repository.updateProduct(product) }
+        coVerify(exactly = 1) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `editor save job and draft target survive UI recreation with one write`() = runTest {
+        val product = sampleProduct(id = 12L, barcode = "55556666", productName = "Lifecycle draft")
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        viewModel.openProductEditor(product)
+
+        viewModel.startProductEditorSave(product) {
+            writes += 1
+            started.complete(Unit)
+            release.await()
+            ProductEditorSaveResult.Saved(product.id)
+        }
+        runCurrent()
+        started.await()
+
+        assertEquals(product, viewModel.productEditorTarget.value)
+        assertEquals(ProductEditorOperationState.Saving, viewModel.productEditorOperationState.value)
+        viewModel.startProductEditorSave(product) {
+            writes += 1
+            ProductEditorSaveResult.Saved(product.id)
+        }
+        runCurrent()
+        assertEquals(1, writes)
+
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(ProductEditorOperationState.Saved, viewModel.productEditorOperationState.value)
+        assertEquals(product, viewModel.productEditorTarget.value)
+        assertEquals(1, writes)
+
+        viewModel.dismissProductEditor()
+        assertNull(viewModel.productEditorTarget.value)
+    }
+
+    @Test
+    fun `scanner lookup reports repository failure and discards stale scope result`() = runTest {
+        val barcode = "780000000042"
+        coEvery { repository.findProductByBarcode(barcode) } throws
+            IllegalStateException("database unavailable")
+
+        assertEquals(
+            ScannedBarcodeLookupResult.Failed,
+            viewModel.lookupScannedBarcode(barcode, viewModel.currentProductImageScopeEpoch())
+        )
+
+        val product = sampleProduct(id = 42L, barcode = barcode)
+        coEvery { repository.findProductByBarcode(barcode) } returns product
+        assertEquals(
+            ScannedBarcodeLookupResult.StaleScope,
+            viewModel.lookupScannedBarcode(
+                barcode,
+                viewModel.currentProductImageScopeEpoch() - 1L
+            )
+        )
+    }
+
+    @Test
+    fun `new product staged image survives save failure and transfers once after retry`() = runTest {
+        val prepared = PreparedProductImage(
+            main = PreparedProductImageVariant(
+                bytes = byteArrayOf(1, 2, 3),
+                metadata = ProductImageMetadata(3, 1, sha256 = "a".repeat(64), width = 1)
+            ),
+            thumb = PreparedProductImageVariant(
+                bytes = byteArrayOf(4, 5),
+                metadata = ProductImageMetadata(2, 1, sha256 = "b".repeat(64), width = 1)
+            )
+        )
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val imageViewModel = DatabaseViewModel(
+            app = stableScopedImageApplication("test-account", "test-shop"),
+            repository = repository,
+            productImageService = imageService,
+            stagedImagePreparer = { _, _ -> prepared },
+            stagedImageWriter = { _, _ -> Uri.parse("file:///tmp/staged-product-image.jpg") },
+            canStageProductImages = { true }
+        )
+        val draft = sampleProduct(id = 0L, barcode = "STAGED-IMAGE-1")
+        val persisted = draft.copy(id = 101L)
+        coEvery { repository.findProductByBarcode(draft.barcode) } returns persisted
+        coEvery { repository.hasSyncedProductRemoteRef(persisted.id) } returns false
+        imageViewModel.openProductEditor(draft)
+        imageViewModel.stageNewProductImage(Uri.EMPTY)
+        advanceUntilIdle()
+        assertTrue(imageViewModel.stagedProductImageState.value is StagedProductImageState.Ready)
+
+        imageViewModel.startProductEditorSave(draft) {
+            ProductEditorSaveResult.Failed("retry")
+        }
+        advanceUntilIdle()
+        assertEquals(
+            ProductEditorOperationState.Failed("retry"),
+            imageViewModel.productEditorOperationState.value
+        )
+        assertTrue(imageViewModel.stagedProductImageState.value is StagedProductImageState.Ready)
+
+        imageViewModel.startProductEditorSave(draft) { ProductEditorSaveResult.Saved(persisted.id) }
+        advanceUntilIdle()
+        assertEquals(ProductEditorOperationState.Saved, imageViewModel.productEditorOperationState.value)
+        assertEquals(StagedProductImageState.Empty, imageViewModel.stagedProductImageState.value)
+        assertTrue(imageViewModel.hasPendingStagedProductImage(persisted.id))
+        coVerify(exactly = 0) { imageService.upload(any(), any(), any(), any()) }
+
+        coEvery { repository.hasSyncedProductRemoteRef(persisted.id) } returns true
+        coEvery { imageService.upload(persisted.id, any(), any(), any()) } returns
+            ProductImageMutationResult(
+                status = "published",
+                versionId = "00000000-0000-4000-8000-000000000101",
+                imageUpdatedAt = "now"
+            )
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            firstArg<List<ProductImageLoadRequest>>().map { request ->
+                ProductImageBatchItem(
+                    request = request,
+                    result = ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(9),
+                        source = ProductImageLoadSource.NETWORK,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            }
+        }
+        remoteAppliedProductIds.emit(setOf(persisted.id))
+        advanceUntilIdle()
+        remoteAppliedProductIds.emit(setOf(persisted.id))
+        advanceUntilIdle()
+
+        assertFalse(imageViewModel.hasPendingStagedProductImage(persisted.id))
+        coVerify(exactly = 1) { imageService.upload(persisted.id, any(), any(), any()) }
+        coVerify(exactly = 0) { repository.findProductByBarcode(draft.barcode) }
+    }
+
+    @Test
+    fun `post commit remote lookup failure keeps staged image durably pending`() = runTest {
+        val store = SharedPreferencesPendingStagedProductImageStore(app)
+        store.clear().forEach { uri -> uri.path?.let(::File)?.delete() }
+        val prepared = PreparedProductImage(
+            main = PreparedProductImageVariant(
+                bytes = byteArrayOf(21, 22, 23),
+                metadata = ProductImageMetadata(3, 1, sha256 = "c".repeat(64), width = 1)
+            ),
+            thumb = PreparedProductImageVariant(
+                bytes = byteArrayOf(24, 25),
+                metadata = ProductImageMetadata(2, 1, sha256 = "d".repeat(64), width = 1)
+            )
+        )
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        val draft = sampleProduct(id = 0L, barcode = "STAGED-DURABLE-1")
+        val persistedId = 102L
+        val stagedUri = writeStagedProductImage(app, prepared.main.bytes)
+        coEvery { repository.hasSyncedProductRemoteRef(persistedId) } throws
+            IllegalStateException("remote ref temporarily unavailable")
+        val imageViewModel = DatabaseViewModel(
+            app = stableScopedImageApplication("test-account", "test-shop"),
+            repository = repository,
+            productImageService = imageService,
+            stagedImagePreparer = { _, _ -> prepared },
+            stagedImageWriter = { _, _ -> stagedUri },
+            pendingStagedImageStore = store,
+            canStageProductImages = { true }
+        )
+        imageViewModel.openProductEditor(draft)
+        imageViewModel.stageNewProductImage(Uri.EMPTY)
+        advanceUntilIdle()
+        assertTrue(imageViewModel.stagedProductImageState.value is StagedProductImageState.Ready)
+
+        imageViewModel.startProductEditorSave(draft) {
+            ProductEditorSaveResult.Saved(persistedId)
+        }
+        runCurrent()
+
+        assertEquals(ProductEditorOperationState.Saved, imageViewModel.productEditorOperationState.value)
+        assertEquals(persistedId, store.records().single().productId)
+        coVerify(exactly = 0) { imageService.upload(any(), any(), any(), any()) }
+        assertTrue(imageViewModel.hasPendingStagedProductImage(persistedId))
+        assertEquals(StagedProductImageState.Empty, imageViewModel.stagedProductImageState.value)
+        coVerify(exactly = 0) { repository.findProductByBarcode(draft.barcode) }
+        imageViewModel.discardPendingStagedProductImage(persistedId)
+        assertTrue(store.records().isEmpty())
+    }
+
+    @Test
+    fun `new view model recovers durable staged image and uploads exactly once`() = runTest {
+        val store = SharedPreferencesPendingStagedProductImageStore(app)
+        store.clear().forEach { uri -> uri.path?.let(::File)?.delete() }
+        val productId = 103L
+        val barcode = "STAGED-RECOVERY-1"
+        val stagedUri = writeStagedProductImage(app, byteArrayOf(31, 32, 33))
+        assertTrue(store.prepare(stagedUri, barcode, "test-account", "test-shop"))
+        assertTrue(store.bind(stagedUri, productId))
+        coEvery { repository.hasSyncedProductRemoteRef(productId) } returns true
+        val imageService = mockk<ProductImageService>(relaxed = true)
+        coEvery { imageService.upload(productId, any(), any(), any()) } returns
+            ProductImageMutationResult(
+                status = "published",
+                versionId = "00000000-0000-4000-8000-000000000103",
+                imageUpdatedAt = "now"
+            )
+        coEvery { imageService.loadBatch(any()) } coAnswers {
+            firstArg<List<ProductImageLoadRequest>>().map { request ->
+                ProductImageBatchItem(
+                    request = request,
+                    result = ProductImageLoadResult.Ready(
+                        bytes = byteArrayOf(34),
+                        source = ProductImageLoadSource.NETWORK,
+                        versionId = requireNotNull(request.expectedVersionId)
+                    )
+                )
+            }
+        }
+
+        val recoveredViewModel = DatabaseViewModel(
+            app = stableScopedImageApplication("test-account", "test-shop"),
+            repository = repository,
+            productImageService = imageService,
+            pendingStagedImageStore = store
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { imageService.upload(productId, any(), any(), any()) }
+        assertFalse(recoveredViewModel.hasPendingStagedProductImage(productId))
+        assertTrue(store.records().isEmpty())
+        assertFalse(File(requireNotNull(stagedUri.path)).exists())
+    }
+
+    @Test
+    fun `auth bootstrap and same scope loading preserve durable staged image until upload commits`() =
+        runTest {
+            val store = SharedPreferencesPendingStagedProductImageStore(app)
+            store.clear().forEach { uri -> uri.path?.let(::File)?.delete() }
+            val accountId = "bootstrap-account"
+            val shopId = "bootstrap-shop"
+            val productId = 104L
+            val barcode = "STAGED-BOOTSTRAP-1"
+            val stagedUri = writeStagedProductImage(app, byteArrayOf(41, 42, 43))
+            assertTrue(store.prepare(stagedUri, barcode, accountId, shopId))
+            assertTrue(store.bind(stagedUri, productId))
+
+            val authState = MutableStateFlow<AuthState>(AuthState.Checking)
+            val shopState = MutableStateFlow(ShopContext.legacy())
+            val uploadEntered = CompletableDeferred<Unit>()
+            val releaseUpload = CompletableDeferred<Unit>()
+            val imageService = mockk<ProductImageService>(relaxed = true)
+            coEvery { repository.hasSyncedProductRemoteRef(productId) } returns true
+            coEvery { imageService.upload(productId, any(), any(), any()) } coAnswers {
+                uploadEntered.complete(Unit)
+                releaseUpload.await()
+                ProductImageMutationResult(
+                    status = "published",
+                    versionId = "00000000-0000-4000-8000-000000000104",
+                    imageUpdatedAt = "now"
+                )
+            }
+            coEvery { imageService.loadBatch(any()) } coAnswers {
+                firstArg<List<ProductImageLoadRequest>>().map { request ->
+                    ProductImageBatchItem(
+                        request = request,
+                        result = ProductImageLoadResult.Ready(
+                            bytes = byteArrayOf(44),
+                            source = ProductImageLoadSource.NETWORK,
+                            versionId = requireNotNull(request.expectedVersionId)
+                        )
+                    )
+                }
+            }
+
+            val recoveredViewModel = DatabaseViewModel(
+                app = scopedImageApplication(authState, shopState),
+                repository = repository,
+                productImageService = imageService,
+                pendingStagedImageStore = store
+            )
+            runCurrent()
+
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            authState.value = AuthState.SignedIn(accountId, null)
+            shopState.value = shopContext(accountId, shopId).copy(
+                isLoading = true,
+                syncAllowed = false
+            )
+            runCurrent()
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            shopState.value = shopContext(accountId, shopId)
+            runCurrent()
+            assertTrue(uploadEntered.isCompleted)
+
+            shopState.value = shopContext(accountId, shopId).copy(
+                isLoading = true,
+                syncAllowed = false
+            )
+            runCurrent()
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            shopState.value = shopContext(accountId, shopId)
+            runCurrent()
+            coVerify(exactly = 1) { imageService.upload(productId, any(), any(), any()) }
+
+            releaseUpload.complete(Unit)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { imageService.upload(productId, any(), any(), any()) }
+            assertFalse(recoveredViewModel.hasPendingStagedProductImage(productId))
+            assertTrue(store.records().isEmpty())
+            assertFalse(File(requireNotNull(stagedUri.path)).exists())
+        }
+
+    @Test
+    fun `staged image writer persists normalized bytes in durable application storage`() = runTest {
+        val bytes = byteArrayOf(7, 8, 9, 10)
+
+        val uri = writeStagedProductImage(app, bytes)
+        val stagedFile = File(requireNotNull(uri.path))
+
+        assertTrue(stagedFile.isFile)
+        assertArrayEquals(bytes, stagedFile.readBytes())
+        assertTrue(stagedFile.delete())
+    }
+
+    @Test
+    fun `product search cancels obsolete debounce windows and clear is immediate`() = runTest {
+        viewModel.appliedProductFilter.test {
+            assertNull(awaitItem())
+
+            viewModel.setFilter("a")
+            runCurrent()
+            advanceTimeBy(80)
+            viewModel.setFilter("ab")
+            runCurrent()
+            advanceTimeBy(80)
+            viewModel.setFilter("abc")
+            runCurrent()
+
+            advanceTimeBy(249)
+            expectNoEvents()
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals("abc", awaitItem())
+
+            viewModel.setFilter("")
+            runCurrent()
+            assertNull(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test
@@ -606,7 +1029,7 @@ class DatabaseViewModelTest {
     }
 
     @Test
-    fun `139 restored auth invalidates image scope while shop is unresolved`() = runTest {
+    fun `139 restored auth preserves resolved scope through transient shop states`() = runTest {
         val accountId = "account-restored"
         val firstShopId = "shop-restored"
         val secondShopId = "shop-next"
@@ -635,7 +1058,7 @@ class DatabaseViewModelTest {
         runCurrent()
 
         coVerify(exactly = 0) { imageService.purgeScope(any(), any()) }
-        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
+        assertEquals(0L, imageViewModel.productImageScopeEpoch.value)
 
         imageViewModel.setProductImageVisible(81L, null, visible = true)
         assertFalse(imageViewModel.productImageStates.value.isEmpty())
@@ -646,15 +1069,15 @@ class DatabaseViewModelTest {
             syncAllowed = false
         )
         runCurrent()
-        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
-        assertTrue(imageViewModel.productImageStates.value.isEmpty())
-        assertEquals(2L, imageViewModel.productImageScopeEpoch.value)
+        coVerify(exactly = 0) { imageService.purgeScope(any(), any()) }
+        assertFalse(imageViewModel.productImageStates.value.isEmpty())
+        assertEquals(0L, imageViewModel.productImageScopeEpoch.value)
 
         shopStates.value = shopContext(accountId, secondShopId)
         runCurrent()
 
-        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
-        assertEquals(3L, imageViewModel.productImageScopeEpoch.value)
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, firstShopId) }
+        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
     }
 
     @Test
@@ -1639,6 +2062,29 @@ class DatabaseViewModelTest {
             canWrite = true
         )
     )
+
+    private fun stableScopedImageApplication(
+        accountId: String,
+        shopId: String
+    ): MerchandiseControlApplication = scopedImageApplication(
+        MutableStateFlow(AuthState.SignedIn(accountId, null)),
+        MutableStateFlow(shopContext(accountId, shopId))
+    )
+
+    private fun scopedImageApplication(
+        authState: MutableStateFlow<AuthState>,
+        shopState: MutableStateFlow<ShopContext>
+    ): MerchandiseControlApplication {
+        val authManager = mockk<SupabaseAuthManager>()
+        val shopContextRepository = mockk<ShopContextRepository>()
+        val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
+        every { authManager.state } returns authState
+        every { shopContextRepository.state } returns shopState
+        every { scopedApp.applicationContext } returns app
+        every { scopedApp.authManager } returns authManager
+        every { scopedApp.shopContextRepository } returns shopContextRepository
+        return scopedApp
+    }
 
     private suspend fun preparePreview(): Long {
         coEvery { repository.getAllProducts() } returns emptyList()

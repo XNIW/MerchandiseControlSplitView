@@ -43,6 +43,7 @@ import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
+import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorSaveResult
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -115,7 +116,7 @@ fun ImportAnalysisScreen(
             onDismiss = { itemToEdit = null },
             onSave = { updatedProduct ->
                 editableNewProducts[index] = updatedProduct
-                itemToEdit = null
+                ProductEditorSaveResult.Saved()
             }
         )
     }
@@ -130,7 +131,7 @@ fun ImportAnalysisScreen(
             onDismiss = { updateToEdit = null },
             onSave = { updatedProduct ->
                 editableUpdatedProducts[index] = productUpdate.copy(newProduct = updatedProduct)
-                updateToEdit = null
+                ProductEditorSaveResult.Saved()
             }
         )
     }

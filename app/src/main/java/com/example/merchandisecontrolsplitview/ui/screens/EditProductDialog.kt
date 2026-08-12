@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.HorizontalDivider
@@ -44,7 +46,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -52,6 +53,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -64,6 +66,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -100,36 +104,62 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
+import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorSaveResult
+import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorOperationState
+import com.example.merchandisecontrolsplitview.viewmodel.StagedProductImageState
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal enum class QuickCreateStatus {
+    IDLE,
+    SAVING,
+    SUCCESS,
+    ERROR
+}
+
+internal data class QuickCreateUiState(
+    val status: QuickCreateStatus = QuickCreateStatus.IDLE,
+    val errorMessage: String? = null
+)
 
 @Composable
 internal fun EditProductDialog(
     product: Product,
+    sessionId: Long = product.id,
     viewModel: DatabaseViewModel,
     onResolveSupplierId: suspend (String) -> Long? = { name -> viewModel.addSupplier(name)?.id },
     onResolveCategoryId: suspend (String) -> Long? = { name -> viewModel.addCategory(name)?.id },
     enablePriceHistory: Boolean = false,
     onDismiss: () -> Unit,
-    onSave: (Product) -> Unit
+    onSave: suspend (Product) -> ProductEditorSaveResult
 ) {
-    var barcode by remember { mutableStateOf(product.barcode) }
-    var productName by remember { mutableStateOf(product.productName ?: "") }
-    var secondProductName by remember { mutableStateOf(product.secondProductName ?: "") }
-    var itemNumber by remember { mutableStateOf(product.itemNumber ?: "") }
-    var purchasePrice by remember { mutableStateOf(formatClPriceInput(product.purchasePrice)) }
-    var retailPrice by remember { mutableStateOf(formatClPriceInput(product.retailPrice)) }
-    var stockQuantity by remember { mutableStateOf(formatClQuantityInput(product.stockQuantity)) }
+    var barcode by rememberSaveable(sessionId) { mutableStateOf(product.barcode) }
+    var productName by rememberSaveable(sessionId) { mutableStateOf(product.productName ?: "") }
+    var secondProductName by rememberSaveable(sessionId) { mutableStateOf(product.secondProductName ?: "") }
+    var itemNumber by rememberSaveable(sessionId) { mutableStateOf(product.itemNumber ?: "") }
+    var purchasePrice by rememberSaveable(sessionId) { mutableStateOf(formatClPriceInput(product.purchasePrice)) }
+    var retailPrice by rememberSaveable(sessionId) { mutableStateOf(formatClPriceInput(product.retailPrice)) }
+    var stockQuantity by rememberSaveable(sessionId) { mutableStateOf(formatClQuantityInput(product.stockQuantity)) }
 
-    var barcodeError by remember { mutableStateOf<String?>(null) }
-    var productNameError by remember { mutableStateOf<String?>(null) }
-    var purchasePriceError by remember { mutableStateOf<String?>(null) }
-    var retailPriceError by remember { mutableStateOf<String?>(null) }
-    var stockQuantityError by remember { mutableStateOf<String?>(null) }
+    var barcodeError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    var productNameError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    var purchasePriceError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    var retailPriceError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    var stockQuantityError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    val editorOperation by viewModel.productEditorOperationState.collectAsState()
+    val stagedImageState by viewModel.stagedProductImageState.collectAsState()
+    val isSaving = editorOperation == ProductEditorOperationState.Saving
+    val saveError = (editorOperation as? ProductEditorOperationState.Failed)?.message
+    var supplierQuickCreateState by remember(product.id) { mutableStateOf(QuickCreateUiState()) }
+    var categoryQuickCreateState by remember(product.id) { mutableStateOf(QuickCreateUiState()) }
+    val supplierQuickCreateInFlight = remember(product.id) { AtomicBoolean(false) }
+    val categoryQuickCreateInFlight = remember(product.id) { AtomicBoolean(false) }
     val barcodeRequiredErrorText = stringResource(id = R.string.error_barcode_required)
     val productNameRequiredAtLeastOneErrorText = stringResource(id = R.string.error_productname_required_at_least_one)
     val purchasePriceInvalidErrorText = stringResource(id = R.string.error_invalid_purchase_price)
@@ -137,6 +167,8 @@ internal fun EditProductDialog(
     val retailPriceErrorText = stringResource(id = R.string.error_invalid_or_missing_retail_price)
     val quantityInvalidErrorText = stringResource(id = R.string.error_invalid_quantity)
     val negativeQuantityErrorText = stringResource(id = R.string.error_negative_quantity)
+    val supplierQuickCreateFailedText = stringResource(id = R.string.quick_create_supplier_failed)
+    val categoryQuickCreateFailedText = stringResource(id = R.string.quick_create_category_failed)
 
     fun purchasePriceValidationMessage(value: String): String? =
         when (validateOptionalUserPriceInput(value).status) {
@@ -154,8 +186,8 @@ internal fun EditProductDialog(
             OptionalNumericInputStatus.VALID -> null
         }
 
-    var showSecondNameField by remember(product) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
-    var showItemNumberField by remember(product) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
+    var showSecondNameField by rememberSaveable(sessionId) { mutableStateOf(!product.secondProductName.isNullOrBlank()) }
+    var showItemNumberField by rememberSaveable(sessionId) { mutableStateOf(!product.itemNumber.isNullOrBlank()) }
 
     val purchaseSeries by viewModel.getPriceSeries(product.id, "PURCHASE").collectAsState(emptyList())
     val retailSeries by viewModel.getPriceSeries(product.id, "RETAIL").collectAsState(emptyList())
@@ -164,11 +196,11 @@ internal fun EditProductDialog(
     val prevPurchase = purchaseSeries.getOrNull(1)?.price
     val lastRetail = retailSeries.getOrNull(0)?.price
     val prevRetail = retailSeries.getOrNull(1)?.price
-    var showPriceHistorySheet by remember { mutableStateOf(false) }
+    var showPriceHistorySheet by rememberSaveable(sessionId) { mutableStateOf(false) }
     val retailFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
-    var askedKeyboard by remember { mutableStateOf(false) }
+    var askedKeyboard by rememberSaveable(sessionId) { mutableStateOf(false) }
     val productImageStates by viewModel.productImageStates.collectAsState()
     val mainImageState = productImageStates[
         ProductImageUiKey(product.id, ProductImageVariant.MAIN)
@@ -182,32 +214,64 @@ internal fun EditProductDialog(
     } else {
         product.primaryImageVersionId
     }
-    var pendingCaptureFile by remember { mutableStateOf<File?>(null) }
-    var pendingCaptureUri by remember { mutableStateOf<android.net.Uri?>(null) }
-    val captureFiles = remember(product.id) { ProductImageCaptureFileTracker() }
-    var confirmImageRemoval by remember { mutableStateOf(false) }
+    val stagedPreviewState = when (val staged = stagedImageState) {
+        StagedProductImageState.Empty -> null
+        StagedProductImageState.Preparing -> ProductImageUiState(
+            status = ProductImageUiStatus.UPLOADING,
+            mutationPhase = ProductImageMutationPhase.PREPROCESSING
+        )
+        is StagedProductImageState.Ready -> ProductImageUiState(
+            status = ProductImageUiStatus.READY,
+            bytes = staged.previewBytes
+        )
+        is StagedProductImageState.Failed -> ProductImageUiState(
+            status = ProductImageUiStatus.ERROR,
+            errorCode = "image_decode_failed"
+        )
+    }
+    val displayedMainImageState = if (product.id == 0L) stagedPreviewState else mainImageState
+    val displayedPreviewState = productImagePreviewState(displayedMainImageState, thumbImageState)
+    val imageMutationBusy = productImageMutationBusy(displayedMainImageState, thumbImageState)
+    var pendingCapturePath by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
+    var confirmImageRemoval by rememberSaveable(sessionId) { mutableStateOf(false) }
+    var showImagePreview by rememberSaveable(sessionId) { mutableStateOf(false) }
     var hasSyncedRemoteRef by remember(product.id) { mutableStateOf<Boolean?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null && product.id != 0L) {
-            viewModel.uploadProductImage(product.id, uri)
+        if (uri != null) {
+            if (product.id == 0L) {
+                viewModel.stageNewProductImage(uri)
+            } else {
+                viewModel.uploadProductImage(product.id, uri)
+            }
         }
     }
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { captured ->
-        val file = pendingCaptureFile
-        val uri = pendingCaptureUri
-        pendingCaptureFile = null
-        pendingCaptureUri = null
-        if (captured && uri != null && product.id != 0L) {
-            viewModel.uploadProductImage(product.id, uri) {
-                captureFiles.release(file)
+        val file = pendingCapturePath?.let(::File)
+        val uri = file?.takeIf(File::isFile)?.let { captureFile ->
+            runCatching {
+                FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    captureFile
+                )
+            }.getOrNull()
+        }
+        pendingCapturePath = null
+        if (captured && uri != null) {
+            if (product.id == 0L) {
+                viewModel.stageNewProductImage(uri) { file.delete() }
+            } else {
+                viewModel.uploadProductImage(product.id, uri) {
+                    file.delete()
+                }
             }
         } else {
-            captureFiles.release(file)
+            file?.delete()
         }
     }
 
@@ -228,19 +292,14 @@ internal fun EditProductDialog(
             )
         }
     }
-    DisposableEffect(product.id) {
-        onDispose {
-            if (product.id != 0L) {
-                viewModel.closeProductImageEditor(product.id)
-            }
-            captureFiles.cleanup()
-        }
-    }
-
     fun launchProductCamera() {
-        if (product.id == 0L) return
         val directory = File(context.cacheDir, "product-image-capture")
         if (!directory.exists() && !directory.mkdirs()) return
+        directory.listFiles()
+            ?.filter { file ->
+                file.isFile && System.currentTimeMillis() - file.lastModified() > 86_400_000L
+            }
+            ?.forEach(File::delete)
         val file = runCatching {
             File.createTempFile("product-", ".jpg", directory)
         }.getOrNull() ?: return
@@ -254,13 +313,11 @@ internal fun EditProductDialog(
             file.delete()
             return
         }
-        captureFiles.track(file)
-        pendingCaptureFile = file
-        pendingCaptureUri = uri
+        pendingCapturePath = file.absolutePath
         cameraLauncher.launch(uri)
     }
 
-    var retailPriceTf by remember(product) {
+    var retailPriceTf by rememberSaveable(sessionId, stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(retailPrice, TextRange(retailPrice.length)))
     }
 
@@ -301,10 +358,10 @@ internal fun EditProductDialog(
         }
     }
 
-    var supplierId by remember { mutableStateOf(product.supplierId) }
+    var supplierId by rememberSaveable(sessionId) { mutableStateOf(product.supplierId) }
     val noSupplierText = stringResource(R.string.no_supplier)
-    var supplierName by remember { mutableStateOf(noSupplierText) }
-    var showSupplierSelectionDialog by remember { mutableStateOf(false) }
+    var supplierName by rememberSaveable(sessionId) { mutableStateOf(noSupplierText) }
+    var showSupplierSelectionDialog by rememberSaveable(sessionId) { mutableStateOf(false) }
     val supplierIdPrefix = stringResource(id = R.string.supplier_id_prefix)
     val scanPromptText = stringResource(R.string.scan_prompt)
     LaunchedEffect(supplierId) {
@@ -315,10 +372,10 @@ internal fun EditProductDialog(
         }
     }
 
-    var categoryId by remember { mutableStateOf(product.categoryId) }
+    var categoryId by rememberSaveable(sessionId) { mutableStateOf(product.categoryId) }
     val noCategoryText = stringResource(R.string.no_category)
-    var categoryName by remember { mutableStateOf(noCategoryText) }
-    var showCategorySelectionDialog by remember { mutableStateOf(false) }
+    var categoryName by rememberSaveable(sessionId) { mutableStateOf(noCategoryText) }
+    var showCategorySelectionDialog by rememberSaveable(sessionId) { mutableStateOf(false) }
     val categoryIdPrefix = stringResource(id = R.string.category_id_prefix)
     LaunchedEffect(categoryId) {
         categoryName = if (categoryId != null) {
@@ -328,40 +385,12 @@ internal fun EditProductDialog(
         }
     }
 
-    LaunchedEffect(
-        product.id,
-        product.barcode,
-        product.productName,
-        product.secondProductName,
-        product.itemNumber,
-        product.purchasePrice,
-        product.retailPrice,
-        product.stockQuantity,
-        product.supplierId,
-        product.categoryId
-    ) {
-        barcode = product.barcode
-        productName = product.productName ?: ""
-        secondProductName = product.secondProductName ?: ""
-        itemNumber = product.itemNumber ?: ""
-        purchasePrice = formatClPriceInput(product.purchasePrice)
-        val formattedRetailPrice = formatClPriceInput(product.retailPrice)
-        retailPrice = formattedRetailPrice
-        retailPriceTf = TextFieldValue(
-            formattedRetailPrice,
-            TextRange(formattedRetailPrice.length)
-        )
-        stockQuantity = formatClQuantityInput(product.stockQuantity)
-        supplierId = product.supplierId
-        categoryId = product.categoryId
-        showSecondNameField = !product.secondProductName.isNullOrBlank()
-        showItemNumberField = !product.itemNumber.isNullOrBlank()
-        barcodeError = null
-        productNameError = null
-        purchasePriceError = null
-        retailPriceError = null
-        stockQuantityError = null
-        askedKeyboard = false
+    LaunchedEffect(editorOperation) {
+        if (editorOperation == ProductEditorOperationState.Saved) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+            onDismiss()
+        }
     }
 
     LaunchedEffect(product.id) {
@@ -386,25 +415,52 @@ internal fun EditProductDialog(
     if (showSupplierSelectionDialog) {
         SupplierSelectionDialog(
             viewModel = viewModel,
-            onDismiss = { showSupplierSelectionDialog = false },
+            quickCreateState = supplierQuickCreateState,
+            onDismiss = {
+                if (supplierQuickCreateState.status != QuickCreateStatus.SAVING) {
+                    showSupplierSelectionDialog = false
+                }
+            },
             onSupplierSelected = { selectedSupplier ->
+                if (supplierQuickCreateState.status == QuickCreateStatus.SAVING) {
+                    return@SupplierSelectionDialog
+                }
                 supplierId = selectedSupplier.id
                 showSupplierSelectionDialog = false
             },
             onAddNewSupplier = { name ->
+                if (!supplierQuickCreateInFlight.compareAndSet(false, true)) {
+                    return@SupplierSelectionDialog
+                }
+                supplierQuickCreateState = QuickCreateUiState(QuickCreateStatus.SAVING)
                 scope.launch {
-                    val canonicalName = runCatching {
-                        CatalogTextCanonicalizer.supplierName(name)
-                    }.getOrElse { throwable ->
-                        val rejection = (throwable as? CatalogTextValidationException)?.rejection
-                        if (rejection != null) {
-                            productNameError = context.catalogTextErrorMessage(rejection)
+                    try {
+                        val canonicalName = CatalogTextCanonicalizer.supplierName(name)
+                        val resolvedId = onResolveSupplierId(canonicalName)
+                        if (resolvedId == null) {
+                            supplierQuickCreateState = QuickCreateUiState(
+                                QuickCreateStatus.ERROR,
+                                supplierQuickCreateFailedText
+                            )
+                        } else {
+                            supplierQuickCreateState = QuickCreateUiState(QuickCreateStatus.SUCCESS)
+                            supplierId = resolvedId
+                            showSupplierSelectionDialog = false
                         }
-                        return@launch
-                    }
-                    onResolveSupplierId(canonicalName)?.let {
-                        supplierId = it
-                        showSupplierSelectionDialog = false
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (throwable: CatalogTextValidationException) {
+                        supplierQuickCreateState = QuickCreateUiState(
+                            QuickCreateStatus.ERROR,
+                            context.catalogTextErrorMessage(throwable.rejection)
+                        )
+                    } catch (_: Exception) {
+                        supplierQuickCreateState = QuickCreateUiState(
+                            QuickCreateStatus.ERROR,
+                            supplierQuickCreateFailedText
+                        )
+                    } finally {
+                        supplierQuickCreateInFlight.set(false)
                     }
                 }
             }
@@ -414,25 +470,52 @@ internal fun EditProductDialog(
     if (showCategorySelectionDialog) {
         CategorySelectionDialog(
             viewModel = viewModel,
-            onDismiss = { showCategorySelectionDialog = false },
+            quickCreateState = categoryQuickCreateState,
+            onDismiss = {
+                if (categoryQuickCreateState.status != QuickCreateStatus.SAVING) {
+                    showCategorySelectionDialog = false
+                }
+            },
             onCategorySelected = { selectedCategory ->
+                if (categoryQuickCreateState.status == QuickCreateStatus.SAVING) {
+                    return@CategorySelectionDialog
+                }
                 categoryId = selectedCategory.id
                 showCategorySelectionDialog = false
             },
             onAddNewCategory = { name ->
+                if (!categoryQuickCreateInFlight.compareAndSet(false, true)) {
+                    return@CategorySelectionDialog
+                }
+                categoryQuickCreateState = QuickCreateUiState(QuickCreateStatus.SAVING)
                 scope.launch {
-                    val canonicalName = runCatching {
-                        CatalogTextCanonicalizer.categoryName(name)
-                    }.getOrElse { throwable ->
-                        val rejection = (throwable as? CatalogTextValidationException)?.rejection
-                        if (rejection != null) {
-                            productNameError = context.catalogTextErrorMessage(rejection)
+                    try {
+                        val canonicalName = CatalogTextCanonicalizer.categoryName(name)
+                        val resolvedId = onResolveCategoryId(canonicalName)
+                        if (resolvedId == null) {
+                            categoryQuickCreateState = QuickCreateUiState(
+                                QuickCreateStatus.ERROR,
+                                categoryQuickCreateFailedText
+                            )
+                        } else {
+                            categoryQuickCreateState = QuickCreateUiState(QuickCreateStatus.SUCCESS)
+                            categoryId = resolvedId
+                            showCategorySelectionDialog = false
                         }
-                        return@launch
-                    }
-                    onResolveCategoryId(canonicalName)?.let {
-                        categoryId = it
-                        showCategorySelectionDialog = false
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (throwable: CatalogTextValidationException) {
+                        categoryQuickCreateState = QuickCreateUiState(
+                            QuickCreateStatus.ERROR,
+                            context.catalogTextErrorMessage(throwable.rejection)
+                        )
+                    } catch (_: Exception) {
+                        categoryQuickCreateState = QuickCreateUiState(
+                            QuickCreateStatus.ERROR,
+                            categoryQuickCreateFailedText
+                        )
+                    } finally {
+                        categoryQuickCreateInFlight.set(false)
                     }
                 }
             }
@@ -440,7 +523,11 @@ internal fun EditProductDialog(
     }
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (!isSaving && !imageMutationBusy) {
+                onDismiss()
+            }
+        },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Box(
@@ -474,36 +561,70 @@ internal fun EditProductDialog(
                     ) {
                     ProductImageEditorSection(
                         product = product,
-                        mainState = mainImageState,
+                        mainState = displayedMainImageState,
                         thumbState = thumbImageState,
                         apiConfigured = viewModel.productImagesConfigured(),
                         canManage = viewModel.canManageProductImages(),
                         hasSyncedRemoteRef = hasSyncedRemoteRef == true,
                         currentImageVersionId = effectiveImageVersionId,
                         onChoosePhoto = {
-                            viewModel.discardFailedProductImageOperation(product.id)
+                            if (product.id == 0L) {
+                                viewModel.discardStagedProductImage()
+                            } else if (viewModel.hasPendingStagedProductImage(product.id)) {
+                                viewModel.discardPendingStagedProductImage(product.id)
+                            } else {
+                                viewModel.discardFailedProductImageOperation(product.id)
+                            }
                             photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                             )
                         },
                         onTakePhoto = {
-                            viewModel.discardFailedProductImageOperation(product.id)
+                            if (product.id == 0L) {
+                                viewModel.discardStagedProductImage()
+                            } else if (viewModel.hasPendingStagedProductImage(product.id)) {
+                                viewModel.discardPendingStagedProductImage(product.id)
+                            } else {
+                                viewModel.discardFailedProductImageOperation(product.id)
+                            }
                             launchProductCamera()
                         },
                         onRetry = {
-                            viewModel.loadProductImageProgressively(
-                                productId = product.id,
-                                expectedVersionId = effectiveImageVersionId,
-                                force = true
-                            )
+                            if (product.id == 0L) {
+                                viewModel.discardStagedProductImage()
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            } else if (viewModel.hasPendingStagedProductImage(product.id)) {
+                                viewModel.retryPendingStagedProductImage(product.id)
+                            } else if (product.id != 0L) {
+                                viewModel.loadProductImageProgressively(
+                                    productId = product.id,
+                                    expectedVersionId = effectiveImageVersionId,
+                                    force = true
+                                )
+                            }
                         },
                         onCancelOperation = {
                             viewModel.cancelProductImageOperation(product.id)
                         },
                         onDiscardFailure = {
-                            viewModel.discardFailedProductImageOperation(product.id)
+                            if (product.id == 0L) {
+                                viewModel.discardStagedProductImage()
+                            } else if (viewModel.hasPendingStagedProductImage(product.id)) {
+                                viewModel.discardPendingStagedProductImage(product.id)
+                            } else {
+                                viewModel.discardFailedProductImageOperation(product.id)
+                            }
                         },
-                        onRemove = { confirmImageRemoval = true }
+                        onRemove = {
+                            if (product.id == 0L) {
+                                viewModel.discardStagedProductImage()
+                            } else {
+                                confirmImageRemoval = true
+                            }
+                        },
+                        onOpenPreview = { showImagePreview = true }
                     )
 
                     OutlinedTextField(
@@ -532,7 +653,16 @@ internal fun EditProductDialog(
                         }
                     )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = productName, onValueChange = { productName = it; validate() }, label = { Text(stringResource(R.string.product_name_label)) }, modifier = Modifier.fillMaxWidth(), isError = productNameError != null, supportingText = { productNameError?.let { Text(it) } })
+                    OutlinedTextField(
+                        value = productName,
+                        onValueChange = { productName = it; validate() },
+                        label = { Text(stringResource(R.string.product_name_label)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("product-editor-name"),
+                        isError = productNameError != null,
+                        supportingText = { productNameError?.let { Text(it) } }
+                    )
                     if (showSecondNameField) {
                         OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it; validate() }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
                     } else {
@@ -585,6 +715,7 @@ internal fun EditProductDialog(
                         label = { CompactFieldLabel(R.string.retail_price_label) },
                         modifier = Modifier
                             .weight(1f)
+                            .testTag("product-editor-retail-price")
                             .focusRequester(retailFocusRequester)
                             .onFocusChanged { state ->
                                 if (state.isFocused && !askedKeyboard) {
@@ -694,16 +825,28 @@ internal fun EditProductDialog(
                     value = supplierName,
                     labelRes = R.string.supplier_label,
                     contentDescriptionRes = R.string.select_supplier,
-                    onClick = { showSupplierSelectionDialog = true },
-                    modifier = Modifier.fillMaxWidth()
+                    onClick = {
+                        supplierQuickCreateState = QuickCreateUiState()
+                        supplierQuickCreateInFlight.set(false)
+                        showSupplierSelectionDialog = true
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("product-editor-supplier-selector")
                 )
 
                 SelectionTextField(
                     value = categoryName,
                     labelRes = R.string.category_label,
                     contentDescriptionRes = R.string.select_category,
-                    onClick = { showCategorySelectionDialog = true },
-                    modifier = Modifier.fillMaxWidth()
+                    onClick = {
+                        categoryQuickCreateState = QuickCreateUiState()
+                        categoryQuickCreateInFlight.set(false)
+                        showCategorySelectionDialog = true
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("product-editor-category-selector")
                 )
                     }
 
@@ -721,14 +864,32 @@ internal fun EditProductDialog(
                 }
 
                 HorizontalDivider()
+                saveError?.let { message ->
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("product-editor-save-error")
+                            .semantics {
+                                error(message)
+                                liveRegion = LiveRegionMode.Polite
+                            }
+                    )
+                }
                 Row(modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 2.dp), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                    TextButton(
+                        enabled = !isSaving && !imageMutationBusy,
+                        onClick = onDismiss
+                    ) { Text(stringResource(R.string.cancel)) }
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = {
-                        focusManager.clearFocus()
-                        keyboardController?.hide()
+                    Button(
+                        enabled = !isSaving && !imageMutationBusy,
+                        modifier = Modifier.testTag("product-editor-save"),
+                        onClick = {
                         if (validate()) {
                             val productToSave = runCatching {
                                 CatalogTextCanonicalizer.product(
@@ -757,9 +918,21 @@ internal fun EditProductDialog(
                                 }
                                 return@Button
                             }
-                            onSave(productToSave)
+                            viewModel.resetProductEditorOperation()
+                            viewModel.startProductEditorSave(productToSave, onSave)
                         }
-                    }) { Text(stringResource(R.string.save)) }
+                    }) {
+                        if (isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.product_editor_saving))
+                        } else {
+                            Text(stringResource(R.string.save))
+                        }
+                    }
                 }
                 }
             }
@@ -814,6 +987,20 @@ internal fun EditProductDialog(
                     }
                 )
             }
+            if (showImagePreview) {
+                ProductImageFullscreenDialog(
+                    state = displayedPreviewState,
+                    contentDescription = stringResource(R.string.product_image_main),
+                    onDismiss = { showImagePreview = false },
+                    onRetry = if (product.id == 0L) null else ({
+                        viewModel.loadProductImageProgressively(
+                            productId = product.id,
+                            expectedVersionId = effectiveImageVersionId,
+                            force = true
+                        )
+                    })
+                )
+            }
     }
 }
 
@@ -831,45 +1018,20 @@ internal fun ProductImageEditorSection(
     onRetry: () -> Unit,
     onCancelOperation: () -> Unit,
     onDiscardFailure: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onOpenPreview: () -> Unit = {}
 ) {
     val mutationPhase = mainState?.mutationPhase ?: thumbState?.mutationPhase
-    val mutating = mainState?.status in setOf(
-        ProductImageUiStatus.UPLOADING,
-        ProductImageUiStatus.REMOVING
-    ) || thumbState?.status in setOf(
-        ProductImageUiStatus.UPLOADING,
-        ProductImageUiStatus.REMOVING
-    ) || mutationPhase == ProductImageMutationPhase.COMPLETED && (
-        mainState?.status == ProductImageUiStatus.LOADING ||
-            thumbState?.status == ProductImageUiStatus.LOADING
-    )
+    val mutating = productImageMutationBusy(mainState, thumbState)
     val hasFailure = mainState?.status == ProductImageUiStatus.ERROR ||
         thumbState?.status == ProductImageUiStatus.ERROR
-    val hasImage = currentImageVersionId != null
     val cancellable = mutationPhase in setOf(
         ProductImageMutationPhase.PREPROCESSING,
         ProductImageMutationPhase.UPLOAD_MAIN,
         ProductImageMutationPhase.UPLOAD_THUMB
     )
-    val previewState = when {
-        mainState?.pendingPreviewBytes != null -> mainState.copy(
-            bytes = mainState.pendingPreviewBytes
-        )
-        thumbState?.pendingPreviewBytes != null -> thumbState.copy(
-            bytes = thumbState.pendingPreviewBytes,
-            status = mainState?.status ?: thumbState.status,
-            errorCode = mainState?.errorCode,
-            mutationPhase = mutationPhase
-        )
-        mainState?.bytes != null -> mainState
-        thumbState?.bytes != null -> thumbState.copy(
-            status = mainState?.status ?: thumbState.status,
-            errorCode = mainState?.errorCode,
-            mutationPhase = mutationPhase
-        )
-        else -> mainState ?: thumbState
-    }
+    val previewState = productImagePreviewState(mainState, thumbState)
+    val hasImage = currentImageVersionId != null || previewState?.bytes != null
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -887,9 +1049,19 @@ internal fun ProductImageEditorSection(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(190.dp)
+                    .clickable(
+                        enabled = previewState?.bytes != null,
+                        onClick = onOpenPreview
+                    )
             )
             when {
-                product.id == 0L || !hasSyncedRemoteRef -> Text(
+                product.id == 0L -> Text(
+                    text = stringResource(R.string.product_image_staged_before_save),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                !hasSyncedRemoteRef -> Text(
                     text = stringResource(R.string.product_image_save_first),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -949,7 +1121,8 @@ internal fun ProductImageEditorSection(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Button(
-                    enabled = hasSyncedRemoteRef && canManage && !mutating,
+                    enabled = (product.id == 0L || hasSyncedRemoteRef) &&
+                        apiConfigured && canManage && !mutating,
                     onClick = onTakePhoto,
                     modifier = Modifier.weight(1f)
                 ) {
@@ -965,7 +1138,8 @@ internal fun ProductImageEditorSection(
                     )
                 }
                 TextButton(
-                    enabled = hasSyncedRemoteRef && canManage && !mutating,
+                    enabled = (product.id == 0L || hasSyncedRemoteRef) &&
+                        apiConfigured && canManage && !mutating,
                     onClick = onChoosePhoto,
                     modifier = Modifier.weight(1f)
                 ) {
@@ -980,7 +1154,8 @@ internal fun ProductImageEditorSection(
             }
             if (hasImage) {
                 TextButton(
-                    enabled = hasSyncedRemoteRef && canManage && !mutating,
+                    enabled = (product.id == 0L || hasSyncedRemoteRef) &&
+                        canManage && !mutating,
                     onClick = onRemove,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -997,6 +1172,48 @@ internal fun ProductImageEditorSection(
                 }
             }
         }
+    }
+}
+
+internal fun productImageMutationBusy(
+    mainState: ProductImageUiState?,
+    thumbState: ProductImageUiState?
+): Boolean {
+    val phase = mainState?.mutationPhase ?: thumbState?.mutationPhase
+    return mainState?.status in setOf(
+        ProductImageUiStatus.UPLOADING,
+        ProductImageUiStatus.REMOVING
+    ) || thumbState?.status in setOf(
+        ProductImageUiStatus.UPLOADING,
+        ProductImageUiStatus.REMOVING
+    ) || phase == ProductImageMutationPhase.COMPLETED && (
+        mainState?.status == ProductImageUiStatus.LOADING ||
+            thumbState?.status == ProductImageUiStatus.LOADING
+    )
+}
+
+internal fun productImagePreviewState(
+    mainState: ProductImageUiState?,
+    thumbState: ProductImageUiState?
+): ProductImageUiState? {
+    val phase = mainState?.mutationPhase ?: thumbState?.mutationPhase
+    return when {
+        mainState?.pendingPreviewBytes != null -> mainState.copy(
+            bytes = mainState.pendingPreviewBytes
+        )
+        thumbState?.pendingPreviewBytes != null -> thumbState.copy(
+            bytes = thumbState.pendingPreviewBytes,
+            status = mainState?.status ?: thumbState.status,
+            errorCode = mainState?.errorCode,
+            mutationPhase = phase
+        )
+        mainState?.bytes != null -> mainState
+        thumbState?.bytes != null -> thumbState.copy(
+            status = mainState?.status ?: thumbState.status,
+            errorCode = mainState?.errorCode,
+            mutationPhase = phase
+        )
+        else -> mainState ?: thumbState
     }
 }
 
@@ -1083,6 +1300,7 @@ private fun SelectionTextField(
 @Composable
 private fun SupplierSelectionDialog(
     viewModel: DatabaseViewModel,
+    quickCreateState: QuickCreateUiState,
     onDismiss: () -> Unit,
     onSupplierSelected: (Supplier) -> Unit,
     onAddNewSupplier: (String) -> Unit
@@ -1091,9 +1309,14 @@ private fun SupplierSelectionDialog(
     var searchText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) { viewModel.onSupplierSearchQueryChanged("") }
+    val quickCreateBusy = quickCreateState.status == QuickCreateStatus.SAVING
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (!quickCreateBusy) {
+                onDismiss()
+            }
+        },
         title = { Text(stringResource(R.string.select_supplier_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1102,6 +1325,7 @@ private fun SupplierSelectionDialog(
                     onValueChange = { searchText = it; viewModel.onSupplierSearchQueryChanged(it) },
                     label = { Text(stringResource(R.string.search_or_add_supplier)) },
                     modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    enabled = !quickCreateBusy,
                     trailingIcon = {
                         if (searchText.isNotBlank()) {
                             IconButton(onClick = { searchText = ""; viewModel.onSupplierSearchQueryChanged("") }) {
@@ -1119,28 +1343,80 @@ private fun SupplierSelectionDialog(
                     items(suppliers) { supplier ->
                         SelectionDialogRow(
                             text = supplier.name,
-                            onClick = { onSupplierSelected(supplier) }
+                            onClick = { onSupplierSelected(supplier) },
+                            enabled = !quickCreateBusy
                         )
                     }
                     if (suppliers.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
                         item {
                             SelectionDialogRow(
-                                text = stringResource(R.string.add_new_supplier_prompt, searchText),
+                                text = when (quickCreateState.status) {
+                                    QuickCreateStatus.SAVING -> stringResource(
+                                        R.string.quick_create_supplier_saving,
+                                        searchText
+                                    )
+                                    QuickCreateStatus.ERROR -> stringResource(
+                                        R.string.quick_create_supplier_retry,
+                                        searchText
+                                    )
+                                    QuickCreateStatus.IDLE,
+                                    QuickCreateStatus.SUCCESS -> stringResource(
+                                        R.string.add_new_supplier_prompt,
+                                        searchText
+                                    )
+                                },
                                 onClick = { onAddNewSupplier(searchText) },
-                                highlighted = true
+                                highlighted = true,
+                                enabled = !quickCreateBusy
                             )
                         }
                     }
                 }
+                if (quickCreateBusy) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("supplier-quick-create-saving")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(stringResource(R.string.quick_create_in_progress))
+                    }
+                }
+                quickCreateState.errorMessage?.let { message ->
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("supplier-quick-create-error")
+                            .semantics {
+                                error(message)
+                                liveRegion = LiveRegionMode.Polite
+                            }
+                    )
+                }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } }
+        confirmButton = {
+            TextButton(
+                enabled = !quickCreateBusy,
+                onClick = onDismiss
+            ) { Text(stringResource(R.string.close)) }
+        }
     )
 }
 
 @Composable
 private fun CategorySelectionDialog(
     viewModel: DatabaseViewModel,
+    quickCreateState: QuickCreateUiState,
     onDismiss: () -> Unit,
     onCategorySelected: (Category) -> Unit,
     onAddNewCategory: (String) -> Unit
@@ -1151,9 +1427,14 @@ private fun CategorySelectionDialog(
     LaunchedEffect(Unit) {
         viewModel.onCategorySearchQueryChanged("")
     }
+    val quickCreateBusy = quickCreateState.status == QuickCreateStatus.SAVING
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (!quickCreateBusy) {
+                onDismiss()
+            }
+        },
         title = { Text(stringResource(R.string.select_category_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -1166,6 +1447,7 @@ private fun CategorySelectionDialog(
                     label = { Text(stringResource(R.string.search_or_add_category)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    enabled = !quickCreateBusy,
                     trailingIcon = {
                         if (searchText.isNotBlank()) {
                             IconButton(onClick = {
@@ -1189,24 +1471,73 @@ private fun CategorySelectionDialog(
                     items(categories) { category ->
                         SelectionDialogRow(
                             text = category.name,
-                            onClick = { onCategorySelected(category) }
+                            onClick = { onCategorySelected(category) },
+                            enabled = !quickCreateBusy
                         )
                     }
 
                     if (categories.none { it.name.equals(searchText, ignoreCase = true) } && searchText.isNotBlank()) {
                         item {
                             SelectionDialogRow(
-                                text = stringResource(R.string.add_new_category_prompt, searchText),
+                                text = when (quickCreateState.status) {
+                                    QuickCreateStatus.SAVING -> stringResource(
+                                        R.string.quick_create_category_saving,
+                                        searchText
+                                    )
+                                    QuickCreateStatus.ERROR -> stringResource(
+                                        R.string.quick_create_category_retry,
+                                        searchText
+                                    )
+                                    QuickCreateStatus.IDLE,
+                                    QuickCreateStatus.SUCCESS -> stringResource(
+                                        R.string.add_new_category_prompt,
+                                        searchText
+                                    )
+                                },
                                 onClick = { onAddNewCategory(searchText) },
-                                highlighted = true
+                                highlighted = true,
+                                enabled = !quickCreateBusy
                             )
                         }
                     }
                 }
+                if (quickCreateBusy) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("category-quick-create-saving")
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(stringResource(R.string.quick_create_in_progress))
+                    }
+                }
+                quickCreateState.errorMessage?.let { message ->
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("category-quick-create-error")
+                            .semantics {
+                                error(message)
+                                liveRegion = LiveRegionMode.Polite
+                            }
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                enabled = !quickCreateBusy,
+                onClick = onDismiss
+            ) {
                 Text(stringResource(R.string.close))
             }
         }
@@ -1217,7 +1548,8 @@ private fun CategorySelectionDialog(
 private fun SelectionDialogRow(
     text: String,
     onClick: () -> Unit,
-    highlighted: Boolean = false
+    highlighted: Boolean = false,
+    enabled: Boolean = true
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -1236,7 +1568,7 @@ private fun SelectionDialogRow(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
     ) {
         Text(
             text = text,
@@ -1246,7 +1578,7 @@ private fun SelectionDialogRow(
                 MaterialTheme.colorScheme.onSecondaryContainer
             } else {
                 MaterialTheme.colorScheme.onSurface
-            },
+            }.copy(alpha = if (enabled) 1f else 0.55f),
             fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

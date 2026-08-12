@@ -40,8 +40,12 @@ import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadRequ
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadResult
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
 import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
+import com.example.merchandisecontrolsplitview.productimage.ProductImageProcessor
+import com.example.merchandisecontrolsplitview.productimage.PreparedProductImage
+import com.example.merchandisecontrolsplitview.productimage.PendingStagedProductImageStore
 import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
+import com.example.merchandisecontrolsplitview.productimage.SharedPreferencesPendingStagedProductImageStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -52,12 +56,42 @@ import kotlinx.coroutines.sync.withLock
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.io.File
+import java.util.UUID
 
 sealed class UiState {
     data object Idle : UiState()
     data class Loading(val message: String? = null, val progress: Int? = null) : UiState()
     data class Success(val message: String) : UiState()
     data class Error(val message: String) : UiState()
+}
+
+sealed interface ProductEditorSaveResult {
+    data class Saved(val productId: Long? = null) : ProductEditorSaveResult
+    data class Failed(val message: String) : ProductEditorSaveResult
+}
+
+sealed interface ProductEditorOperationState {
+    data object Idle : ProductEditorOperationState
+    data object Saving : ProductEditorOperationState
+    data object Saved : ProductEditorOperationState
+    data class Failed(val message: String) : ProductEditorOperationState
+}
+
+sealed interface StagedProductImageState {
+    data object Empty : StagedProductImageState
+    data object Preparing : StagedProductImageState
+    data class Ready(
+        val fileUri: Uri,
+        val previewBytes: ByteArray
+    ) : StagedProductImageState
+    data class Failed(val message: String) : StagedProductImageState
+}
+
+sealed interface ScannedBarcodeLookupResult {
+    data class Resolved(val destination: Product?) : ScannedBarcodeLookupResult
+    data object StaleScope : ScannedBarcodeLookupResult
+    data object Failed : ScannedBarcodeLookupResult
 }
 
 sealed interface ImportFlowState {
@@ -174,6 +208,7 @@ private class ExportProgressTracker(
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 private const val PRODUCT_DETAILS_OVERRIDE_LIMIT = 100
+private const val PRODUCT_SEARCH_DEBOUNCE_MS = 250L
 private const val PRODUCT_IMAGE_VISIBLE_BATCH_WINDOW_MS = 16L
 private val PRICE_HISTORY_MANUAL_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -188,7 +223,15 @@ class DatabaseViewModel(
     app: Application,
     private val repository: InventoryRepository,
     private val productImageService: ProductImageService =
-        (app as MerchandiseControlApplication).productImageService
+        (app as MerchandiseControlApplication).productImageService,
+    private val stagedImagePreparer: suspend (Context, Uri) -> PreparedProductImage =
+        ProductImageProcessor()::prepare,
+    private val stagedImageWriter: suspend (Context, ByteArray) -> Uri =
+        ::writeStagedProductImage,
+    private val pendingStagedImageStore: PendingStagedProductImageStore =
+        SharedPreferencesPendingStagedProductImageStore(app),
+    private val canStageProductImages: () -> Boolean =
+        productImageService::canWriteNow
 ) : AndroidViewModel(app) {
     private val importMutex = Mutex()
     private val exportMutex = Mutex()
@@ -201,6 +244,18 @@ class DatabaseViewModel(
     val exportUiState: StateFlow<ExportUiState> = _exportUiState.asStateFlow()
     private val _selectedHubTab = MutableStateFlow(DatabaseHubTab.PRODUCTS)
     val selectedHubTab: StateFlow<DatabaseHubTab> = _selectedHubTab.asStateFlow()
+    private val _productEditorTarget = MutableStateFlow<Product?>(null)
+    val productEditorTarget: StateFlow<Product?> = _productEditorTarget.asStateFlow()
+    private val _productEditorSessionId = MutableStateFlow(0L)
+    val productEditorSessionId: StateFlow<Long> = _productEditorSessionId.asStateFlow()
+    private val _productEditorOperationState =
+        MutableStateFlow<ProductEditorOperationState>(ProductEditorOperationState.Idle)
+    val productEditorOperationState: StateFlow<ProductEditorOperationState> =
+        _productEditorOperationState.asStateFlow()
+    private val _stagedProductImageState =
+        MutableStateFlow<StagedProductImageState>(StagedProductImageState.Empty)
+    val stagedProductImageState: StateFlow<StagedProductImageState> =
+        _stagedProductImageState.asStateFlow()
 
     fun consumeUiState() { _uiState.value = UiState.Idle }
     private val _filter = MutableStateFlow<String?>(null)
@@ -212,6 +267,7 @@ class DatabaseViewModel(
     private val appContext = getApplication<Application>().applicationContext
     private val merchandiseApplication =
         getApplication<Application>() as MerchandiseControlApplication
+    private var currentProductImageScope = ProductImageOwnerShopScope("", null)
     private var productImageScopeGeneration = 0L
     private val _productImageScopeEpoch = MutableStateFlow(0L)
     val productImageScopeEpoch: StateFlow<Long> = _productImageScopeEpoch.asStateFlow()
@@ -223,6 +279,9 @@ class DatabaseViewModel(
     private val productImageMutationJobs = mutableMapOf<Long, Job>()
     private val failedProductImageRollbackStates =
         mutableMapOf<Long, Map<ProductImageUiKey, ProductImageUiState?>>()
+    private val pendingStagedProductImages = mutableMapOf<Long, Uri>()
+    private var stagedImagePreparationJob: Job? = null
+    private var productEditorSaveJob: Job? = null
     private val visibleThumbVersions = linkedMapOf<Long, String?>()
     private val pendingVisibleThumbs = linkedMapOf<Long, String?>()
     private var inFlightVisibleThumbProductIds = emptySet<Long>()
@@ -247,7 +306,18 @@ class DatabaseViewModel(
         refreshFlow = _categoryCatalogRefresh
     )
 
-    val pager = filter.flatMapLatest { filterStr ->
+    internal val appliedProductFilter: StateFlow<String?> = filter
+        .transformLatest { rawQuery ->
+            val normalized = rawQuery?.trim()?.takeIf(String::isNotEmpty)
+            if (normalized != null) {
+                delay(PRODUCT_SEARCH_DEBOUNCE_MS)
+            }
+            emit(normalized)
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val pager = appliedProductFilter.flatMapLatest { filterStr ->
         Pager(PagingConfig(pageSize = 20)) {
             repository.getProductsWithDetailsPaged(filterStr)
         }.flow.cachedIn(viewModelScope)
@@ -261,6 +331,187 @@ class DatabaseViewModel(
     fun canManageProductImages(): Boolean = productImageService.canWriteNow()
 
     fun productImagesConfigured(): Boolean = productImageService.isConfigured
+
+    fun openProductEditor(product: Product) {
+        if (productEditorSaveJob?.isActive == true) return
+        clearStagedProductImage(deleteFile = true)
+        _productEditorTarget.value = product
+        _productEditorSessionId.value += 1L
+        _productEditorOperationState.value = ProductEditorOperationState.Idle
+    }
+
+    fun dismissProductEditor() {
+        if (productEditorSaveJob?.isActive == true &&
+            _productEditorOperationState.value != ProductEditorOperationState.Saved
+        ) return
+        _productEditorTarget.value?.id?.takeIf { it > 0L }?.let(::closeProductImageEditor)
+        _productEditorTarget.value = null
+        _productEditorOperationState.value = ProductEditorOperationState.Idle
+        clearStagedProductImage(deleteFile = true)
+    }
+
+    fun stageNewProductImage(sourceUri: Uri, onFinished: () -> Unit = {}) {
+        if (_productEditorTarget.value?.id != 0L || !canStageProductImages()) {
+            onFinished()
+            return
+        }
+        stagedImagePreparationJob?.cancel()
+        clearStagedProductImage(deleteFile = true)
+        _stagedProductImageState.value = StagedProductImageState.Preparing
+        stagedImagePreparationJob = viewModelScope.launch {
+            try {
+                val prepared = stagedImagePreparer(appContext, sourceUri)
+                _stagedProductImageState.value = StagedProductImageState.Ready(
+                    fileUri = stagedImageWriter(appContext, prepared.main.bytes),
+                    previewBytes = prepared.main.bytes
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _stagedProductImageState.value = StagedProductImageState.Failed(
+                    appContext.getString(R.string.product_image_operation_failed)
+                )
+            } finally {
+                onFinished()
+            }
+        }
+    }
+
+    fun discardStagedProductImage() {
+        if (stagedImagePreparationJob?.isActive == true) {
+            stagedImagePreparationJob?.cancel()
+        }
+        clearStagedProductImage(deleteFile = true)
+    }
+
+    fun hasPendingStagedProductImage(productId: Long): Boolean =
+        pendingStagedProductImages.containsKey(productId)
+
+    fun retryPendingStagedProductImage(productId: Long) {
+        uploadPendingStagedProductImage(productId)
+    }
+
+    fun discardPendingStagedProductImage(productId: Long) {
+        pendingStagedProductImages.remove(productId)?.let { fileUri ->
+            pendingStagedImageStore.remove(fileUri)
+            deleteStagedImageFile(fileUri)
+        }
+        discardFailedProductImageOperation(productId)
+    }
+
+    fun startProductEditorSave(
+        product: Product,
+        save: suspend (Product) -> ProductEditorSaveResult = ::saveProductFromEditor
+    ) {
+        if (productEditorSaveJob?.isActive == true) return
+        val staged = if (product.id == 0L) {
+            _stagedProductImageState.value as? StagedProductImageState.Ready
+        } else {
+            null
+        }
+        val durableScope = resolveProductImageScope().also { currentProductImageScope = it }
+        if (staged != null && !pendingStagedImageStore.prepare(
+                fileUri = staged.fileUri,
+                barcode = product.barcode,
+                accountId = durableScope.accountId,
+                shopId = durableScope.shopId
+            )
+        ) {
+            _productEditorOperationState.value = ProductEditorOperationState.Failed(
+                appContext.getString(R.string.product_editor_save_failed)
+            )
+            return
+        }
+        _productEditorOperationState.value = ProductEditorOperationState.Saving
+        productEditorSaveJob = viewModelScope.launch {
+            val result = try {
+                save(product)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                ProductEditorSaveResult.Failed(
+                    appContext.getString(R.string.product_editor_save_failed)
+                )
+            }
+            when (result) {
+                is ProductEditorSaveResult.Saved -> {
+                    if (staged != null) {
+                        val persistedId = result.productId
+                        if (persistedId == null || persistedId <= 0L) {
+                            pendingStagedImageStore.remove(staged.fileUri)
+                            _productEditorOperationState.value = ProductEditorOperationState.Failed(
+                                appContext.getString(R.string.product_editor_save_failed)
+                            )
+                            return@launch
+                        }
+                        if (!pendingStagedImageStore.bind(staged.fileUri, persistedId)) {
+                            Log.w(
+                                "DB_PRODUCT_IMAGE",
+                                "Staged image remains recoverable by barcode; id binding was deferred"
+                            )
+                        }
+                        pendingStagedProductImages[persistedId] = staged.fileUri
+                        _stagedProductImageState.value = StagedProductImageState.Empty
+                        val hasRemoteReference = try {
+                            repository.hasSyncedProductRemoteRef(persistedId)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (hasRemoteReference) {
+                            uploadPendingStagedProductImage(persistedId)
+                        }
+                    }
+                    _productEditorOperationState.value = ProductEditorOperationState.Saved
+                }
+                is ProductEditorSaveResult.Failed -> {
+                    staged?.fileUri?.let(pendingStagedImageStore::remove)
+                    _productEditorOperationState.value =
+                        ProductEditorOperationState.Failed(result.message)
+                }
+            }
+        }
+    }
+
+    fun resetProductEditorOperation() {
+        if (productEditorSaveJob?.isActive != true) {
+            _productEditorOperationState.value = ProductEditorOperationState.Idle
+        }
+    }
+
+    fun currentProductImageScopeEpoch(): Long = productImageScopeGeneration
+
+    private fun resolveProductImageScope(): ProductImageOwnerShopScope {
+        val auth = merchandiseApplication.authManager.state.value
+        val shopContext = merchandiseApplication.shopContextRepository.state.value
+        return if (
+            auth is AuthState.SignedIn &&
+            shopContext.ownerUserId == auth.userId &&
+            !shopContext.isLoading &&
+            shopContext.syncAllowed
+        ) {
+            ProductImageOwnerShopScope(auth.userId, shopContext.activeShopId)
+        } else {
+            ProductImageOwnerShopScope("", null)
+        }
+    }
+
+    suspend fun lookupScannedBarcode(
+        barcode: String,
+        expectedScopeEpoch: Long
+    ): ScannedBarcodeLookupResult = try {
+        val product = repository.findProductByBarcode(barcode)
+        if (expectedScopeEpoch != productImageScopeGeneration) {
+            ScannedBarcodeLookupResult.StaleScope
+        } else {
+            ScannedBarcodeLookupResult.Resolved(product)
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        ScannedBarcodeLookupResult.Failed
+    }
 
     suspend fun hasSyncedProductImageReference(productId: Long): Boolean =
         productId > 0L && repository.hasSyncedProductRemoteRef(productId)
@@ -444,7 +695,8 @@ class DatabaseViewModel(
     fun uploadProductImage(
         productId: Long,
         sourceUri: Uri,
-        onFinished: () -> Unit = {}
+        onFinished: () -> Unit = {},
+        onCommitted: () -> Unit = {}
     ) {
         if (productImageMutationJobs[productId]?.isActive == true) return
         val keys = ProductImageVariant.entries.map { ProductImageUiKey(productId, it) }
@@ -509,6 +761,7 @@ class DatabaseViewModel(
                     }
                 )
                 if (generation != productImageScopeGeneration) return@launch
+                onCommitted()
                 keys.forEach { key ->
                     desiredProductImageVersions[key] = result.versionId
                     updateProductImageState(
@@ -804,7 +1057,7 @@ class DatabaseViewModel(
                 merchandiseApplication.shopContextRepository.state
             ) { auth, shopContext ->
                 when (auth) {
-                    AuthState.Checking -> ProductImageOwnerShopScope("", null)
+                    AuthState.Checking -> null
                     AuthState.SignedOut,
                     is AuthState.ErrorRecoverable -> ProductImageOwnerShopScope("", null)
                     is AuthState.SignedIn -> {
@@ -813,21 +1066,49 @@ class DatabaseViewModel(
                             shopContext.isLoading ||
                             !shopContext.syncAllowed
                         ) {
-                            ProductImageOwnerShopScope("", null)
+                            null
                         } else {
                             ProductImageOwnerShopScope(auth.userId, shopContext.activeShopId)
                         }
                     }
                 }
             }
+                .filterNotNull()
                 .distinctUntilChanged()
                 .collect { currentScope ->
                     val oldScope = previousScope
                     previousScope = currentScope
-                    if (oldScope == null || oldScope == currentScope) return@collect
+                    currentProductImageScope = currentScope
+                    if (oldScope == null) {
+                        if (currentScope.accountId.isNotBlank()) {
+                            recoverPendingStagedProductImages(
+                                currentScope.accountId,
+                                currentScope.shopId
+                            )
+                        }
+                        return@collect
+                    }
+                    if (oldScope == currentScope) return@collect
+                    if (oldScope.accountId.isBlank() && currentScope.accountId.isNotBlank()) {
+                        productImageScopeGeneration += 1
+                        _productImageScopeEpoch.value = productImageScopeGeneration
+                        recoverPendingStagedProductImages(
+                            currentScope.accountId,
+                            currentScope.shopId
+                        )
+                        return@collect
+                    }
 
                     productImageScopeGeneration += 1
                     _productImageScopeEpoch.value = productImageScopeGeneration
+                    productEditorSaveJob?.cancel()
+                    productEditorSaveJob = null
+                    _productEditorTarget.value = null
+                    _productEditorOperationState.value = ProductEditorOperationState.Idle
+                    clearStagedProductImage(deleteFile = true)
+                    pendingStagedImageStore.clear().forEach(::deleteStagedImageFile)
+                    pendingStagedProductImages.values.forEach(::deleteStagedImageFile)
+                    pendingStagedProductImages.clear()
                     val jobsToJoin = buildSet {
                         addAll(productImageLoadJobs.values)
                         addAll(productImageMutationJobs.values)
@@ -1761,34 +2042,82 @@ class DatabaseViewModel(
 
     fun addProduct(product: Product) {
         viewModelScope.launch {
-            try {
-                repository.addProduct(product)
-                _uiState.value = UiState.Success(appContext.getString(R.string.success_product_added))
-            } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                e.printStackTrace()
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists))
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_product_added))
+            when (val result = persistProductFromEditor(product, isNewProduct = true)) {
+                is ProductEditorSaveResult.Saved -> Unit
+                is ProductEditorSaveResult.Failed -> _uiState.value = UiState.Error(result.message)
             }
         }
     }
 
     fun updateProduct(product: Product) {
         viewModelScope.launch {
-            try {
+            when (val result = persistProductFromEditor(product, isNewProduct = false)) {
+                is ProductEditorSaveResult.Saved -> Unit
+                is ProductEditorSaveResult.Failed -> _uiState.value = UiState.Error(result.message)
+            }
+        }
+    }
+
+    /**
+     * Salvataggio atteso dall'editor: il chiamante riceve l'esito reale prima di chiudere
+     * il dialog. Il repository mantiene prodotto, history e dirty marker nella stessa
+     * transazione; un retry parte quindi da uno stato interamente precedente o successivo.
+     */
+    suspend fun saveProductFromEditor(product: Product): ProductEditorSaveResult =
+        persistProductFromEditor(product, isNewProduct = product.id == 0L)
+
+    private suspend fun persistProductFromEditor(
+        product: Product,
+        isNewProduct: Boolean
+    ): ProductEditorSaveResult {
+        return try {
+            if (isNewProduct) {
+                val productId = repository.addProductAndReturnId(product)
+                if (productId <= 0L) error("Inserted product id is unavailable")
+                _uiState.value = UiState.Success(
+                    appContext.getString(R.string.success_product_added)
+                )
+                return ProductEditorSaveResult.Saved(productId)
+            } else {
                 productDetailsOverrideMutex.withLock {
                     repository.updateProduct(product)
-                    refreshProductDetailsOverridesLocked(listOf(product.id))
+                    try {
+                        refreshProductDetailsOverridesLocked(listOf(product.id))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (refreshFailure: Exception) {
+                        // La write e la relativa history sono gia state confermate dalla
+                        // transazione repository. Un read-through secondario non deve
+                        // trasformare quel successo in un falso errore con retry duplicato.
+                        _productDetailsOverrides.update { current -> current - product.id }
+                        Log.w(
+                            "DB_PRODUCT_SAVE",
+                            "Product saved; details override refresh deferred",
+                            refreshFailure
+                        )
+                    }
                 }
-                _uiState.value = UiState.Success(appContext.getString(R.string.success_product_updated))
-            } catch (e: android.database.sqlite.SQLiteConstraintException) {
-                e.printStackTrace()
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_barcode_already_exists))
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _uiState.value = UiState.Error(appContext.getString(R.string.error_product_updated))
             }
+            _uiState.value = UiState.Success(
+                appContext.getString(
+                    if (isNewProduct) R.string.success_product_added
+                    else R.string.success_product_updated
+                )
+            )
+            ProductEditorSaveResult.Saved(product.id.takeIf { it > 0L })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: android.database.sqlite.SQLiteConstraintException) {
+            ProductEditorSaveResult.Failed(
+                appContext.getString(R.string.error_barcode_already_exists)
+            )
+        } catch (_: Exception) {
+            ProductEditorSaveResult.Failed(
+                appContext.getString(
+                    if (isNewProduct) R.string.error_product_added
+                    else R.string.error_product_updated
+                )
+            )
         }
     }
 
@@ -1837,6 +2166,11 @@ class DatabaseViewModel(
                 .collect { productIds ->
                     try {
                         refreshProductDetailsOverrides(productIds)
+                        productIds.forEach { productId ->
+                            if (pendingStagedProductImages.containsKey(productId)) {
+                                uploadPendingStagedProductImage(productId)
+                            }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -1844,6 +2178,75 @@ class DatabaseViewModel(
                     }
                 }
         }
+    }
+
+    private fun uploadPendingStagedProductImage(productId: Long) {
+        val sourceUri = pendingStagedProductImages[productId] ?: return
+        if (productImageMutationJobs[productId]?.isActive == true) return
+        viewModelScope.launch {
+            val hasRemoteReference = try {
+                repository.hasSyncedProductRemoteRef(productId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            if (!hasRemoteReference || pendingStagedProductImages[productId] != sourceUri) {
+                return@launch
+            }
+            uploadProductImage(
+                productId = productId,
+                sourceUri = sourceUri,
+                onCommitted = {
+                    if (pendingStagedProductImages[productId] == sourceUri) {
+                        pendingStagedProductImages.remove(productId)
+                        pendingStagedImageStore.remove(sourceUri)
+                        deleteStagedImageFile(sourceUri)
+                    }
+                },
+                onFinished = {}
+            )
+        }
+    }
+
+    private fun clearStagedProductImage(deleteFile: Boolean) {
+        val staged = _stagedProductImageState.value as? StagedProductImageState.Ready
+        _stagedProductImageState.value = StagedProductImageState.Empty
+        if (deleteFile && staged != null) {
+            pendingStagedImageStore.remove(staged.fileUri)
+            deleteStagedImageFile(staged.fileUri)
+        }
+    }
+
+    internal fun recoverPendingStagedProductImages(accountId: String, shopId: String?) {
+        if (accountId.isBlank()) return
+        viewModelScope.launch {
+            pendingStagedImageStore.records().forEach { record ->
+                val stagedFile = record.fileUri.path?.let(::File)
+                if (record.accountId != accountId || record.shopId != shopId || stagedFile?.isFile != true) {
+                    pendingStagedImageStore.remove(record.fileUri)
+                    deleteStagedImageFile(record.fileUri)
+                    return@forEach
+                }
+                val productId = record.productId ?: try {
+                    repository.findProductByBarcode(record.barcode)?.id
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                if (productId != null && productId > 0L) {
+                    pendingStagedImageStore.bind(record.fileUri, productId)
+                    pendingStagedProductImages[productId] = record.fileUri
+                    uploadPendingStagedProductImage(productId)
+                }
+            }
+        }
+    }
+
+    private fun deleteStagedImageFile(uri: Uri) {
+        if (uri.scheme != "file") return
+        runCatching { uri.path?.let(::File)?.delete() }
     }
 
     private suspend fun refreshProductDetailsOverrides(productIds: Iterable<Long>) {
@@ -2103,3 +2506,14 @@ class DatabaseViewModel(
         return updated.toMap()
     }
 }
+
+internal suspend fun writeStagedProductImage(context: Context, bytes: ByteArray): Uri =
+    withContext(Dispatchers.IO) {
+        val stageDirectory = File(context.filesDir, "product-image-stage")
+        if (!stageDirectory.exists() && !stageDirectory.mkdirs()) {
+            throw IOException("Unable to create staged image directory")
+        }
+        val stageFile = File(stageDirectory, "${UUID.randomUUID()}.jpg")
+        stageFile.outputStream().use { output -> output.write(bytes) }
+        Uri.fromFile(stageFile)
+    }

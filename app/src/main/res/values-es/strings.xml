@@ -86,6 +86,8 @@
     <string name="import_file">Importar</string>
     <string name="export_file">Exportar</string>
     <string name="retry">Reintentar</string>
+    <string name="product_image_zoom_in">Ampliar imagen</string>
+    <string name="product_image_zoom_out">Reducir imagen</string>
     <string name="scan_barcode">Escanear código de barras</string>
 
     <!-- viewmodel DatabaseViewModel -->
@@ -122,6 +124,8 @@
     <string name="no_supplier">Sin proveedor</string>
     <string name="select_supplier">Seleccionar proveedor</string>
     <string name="edit_product_title">Editar producto</string>
+    <string name="product_editor_saving">Guardando…</string>
+    <string name="product_editor_save_failed">No se pudo guardar el producto. El borrador sigue disponible; vuelve a intentarlo.</string>
     <string name="product_name_label">Nombre del producto</string>
     <string name="second_product_name_label">Segundo nombre del producto</string>
     <string name="field_second_product_name">Segundo Nombre del Producto</string>
@@ -134,6 +138,10 @@
     <string name="select_supplier_title">Seleccionar proveedor</string>
     <string name="search_or_add_supplier">Buscar o agregar proveedor</string>
     <string name="add_new_supplier_prompt">Agregar "%1$s" como nuevo proveedor</string>
+    <string name="quick_create_supplier_saving">Creando “%1$s”…</string>
+    <string name="quick_create_supplier_retry">Reintentar la creación de “%1$s”</string>
+    <string name="quick_create_supplier_failed">No se pudo crear el proveedor. El nombre ingresado se conserva; vuelve a intentarlo.</string>
+    <string name="quick_create_in_progress">Guardado en curso…</string>
     <string name="save">Guardar</string>
     <string name="file_exported_successfully">Archivo exportado correctamente</string>
 
@@ -244,6 +252,9 @@
     <string name="select_category_title">Seleccionar categoría</string>
     <string name="search_or_add_category">Buscar o agregar categoría</string>
     <string name="add_new_category_prompt">Agregar nueva categoría: %1$s</string>
+    <string name="quick_create_category_saving">Creando “%1$s”…</string>
+    <string name="quick_create_category_retry">Reintentar la creación de “%1$s”</string>
+    <string name="quick_create_category_failed">No se pudo crear la categoría. El nombre ingresado se conserva; vuelve a intentarlo.</string>
     <string name="header_category_id">ID de categoría</string>
     <string name="add_item_code">Agregar código de artículo</string>
     <string name="loading_ellipsis">Cargando…</string>
@@ -482,6 +493,12 @@
     </plurals>
     <string name="database_catalog_manage_actions">Renombrar o eliminar</string>
     <string name="database_catalog_retry_body">Vuelve a cargar esta sección. Si el problema sigue, cierra y abre otra vez el hub de base de datos.</string>
+    <string name="database_products_load_failed_title">No se pudieron cargar los productos</string>
+    <string name="database_products_load_failed_body">No se pudo determinar la lista de productos. Vuelve a intentarlo.</string>
+    <string name="scanner_product_lookup_failed">No se pudo buscar el código en el catálogo. Vuelve a intentarlo.</string>
+    <string name="product_image_staged_before_save">Puedes elegir la imagen ahora. Se conservará con el borrador y se cargará una sola vez después de guardar y sincronizar el producto.</string>
+    <string name="database_products_refresh_failed">Los productos visibles siguen disponibles, pero la actualización falló.</string>
+    <string name="database_products_append_failed">No se pudieron cargar más productos.</string>
     <string name="database_catalog_empty_title">Sin %1$s todavía</string>
     <string name="database_catalog_empty_body">Agrega el primer %1$s para organizar mejor los productos.</string>
     <string name="database_catalog_add_first">Agregar %1$s</string>
@@ -677,7 +694,7 @@
     <string name="business_scope_shop_mismatch_short">Base vinculada a otra tienda</string>
     <string name="business_scope_schema_mismatch_short">Revisa el vínculo de la base</string>
     <string name="business_scope_pending_local_changes">Cambios locales</string>
-    <string name="business_scope_pending_outbox">Bandeja de salida pendiente</string>
+    <string name="business_scope_pending_outbox">Notificaciones de sincronización pendientes</string>
     <string name="business_scope_review_details">Revisar detalles</string>
     <string name="business_scope_continue_discard">Continuar y descartar datos sin vincular</string>
     <string name="business_scope_keep_local">Conservar datos locales</string>

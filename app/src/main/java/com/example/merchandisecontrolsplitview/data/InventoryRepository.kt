@@ -107,6 +107,12 @@ interface InventoryRepository {
     val remoteAppliedProductIds: Flow<Set<Long>>
         get() = emptyFlow()
     suspend fun addProduct(product: Product)
+    suspend fun addProductAndReturnId(product: Product): Long {
+        addProduct(product)
+        return requireNotNull(findProductByBarcode(product.barcode)?.id) {
+            "Inserted product id is unavailable"
+        }
+    }
     suspend fun updateProduct(product: Product)
     suspend fun deleteProduct(product: Product)
     suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult
@@ -612,7 +618,11 @@ class DefaultInventoryRepository(
             productRemoteRefDao.getByProductId(productId)?.lastRemoteAppliedAt != null
         }
 
-    override suspend fun addProduct(product: Product) = withLocalBusinessMutation {
+    override suspend fun addProduct(product: Product) {
+        addProductAndReturnId(product)
+    }
+
+    override suspend fun addProductAndReturnId(product: Product): Long = withLocalBusinessMutation {
         val canonicalProduct = CatalogTextCanonicalizer.product(product).product
         DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert?.invoke()
         requireCurrentBusinessDataScope()
@@ -620,8 +630,9 @@ class DefaultInventoryRepository(
             db.withTransaction {
                 productDao.insert(canonicalProduct)
                 DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
-                val persisted = productDao.findByBarcode(canonicalProduct.barcode)
-                    ?: return@withTransaction null
+                val persisted = requireNotNull(productDao.findByBarcode(canonicalProduct.barcode)) {
+                    "Inserted product id is unavailable"
+                }
 
                 val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
                     ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
@@ -648,8 +659,8 @@ class DefaultInventoryRepository(
                 persisted.id
             }
         }
-        persistedId?.let(::notifyProductCatalogChanged)
-        Unit
+        notifyProductCatalogChanged(persistedId)
+        persistedId
     }
     override suspend fun updateProduct(product: Product) = withLocalBusinessMutation {
         val canonicalProduct = CatalogTextCanonicalizer.product(product).product

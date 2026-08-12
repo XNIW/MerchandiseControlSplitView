@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileDownload
@@ -30,6 +32,9 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Image as ProductImageIcon
 import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +44,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -52,14 +58,22 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -70,6 +84,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import com.example.merchandisecontrolsplitview.R
@@ -96,6 +112,37 @@ private val DatabaseListContentPadding = PaddingValues(
     end = 20.dp,
     bottom = 152.dp
 )
+
+internal enum class ProductPagingPrimaryState {
+    LOADING,
+    ERROR,
+    EMPTY,
+    CONTENT
+}
+
+internal data class ProductPagingPresentation(
+    val primaryState: ProductPagingPrimaryState,
+    val showRefreshError: Boolean,
+    val showAppendError: Boolean
+)
+
+internal fun productPagingPresentation(
+    itemCount: Int,
+    refreshState: LoadState,
+    appendState: LoadState
+): ProductPagingPresentation {
+    val primaryState = when {
+        itemCount > 0 -> ProductPagingPrimaryState.CONTENT
+        refreshState is LoadState.Loading -> ProductPagingPrimaryState.LOADING
+        refreshState is LoadState.Error -> ProductPagingPrimaryState.ERROR
+        else -> ProductPagingPrimaryState.EMPTY
+    }
+    return ProductPagingPresentation(
+        primaryState = primaryState,
+        showRefreshError = itemCount > 0 && refreshState is LoadState.Error,
+        showAppendError = itemCount > 0 && appendState is LoadState.Error
+    )
+}
 
 @Composable
 internal fun DatabaseRootHeader(
@@ -262,6 +309,7 @@ internal fun DatabaseCatalogListSection(
                     body = stringResource(R.string.database_catalog_retry_body),
                     actionLabel = stringResource(R.string.retry),
                     onAction = onRetry,
+                    announce = true,
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
@@ -340,10 +388,19 @@ private fun DatabaseCatalogFeedbackState(
     body: String,
     actionLabel: String,
     onAction: () -> Unit,
+    announce: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.padding(horizontal = 32.dp),
+        modifier = modifier
+            .padding(horizontal = 32.dp)
+            .then(
+                if (announce) {
+                    Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                } else {
+                    Modifier
+                }
+            ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -443,8 +500,10 @@ internal fun DatabaseProductListSection(
     products: LazyPagingItems<ProductWithDetails>,
     listState: LazyListState,
     onProductClick: (Product) -> Unit,
+    onProductImageClick: (Product) -> Unit = {},
     onDeleteRequest: (Product) -> Unit,
     onShowHistory: (Product) -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier,
     productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
     productImageStates: Map<ProductImageUiKey, ProductImageUiState> = emptyMap(),
@@ -452,10 +511,29 @@ internal fun DatabaseProductListSection(
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
+    val presentation = productPagingPresentation(
+        itemCount = products.itemCount,
+        refreshState = loadState.refresh,
+        appendState = loadState.append
+    )
     Box(modifier = modifier.fillMaxSize()) {
-        if (isRefreshing && products.itemCount == 0) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-        } else if (products.itemCount == 0) {
+        if (presentation.primaryState == ProductPagingPrimaryState.LOADING) {
+            CircularProgressIndicator(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+            )
+        } else if (presentation.primaryState == ProductPagingPrimaryState.ERROR) {
+            DatabaseCatalogFeedbackState(
+                icon = Icons.Default.SearchOff,
+                title = stringResource(R.string.database_products_load_failed_title),
+                body = stringResource(R.string.database_products_load_failed_body),
+                actionLabel = stringResource(R.string.retry),
+                onAction = onRetry,
+                announce = true,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        } else if (presentation.primaryState == ProductPagingPrimaryState.EMPTY) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -498,6 +576,15 @@ internal fun DatabaseProductListSection(
                 contentPadding = DatabaseListContentPadding,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (presentation.showRefreshError) {
+                    item(key = "refresh-error") {
+                        ProductPagingErrorCard(
+                            message = stringResource(R.string.database_products_refresh_failed),
+                            onRetry = onRetry
+                        )
+                    }
+                }
+
                 items(products.itemCount, key = { idx -> products[idx]?.product?.id ?: "placeholder-$idx" }) { idx ->
                     products[idx]?.let { details ->
                         val effectiveDetails = productDetailsOverrides[details.product.id] ?: details
@@ -532,6 +619,7 @@ internal fun DatabaseProductListSection(
                                     onImageVisibilityChanged = { visible ->
                                         onProductImageVisibilityChanged(currentProduct, visible)
                                     },
+                                    onImageClick = { onProductImageClick(currentProduct) },
                                     onClick = { onProductClick(currentProduct) },
                                     onShowHistory = { onShowHistory(currentProduct) }
                                 )
@@ -551,6 +639,15 @@ internal fun DatabaseProductListSection(
                         }
                     }
                 }
+
+                if (presentation.showAppendError) {
+                    item(key = "append-error") {
+                        ProductPagingErrorCard(
+                            message = stringResource(R.string.database_products_append_failed),
+                            onRetry = onRetry
+                        )
+                    }
+                }
             }
 
             if (isRefreshing) {
@@ -559,6 +656,39 @@ internal fun DatabaseProductListSection(
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProductPagingErrorCard(
+    message: String,
+    onRetry: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { liveRegion = LiveRegionMode.Polite }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRetry) {
+                Text(stringResource(R.string.retry))
             }
         }
     }
@@ -648,6 +778,7 @@ internal fun ProductRow(
     productDetails: ProductWithDetails,
     imageState: ProductImageUiState? = null,
     onImageVisibilityChanged: (Boolean) -> Unit = {},
+    onImageClick: () -> Unit = {},
     onClick: () -> Unit,
     onShowHistory: () -> Unit = {}
 ) {
@@ -672,7 +803,9 @@ internal fun ProductRow(
             ProductImagePreview(
                 state = imageState,
                 contentDescription = stringResource(R.string.product_image_thumbnail),
-                modifier = Modifier.size(80.dp)
+                modifier = Modifier
+                    .size(80.dp)
+                    .clickable(onClick = onImageClick)
             )
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -855,6 +988,122 @@ internal fun ProductImagePreview(
             )
         ) {
             CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+        }
+    }
+}
+
+@Composable
+internal fun ProductImageFullscreenDialog(
+    state: ProductImageUiState?,
+    contentDescription: String,
+    onDismiss: () -> Unit,
+    onRetry: (() -> Unit)? = null
+) {
+    val imageKey = state?.bytes?.contentHashCode() ?: state?.versionId
+    var scale by remember(imageKey) { mutableFloatStateOf(1f) }
+    var offsetX by remember(imageKey) { mutableFloatStateOf(0f) }
+    var offsetY by remember(imageKey) { mutableFloatStateOf(0f) }
+    var viewportWidth by remember { mutableFloatStateOf(0f) }
+    var viewportHeight by remember { mutableFloatStateOf(0f) }
+
+    fun updateScale(requestedScale: Float, panX: Float = 0f, panY: Float = 0f) {
+        val nextScale = requestedScale.coerceIn(1f, 5f)
+        scale = nextScale
+        if (nextScale == 1f) {
+            offsetX = 0f
+            offsetY = 0f
+        } else {
+            val maxX = viewportWidth * (nextScale - 1f) / 2f
+            val maxY = viewportHeight * (nextScale - 1f) / 2f
+            offsetX = (offsetX + panX).coerceIn(-maxX, maxX)
+            offsetY = (offsetY + panY).coerceIn(-maxY, maxY)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .semantics { stateDescription = contentDescription },
+            contentAlignment = Alignment.Center
+        ) {
+            ProductImagePreview(
+                state = state,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size ->
+                        viewportWidth = size.width.toFloat()
+                        viewportHeight = size.height.toFloat()
+                    }
+                    .pointerInput(imageKey) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            updateScale(scale * zoom, pan.x, pan.y)
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offsetX
+                        translationY = offsetY
+                    }
+            )
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(20.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.close),
+                    tint = Color.White
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(20.dp)
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(24.dp)),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    enabled = state?.bytes != null && scale > 1f,
+                    onClick = { updateScale(scale - 0.5f) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ZoomOut,
+                        contentDescription = stringResource(R.string.product_image_zoom_out),
+                        tint = Color.White
+                    )
+                }
+                IconButton(
+                    enabled = state?.bytes != null && scale < 5f,
+                    onClick = { updateScale(scale + 0.5f) }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ZoomIn,
+                        contentDescription = stringResource(R.string.product_image_zoom_in),
+                        tint = Color.White
+                    )
+                }
+                if (state?.status == ProductImageUiStatus.ERROR && onRetry != null) {
+                    TextButton(onClick = onRetry) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.retry), color = Color.White)
+                    }
+                }
+            }
         }
     }
 }

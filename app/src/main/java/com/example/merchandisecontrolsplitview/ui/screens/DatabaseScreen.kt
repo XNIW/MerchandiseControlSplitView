@@ -41,6 +41,7 @@ import com.example.merchandisecontrolsplitview.util.ExportSheetSelection
 import com.example.merchandisecontrolsplitview.util.buildDatabaseExportDisplayName
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseHubTab
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ScannedBarcodeLookupResult
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -53,6 +54,18 @@ private data class CatalogDialogTarget(
     val kind: CatalogEntityKind,
     val item: CatalogListItem
 )
+
+internal sealed interface ScannedBarcodeDestination {
+    data class ExistingProduct(val product: Product) : ScannedBarcodeDestination
+    data class NewProduct(val barcode: String) : ScannedBarcodeDestination
+}
+
+internal fun scannedBarcodeDestination(
+    barcode: String,
+    existingProduct: Product?
+): ScannedBarcodeDestination = existingProduct
+    ?.let { ScannedBarcodeDestination.ExistingProduct(it) }
+    ?: ScannedBarcodeDestination.NewProduct(barcode)
 
 private sealed interface CatalogNameRequest {
     val kind: CatalogEntityKind
@@ -87,6 +100,7 @@ fun DatabaseScreen(
     val uiState by viewModel.uiState.collectAsState()
     val exportUiState by viewModel.exportUiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
+    val appliedProductFilter by viewModel.appliedProductFilter.collectAsState()
     val selectedHubTab by viewModel.selectedHubTab.collectAsState()
     val supplierCatalogSection by viewModel.supplierCatalogSection.collectAsState()
     val categoryCatalogSection by viewModel.categoryCatalogSection.collectAsState()
@@ -96,9 +110,10 @@ fun DatabaseScreen(
     val categoryOptions by viewModel.categories.collectAsState()
     val productDetailsOverrides by viewModel.productDetailsOverrides.collectAsState()
     val productImageStates by viewModel.productImageStates.collectAsState()
-    val productImageScopeEpoch by viewModel.productImageScopeEpoch.collectAsState()
+    val productEditorTarget by viewModel.productEditorTarget.collectAsState()
+    val productEditorSessionId by viewModel.productEditorSessionId.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
-    val productListState = key(filter.orEmpty()) { rememberLazyListState() }
+    val productListState = key(appliedProductFilter.orEmpty()) { rememberLazyListState() }
     val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
     val categoryListState = key(categoryCatalogQuery) { rememberLazyListState() }
     val context = LocalContext.current
@@ -106,7 +121,6 @@ fun DatabaseScreen(
     val scope = rememberCoroutineScope()
     val scanPromptText = stringResource(R.string.scan_prompt)
 
-    var itemToEdit by remember { mutableStateOf<Product?>(null) }
     var itemToDelete by remember { mutableStateOf<Product?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -114,6 +128,7 @@ fun DatabaseScreen(
     var exportLoadingTimedOut by remember { mutableStateOf(false) }
     var uiLoadingTimedOut by remember { mutableStateOf(false) }
     var showHistoryFor by remember { mutableStateOf<Product?>(null) }
+    var imagePreviewProduct by remember { mutableStateOf<Product?>(null) }
 
     var catalogActionTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
     var catalogNameRequest by remember { mutableStateOf<CatalogNameRequest?>(null) }
@@ -122,16 +137,12 @@ fun DatabaseScreen(
     var catalogReplacementTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
     var catalogClearAssignmentsTarget by remember { mutableStateOf<CatalogDialogTarget?>(null) }
 
-    LaunchedEffect(productImageScopeEpoch) {
-        itemToEdit = null
-    }
-
     fun openNewProductEditor(barcode: String = "") {
-        itemToEdit = Product(
+        viewModel.openProductEditor(Product(
             id = 0L,
             barcode = barcode,
             productName = ""
-        )
+        ))
     }
 
     fun openCatalogCreate(kind: CatalogEntityKind, initialName: String = "") {
@@ -171,14 +182,30 @@ fun DatabaseScreen(
         }
     )
 
+    val scannerLookupFailedMessage = stringResource(R.string.scanner_product_lookup_failed)
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         result?.contents?.let { code ->
+            val expectedScopeEpoch = viewModel.currentProductImageScopeEpoch()
             scope.launch {
-                val existing = viewModel.findProductByBarcode(code)
-                if (existing != null) {
-                    viewModel.setFilter(code)
-                } else {
-                    openNewProductEditor(code)
+                when (val lookup = viewModel.lookupScannedBarcode(code, expectedScopeEpoch)) {
+                    is ScannedBarcodeLookupResult.Resolved -> {
+                        when (val destination = scannedBarcodeDestination(code, lookup.destination)) {
+                            is ScannedBarcodeDestination.ExistingProduct -> {
+                                viewModel.openProductEditor(destination.product)
+                            }
+                            is ScannedBarcodeDestination.NewProduct -> {
+                                openNewProductEditor(destination.barcode)
+                            }
+                        }
+                    }
+                    ScannedBarcodeLookupResult.Failed -> {
+                        snackbarHostState.showSnackbar(
+                            message = scannerLookupFailedMessage,
+                            withDismissAction = true,
+                            duration = SnackbarDuration.Short
+                        )
+                    }
+                    ScannedBarcodeLookupResult.StaleScope -> Unit
                 }
             }
         }
@@ -319,7 +346,15 @@ fun DatabaseScreen(
                                     visible = visible
                                 )
                             },
-                            onProductClick = { itemToEdit = it },
+                            onProductClick = viewModel::openProductEditor,
+                            onProductImageClick = { product ->
+                                imagePreviewProduct = product
+                                viewModel.loadProductImageProgressively(
+                                    productId = product.id,
+                                    expectedVersionId = product.primaryImageVersionId
+                                )
+                            },
+                            onRetry = products::retry,
                             onDeleteRequest = {
                                 itemToDelete = it
                                 showDeleteDialog = true
@@ -437,20 +472,42 @@ fun DatabaseScreen(
         )
     }
 
-    if (itemToEdit != null) {
-        val isNewProduct = itemToEdit!!.id == 0L
+    if (productEditorTarget != null) {
+        val editorProduct = productEditorTarget!!
+        val isNewProduct = editorProduct.id == 0L
         EditProductDialog(
-            product = itemToEdit!!,
+            product = editorProduct,
+            sessionId = productEditorSessionId,
             viewModel = viewModel,
             enablePriceHistory = !isNewProduct,
-            onDismiss = { itemToEdit = null },
-            onSave = { productToSave ->
-                if (isNewProduct) {
-                    viewModel.addProduct(productToSave)
-                } else {
-                    viewModel.updateProduct(productToSave)
-                }
-                itemToEdit = null
+            onDismiss = viewModel::dismissProductEditor,
+            onSave = viewModel::saveProductFromEditor
+        )
+    }
+
+    imagePreviewProduct?.let { previewProduct ->
+        val mainState = productImageStates[
+            com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey(
+                previewProduct.id,
+                com.example.merchandisecontrolsplitview.productimage.ProductImageVariant.MAIN
+            )
+        ]
+        val thumbState = productImageStates[
+            com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey(
+                previewProduct.id,
+                com.example.merchandisecontrolsplitview.productimage.ProductImageVariant.THUMB
+            )
+        ]
+        ProductImageFullscreenDialog(
+            state = productImagePreviewState(mainState, thumbState),
+            contentDescription = stringResource(R.string.product_image_main),
+            onDismiss = { imagePreviewProduct = null },
+            onRetry = {
+                viewModel.loadProductImageProgressively(
+                    productId = previewProduct.id,
+                    expectedVersionId = previewProduct.primaryImageVersionId,
+                    force = true
+                )
             }
         )
     }

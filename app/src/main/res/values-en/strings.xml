@@ -87,6 +87,8 @@
     <string name="import_file">Import</string>
     <string name="export_file">Export</string>
     <string name="retry">Retry</string>
+    <string name="product_image_zoom_in">Zoom in image</string>
+    <string name="product_image_zoom_out">Zoom out image</string>
     <string name="scan_barcode">Scan barcode</string>
 
     <!-- viewmodel DatabaseViewModel -->
@@ -123,6 +125,8 @@
     <string name="no_supplier">No supplier</string>
     <string name="select_supplier">Select supplier</string>
     <string name="edit_product_title">Edit product</string>
+    <string name="product_editor_saving">Saving…</string>
+    <string name="product_editor_save_failed">Could not save the product. Your draft is still here; try again.</string>
     <string name="product_name_label">Product name</string>
     <string name="second_product_name_label">Second product name</string>
     <string name="field_second_product_name">Second Product Name</string>
@@ -135,6 +139,10 @@
     <string name="select_supplier_title">Select supplier</string>
     <string name="search_or_add_supplier">Search or add supplier</string>
     <string name="add_new_supplier_prompt">Add "%1$s" as a new supplier</string>
+    <string name="quick_create_supplier_saving">Creating “%1$s”…</string>
+    <string name="quick_create_supplier_retry">Retry creating “%1$s”</string>
+    <string name="quick_create_supplier_failed">Could not create the supplier. The name you entered is still here; try again.</string>
+    <string name="quick_create_in_progress">Saving in progress…</string>
     <string name="save">Save</string>
     <string name="file_exported_successfully">File exported successfully</string>
 
@@ -245,6 +253,9 @@
     <string name="select_category_title">Select Category</string>
     <string name="search_or_add_category">Search or add category</string>
     <string name="add_new_category_prompt">Add new category: %1$s</string>
+    <string name="quick_create_category_saving">Creating “%1$s”…</string>
+    <string name="quick_create_category_retry">Retry creating “%1$s”</string>
+    <string name="quick_create_category_failed">Could not create the category. The name you entered is still here; try again.</string>
     <string name="header_category_id">Category ID</string>
     <string name="add_item_code">Add item code</string>
     <string name="loading_ellipsis">Loading…</string>
@@ -481,6 +492,12 @@
     </plurals>
     <string name="database_catalog_manage_actions">Rename or delete</string>
     <string name="database_catalog_retry_body">Try loading this section again. If the issue persists, close and reopen the database hub.</string>
+    <string name="database_products_load_failed_title">Could not load products</string>
+    <string name="database_products_load_failed_body">Unable to determine the product list. Retry.</string>
+    <string name="scanner_product_lookup_failed">Unable to look up the code in the catalog. Retry.</string>
+    <string name="product_image_staged_before_save">You can choose the image now. It stays with the draft and uploads once after the product is saved and synced.</string>
+    <string name="database_products_refresh_failed">Visible products are still available, but refresh failed.</string>
+    <string name="database_products_append_failed">Could not load more products.</string>
     <string name="database_catalog_empty_title">No %1$s yet</string>
     <string name="database_catalog_empty_body">Add the first %1$s to keep product organization clearer.</string>
     <string name="database_catalog_add_first">Add %1$s</string>
@@ -668,7 +685,7 @@
     <string name="business_scope_shop_mismatch_short">Database linked to another shop</string>
     <string name="business_scope_schema_mismatch_short">Database binding needs checking</string>
     <string name="business_scope_pending_local_changes">Local changes</string>
-    <string name="business_scope_pending_outbox">Pending outbox</string>
+    <string name="business_scope_pending_outbox">Sync notifications waiting</string>
     <string name="business_scope_review_details">Review details</string>
     <string name="business_scope_continue_discard">Continue and discard unlinked data</string>
     <string name="business_scope_keep_local">Keep local data</string>
