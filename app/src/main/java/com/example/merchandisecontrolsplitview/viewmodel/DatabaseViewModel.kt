@@ -1057,7 +1057,7 @@ class DatabaseViewModel(
                 merchandiseApplication.shopContextRepository.state
             ) { auth, shopContext ->
                 when (auth) {
-                    AuthState.Checking -> ProductImageOwnerShopScope("", null)
+                    AuthState.Checking -> null
                     AuthState.SignedOut,
                     is AuthState.ErrorRecoverable -> ProductImageOwnerShopScope("", null)
                     is AuthState.SignedIn -> {
@@ -1066,13 +1066,14 @@ class DatabaseViewModel(
                             shopContext.isLoading ||
                             !shopContext.syncAllowed
                         ) {
-                            ProductImageOwnerShopScope("", null)
+                            null
                         } else {
                             ProductImageOwnerShopScope(auth.userId, shopContext.activeShopId)
                         }
                     }
                 }
             }
+                .filterNotNull()
                 .distinctUntilChanged()
                 .collect { currentScope ->
                     val oldScope = previousScope
@@ -1088,6 +1089,15 @@ class DatabaseViewModel(
                         return@collect
                     }
                     if (oldScope == currentScope) return@collect
+                    if (oldScope.accountId.isBlank() && currentScope.accountId.isNotBlank()) {
+                        productImageScopeGeneration += 1
+                        _productImageScopeEpoch.value = productImageScopeGeneration
+                        recoverPendingStagedProductImages(
+                            currentScope.accountId,
+                            currentScope.shopId
+                        )
+                        return@collect
+                    }
 
                     productImageScopeGeneration += 1
                     _productImageScopeEpoch.value = productImageScopeGeneration

@@ -116,4 +116,23 @@ class CrossPlatformReliabilityPresentationTest {
             )
         )
     }
+
+    @Test
+    fun `main failure keeps retry state while thumbnail remains available for preview`() {
+        val thumbBytes = byteArrayOf(1, 2, 3)
+        val state = productImagePreviewState(
+            mainState = ProductImageUiState(
+                status = ProductImageUiStatus.ERROR,
+                errorCode = "main_download_failed"
+            ),
+            thumbState = ProductImageUiState(
+                status = ProductImageUiStatus.READY,
+                bytes = thumbBytes
+            )
+        )
+
+        assertEquals(ProductImageUiStatus.ERROR, state?.status)
+        assertEquals("main_download_failed", state?.errorCode)
+        assertTrue(state?.bytes?.contentEquals(thumbBytes) == true)
+    }
 }

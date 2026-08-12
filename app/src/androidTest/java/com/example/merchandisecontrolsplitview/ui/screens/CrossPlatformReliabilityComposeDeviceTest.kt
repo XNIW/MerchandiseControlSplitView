@@ -246,8 +246,18 @@ class CrossPlatformReliabilityComposeDeviceTest {
 
     @Test
     fun fullscreenImageOffersRetryAndBoundedZoomControls() {
+        val thumbnailBytes = byteArrayOf(1)
         val state = mutableStateOf(
-            ProductImageUiState(
+            productImagePreviewState(
+                mainState = ProductImageUiState(
+                    status = ProductImageUiStatus.ERROR,
+                    errorCode = "temporary"
+                ),
+                thumbState = ProductImageUiState(
+                    status = ProductImageUiStatus.READY,
+                    bytes = thumbnailBytes
+                )
+            ) ?: ProductImageUiState(
                 status = ProductImageUiStatus.ERROR,
                 errorCode = "temporary"
             )
@@ -273,6 +283,7 @@ class CrossPlatformReliabilityComposeDeviceTest {
 
         composeRule.onNodeWithText(context.getString(R.string.retry)).performClick()
         assertEquals(1, retries.get())
+        assertEquals(ProductImageUiStatus.READY, state.value.status)
         composeRule.onNodeWithContentDescription(
             context.getString(R.string.product_image_zoom_out)
         ).assertIsNotEnabled()

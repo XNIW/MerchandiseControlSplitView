@@ -499,7 +499,7 @@ fun DatabaseScreen(
             )
         ]
         ProductImageFullscreenDialog(
-            state = mainState?.takeIf { it.bytes != null } ?: thumbState,
+            state = productImagePreviewState(mainState, thumbState),
             contentDescription = stringResource(R.string.product_image_main),
             onDismiss = { imagePreviewProduct = null },
             onRetry = {

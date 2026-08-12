@@ -591,6 +591,92 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    fun `auth bootstrap and same scope loading preserve durable staged image until upload commits`() =
+        runTest {
+            val store = SharedPreferencesPendingStagedProductImageStore(app)
+            store.clear().forEach { uri -> uri.path?.let(::File)?.delete() }
+            val accountId = "bootstrap-account"
+            val shopId = "bootstrap-shop"
+            val productId = 104L
+            val barcode = "STAGED-BOOTSTRAP-1"
+            val stagedUri = writeStagedProductImage(app, byteArrayOf(41, 42, 43))
+            assertTrue(store.prepare(stagedUri, barcode, accountId, shopId))
+            assertTrue(store.bind(stagedUri, productId))
+
+            val authState = MutableStateFlow<AuthState>(AuthState.Checking)
+            val shopState = MutableStateFlow(ShopContext.legacy())
+            val uploadEntered = CompletableDeferred<Unit>()
+            val releaseUpload = CompletableDeferred<Unit>()
+            val imageService = mockk<ProductImageService>(relaxed = true)
+            coEvery { repository.hasSyncedProductRemoteRef(productId) } returns true
+            coEvery { imageService.upload(productId, any(), any(), any()) } coAnswers {
+                uploadEntered.complete(Unit)
+                releaseUpload.await()
+                ProductImageMutationResult(
+                    status = "published",
+                    versionId = "00000000-0000-4000-8000-000000000104",
+                    imageUpdatedAt = "now"
+                )
+            }
+            coEvery { imageService.loadBatch(any()) } coAnswers {
+                firstArg<List<ProductImageLoadRequest>>().map { request ->
+                    ProductImageBatchItem(
+                        request = request,
+                        result = ProductImageLoadResult.Ready(
+                            bytes = byteArrayOf(44),
+                            source = ProductImageLoadSource.NETWORK,
+                            versionId = requireNotNull(request.expectedVersionId)
+                        )
+                    )
+                }
+            }
+
+            val recoveredViewModel = DatabaseViewModel(
+                app = scopedImageApplication(authState, shopState),
+                repository = repository,
+                productImageService = imageService,
+                pendingStagedImageStore = store
+            )
+            runCurrent()
+
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            authState.value = AuthState.SignedIn(accountId, null)
+            shopState.value = shopContext(accountId, shopId).copy(
+                isLoading = true,
+                syncAllowed = false
+            )
+            runCurrent()
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            shopState.value = shopContext(accountId, shopId)
+            runCurrent()
+            assertTrue(uploadEntered.isCompleted)
+
+            shopState.value = shopContext(accountId, shopId).copy(
+                isLoading = true,
+                syncAllowed = false
+            )
+            runCurrent()
+            assertEquals(1, store.records().size)
+            assertTrue(File(requireNotNull(stagedUri.path)).isFile)
+
+            shopState.value = shopContext(accountId, shopId)
+            runCurrent()
+            coVerify(exactly = 1) { imageService.upload(productId, any(), any(), any()) }
+
+            releaseUpload.complete(Unit)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { imageService.upload(productId, any(), any(), any()) }
+            assertFalse(recoveredViewModel.hasPendingStagedProductImage(productId))
+            assertTrue(store.records().isEmpty())
+            assertFalse(File(requireNotNull(stagedUri.path)).exists())
+        }
+
+    @Test
     fun `staged image writer persists normalized bytes in durable application storage`() = runTest {
         val bytes = byteArrayOf(7, 8, 9, 10)
 
@@ -943,7 +1029,7 @@ class DatabaseViewModelTest {
     }
 
     @Test
-    fun `139 restored auth invalidates image scope while shop is unresolved`() = runTest {
+    fun `139 restored auth preserves resolved scope through transient shop states`() = runTest {
         val accountId = "account-restored"
         val firstShopId = "shop-restored"
         val secondShopId = "shop-next"
@@ -972,7 +1058,7 @@ class DatabaseViewModelTest {
         runCurrent()
 
         coVerify(exactly = 0) { imageService.purgeScope(any(), any()) }
-        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
+        assertEquals(0L, imageViewModel.productImageScopeEpoch.value)
 
         imageViewModel.setProductImageVisible(81L, null, visible = true)
         assertFalse(imageViewModel.productImageStates.value.isEmpty())
@@ -983,15 +1069,15 @@ class DatabaseViewModelTest {
             syncAllowed = false
         )
         runCurrent()
-        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
-        assertTrue(imageViewModel.productImageStates.value.isEmpty())
-        assertEquals(2L, imageViewModel.productImageScopeEpoch.value)
+        coVerify(exactly = 0) { imageService.purgeScope(any(), any()) }
+        assertFalse(imageViewModel.productImageStates.value.isEmpty())
+        assertEquals(0L, imageViewModel.productImageScopeEpoch.value)
 
         shopStates.value = shopContext(accountId, secondShopId)
         runCurrent()
 
-        coVerify(exactly = 1) { imageService.purgeScope(accountId, null) }
-        assertEquals(3L, imageViewModel.productImageScopeEpoch.value)
+        coVerify(exactly = 1) { imageService.purgeScope(accountId, firstShopId) }
+        assertEquals(1L, imageViewModel.productImageScopeEpoch.value)
     }
 
     @Test
@@ -1980,16 +2066,20 @@ class DatabaseViewModelTest {
     private fun stableScopedImageApplication(
         accountId: String,
         shopId: String
+    ): MerchandiseControlApplication = scopedImageApplication(
+        MutableStateFlow(AuthState.SignedIn(accountId, null)),
+        MutableStateFlow(shopContext(accountId, shopId))
+    )
+
+    private fun scopedImageApplication(
+        authState: MutableStateFlow<AuthState>,
+        shopState: MutableStateFlow<ShopContext>
     ): MerchandiseControlApplication {
         val authManager = mockk<SupabaseAuthManager>()
         val shopContextRepository = mockk<ShopContextRepository>()
         val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
-        every { authManager.state } returns MutableStateFlow(
-            AuthState.SignedIn(accountId, null)
-        )
-        every { shopContextRepository.state } returns MutableStateFlow(
-            shopContext(accountId, shopId)
-        )
+        every { authManager.state } returns authState
+        every { shopContextRepository.state } returns shopState
         every { scopedApp.applicationContext } returns app
         every { scopedApp.authManager } returns authManager
         every { scopedApp.shopContextRepository } returns shopContextRepository
