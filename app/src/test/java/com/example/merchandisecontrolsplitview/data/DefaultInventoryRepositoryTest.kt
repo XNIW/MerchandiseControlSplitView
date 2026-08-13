@@ -8,6 +8,7 @@ import com.example.merchandisecontrolsplitview.util.CatalogTextPolicy
 import com.example.merchandisecontrolsplitview.util.CatalogTextValidationException
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import java.io.IOException
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -21,6 +22,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -32,6 +34,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -6226,6 +6229,469 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun `wechat 004 real local Supabase fixture converges through production incremental apply`() =
+        runTest {
+            val fixturePath = System.getenv("WECHAT_004_LOCAL_E2E_FIXTURE")
+            assumeTrue("WECHAT_004_LOCAL_E2E_FIXTURE is required for the real local gate", !fixturePath.isNullOrBlank())
+            val root = Json.parseToJsonElement(File(checkNotNull(fixturePath)).readText()).jsonObject
+            assertEquals("supabase_local_real", root.getValue("provenance").jsonObject
+                .getValue("kind").jsonPrimitive.content)
+            val actor = root.getValue("actorUserId").jsonPrimitive.content
+            val shopId = root.getValue("shopId").jsonPrimitive.content
+            val supplier = Json.decodeFromJsonElement<InventorySupplierRow>(root.getValue("supplier"))
+            val category = Json.decodeFromJsonElement<InventoryCategoryRow>(root.getValue("category"))
+            val product = Json.decodeFromJsonElement<InventoryProductRow>(root.getValue("product"))
+            val prices = root.getValue("prices").jsonArray.map {
+                Json.decodeFromJsonElement<InventoryProductPriceRow>(it)
+            }
+            val events = root.getValue("events").jsonArray.map {
+                Json.decodeFromJsonElement<SyncEventRemoteRow>(it)
+            }
+
+            events.forEach { event ->
+                val ids = requireNotNull(event.entityIds)
+                if (ids.supplierIds.isNotEmpty()) {
+                    shopSyncReader.enqueueTargetedResponse(
+                        ShopSyncRowDomain.SUPPLIERS,
+                        ShopSyncRows.Suppliers(listOf(supplier))
+                    )
+                }
+                if (ids.categoryIds.isNotEmpty()) {
+                    shopSyncReader.enqueueTargetedResponse(
+                        ShopSyncRowDomain.CATEGORIES,
+                        ShopSyncRows.Categories(listOf(category))
+                    )
+                }
+                if (ids.productIds.isNotEmpty() && event.domain == SyncEventDomains.CATALOG) {
+                    shopSyncReader.enqueueTargetedResponse(
+                        ShopSyncRowDomain.PRODUCTS,
+                        ShopSyncRows.Products(listOf(product))
+                    )
+                }
+                if (ids.priceIds.isNotEmpty()) {
+                    shopSyncReader.enqueueTargetedResponse(
+                        ShopSyncRowDomain.PRICES,
+                        ShopSyncRows.Prices(prices.filter { it.id in ids.priceIds })
+                    )
+                }
+            }
+            shopSyncReader.eventRows += events
+
+            val summary = repository.drainSyncEventsFromRemote(
+                remote = FakeCatalogRemote016(),
+                priceRemote = RecordingPriceRemote016(configured = false),
+                syncEventRemote = FakeSyncEventRemote(),
+                ownerUserId = actor,
+                progressReporter = CatalogSyncProgressReporter { },
+                selectedShop = selectedShop(shopId)
+            ).getOrThrow()
+
+            val stored = checkNotNull(repository.findProductByBarcode(product.barcode))
+            assertEquals(product.id, db.productRemoteRefDao().getByProductId(stored.id)?.remoteId)
+            assertEquals(product.productName, stored.productName)
+            assertEquals(category.name, stored.categoryId?.let { db.categoryDao().getById(it)?.name })
+            assertEquals(supplier.name, stored.supplierId?.let { db.supplierDao().getById(it)?.name })
+            assertEquals(prices.size, db.productPriceDao().countAll())
+            assertEquals(events.size, summary.syncEventsProcessed)
+            assertFalse(summary.fullCatalogFetch)
+            assertFalse(summary.fullPriceFetch)
+        }
+
+    @Test
+    fun `wechat 003 admin events converge catalog lifecycle and reject a foreign shop row`() =
+        runTest {
+            val authenticatedOwner = "00000000-0000-4000-8000-000000003001"
+            val mutationActor = "00000000-0000-4000-8000-000000003002"
+            val activeShopId = "00000000-0000-4000-8000-000000003003"
+            val foreignShopId = "00000000-0000-4000-8000-000000003004"
+            val sourceSupplierId = "00000000-0000-4000-8000-000000003011"
+            val replacementSupplierId = "00000000-0000-4000-8000-000000003012"
+            val sourceCategoryId = "00000000-0000-4000-8000-000000003021"
+            val replacementCategoryId = "00000000-0000-4000-8000-000000003022"
+            val productId = "00000000-0000-4000-8000-000000003031"
+            val initialPriceId = "00000000-0000-4000-8000-000000003041"
+            val changedPriceId = "00000000-0000-4000-8000-000000003042"
+            val firstImageVersionId = "00000000-0000-4000-8000-000000003051"
+            val replacementImageVersionId = "00000000-0000-4000-8000-000000003052"
+            val foreignProductId = "00000000-0000-4000-8000-000000003061"
+            val barcode = "WeChat-Case-003"
+
+            val sourceSupplier = InventorySupplierRow(
+                id = sourceSupplierId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                name = "Source supplier",
+                updatedAt = "2026-08-13T10:00:00Z"
+            )
+            val replacementSupplier = InventorySupplierRow(
+                id = replacementSupplierId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                name = "Replacement supplier",
+                updatedAt = "2026-08-13T10:01:00Z"
+            )
+            val sourceCategory = InventoryCategoryRow(
+                id = sourceCategoryId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                name = "Source category",
+                updatedAt = "2026-08-13T10:00:00Z"
+            )
+            val replacementCategory = InventoryCategoryRow(
+                id = replacementCategoryId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                name = "Replacement category",
+                updatedAt = "2026-08-13T10:01:00Z"
+            )
+            val createdProduct = InventoryProductRow(
+                id = productId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                barcode = barcode,
+                productName = "Created by Mini Program",
+                purchasePrice = 10.0,
+                retailPrice = 20.0,
+                supplierId = sourceSupplierId,
+                categoryId = sourceCategoryId,
+                stockQuantity = 1.0,
+                primaryImageVersionId = firstImageVersionId,
+                primaryImageUpdatedAt = "2026-08-13T10:00:00Z",
+                updatedAt = "2026-08-13T10:00:00Z"
+            )
+            val updatedProduct = createdProduct.copy(
+                productName = "Updated by Mini Program",
+                purchasePrice = 12.0,
+                retailPrice = 23.456,
+                supplierId = replacementSupplierId,
+                categoryId = replacementCategoryId,
+                stockQuantity = 2.0,
+                primaryImageVersionId = replacementImageVersionId,
+                primaryImageUpdatedAt = "2026-08-13T10:01:00Z",
+                updatedAt = "2026-08-13T10:01:00Z"
+            )
+            val archivedProduct = updatedProduct.copy(
+                updatedAt = "2026-08-13T10:02:00Z",
+                deletedAt = "2026-08-13T10:02:00Z"
+            )
+            val restoredProduct = updatedProduct.copy(
+                updatedAt = "2026-08-13T10:03:00Z",
+                deletedAt = null
+            )
+            val initialPrice = InventoryProductPriceRow(
+                id = initialPriceId,
+                ownerUserId = mutationActor,
+                shopId = activeShopId,
+                productId = productId,
+                type = "RETAIL",
+                price = 20.0,
+                priceCanonical = "20.000",
+                effectiveAt = "2026-08-13 10:00:00",
+                source = "WECHAT_MINI_PROGRAM",
+                createdAt = "2026-08-13 10:00:00",
+                updatedAt = "2026-08-13T10:00:00Z"
+            )
+            val changedPrice = initialPrice.copy(
+                id = changedPriceId,
+                price = 23.456,
+                priceCanonical = "23.456",
+                effectiveAt = "2026-08-13 10:01:00",
+                createdAt = "2026-08-13 10:01:00",
+                updatedAt = "2026-08-13T10:01:00Z"
+            )
+
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.SUPPLIERS,
+                ShopSyncRows.Suppliers(listOf(sourceSupplier))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.CATEGORIES,
+                ShopSyncRows.Categories(listOf(sourceCategory))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRODUCTS,
+                ShopSyncRows.Products(listOf(createdProduct))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.SUPPLIERS,
+                ShopSyncRows.Suppliers(
+                    listOf(
+                        sourceSupplier.copy(
+                            updatedAt = "2026-08-13T10:01:00Z",
+                            deletedAt = "2026-08-13T10:01:00Z"
+                        ),
+                        replacementSupplier
+                    )
+                )
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.CATEGORIES,
+                ShopSyncRows.Categories(
+                    listOf(
+                        sourceCategory.copy(
+                            updatedAt = "2026-08-13T10:01:00Z",
+                            deletedAt = "2026-08-13T10:01:00Z"
+                        ),
+                        replacementCategory
+                    )
+                )
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRODUCTS,
+                ShopSyncRows.Products(listOf(updatedProduct))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRODUCTS,
+                ShopSyncRows.Products(listOf(archivedProduct))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRODUCTS,
+                ShopSyncRows.Products(listOf(restoredProduct))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRICES,
+                ShopSyncRows.Prices(listOf(initialPrice))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRICES,
+                ShopSyncRows.Prices(listOf(changedPrice))
+            )
+            shopSyncReader.enqueueTargetedResponse(
+                ShopSyncRowDomain.PRICES,
+                ShopSyncRows.Prices(listOf(changedPrice))
+            )
+
+            fun adminEvent(
+                id: Long,
+                domain: String,
+                eventType: String,
+                ids: SyncEventEntityIds,
+                shopId: String = activeShopId
+            ) = SyncEventRemoteRow(
+                id = id,
+                ownerUserId = mutationActor,
+                shopId = shopId,
+                domain = domain,
+                eventType = eventType,
+                source = "admin_web",
+                sourceDeviceId = "wechat-mini-program",
+                changedCount = SyncEventContract.primaryChangedCount(domain, ids),
+                entityIds = ids,
+                createdAt = "2026-08-13T10:0${id - 1}:00Z"
+            )
+
+            val createIds = SyncEventEntityIds(
+                supplierIds = listOf(sourceSupplierId),
+                categoryIds = listOf(sourceCategoryId),
+                productIds = listOf(productId)
+            )
+            val relationReplacementIds = SyncEventEntityIds(
+                supplierIds = listOf(sourceSupplierId, replacementSupplierId),
+                categoryIds = listOf(sourceCategoryId, replacementCategoryId),
+                productIds = listOf(productId)
+            )
+            val productOnlyIds = SyncEventEntityIds(productIds = listOf(productId))
+            val validEvents = listOf(
+                adminEvent(1, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED, createIds),
+                adminEvent(
+                    2,
+                    SyncEventDomains.CATALOG,
+                    SyncEventTypes.CATALOG_CHANGED,
+                    relationReplacementIds
+                ),
+                adminEvent(
+                    3,
+                    SyncEventDomains.CATALOG,
+                    SyncEventTypes.CATALOG_TOMBSTONE,
+                    productOnlyIds
+                ),
+                adminEvent(
+                    4,
+                    SyncEventDomains.CATALOG,
+                    SyncEventTypes.CATALOG_CHANGED,
+                    productOnlyIds
+                ),
+                adminEvent(
+                    5,
+                    SyncEventDomains.PRICES,
+                    SyncEventTypes.PRICES_CHANGED,
+                    SyncEventEntityIds(priceIds = listOf(initialPriceId))
+                ),
+                adminEvent(
+                    6,
+                    SyncEventDomains.PRICES,
+                    SyncEventTypes.PRICES_CHANGED,
+                    SyncEventEntityIds(priceIds = listOf(changedPriceId))
+                ),
+                adminEvent(
+                    7,
+                    SyncEventDomains.PRICES,
+                    SyncEventTypes.PRICES_CHANGED,
+                    SyncEventEntityIds(priceIds = listOf(changedPriceId))
+                )
+            )
+            shopSyncReader.eventRows += validEvents
+            shopSyncReader.eventRows += adminEvent(
+                id = 8,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_CHANGED,
+                ids = SyncEventEntityIds(productIds = listOf(foreignProductId)),
+                shopId = foreignShopId
+            )
+
+            data class AppliedCatalogState(
+                val productName: String?,
+                val supplierName: String?,
+                val categoryName: String?,
+                val retailPrice: Double?,
+                val imageVersionId: String?
+            )
+
+            suspend fun appliedCatalogState(): AppliedCatalogState? {
+                val ref = db.productRemoteRefDao().getByRemoteId(productId) ?: return null
+                val product = db.productDao().getById(ref.productId) ?: return null
+                return AppliedCatalogState(
+                    productName = product.productName,
+                    supplierName = product.supplierId?.let { db.supplierDao().getById(it)?.name },
+                    categoryName = product.categoryId?.let { db.categoryDao().getById(it)?.name },
+                    retailPrice = product.retailPrice,
+                    imageVersionId = product.primaryImageVersionId
+                )
+            }
+
+            val statesBeforeProductApply = mutableListOf<AppliedCatalogState?>()
+            val statesBeforePriceApply = mutableListOf<AppliedCatalogState?>()
+            shopSyncReader.beforeTargetedRequest = { domain, ids ->
+                if (domain == ShopSyncRowDomain.PRODUCTS && ids == listOf(productId)) {
+                    statesBeforeProductApply += appliedCatalogState()
+                }
+                if (domain == ShopSyncRowDomain.PRICES && statesBeforePriceApply.isEmpty()) {
+                    statesBeforePriceApply += appliedCatalogState()
+                }
+            }
+
+            assertTrue(
+                validEvents.all { event ->
+                    SyncEventContract.hasCompletePrimaryIds(
+                        event.domain,
+                        event.changedCount,
+                        requireNotNull(event.entityIds)
+                    )
+                }
+            )
+            assertEquals(5, SyncEventContract.primaryChangedCount(
+                SyncEventDomains.CATALOG,
+                relationReplacementIds
+            ))
+
+            val summary = repository.drainSyncEventsFromRemote(
+                remote = FakeCatalogRemote016(),
+                priceRemote = RecordingPriceRemote016(configured = false),
+                syncEventRemote = FakeSyncEventRemote(),
+                ownerUserId = authenticatedOwner,
+                progressReporter = CatalogSyncProgressReporter { },
+                selectedShop = selectedShop(activeShopId)
+            ).getOrThrow()
+
+            assertEquals(
+                listOf(
+                    null,
+                    AppliedCatalogState(
+                        "Created by Mini Program",
+                        "Source supplier",
+                        "Source category",
+                        20.0,
+                        firstImageVersionId
+                    ),
+                    AppliedCatalogState(
+                        "Updated by Mini Program",
+                        "Replacement supplier",
+                        "Replacement category",
+                        23.456,
+                        replacementImageVersionId
+                    ),
+                    null
+                ),
+                statesBeforeProductApply
+            )
+            assertEquals(
+                listOf(
+                    AppliedCatalogState(
+                        "Updated by Mini Program",
+                        "Replacement supplier",
+                        "Replacement category",
+                        23.456,
+                        replacementImageVersionId
+                    )
+                ),
+                statesBeforePriceApply
+            )
+            val restored = checkNotNull(repository.findProductByBarcode(barcode))
+            assertEquals(barcode, restored.barcode)
+            assertEquals("Updated by Mini Program", restored.productName)
+            assertEquals(23.456, restored.retailPrice ?: Double.NaN, 0.0001)
+            assertEquals(replacementImageVersionId, restored.primaryImageVersionId)
+            assertEquals(
+                "Replacement supplier",
+                restored.supplierId?.let { db.supplierDao().getById(it)?.name }
+            )
+            assertEquals(
+                "Replacement category",
+                restored.categoryId?.let { db.categoryDao().getById(it)?.name }
+            )
+            assertNull(db.supplierRemoteRefDao().getByRemoteId(sourceSupplierId))
+            assertNull(db.categoryRemoteRefDao().getByRemoteId(sourceCategoryId))
+            assertNotNull(db.supplierRemoteRefDao().getByRemoteId(replacementSupplierId))
+            assertNotNull(db.categoryRemoteRefDao().getByRemoteId(replacementCategoryId))
+
+            val retailHistory = repository.getPriceSeries(restored.id, "RETAIL").first()
+            assertEquals(listOf(23.456, 20.0), retailHistory.map { it.price })
+            assertEquals(2, retailHistory.size)
+            assertEquals(2, db.productPriceDao().countAll())
+            assertNotNull(db.productPriceRemoteRefDao().getByRemoteId(initialPriceId))
+            assertNotNull(db.productPriceRemoteRefDao().getByRemoteId(changedPriceId))
+
+            assertEquals(8, summary.syncEventsFetched)
+            assertEquals(7, summary.syncEventsProcessed)
+            assertEquals(7L, summary.syncEventsWatermarkAfter)
+            assertFalse(summary.fullCatalogFetch)
+            assertFalse(summary.fullPriceFetch)
+            assertTrue(summary.syncEventsGapDetected)
+            assertTrue(summary.manualFullSyncRequired)
+            (1L..7L).forEach { eventId ->
+                assertEquals(
+                    SyncEventApplyStatusReasons.APPLIED,
+                    db.syncEventApplyStatusDao()
+                        .get(authenticatedOwner, "shop:$activeShopId", eventId)!!.reason
+                )
+            }
+            assertEquals(
+                SyncEventApplyStatusReasons.SCOPE_MISMATCH,
+                db.syncEventApplyStatusDao()
+                    .get(authenticatedOwner, "shop:$activeShopId", 8L)!!.reason
+            )
+            assertEquals(
+                SyncEventApplyStatusReasons.SCOPE_MISMATCH,
+                db.syncRecoveryJournalDao().get()!!.reason
+            )
+            assertTrue(
+                shopSyncReader.targetedRequests.none { (_, ids) -> foreignProductId in ids }
+            )
+            assertTrue(
+                shopSyncReader.targetedRequests.contains(
+                    ShopSyncRowDomain.SUPPLIERS to
+                        listOf(sourceSupplierId, replacementSupplierId)
+                )
+            )
+            assertTrue(
+                shopSyncReader.targetedRequests.contains(
+                    ShopSyncRowDomain.CATEGORIES to
+                        listOf(sourceCategoryId, replacementCategoryId)
+                )
+            )
+        }
+
+    @Test
     fun `139 history event chunks V6 maximum twenty five ids into three row shop rpc reads`() = runTest {
         val owner = "00000000-0000-4000-8000-000000001396"
         val activeShopId = "00000000-0000-4000-8000-000000001397"
@@ -8227,8 +8693,14 @@ private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
     val targetedHistoryRows = mutableListOf<SharedSheetSessionRecord>()
     val targetedRequests = mutableListOf<Pair<ShopSyncRowDomain, List<String>>>()
     val eventContexts = mutableListOf<ShopSyncRpcContext>()
+    private val targetedResponses = mutableMapOf<ShopSyncRowDomain, java.util.ArrayDeque<ShopSyncRows>>()
+    var beforeTargetedRequest: (suspend (ShopSyncRowDomain, List<String>) -> Unit)? = null
     var eventCalls = 0
         private set
+
+    fun enqueueTargetedResponse(domain: ShopSyncRowDomain, rows: ShopSyncRows) {
+        targetedResponses.getOrPut(domain) { java.util.ArrayDeque() }.addLast(rows)
+    }
 
     override suspend fun checkpoint(
         context: ShopSyncRpcContext
@@ -8318,13 +8790,18 @@ private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
         domain: ShopSyncRowDomain,
         ids: List<String>
     ): Result<ShopSyncTargetedRows> {
+        beforeTargetedRequest?.invoke(domain, ids)
         targetedRequests += domain to ids.toList()
-        if (domain != ShopSyncRowDomain.HISTORY) {
+        val queuedRows = targetedResponses[domain]?.pollFirst()
+        val requestedIds = ids.map { it.lowercase() }.toSet()
+        val rows = queuedRows ?: if (domain == ShopSyncRowDomain.HISTORY) {
+            ShopSyncRows.History(
+                targetedHistoryRows.filter { it.remoteId.lowercase() in requestedIds }
+            )
+        } else {
             return Result.failure(AssertionError("targeted rows not configured for $domain"))
         }
-        val requestedIds = ids.map { it.lowercase() }.toSet()
-        val rows = targetedHistoryRows.filter { it.remoteId.lowercase() in requestedIds }
-        val returnedIds = rows.map { it.remoteId.lowercase() }.toSet()
+        val returnedIds = rows.ids().map { it.lowercase() }.toSet()
         val scope = context.expectedScope ?: ShopSyncScope(
             kind = ShopSyncScopeKinds.SHOP_SCOPED,
             key = "a".repeat(64),
@@ -8344,7 +8821,7 @@ private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
                 materializedDomainEventMaxId = requireNotNull(context.expectedDomainEventMaxId),
                 domainScope = ShopSyncScopeKinds.SHOP_SCOPED,
                 requestedCount = ids.size,
-                rows = ShopSyncRows.History(rows),
+                rows = rows,
                 missingIds = ids.filter { it.lowercase() !in returnedIds }
             )
         )

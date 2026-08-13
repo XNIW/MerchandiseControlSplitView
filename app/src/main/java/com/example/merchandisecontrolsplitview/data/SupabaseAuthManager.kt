@@ -51,6 +51,7 @@ internal interface SupabaseAuthSessionController {
     suspend fun refreshStoredSession(): StoredSessionRefreshResult
     suspend fun clearSession()
     suspend fun signInWithGoogleIdToken(idToken: String)
+    suspend fun importWeChatSession(accessToken: String, refreshToken: String)
     suspend fun signOut(scope: SignOutScope)
 }
 
@@ -92,6 +93,14 @@ private class SupabaseClientAuthSessionController(
         }
     }
 
+    override suspend fun importWeChatSession(accessToken: String, refreshToken: String) {
+        client.auth.importAuthToken(
+            accessToken = accessToken,
+            refreshToken = refreshToken,
+            retrieveUser = true
+        )
+    }
+
     override suspend fun signOut(scope: SignOutScope) {
         client.auth.signOut(scope)
     }
@@ -130,15 +139,26 @@ internal fun isDefinitiveStoredSessionFailure(code: String?): Boolean =
 class SupabaseAuthManager private constructor(
     private val sessionController: SupabaseAuthSessionController?,
     private val googleWebClientId: String,
+    private val wechatCodeProvider: WeChatCodeProvider?,
+    private val wechatGateway: WeChatAuthGateway?,
+    private val wechatDeviceIdProvider: (suspend () -> String)?,
+    private val nowEpochMillis: () -> Long,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 ) {
     constructor(
         client: SupabaseClient?,
         googleWebClientId: String,
+        wechatCodeProvider: WeChatCodeProvider? = null,
+        wechatGateway: WeChatAuthGateway? = null,
+        wechatDeviceIdProvider: (suspend () -> String)? = null,
         scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     ) : this(
         sessionController = client?.let(::SupabaseClientAuthSessionController),
         googleWebClientId = googleWebClientId,
+        wechatCodeProvider = wechatCodeProvider,
+        wechatGateway = wechatGateway,
+        wechatDeviceIdProvider = wechatDeviceIdProvider,
+        nowEpochMillis = System::currentTimeMillis,
         scope = scope
     )
 
@@ -148,16 +168,30 @@ class SupabaseAuthManager private constructor(
 
         internal fun createForTest(
             sessionController: SupabaseAuthSessionController,
-            scope: CoroutineScope
+            scope: CoroutineScope,
+            wechatCodeProvider: WeChatCodeProvider? = null,
+            wechatGateway: WeChatAuthGateway? = null,
+            wechatDeviceIdProvider: (suspend () -> String)? = null,
+            nowEpochMillis: () -> Long = System::currentTimeMillis
         ): SupabaseAuthManager = SupabaseAuthManager(
             sessionController = sessionController,
             googleWebClientId = "test-client-id",
+            wechatCodeProvider = wechatCodeProvider,
+            wechatGateway = wechatGateway,
+            wechatDeviceIdProvider = wechatDeviceIdProvider,
+            nowEpochMillis = nowEpochMillis,
             scope = scope
         )
     }
 
     /** true se il client è stato iniettato con successo e ha il modulo Auth. */
     val isEnabled: Boolean = sessionController != null
+
+    val isWeChatEnabled: Boolean =
+        isEnabled &&
+            wechatCodeProvider?.isConfigured == true &&
+            wechatGateway?.isConfigured == true &&
+            wechatDeviceIdProvider != null
 
     private val _state = MutableStateFlow<AuthState>(
         if (isEnabled) AuthState.Checking else AuthState.SignedOut
@@ -311,6 +345,117 @@ class SupabaseAuthManager private constructor(
     }
 
     /**
+     * WeChat adapter flow. This manager remains the sole owner of the Supabase session;
+     * the platform adapter can only return a temporary code and the server gateway owns
+     * every exchange. AppSecret, OpenID and session_key never enter this client.
+     */
+    suspend fun signInWithWeChat(activityContext: Context): Boolean {
+        val controller = sessionController
+        val codeProvider = wechatCodeProvider
+        val gateway = wechatGateway
+        val installId = wechatDeviceIdProvider
+        if (!isWeChatEnabled || controller == null || codeProvider == null ||
+            gateway == null || installId == null
+        ) {
+            _state.value = AuthState.ErrorRecoverable(
+                activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_configured)
+            )
+            return false
+        }
+        if (!authMutex.tryLock()) return false
+
+        try {
+            _state.value = AuthState.Checking
+            if (!codeProvider.isWeChatInstalled(activityContext)) {
+                _state.value = AuthState.ErrorRecoverable(
+                    activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_installed)
+                )
+                return false
+            }
+
+            val request = WeChatAuthRequest.create(nowEpochMillis())
+            val deviceId = installId()
+            val challenge = when (val issued = gateway.issueChallenge(deviceId, request)) {
+                is WeChatGatewayResult.Success -> issued.value
+                is WeChatGatewayResult.Failure -> {
+                    _state.value = AuthState.ErrorRecoverable(
+                        wechatErrorMessage(activityContext, issued.error)
+                    )
+                    return false
+                }
+            }
+            val callback = when (val result = codeProvider.requestCode(activityContext, request.state)) {
+                is WeChatCodeResult.Success -> result
+                WeChatCodeResult.Cancelled -> {
+                    _state.value = AuthState.SignedOut
+                    return false
+                }
+                WeChatCodeResult.Denied -> {
+                    _state.value = AuthState.ErrorRecoverable(
+                        activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_denied)
+                    )
+                    return false
+                }
+                WeChatCodeResult.NotInstalled -> {
+                    _state.value = AuthState.ErrorRecoverable(
+                        activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_installed)
+                    )
+                    return false
+                }
+                is WeChatCodeResult.Failure -> {
+                    _state.value = AuthState.ErrorRecoverable(
+                        wechatErrorMessage(activityContext, result.error)
+                    )
+                    return false
+                }
+            }
+
+            val callbackDecision = WeChatCallbackGuard(
+                expectedState = request.state,
+                createdAtEpochMillis = request.createdAtEpochMillis
+            ).consume(callback.state, nowEpochMillis())
+            if (callbackDecision != WeChatCallbackDecision.ACCEPT) {
+                _state.value = AuthState.ErrorRecoverable(
+                    activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_state_invalid)
+                )
+                return false
+            }
+
+            val session = when (val exchanged = gateway.exchange(challenge, callback.code, deviceId)) {
+                is WeChatGatewayResult.Success -> exchanged.value
+                is WeChatGatewayResult.Failure -> {
+                    _state.value = AuthState.ErrorRecoverable(
+                        wechatErrorMessage(activityContext, exchanged.error)
+                    )
+                    return false
+                }
+            }
+            controller.importWeChatSession(session.accessToken, session.refreshToken)
+            if (!publishSignedIn(controller.currentUserOrNull())) {
+                controller.clearSession()
+                _state.value = AuthState.ErrorRecoverable(
+                    activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
+                )
+                return false
+            }
+            Log.i(TAG, "Sign-in WeChat completato")
+            return true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            _state.value = AuthState.ErrorRecoverable(
+                activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
+            )
+            // Provider/transport exceptions can contain request metadata. Keep the
+            // diagnostic categorical so codes and session tokens never reach logs.
+            Log.w(TAG, "Sign-in WeChat fallito: errore redatto")
+            return false
+        } finally {
+            authMutex.unlock()
+        }
+    }
+
+    /**
      * Logout: invalida la sessione Supabase lato client.
      * Non effettua wipe di Room ne' dei dati locali (DEC-014, DEC-015).
      */
@@ -344,6 +489,30 @@ class SupabaseAuthManager private constructor(
     fun shutdown() {
         scope.cancel()
     }
+
+    private fun wechatErrorMessage(context: Context, error: WeChatAuthError): String =
+        context.getString(
+            when (error) {
+                WeChatAuthError.PROVIDER_NOT_CONFIGURED ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_configured
+                WeChatAuthError.WECHAT_NOT_INSTALLED ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_installed
+                WeChatAuthError.USER_CANCELLED ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_cancelled
+                WeChatAuthError.USER_DENIED ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_denied
+                WeChatAuthError.CODE_MISSING ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_code_missing
+                WeChatAuthError.STATE_MISMATCH,
+                WeChatAuthError.CALLBACK_DUPLICATE,
+                WeChatAuthError.CALLBACK_EXPIRED ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_state_invalid
+                WeChatAuthError.IDENTITY_CONFLICT ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_identity_conflict
+                WeChatAuthError.BACKEND_ERROR ->
+                    com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error
+            }
+        )
 
     // --- Interno ---
 

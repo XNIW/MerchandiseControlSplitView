@@ -417,3 +417,13 @@ operational checklist for review, staging setup, or TASK-063.
 TASK-063 should remain a separate live smoke task. It should validate two-user /
 two-device behavior, Realtime publication, RLS isolation, and fallback UX. TASK-062
 does not close TASK-055 and does not activate TASK-063.
+
+## WECHAT-001 personal-account authentication adapter
+
+WeChat is an optional personal identity provider and does not alter shop/POS staff authentication or assign roles. `SupabaseAuthManager` remains the only Supabase-session owner. `WeChatOpenSdkCodeProvider` obtains a temporary code only; `HttpWeChatAuthGateway` sends that code to the canonical Admin Web challenge/exchange boundary and the existing Supabase client imports the returned officially supported session.
+
+Public build inputs are `WECHAT_AUTH_ANDROID_ENABLED`, `WECHAT_ANDROID_APP_ID`, and `WECHAT_AUTH_GATEWAY_BASE_URL`. The flag is OFF by default and the button remains hidden unless the provider adapter, HTTPS gateway and syntactically valid AppID are all ready. AppSecret, `session_key`, OpenID, bridge secret and Supabase service role are forbidden in BuildConfig/APK.
+
+The pinned dependency is Maven Central `com.tencent.mm.opensdk:wechat-sdk-android:6.8.34`, published with Tencent WeChat Inc. metadata and Apache-2.0 licence. `WXEntryActivity` is the single exported/no-history callback entry and delegates intent validation to OpenSDK. The in-memory broker accepts one matching state once, maps cancel/deny/missing/expired/error outcomes, times out after five minutes and rejects a callback delivered after process death because no pending challenge remains; the user must retry. No callback payload or code is logged.
+
+External activation still requires WeChat AppID approval, package `com.example.merchandisecontrolsplitview`, registered test/release signature and callback requirements to be revalidated against current official documentation. The documentation origin was inaccessible under the execution environment's site-safety policy, so console registration and device behavior are not claimed. The 6.8.34 artifact also emits D8 stack-map warnings during a clean debug build; compilation succeeds, but a release/device validation is required before activation. Live login, app-not-installed, cold-process recovery and same-identity cross-surface tests are not claimed.

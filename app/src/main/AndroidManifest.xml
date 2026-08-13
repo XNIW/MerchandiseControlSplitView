@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <queries>
+        <package android:name="com.tencent.mm" />
+    </queries>
+
     <application
         android:name=".MerchandiseControlApplication"
         android:enableOnBackInvokedCallback="true"
@@ -23,6 +27,14 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.AppCompat.NoActionBar"
             tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+
+        <activity
+            android:name=".wxapi.WXEntryActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:theme="@style/Theme.MerchandiseControlSplitView" />
 
         <activity
             android:name=".MainActivity"

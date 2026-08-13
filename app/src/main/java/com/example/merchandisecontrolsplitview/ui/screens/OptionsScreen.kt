@@ -76,7 +76,9 @@ fun OptionsScreen(
     contentPadding: PaddingValues = PaddingValues(),
     authState: AuthState = AuthState.SignedOut,
     authEnabled: Boolean = false,
+    wechatAuthEnabled: Boolean = false,
     onSignIn: (Context) -> Unit = {},
+    onSignInWithWeChat: (Context) -> Unit = {},
     onSignOut: () -> Unit = {},
     onDismissError: () -> Unit = {},
     onDiscardUnboundLocalData: () -> Unit = {},
@@ -181,6 +183,8 @@ fun OptionsScreen(
                 authState = authState,
                 catalogSyncUi = catalogSyncUi,
                 onSignIn = { onSignIn(context) },
+                wechatAuthEnabled = wechatAuthEnabled,
+                onSignInWithWeChat = { onSignInWithWeChat(context) },
                 onSignOut = onSignOut,
                 onDismissError = onDismissError
             )
@@ -685,9 +689,13 @@ private fun AccountCloudSyncSection(
     authState: AuthState,
     catalogSyncUi: CatalogSyncUiState?,
     onSignIn: () -> Unit,
+    wechatAuthEnabled: Boolean,
+    onSignInWithWeChat: () -> Unit,
     onSignOut: () -> Unit,
     onDismissError: () -> Unit
 ) {
+    val wechatSignInDescription =
+        stringResource(R.string.account_sign_in_wechat_content_description)
     val subtitle = when (authState) {
         is AuthState.Checking -> stringResource(R.string.account_checking)
         is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
@@ -716,11 +724,25 @@ private fun AccountCloudSyncSection(
                 }
             }
             is AuthState.SignedOut -> {
-                Button(
-                    onClick = onSignIn,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.account_sign_in_google))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onSignIn,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.account_sign_in_google))
+                    }
+                    if (wechatAuthEnabled) {
+                        OutlinedButton(
+                            onClick = onSignInWithWeChat,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics {
+                                    contentDescription = wechatSignInDescription
+                                }
+                        ) {
+                            Text(stringResource(R.string.account_sign_in_wechat))
+                        }
+                    }
                 }
             }
             is AuthState.SignedIn -> {
@@ -743,6 +765,17 @@ private fun AccountCloudSyncSection(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(stringResource(R.string.account_sign_in_google))
+                    }
+                    if (wechatAuthEnabled) {
+                        OutlinedButton(
+                            onClick = {
+                                onDismissError()
+                                onSignInWithWeChat()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.account_sign_in_wechat))
+                        }
                     }
                     OutlinedButton(
                         onClick = onDismissError,

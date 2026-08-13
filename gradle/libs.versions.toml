@@ -29,6 +29,7 @@ supabase = "3.6.0"
 ktor = "3.5.0"
 credentials = "1.6.0"
 googleid = "1.2.0"
+wechatOpenSdk = "6.8.34"
 
 [libraries]
 androidx-core-ktx               = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -86,6 +87,7 @@ ktor-client-okhttp             = { group = "io.ktor", name = "ktor-client-okhttp
 androidx-credentials            = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 google-id                      = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
+wechat-opensdk                 = { group = "com.tencent.mm.opensdk", name = "wechat-sdk-android", version.ref = "wechatOpenSdk" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

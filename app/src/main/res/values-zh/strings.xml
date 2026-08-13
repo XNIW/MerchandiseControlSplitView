@@ -556,6 +556,16 @@
     <string name="account_not_signed_in">未登录</string>
     <string name="account_checking">验证中\u2026</string>
     <string name="account_sign_in_google">使用 Google 登录</string>
+    <string name="account_sign_in_wechat">使用微信登录</string>
+    <string name="account_sign_in_wechat_content_description">使用微信登录个人账号</string>
+    <string name="wechat_auth_not_configured">此设备尚未配置微信登录</string>
+    <string name="wechat_auth_not_installed">未安装微信</string>
+    <string name="wechat_auth_cancelled">已取消微信登录</string>
+    <string name="wechat_auth_denied">已拒绝微信授权</string>
+    <string name="wechat_auth_code_missing">微信未返回有效登录码</string>
+    <string name="wechat_auth_state_invalid">微信登录请求已过期或已使用，请重试</string>
+    <string name="wechat_auth_identity_conflict">此微信身份已关联到其他账号</string>
+    <string name="wechat_auth_backend_error">微信登录暂时不可用</string>
     <string name="account_sign_out">退出</string>
 
     <string name="local_database_status_title">本地数据库状态</string>

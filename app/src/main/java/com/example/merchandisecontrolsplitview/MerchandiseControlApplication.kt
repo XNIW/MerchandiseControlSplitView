@@ -42,6 +42,8 @@ import com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDa
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSessionBackupRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
+import com.example.merchandisecontrolsplitview.data.HttpWeChatAuthGateway
+import com.example.merchandisecontrolsplitview.data.WeChatOpenSdkCodeProvider
 import com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriber
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
@@ -211,7 +213,22 @@ class MerchandiseControlApplication : Application() {
     val authManager: SupabaseAuthManager by lazy {
         SupabaseAuthManager(
             client = supabaseClient,
-            googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID
+            googleWebClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID,
+            wechatCodeProvider = if (BuildConfig.WECHAT_AUTH_ANDROID_ENABLED) {
+                WeChatOpenSdkCodeProvider(this, BuildConfig.WECHAT_ANDROID_APP_ID)
+            } else {
+                null
+            },
+            wechatGateway = if (BuildConfig.WECHAT_AUTH_ANDROID_ENABLED) {
+                HttpWeChatAuthGateway(BuildConfig.WECHAT_AUTH_GATEWAY_BASE_URL)
+            } else {
+                null
+            },
+            wechatDeviceIdProvider = if (BuildConfig.WECHAT_AUTH_ANDROID_ENABLED) {
+                { deviceInstallIdProvider.getOrCreate() }
+            } else {
+                null
+            }
         )
     }
 

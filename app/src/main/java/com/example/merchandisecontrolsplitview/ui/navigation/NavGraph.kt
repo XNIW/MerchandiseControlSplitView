@@ -413,8 +413,12 @@ fun AppNavGraph() {
                     contentPadding = innerPadding,
                     authState = authState,
                     authEnabled = app.authManager.isEnabled,
+                    wechatAuthEnabled = app.authManager.isWeChatEnabled,
                     onSignIn = { activityContext ->
                         authScope.launch { app.authManager.signInWithGoogle(activityContext) }
+                    },
+                    onSignInWithWeChat = { activityContext ->
+                        authScope.launch { app.authManager.signInWithWeChat(activityContext) }
                     },
                     onSignOut = {
                         authScope.launch { app.authManager.signOut() }
