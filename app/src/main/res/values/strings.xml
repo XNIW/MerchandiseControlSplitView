@@ -579,6 +579,16 @@
     <string name="account_not_signed_in">Nessun accesso</string>
     <string name="account_checking">Verifica in corso\u2026</string>
     <string name="account_sign_in_google">Accedi con Google</string>
+    <string name="account_sign_in_wechat">Accedi con WeChat</string>
+    <string name="account_sign_in_wechat_content_description">Accedi all’account personale con WeChat</string>
+    <string name="wechat_auth_not_configured">Accesso WeChat non configurato su questo dispositivo</string>
+    <string name="wechat_auth_not_installed">WeChat non è installato</string>
+    <string name="wechat_auth_cancelled">Accesso WeChat annullato</string>
+    <string name="wechat_auth_denied">Autorizzazione WeChat rifiutata</string>
+    <string name="wechat_auth_code_missing">WeChat non ha restituito un codice valido</string>
+    <string name="wechat_auth_state_invalid">Richiesta WeChat scaduta o già usata. Riprova.</string>
+    <string name="wechat_auth_identity_conflict">Questa identità WeChat è già associata a un altro account</string>
+    <string name="wechat_auth_backend_error">Accesso WeChat temporaneamente non disponibile</string>
     <string name="account_sign_out">Esci</string>
 
     <string name="local_database_status_title">Stato database locale</string>

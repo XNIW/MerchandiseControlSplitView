@@ -20,6 +20,9 @@ fun readLocalOrEnv(name: String): String =
         ?.takeIf { it.isNotEmpty() }
         ?: localProperties.getProperty(name)?.trim().orEmpty()
 
+fun readBooleanLocalOrEnv(name: String): Boolean =
+    readLocalOrEnv(name).lowercase() in setOf("1", "true")
+
 fun String.toBuildConfigLiteral(): String =
     "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
@@ -57,6 +60,21 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
             "String",
             "PRODUCT_IMAGE_API_BASE_URL",
             readLocalOrEnv("PRODUCT_IMAGE_API_BASE_URL").toBuildConfigLiteral()
+        )
+        buildConfigField(
+            "boolean",
+            "WECHAT_AUTH_ANDROID_ENABLED",
+            readBooleanLocalOrEnv("WECHAT_AUTH_ANDROID_ENABLED").toString()
+        )
+        buildConfigField(
+            "String",
+            "WECHAT_ANDROID_APP_ID",
+            readLocalOrEnv("WECHAT_ANDROID_APP_ID").toBuildConfigLiteral()
+        )
+        buildConfigField(
+            "String",
+            "WECHAT_AUTH_GATEWAY_BASE_URL",
+            readLocalOrEnv("WECHAT_AUTH_GATEWAY_BASE_URL").toBuildConfigLiteral()
         )
     }
 
@@ -304,6 +322,7 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)
     implementation(libs.google.id)
+    implementation(libs.wechat.opensdk)
 
     // Test
     testImplementation(libs.junit)

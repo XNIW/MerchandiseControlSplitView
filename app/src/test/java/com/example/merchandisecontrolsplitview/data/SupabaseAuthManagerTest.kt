@@ -1,5 +1,6 @@
 package com.example.merchandisecontrolsplitview.data
 
+import android.content.Context
 import android.util.Log
 import io.github.jan.supabase.auth.SignOutScope
 import io.github.jan.supabase.auth.status.SessionSource
@@ -14,6 +15,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import io.mockk.every
+import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
 import org.junit.After
@@ -168,6 +170,85 @@ class SupabaseAuthManagerTest {
         managerScope.cancel()
     }
 
+    @Test
+    fun `wechat adapter success imports session into the existing Supabase owner`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(
+            initialStatus = SessionStatus.NotAuthenticated(),
+            refreshResult = StoredSessionRefreshResult.Refreshed
+        )
+        val codeProvider = FakeWeChatCodeProvider(
+            result = WeChatCodeResult.Success("temporary-code", "state-value")
+        )
+        val gateway = FakeWeChatGateway(expectedState = "state-value")
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(
+            sessionController = controller,
+            scope = managerScope,
+            wechatCodeProvider = codeProvider,
+            wechatGateway = gateway,
+            wechatDeviceIdProvider = { "00000000-0000-4000-8000-000000000201" },
+            nowEpochMillis = { 1_000L }
+        )
+
+        assertTrue(manager.signInWithWeChat(stubContext()))
+        assertEquals(1, controller.importCalls)
+        assertEquals("fixture-access-token", controller.lastImportedAccessToken)
+        assertTrue(manager.state.value is AuthState.SignedIn)
+        managerScope.cancel()
+    }
+
+    @Test
+    fun `wechat cancellation is neutral and does not import a session`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(
+            initialStatus = SessionStatus.NotAuthenticated(),
+            refreshResult = StoredSessionRefreshResult.Refreshed
+        )
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(
+            sessionController = controller,
+            scope = managerScope,
+            wechatCodeProvider = FakeWeChatCodeProvider(WeChatCodeResult.Cancelled),
+            wechatGateway = FakeWeChatGateway(),
+            wechatDeviceIdProvider = { "00000000-0000-4000-8000-000000000201" },
+            nowEpochMillis = { 1_000L }
+        )
+
+        assertFalse(manager.signInWithWeChat(stubContext()))
+        assertEquals(0, controller.importCalls)
+        assertEquals(AuthState.SignedOut, manager.state.value)
+        managerScope.cancel()
+    }
+
+    @Test
+    fun `wechat callback state mismatch fails before backend exchange`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(
+            initialStatus = SessionStatus.NotAuthenticated(),
+            refreshResult = StoredSessionRefreshResult.Refreshed
+        )
+        val gateway = FakeWeChatGateway(expectedState = "expected-state")
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(
+            sessionController = controller,
+            scope = managerScope,
+            wechatCodeProvider = FakeWeChatCodeProvider(
+                WeChatCodeResult.Success("temporary-code", "wrong-state")
+            ),
+            wechatGateway = gateway,
+            wechatDeviceIdProvider = { "00000000-0000-4000-8000-000000000201" },
+            nowEpochMillis = { 1_000L }
+        )
+
+        assertFalse(manager.signInWithWeChat(stubContext()))
+        assertEquals(0, gateway.exchangeCalls)
+        assertEquals(0, controller.importCalls)
+        assertTrue(manager.state.value is AuthState.ErrorRecoverable)
+        managerScope.cancel()
+    }
+
+    private fun stubContext(): Context = mockk {
+        every { getString(any()) } returns "safe localized auth error"
+    }
+
     private fun authenticatedStatus(): SessionStatus.Authenticated =
         SessionStatus.Authenticated(
             session = UserSession(
@@ -195,6 +276,10 @@ private class FakeSupabaseAuthSessionController(
         private set
     var lastSignOutScope: SignOutScope? = null
         private set
+    var importCalls = 0
+        private set
+    var lastImportedAccessToken: String? = null
+        private set
 
     override fun currentUserOrNull() = sessionUser
 
@@ -210,8 +295,65 @@ private class FakeSupabaseAuthSessionController(
 
     override suspend fun signInWithGoogleIdToken(idToken: String) = Unit
 
+    override suspend fun importWeChatSession(accessToken: String, refreshToken: String) {
+        importCalls += 1
+        lastImportedAccessToken = accessToken
+    }
+
     override suspend fun signOut(scope: SignOutScope) {
         lastSignOutScope = scope
         sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+    }
+}
+
+private class FakeWeChatCodeProvider(
+    private val result: WeChatCodeResult,
+    override val isConfigured: Boolean = true,
+    private val installed: Boolean = true
+) : WeChatCodeProvider {
+    override fun isWeChatInstalled(context: Context) = installed
+    override suspend fun requestCode(context: Context, state: String): WeChatCodeResult =
+        when (val current = result) {
+            is WeChatCodeResult.Success -> current.copy(
+                state = if (current.state == "state-value") state else current.state
+            )
+            else -> current
+        }
+}
+
+private class FakeWeChatGateway(
+    private val expectedState: String? = null,
+    override val isConfigured: Boolean = true
+) : WeChatAuthGateway {
+    var exchangeCalls = 0
+        private set
+
+    override suspend fun issueChallenge(
+        deviceId: String,
+        request: WeChatAuthRequest
+    ): WeChatGatewayResult<WeChatChallenge> = WeChatGatewayResult.Success(
+        WeChatChallenge(
+            state = expectedState ?: request.state,
+            nonce = request.nonce,
+            correlationId = "90000000-0000-4000-8000-000000000201",
+            expiresInSeconds = 300
+        )
+    )
+
+    override suspend fun exchange(
+        challenge: WeChatChallenge,
+        code: String,
+        deviceId: String
+    ): WeChatGatewayResult<WeChatSupabaseSession> {
+        exchangeCalls += 1
+        return WeChatGatewayResult.Success(
+            WeChatSupabaseSession(
+                accessToken = "fixture-access-token",
+                refreshToken = "fixture-refresh-token",
+                expiresAt = 4_600L,
+                expiresIn = 3_600L,
+                userId = "00000000-0000-4000-8000-000000000201"
+            )
+        )
     }
 }

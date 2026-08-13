@@ -565,6 +565,16 @@
     <string name="account_not_signed_in">Not signed in</string>
     <string name="account_checking">Checking\u2026</string>
     <string name="account_sign_in_google">Sign in with Google</string>
+    <string name="account_sign_in_wechat">Sign in with WeChat</string>
+    <string name="account_sign_in_wechat_content_description">Sign in to the personal account with WeChat</string>
+    <string name="wechat_auth_not_configured">WeChat sign-in is not configured on this device</string>
+    <string name="wechat_auth_not_installed">WeChat is not installed</string>
+    <string name="wechat_auth_cancelled">WeChat sign-in was cancelled</string>
+    <string name="wechat_auth_denied">WeChat authorization was denied</string>
+    <string name="wechat_auth_code_missing">WeChat did not return a valid code</string>
+    <string name="wechat_auth_state_invalid">The WeChat request expired or was already used. Try again.</string>
+    <string name="wechat_auth_identity_conflict">This WeChat identity is linked to another account</string>
+    <string name="wechat_auth_backend_error">WeChat sign-in is temporarily unavailable</string>
     <string name="account_sign_out">Sign out</string>
 
     <string name="local_database_status_title">Local database status</string>
