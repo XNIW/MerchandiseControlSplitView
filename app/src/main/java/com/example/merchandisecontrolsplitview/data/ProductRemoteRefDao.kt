@@ -19,6 +19,9 @@ interface ProductRemoteRefDao {
     @Query("SELECT * FROM product_remote_refs WHERE remoteId IN (:remoteIds)")
     suspend fun getByRemoteIds(remoteIds: List<String>): List<ProductRemoteRef>
 
+    @Query("SELECT * FROM product_remote_refs WHERE productId IN (:productIds)")
+    suspend fun getByProductIds(productIds: List<Long>): List<ProductRemoteRef>
+
     @Query("SELECT productId FROM product_remote_refs")
     suspend fun getAllProductIds(): List<Long>
 

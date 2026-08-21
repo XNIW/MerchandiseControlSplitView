@@ -693,6 +693,68 @@ class ProductImageService internal constructor(
         }
     }
 
+    /**
+     * Riusa l'immagine operativa gia' finalizzata e chiede al control plane di
+     * produrre le varianti pubbliche. Non collega automaticamente il risultato
+     * alla publication: il salvataggio Storefront resta un'azione separata.
+     */
+    suspend fun adoptForStorefront(
+        localProductId: Long,
+        publicationId: String
+    ): String {
+        if (!networkAvailable()) throw ProductImageException("image_request_failed")
+        requireUuid(publicationId)
+        val operation = resolveOperationContext(requireWrite = true)
+        return businessDataScopeRuntimeGuard.withBusinessDataScopeFlight(
+            ownerUserId = operation.accountId,
+            selectedShop = operation.shop
+        ) {
+            requireOperationCurrent(operation)
+            val product = withContext(Dispatchers.IO) {
+                database.productDao().getById(localProductId)
+            } ?: throw ProductImageException("image_reference_invalid")
+            val sourceVersion = product.primaryImageVersionId
+                ?.takeIf(PRODUCT_IMAGE_UUID_PATTERN::matches)
+                ?: throw ProductImageException("image_reference_invalid")
+            val token = accessTokenProvider()?.takeIf(String::isNotBlank)
+                ?: throw ProductImageException("image_session_missing")
+            requireOperationCurrent(operation)
+            val response = api.adoptForStorefront(
+                accessToken = token,
+                body = StorefrontImageAdoptBody(
+                    publicationId = publicationId,
+                    shopId = operation.shop.shopId,
+                    sourceImageVersionId = sourceVersion
+                )
+            )
+            requireOperationCurrent(operation)
+            response.imagePublicationId
+                ?.takeIf(PRODUCT_IMAGE_UUID_PATTERN::matches)
+                ?.takeIf { response.ok && !response.status.isNullOrBlank() }
+                ?: throw ProductImageException("image_request_failed")
+        }
+    }
+
+    /** Download bounded della variante pubblica gia' finalizzata; mai usa l'immagine operativa. */
+    suspend fun loadStorefrontPublicImage(
+        imagePublicationId: String,
+        publicUrl: String,
+        variant: StorefrontPublicImageVariant
+    ): ByteArray {
+        if (!networkAvailable()) throw ProductImageException("image_request_failed")
+        requireUuid(imagePublicationId)
+        val operation = resolveReadOperationContext()
+        return businessDataScopeRuntimeGuard.withBusinessDataScopeFlight(
+            ownerUserId = operation.accountId,
+            selectedShop = operation.shop
+        ) {
+            requireReadOperationCurrent(operation)
+            val bytes = api.downloadPublicStorefrontWebp(publicUrl, variant)
+            requireReadOperationCurrent(operation)
+            bytes
+        }
+    }
+
     private suspend fun uploadInBusinessDataScope(
         operation: OperationContext,
         localProductId: Long,

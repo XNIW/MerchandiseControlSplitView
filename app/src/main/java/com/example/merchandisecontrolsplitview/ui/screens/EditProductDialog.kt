@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -69,6 +71,8 @@ import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -84,6 +88,7 @@ import com.example.merchandisecontrolsplitview.data.CatalogTextCanonicalizer
 import com.example.merchandisecontrolsplitview.data.Category
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.Supplier
+import com.example.merchandisecontrolsplitview.data.StorefrontDraftField
 import com.example.merchandisecontrolsplitview.productimage.ProductImageLoadSource
 import com.example.merchandisecontrolsplitview.productimage.ProductImageMutationPhase
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
@@ -107,6 +112,11 @@ import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
 import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorSaveResult
 import com.example.merchandisecontrolsplitview.viewmodel.ProductEditorOperationState
 import com.example.merchandisecontrolsplitview.viewmodel.StagedProductImageState
+import com.example.merchandisecontrolsplitview.viewmodel.StorefrontEditorUiState
+import com.example.merchandisecontrolsplitview.data.StorefrontEditorDraft
+import com.example.merchandisecontrolsplitview.data.StorefrontMutationOperation
+import com.example.merchandisecontrolsplitview.data.StorefrontPublicationStatus
+import com.example.merchandisecontrolsplitview.data.StorefrontAvailability
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
@@ -154,6 +164,7 @@ internal fun EditProductDialog(
     var stockQuantityError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
     val editorOperation by viewModel.productEditorOperationState.collectAsState()
     val stagedImageState by viewModel.stagedProductImageState.collectAsState()
+    val storefrontState by viewModel.storefrontEditorState.collectAsState()
     val isSaving = editorOperation == ProductEditorOperationState.Saving
     val saveError = (editorOperation as? ProductEditorOperationState.Failed)?.message
     var supplierQuickCreateState by remember(product.id) { mutableStateOf(QuickCreateUiState()) }
@@ -559,6 +570,11 @@ internal fun EditProductDialog(
                             .verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
+                    Text(
+                        stringResource(R.string.storefront_operational_section),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     ProductImageEditorSection(
                         product = product,
                         mainState = displayedMainImageState,
@@ -863,6 +879,32 @@ internal fun EditProductDialog(
                     }
                 }
 
+                StorefrontEditorSection(
+                    product = product,
+                    state = storefrontState,
+                    operationalImageState = displayedPreviewState,
+                    onExpandedChange = viewModel::setStorefrontExpanded,
+                    onDraftChange = viewModel::updateStorefrontDraft,
+                    onAlign = {
+                        viewModel.alignStorefrontWithOperational(
+                            product.copy(
+                                productName = productName,
+                                retailPrice = parseUserPriceInput(retailPrice)
+                            )
+                        )
+                    },
+                    onAction = viewModel::mutateStorefront,
+                    onPreview = { viewModel.setStorefrontPreviewVisible(true) },
+                    onReload = viewModel::reloadStorefrontEditor,
+                    onRetryPending = viewModel::retryPendingStorefrontDraft,
+                    onReapplyConflict = viewModel::reapplyStorefrontConflict,
+                    onCancelConflict = viewModel::cancelStorefrontConflict,
+                    onUseOperationalImage = {
+                        viewModel.adoptOperationalImageForStorefront(product)
+                    },
+                    onDismissPreview = { viewModel.setStorefrontPreviewVisible(false) }
+                )
+
                 HorizontalDivider()
                 saveError?.let { message ->
                     Text(
@@ -1002,6 +1044,588 @@ internal fun EditProductDialog(
                 )
             }
     }
+}
+
+@Composable
+internal fun StorefrontEditorSection(
+    product: Product,
+    state: StorefrontEditorUiState,
+    operationalImageState: ProductImageUiState?,
+    onExpandedChange: (Boolean) -> Unit,
+    onDraftChange: ((StorefrontEditorDraft) -> StorefrontEditorDraft) -> Unit,
+    onAlign: () -> Unit,
+    onAction: (StorefrontMutationOperation) -> Unit,
+    onPreview: () -> Unit,
+    onReload: () -> Unit,
+    onRetryPending: () -> Unit,
+    onReapplyConflict: () -> Unit,
+    onCancelConflict: () -> Unit,
+    onUseOperationalImage: () -> Unit,
+    onDismissPreview: () -> Unit
+) {
+    var showCategoryPicker by remember { mutableStateOf(false) }
+    var showAvailabilityPicker by remember { mutableStateOf(false) }
+    val status = state.publication?.publicationStatus ?: StorefrontPublicationStatus.UNPUBLISHED
+    val selectedCategory = state.categories.firstOrNull {
+        it.categoryId == state.draft.storefrontCategoryId
+    }?.publicName
+    val expansionState = stringResource(
+        if (state.expanded) R.string.storefront_expanded else R.string.storefront_collapsed
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onExpandedChange(!state.expanded) }
+            .testTag("storefront-editor-section"),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                ProductImagePreview(
+                    state = state.publicImageState,
+                    contentDescription = stringResource(R.string.storefront_thumbnail),
+                    modifier = Modifier.size(52.dp)
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.storefront_customer_app),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        storefrontStatusLabel(status),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        state.draft.publicName.ifBlank {
+                            stringResource(R.string.storefront_public_name_missing)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        state.draft.publicPrice?.let { formatClPricePlainDisplay(it.toDouble()) }
+                            ?: stringResource(R.string.storefront_public_price_missing),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        selectedCategory ?: stringResource(R.string.storefront_category_missing),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val operationalPrice = product.retailPrice
+                    val differs = state.publication != null && (
+                        state.draft.publicName != product.productName.orEmpty() ||
+                            operationalPrice == null || operationalPrice % 1.0 != 0.0 ||
+                            state.draft.publicPrice != operationalPrice.toLong()
+                        )
+                    if (differs) {
+                        Text(
+                            stringResource(R.string.storefront_data_differs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+                Text(
+                    if (state.expanded) "▲" else "▼",
+                    modifier = Modifier.semantics {
+                        stateDescription = expansionState
+                    }
+                )
+            }
+
+            state.publication?.let { publication ->
+                Text(
+                    stringResource(
+                        R.string.storefront_version_updated,
+                        publication.version,
+                        publication.updatedAt,
+                        publication.mutationSource
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (!state.enabled) {
+                Text(
+                    stringResource(R.string.storefront_feature_unavailable),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (state.remoteProductId == null && !state.loading) {
+                Text(
+                    stringResource(R.string.storefront_sync_before_publish),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                )
+            }
+            if (state.loading) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+            }
+            if (state.pendingConnection) {
+                Text(
+                    stringResource(R.string.storefront_local_draft_waiting),
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+                TextButton(onClick = onRetryPending, enabled = !state.busy) {
+                    Text(stringResource(R.string.retry))
+                }
+            } else if (state.serverVersionUnverified) {
+                Text(
+                    stringResource(R.string.storefront_server_version_unverified),
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+            state.errorCode?.let { code ->
+                Text(
+                    storefrontErrorLabel(code),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics {
+                        error(code)
+                        liveRegion = LiveRegionMode.Polite
+                    }
+                )
+            }
+
+            state.conflict?.let { conflict ->
+                val dirtyFieldLabels = buildList {
+                    conflict.dirtyFields.forEach { field ->
+                        add(storefrontDraftFieldLabel(field))
+                    }
+                }.joinToString(", ")
+                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.error)) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.storefront_conflict_title),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            stringResource(
+                                R.string.storefront_conflict_details,
+                                conflict.server.version,
+                                conflict.server.mutationSource,
+                                conflict.server.updatedAt
+                            )
+                        )
+                        Text(
+                            stringResource(
+                                R.string.storefront_conflict_server_name,
+                                conflict.server.publicName,
+                                conflict.server.publicPrice
+                            )
+                        )
+                        Text(
+                            stringResource(
+                                R.string.storefront_conflict_local_name,
+                                conflict.localDraft.publicName,
+                                conflict.localDraft.publicPrice ?: 0L
+                            )
+                        )
+                        Text(
+                            stringResource(
+                                R.string.storefront_conflict_local_fields,
+                                dirtyFieldLabels
+                            )
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = onReload) {
+                                Text(stringResource(R.string.storefront_reload))
+                            }
+                            TextButton(onClick = onReapplyConflict) {
+                                Text(stringResource(R.string.storefront_reapply))
+                            }
+                            TextButton(onClick = onCancelConflict) {
+                                Text(stringResource(R.string.cancel))
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.expanded && state.canAuthor && state.conflict == null) {
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = state.draft.publicName,
+                    onValueChange = { value -> onDraftChange { it.copy(publicName = value) } },
+                    label = { Text(stringResource(R.string.storefront_public_name)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.busy
+                )
+                OutlinedTextField(
+                    value = state.draft.publicDescription,
+                    onValueChange = { value -> onDraftChange { it.copy(publicDescription = value) } },
+                    label = { Text(stringResource(R.string.storefront_public_description)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    enabled = !state.busy
+                )
+                OutlinedTextField(
+                    value = state.draft.publicBrand,
+                    onValueChange = { value -> onDraftChange { it.copy(publicBrand = value) } },
+                    label = { Text(stringResource(R.string.storefront_public_brand)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.busy
+                )
+                SelectionTextField(
+                    value = selectedCategory.orEmpty(),
+                    labelRes = R.string.storefront_public_category,
+                    contentDescriptionRes = R.string.storefront_choose_category,
+                    onClick = { showCategoryPicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = state.draft.publicPrice?.toString().orEmpty(),
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                onDraftChange { it.copy(publicPrice = value.toLongOrNull()) }
+                            }
+                        },
+                        label = { Text(stringResource(R.string.storefront_public_price)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.busy
+                    )
+                    OutlinedTextField(
+                        value = state.draft.compareAtPrice?.toString().orEmpty(),
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                onDraftChange { it.copy(compareAtPrice = value.toLongOrNull()) }
+                            }
+                        },
+                        label = { Text(stringResource(R.string.storefront_compare_at_price)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f),
+                        enabled = !state.busy
+                    )
+                }
+                TextButton(onClick = onAlign, enabled = !state.busy) {
+                    Text(stringResource(R.string.storefront_align_internal))
+                }
+                StorefrontBooleanField(
+                    label = stringResource(R.string.storefront_pickup),
+                    checked = state.draft.pickupEnabled,
+                    enabled = !state.busy,
+                    onChecked = { checked -> onDraftChange { it.copy(pickupEnabled = checked) } }
+                )
+                StorefrontBooleanField(
+                    label = stringResource(R.string.storefront_delivery),
+                    checked = state.draft.deliveryEnabled,
+                    enabled = !state.busy,
+                    onChecked = { checked -> onDraftChange { it.copy(deliveryEnabled = checked) } }
+                )
+                StorefrontBooleanField(
+                    label = stringResource(R.string.storefront_featured),
+                    checked = state.draft.featured,
+                    enabled = !state.busy,
+                    onChecked = { checked -> onDraftChange { it.copy(featured = checked) } }
+                )
+                StorefrontBooleanField(
+                    label = stringResource(R.string.storefront_reservation),
+                    checked = state.draft.reservationEnabled,
+                    enabled = !state.busy,
+                    onChecked = { checked -> onDraftChange { it.copy(reservationEnabled = checked) } }
+                )
+                SelectionTextField(
+                    value = storefrontAvailabilityLabel(state.draft.availability),
+                    labelRes = R.string.storefront_availability,
+                    contentDescriptionRes = R.string.storefront_choose_availability,
+                    onClick = { showAvailabilityPicker = true },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = state.draft.homeOrder.toString(),
+                    onValueChange = { value ->
+                        if (value.all(Char::isDigit)) {
+                            onDraftChange { it.copy(homeOrder = value.toLongOrNull() ?: 0L) }
+                        }
+                    },
+                    label = { Text(stringResource(R.string.storefront_home_order)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.busy
+                )
+                StorefrontBooleanField(
+                    label = stringResource(R.string.storefront_promotion),
+                    checked = state.draft.priceSourceMode == "promotion",
+                    enabled = !state.busy,
+                    onChecked = { checked ->
+                        onDraftChange {
+                            it.copy(
+                                priceSourceMode = if (checked) "promotion" else "override",
+                                promotionStartsAt = if (checked) it.promotionStartsAt else null,
+                                promotionEndsAt = if (checked) it.promotionEndsAt else null
+                            )
+                        }
+                    }
+                )
+                if (state.draft.priceSourceMode == "promotion") {
+                    OutlinedTextField(
+                        value = state.draft.promotionStartsAt.orEmpty(),
+                        onValueChange = { value ->
+                            onDraftChange { it.copy(promotionStartsAt = value.ifBlank { null }) }
+                        },
+                        label = { Text(stringResource(R.string.storefront_promotion_starts)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.busy
+                    )
+                    OutlinedTextField(
+                        value = state.draft.promotionEndsAt.orEmpty(),
+                        onValueChange = { value ->
+                            onDraftChange { it.copy(promotionEndsAt = value.ifBlank { null }) }
+                        },
+                        label = { Text(stringResource(R.string.storefront_promotion_ends)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.busy
+                    )
+                }
+                TextButton(
+                    onClick = onUseOperationalImage,
+                    enabled = !state.busy && state.publication != null && operationalImageState != null
+                ) {
+                    Text(stringResource(R.string.storefront_use_operational_image))
+                }
+                Text(
+                    if (state.draft.publicImageId == null) {
+                        stringResource(R.string.storefront_public_image_missing)
+                    } else {
+                        stringResource(R.string.storefront_public_image_ready)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Button(
+                        onClick = { onAction(StorefrontMutationOperation.SAVE_DRAFT) },
+                        enabled = !state.busy && status !in setOf(
+                            StorefrontPublicationStatus.PUBLISHED,
+                            StorefrontPublicationStatus.ARCHIVED
+                        )
+                    ) { Text(stringResource(R.string.storefront_save_draft)) }
+                    Button(
+                        onClick = { onAction(StorefrontMutationOperation.PUBLISH) },
+                        enabled = !state.busy && status != StorefrontPublicationStatus.ARCHIVED
+                    ) { Text(stringResource(R.string.storefront_publish)) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = { onAction(StorefrontMutationOperation.SCHEDULE) },
+                        enabled = !state.busy && status != StorefrontPublicationStatus.ARCHIVED
+                    ) { Text(stringResource(R.string.storefront_schedule)) }
+                    TextButton(
+                        onClick = { onAction(StorefrontMutationOperation.HIDE) },
+                        enabled = !state.busy && state.publication != null &&
+                            status != StorefrontPublicationStatus.ARCHIVED
+                    ) { Text(stringResource(R.string.storefront_hide)) }
+                    TextButton(
+                        onClick = { onAction(StorefrontMutationOperation.ARCHIVE) },
+                        enabled = !state.busy && state.publication != null &&
+                            status != StorefrontPublicationStatus.ARCHIVED
+                    ) { Text(stringResource(R.string.storefront_archive)) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = onPreview, enabled = !state.busy) {
+                        Text(stringResource(R.string.storefront_preview))
+                    }
+                    TextButton(onClick = onReload, enabled = !state.busy) {
+                        Text(stringResource(R.string.storefront_reload))
+                    }
+                }
+                Text(
+                    stringResource(R.string.storefront_operational_save_separate),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+
+    if (showCategoryPicker) {
+        AlertDialog(
+            onDismissRequest = { showCategoryPicker = false },
+            title = { Text(stringResource(R.string.storefront_choose_category)) },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    items(state.categories, key = { it.categoryId }) { category ->
+                        TextButton(
+                            onClick = {
+                                onDraftChange { it.copy(storefrontCategoryId = category.categoryId) }
+                                showCategoryPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(category.publicName) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCategoryPicker = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (showAvailabilityPicker) {
+        AlertDialog(
+            onDismissRequest = { showAvailabilityPicker = false },
+            title = { Text(stringResource(R.string.storefront_choose_availability)) },
+            text = {
+                Column {
+                    StorefrontAvailability.entries.forEach { availability ->
+                        TextButton(
+                            onClick = {
+                                onDraftChange { it.copy(availability = availability) }
+                                showAvailabilityPicker = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(storefrontAvailabilityLabel(availability)) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAvailabilityPicker = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (state.previewVisible) {
+        AlertDialog(
+            onDismissRequest = onDismissPreview,
+            title = { Text(state.draft.publicName.ifBlank { product.productName.orEmpty() }) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ProductImagePreview(
+                        state = state.publicImageState,
+                        contentDescription = stringResource(R.string.storefront_preview),
+                        modifier = Modifier.size(180.dp)
+                    )
+                    if (state.draft.publicImageId != null &&
+                        state.publicImageState.status != ProductImageUiStatus.READY
+                    ) {
+                        Text(stringResource(R.string.storefront_public_image_pending_preview))
+                    }
+                    Text(state.draft.publicDescription)
+                    Text(
+                        state.draft.publicPrice?.let { formatClPricePlainDisplay(it.toDouble()) }
+                            ?: stringResource(R.string.storefront_public_price_missing),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(selectedCategory ?: stringResource(R.string.storefront_category_missing))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismissPreview) { Text(stringResource(R.string.close)) }
+            }
+        )
+    }
+}
+
+@Composable
+private fun StorefrontBooleanField(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onChecked: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = onChecked
+            )
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Checkbox(checked = checked, onCheckedChange = null, enabled = enabled)
+        Text(label)
+    }
+}
+
+@Composable
+private fun storefrontDraftFieldLabel(field: StorefrontDraftField): String = stringResource(
+    when (field) {
+        StorefrontDraftField.PUBLIC_NAME -> R.string.storefront_public_name
+        StorefrontDraftField.PUBLIC_DESCRIPTION -> R.string.storefront_public_description
+        StorefrontDraftField.STOREFRONT_CATEGORY -> R.string.storefront_public_category
+        StorefrontDraftField.PUBLIC_BRAND -> R.string.storefront_public_brand
+        StorefrontDraftField.PUBLIC_PRICE -> R.string.storefront_public_price
+        StorefrontDraftField.COMPARE_AT_PRICE -> R.string.storefront_compare_at_price
+        StorefrontDraftField.PRICE_SOURCE_MODE -> R.string.storefront_price_mode
+        StorefrontDraftField.PROMOTION_START -> R.string.storefront_promotion_starts
+        StorefrontDraftField.PROMOTION_END -> R.string.storefront_promotion_ends
+        StorefrontDraftField.FEATURED -> R.string.storefront_featured
+        StorefrontDraftField.HOME_ORDER -> R.string.storefront_home_order
+        StorefrontDraftField.PICKUP -> R.string.storefront_pickup
+        StorefrontDraftField.DELIVERY -> R.string.storefront_delivery
+        StorefrontDraftField.RESERVATION -> R.string.storefront_reservation
+        StorefrontDraftField.AVAILABILITY -> R.string.storefront_availability
+        StorefrontDraftField.PUBLIC_IMAGE -> R.string.storefront_public_image
+    }
+)
+
+@Composable
+private fun storefrontStatusLabel(status: StorefrontPublicationStatus): String =
+    stringResource(
+        when (status) {
+            StorefrontPublicationStatus.UNPUBLISHED -> R.string.storefront_status_unpublished
+            StorefrontPublicationStatus.DRAFT -> R.string.storefront_status_draft
+            StorefrontPublicationStatus.SCHEDULED -> R.string.storefront_status_scheduled
+            StorefrontPublicationStatus.PUBLISHED -> R.string.storefront_status_published
+            StorefrontPublicationStatus.HIDDEN -> R.string.storefront_status_hidden
+            StorefrontPublicationStatus.ARCHIVED -> R.string.storefront_status_archived
+        }
+    )
+
+@Composable
+private fun storefrontAvailabilityLabel(value: StorefrontAvailability): String =
+    stringResource(
+        when (value) {
+            StorefrontAvailability.AVAILABLE -> R.string.storefront_availability_available
+            StorefrontAvailability.LOW_STOCK -> R.string.storefront_availability_low_stock
+            StorefrontAvailability.UNAVAILABLE -> R.string.storefront_availability_unavailable
+            StorefrontAvailability.RESERVATION_ONLY -> R.string.storefront_availability_reservation
+            StorefrontAvailability.PICKUP_ONLY -> R.string.storefront_availability_pickup
+            StorefrontAvailability.DELIVERY_ONLY -> R.string.storefront_availability_delivery
+        }
+    )
+
+@Composable
+private fun storefrontErrorLabel(code: String): String = when (code) {
+    "product_not_synced" -> stringResource(R.string.storefront_sync_before_publish)
+    "network_required", "network_or_image_required" ->
+        stringResource(R.string.storefront_network_required)
+    "stale_revision" -> stringResource(R.string.storefront_conflict_title)
+    "storefront_category_required" -> stringResource(R.string.storefront_category_missing)
+    "public_price_required", "public_price_invalid", "public_price_requires_clp_integer" ->
+        stringResource(R.string.storefront_public_price_invalid)
+    "promotion_window_invalid" -> stringResource(R.string.storefront_promotion_invalid)
+    "save_draft_before_image" -> stringResource(R.string.storefront_save_before_image)
+    "permission_denied" -> stringResource(R.string.storefront_permission_denied)
+    else -> stringResource(R.string.storefront_operation_failed)
 }
 
 @Composable

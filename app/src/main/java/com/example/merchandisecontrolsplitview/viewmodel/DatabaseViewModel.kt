@@ -45,6 +45,7 @@ import com.example.merchandisecontrolsplitview.productimage.PreparedProductImage
 import com.example.merchandisecontrolsplitview.productimage.PendingStagedProductImageStore
 import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
+import com.example.merchandisecontrolsplitview.productimage.StorefrontPublicImageVariant
 import com.example.merchandisecontrolsplitview.productimage.SharedPreferencesPendingStagedProductImageStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -139,6 +140,89 @@ data class ProductImageUiState(
     val mutationPhase: ProductImageMutationPhase? = null
 )
 
+enum class StorefrontListFilter {
+    ALL,
+    PUBLISHED,
+    UNPUBLISHED,
+    DRAFT,
+    SCHEDULED,
+    HIDDEN,
+    NEEDS_UPDATE,
+    CONFLICT
+}
+
+private fun StorefrontListFilter.toSummaryFilter(): StorefrontSummaryFilter? = when (this) {
+    StorefrontListFilter.ALL, StorefrontListFilter.CONFLICT -> null
+    StorefrontListFilter.PUBLISHED -> StorefrontSummaryFilter.PUBLISHED
+    StorefrontListFilter.UNPUBLISHED -> StorefrontSummaryFilter.UNPUBLISHED
+    StorefrontListFilter.DRAFT -> StorefrontSummaryFilter.DRAFT
+    StorefrontListFilter.SCHEDULED -> StorefrontSummaryFilter.SCHEDULED
+    StorefrontListFilter.HIDDEN -> StorefrontSummaryFilter.HIDDEN
+    StorefrontListFilter.NEEDS_UPDATE -> StorefrontSummaryFilter.NEEDS_UPDATE
+}
+
+data class StorefrontPublicationSummary(
+    val localProductId: Long,
+    val syncedRemoteIdentity: Boolean,
+    val status: StorefrontPublicationStatus = StorefrontPublicationStatus.UNPUBLISHED,
+    val publicName: String? = null,
+    val publicPrice: Long? = null,
+    val storefrontCategoryId: String? = null,
+    val publicImageId: String? = null,
+    val version: Long? = null,
+    val updatedAt: String? = null,
+    val differsFromOperational: Boolean = false,
+    val hasConflict: Boolean = false
+)
+
+data class StorefrontConflictState(
+    val localDraft: StorefrontEditorDraft,
+    val server: StorefrontPublication,
+    val intendedOperation: StorefrontMutationOperation,
+    val dirtyFields: Set<StorefrontDraftField>
+)
+
+data class StorefrontImportSummary(
+    val internalProductsUpdated: Int,
+    val publicProductsNowDifferent: Int
+)
+
+internal fun countStorefrontImportDifferences(
+    updatedProducts: List<ProductUpdate>,
+    remoteIds: Map<Long, String>,
+    summariesByRemoteId: Map<String, StorefrontPublicationListSummary>
+): Int = updatedProducts.count { update ->
+    val remoteId = remoteIds[update.newProduct.id] ?: return@count false
+    val summary = summariesByRemoteId[remoteId] ?: return@count false
+    summary.publicationStatus != StorefrontPublicationStatus.UNPUBLISHED && (
+        summary.publicName != update.newProduct.productName.orEmpty() ||
+            update.newProduct.retailPrice?.takeIf {
+                it.isFinite() && it >= 0.0 && it % 1.0 == 0.0
+            }?.toLong() != summary.publicPrice
+        )
+}
+
+data class StorefrontEditorUiState(
+    val enabled: Boolean = false,
+    val expanded: Boolean = false,
+    val loading: Boolean = false,
+    val remoteProductId: String? = null,
+    val publication: StorefrontPublication? = null,
+    val draft: StorefrontEditorDraft = StorefrontEditorDraft(),
+    val baseDraft: StorefrontEditorDraft = StorefrontEditorDraft(),
+    val dirtyFields: Set<StorefrontDraftField> = emptySet(),
+    val categories: List<StorefrontCategory> = emptyList(),
+    val pendingConnection: Boolean = false,
+    val serverVersionUnverified: Boolean = false,
+    val busy: Boolean = false,
+    val previewVisible: Boolean = false,
+    val publicImageState: ProductImageUiState = ProductImageUiState(ProductImageUiStatus.ABSENT),
+    val conflict: StorefrontConflictState? = null,
+    val errorCode: String? = null
+) {
+    val canAuthor: Boolean get() = enabled && remoteProductId != null
+}
+
 private data class FullImportDbSnapshot(
     val products: List<Product>,
     val fingerprint: ImportDatasetFingerprint
@@ -231,7 +315,27 @@ class DatabaseViewModel(
     private val pendingStagedImageStore: PendingStagedProductImageStore =
         SharedPreferencesPendingStagedProductImageStore(app),
     private val canStageProductImages: () -> Boolean =
-        productImageService::canWriteNow
+        productImageService::canWriteNow,
+    private val storefrontRemote: StorefrontAuthoringRemoteDataSource =
+        (app as MerchandiseControlApplication).storefrontAuthoringRemoteDataSource,
+    private val storefrontEnabled: Boolean = BuildConfig.STOREFRONT_AUTHORING_ENABLED,
+    private val storefrontNetworkAvailable: () -> Boolean = {
+        (app as MerchandiseControlApplication)
+            .catalogSyncStateTracker.networkAvailable.value == true
+    },
+    private val storefrontScopeProvider: () -> Pair<String, String>? = {
+        val application = app as MerchandiseControlApplication
+        val auth = application.authManager.state.value
+        val shop = application.shopContextRepository.state.value
+        if (auth is AuthState.SignedIn &&
+            shop.ownerUserId == auth.userId &&
+            !shop.isLoading && shop.syncAllowed && shop.activeShopId != null
+        ) {
+            auth.userId to requireNotNull(shop.activeShopId)
+        } else {
+            null
+        }
+    }
 ) : AndroidViewModel(app) {
     private val importMutex = Mutex()
     private val exportMutex = Mutex()
@@ -258,6 +362,7 @@ class DatabaseViewModel(
         _stagedProductImageState.asStateFlow()
 
     fun consumeUiState() { _uiState.value = UiState.Idle }
+    fun consumeStorefrontImportSummary() { _storefrontImportSummary.value = null }
     private val _filter = MutableStateFlow<String?>(null)
     private val productDetailsOverrideMutex = Mutex()
     private val _productDetailsOverrides = MutableStateFlow<Map<Long, ProductWithDetails>>(emptyMap())
@@ -286,6 +391,33 @@ class DatabaseViewModel(
     private val pendingVisibleThumbs = linkedMapOf<Long, String?>()
     private var inFlightVisibleThumbProductIds = emptySet<Long>()
     private var visibleThumbBatchJob: Job? = null
+    private val _storefrontSummaries =
+        MutableStateFlow<Map<Long, StorefrontPublicationSummary>>(emptyMap())
+    val storefrontSummaries: StateFlow<Map<Long, StorefrontPublicationSummary>> =
+        _storefrontSummaries.asStateFlow()
+    private val _storefrontListFilter = MutableStateFlow(StorefrontListFilter.ALL)
+    val storefrontListFilter: StateFlow<StorefrontListFilter> =
+        _storefrontListFilter.asStateFlow()
+    private val _storefrontFilteredProductIds = MutableStateFlow<Set<Long>?>(null)
+    internal val storefrontFilteredProductIds: StateFlow<Set<Long>?> =
+        _storefrontFilteredProductIds.asStateFlow()
+    private val _storefrontFilterLoading = MutableStateFlow(false)
+    val storefrontFilterLoading: StateFlow<Boolean> = _storefrontFilterLoading.asStateFlow()
+    private val _storefrontEditorState = MutableStateFlow(
+        StorefrontEditorUiState(enabled = storefrontEnabled && storefrontRemote.isConfigured)
+    )
+    val storefrontEditorState: StateFlow<StorefrontEditorUiState> =
+        _storefrontEditorState.asStateFlow()
+    private val _storefrontImportSummary = MutableStateFlow<StorefrontImportSummary?>(null)
+    val storefrontImportSummary: StateFlow<StorefrontImportSummary?> =
+        _storefrontImportSummary.asStateFlow()
+    private val storefrontPublicationsByRemoteId = linkedMapOf<String, StorefrontPublication>()
+    private val storefrontKnownUnpublishedRemoteIds = linkedSetOf<String>()
+    private var storefrontSummaryJob: Job? = null
+    private var storefrontEditorJob: Job? = null
+    private var storefrontMutationJob: Job? = null
+    private val _storefrontPagingRefresh = MutableStateFlow(0L)
+    private val storefrontPendingKeys = mutableMapOf<StorefrontMutationOperation, String>()
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
     private val _supplierCatalogQuery = MutableStateFlow("")
@@ -317,9 +449,37 @@ class DatabaseViewModel(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    val pager = appliedProductFilter.flatMapLatest { filterStr ->
-        Pager(PagingConfig(pageSize = 20)) {
-            repository.getProductsWithDetailsPaged(filterStr)
+    val pager = combine(
+        appliedProductFilter,
+        _storefrontListFilter,
+        _storefrontFilteredProductIds,
+        _productImageScopeEpoch,
+        _storefrontPagingRefresh
+    ) { filterStr, storefrontFilter, productIds, _, _ ->
+        Triple(filterStr, storefrontFilter, productIds)
+    }.flatMapLatest { (filterStr, storefrontFilter, productIds) ->
+        val remoteFilter = storefrontFilter.toSummaryFilter()
+        val shopId = storefrontScopeProvider()?.second
+        Pager(PagingConfig(pageSize = 20, initialLoadSize = 20)) {
+            if (remoteFilter != null &&
+                shopId != null &&
+                storefrontEnabled &&
+                storefrontRemote.isConfigured &&
+                storefrontNetworkAvailable()
+            ) {
+                StorefrontProductPagingSource(
+                    remote = storefrontRemote,
+                    repository = repository,
+                    shopId = shopId,
+                    filter = remoteFilter,
+                    query = filterStr
+                )
+            } else {
+                repository.getProductsWithDetailsPaged(
+                    filterStr,
+                    if (storefrontFilter == StorefrontListFilter.CONFLICT) productIds else null
+                )
+            }
         }.flow.cachedIn(viewModelScope)
     }
 
@@ -338,6 +498,7 @@ class DatabaseViewModel(
         _productEditorTarget.value = product
         _productEditorSessionId.value += 1L
         _productEditorOperationState.value = ProductEditorOperationState.Idle
+        loadStorefrontEditor(product)
     }
 
     fun dismissProductEditor() {
@@ -347,7 +508,627 @@ class DatabaseViewModel(
         _productEditorTarget.value?.id?.takeIf { it > 0L }?.let(::closeProductImageEditor)
         _productEditorTarget.value = null
         _productEditorOperationState.value = ProductEditorOperationState.Idle
+        clearStorefrontEditor()
         clearStagedProductImage(deleteFile = true)
+    }
+
+    fun setStorefrontListFilter(filter: StorefrontListFilter) {
+        _storefrontListFilter.value = filter
+        _storefrontFilterLoading.value = false
+        _storefrontFilteredProductIds.value = if (filter == StorefrontListFilter.CONFLICT) {
+            _storefrontSummaries.value.values
+                .filter(StorefrontPublicationSummary::hasConflict)
+                .map(StorefrontPublicationSummary::localProductId)
+                .toSet()
+        } else {
+            null
+        }
+    }
+
+    fun setStorefrontExpanded(expanded: Boolean) {
+        _storefrontEditorState.update { it.copy(expanded = expanded) }
+    }
+
+    fun updateStorefrontDraft(update: (StorefrontEditorDraft) -> StorefrontEditorDraft) {
+        val current = _storefrontEditorState.value
+        if (!current.canAuthor || current.busy) return
+        val updated = update(current.draft)
+        _storefrontEditorState.value = current.copy(
+            draft = updated,
+            dirtyFields = storefrontChangedDraftFields(current.baseDraft, updated),
+            conflict = null,
+            errorCode = null
+        )
+    }
+
+    fun alignStorefrontWithOperational(product: Product) {
+        val retail = product.retailPrice
+        val clp = retail?.takeIf { it.isFinite() && it >= 0.0 && it % 1.0 == 0.0 }?.toLong()
+        updateStorefrontDraft { draft ->
+            draft.copy(
+                publicName = product.productName.orEmpty(),
+                publicBrand = draft.publicBrand,
+                publicPrice = clp ?: draft.publicPrice
+            )
+        }
+        if (retail != null && clp == null) {
+            _storefrontEditorState.update { it.copy(errorCode = "public_price_requires_clp_integer") }
+        }
+    }
+
+    fun setStorefrontPreviewVisible(visible: Boolean) {
+        _storefrontEditorState.update { it.copy(previewVisible = visible) }
+    }
+
+    fun reloadStorefrontEditor() {
+        _productEditorTarget.value?.takeIf { it.id > 0L }?.let(::loadStorefrontEditor)
+    }
+
+    fun reapplyStorefrontConflict() {
+        val current = _storefrontEditorState.value
+        val conflict = current.conflict ?: return
+        val serverDraft = StorefrontEditorDraft.fromPublication(conflict.server)
+        val mergedDraft = serverDraft
+            .overlayChangedFields(conflict.localDraft, conflict.dirtyFields)
+        _storefrontEditorState.value = current.copy(
+            publication = conflict.server,
+            draft = mergedDraft,
+            baseDraft = serverDraft,
+            dirtyFields = storefrontChangedDraftFields(serverDraft, mergedDraft),
+            conflict = null,
+            serverVersionUnverified = false,
+            errorCode = null
+        )
+    }
+
+    fun cancelStorefrontConflict() {
+        val current = _storefrontEditorState.value
+        val server = current.conflict?.server ?: return
+        _storefrontEditorState.value = current.copy(
+            publication = server,
+            draft = StorefrontEditorDraft.fromPublication(server),
+            baseDraft = StorefrontEditorDraft.fromPublication(server),
+            dirtyFields = emptySet(),
+            conflict = null,
+            serverVersionUnverified = false,
+            errorCode = null
+        )
+    }
+
+    fun mutateStorefront(operation: StorefrontMutationOperation) {
+        val product = _productEditorTarget.value ?: return
+        if (storefrontMutationJob?.isActive == true) return
+        val current = _storefrontEditorState.value
+        if (!current.canAuthor || current.loading || current.conflict != null) return
+        if (!storefrontNetworkAvailable()) {
+            if (operation == StorefrontMutationOperation.SAVE_DRAFT) {
+                storefrontPendingKeys.getOrPut(operation) { UUID.randomUUID().toString() }
+                _storefrontEditorState.value = current.copy(
+                    pendingConnection = true,
+                    serverVersionUnverified = true,
+                    errorCode = null
+                )
+            } else {
+                _storefrontEditorState.value = current.copy(errorCode = "network_required")
+            }
+            return
+        }
+        mutateStorefrontOnline(product, operation, current.draft)
+    }
+
+    fun retryPendingStorefrontDraft() {
+        val product = _productEditorTarget.value ?: return
+        val current = _storefrontEditorState.value
+        if (!current.pendingConnection || storefrontMutationJob?.isActive == true) return
+        if (!storefrontNetworkAvailable()) {
+            _storefrontEditorState.value = current.copy(errorCode = "network_required")
+            return
+        }
+        val scope = storefrontScopeProvider() ?: run {
+            _storefrontEditorState.value = current.copy(errorCode = "scope_unavailable")
+            return
+        }
+        val remoteProductId = current.remoteProductId ?: return
+        val generation = productImageScopeGeneration
+        storefrontMutationJob = viewModelScope.launch {
+            _storefrontEditorState.update { it.copy(busy = true, errorCode = null) }
+            val response = storefrontRemote.read(scope.second, listOf(remoteProductId))
+            if (!storefrontScopeStillCurrent(scope, generation)) return@launch
+            val read = response.getOrNull()
+            if (read == null || !read.ok) {
+                _storefrontEditorState.update {
+                    it.copy(busy = false, errorCode = read?.code ?: "backend_unavailable")
+                }
+                return@launch
+            }
+            val server = read.rows.singleOrNull()
+            val expected = current.publication?.version ?: 0L
+            val serverVersion = server?.version ?: 0L
+            if (serverVersion != expected && server != null) {
+                _storefrontEditorState.update {
+                    it.copy(
+                        busy = false,
+                        pendingConnection = false,
+                        conflict = StorefrontConflictState(
+                            localDraft = current.draft,
+                            server = server,
+                            intendedOperation = StorefrontMutationOperation.SAVE_DRAFT,
+                            dirtyFields = current.dirtyFields
+                        ),
+                        errorCode = "stale_revision"
+                    )
+                }
+                return@launch
+            }
+            val serverDraft = server?.let(StorefrontEditorDraft::fromPublication)
+                ?: current.baseDraft
+            _storefrontEditorState.update {
+                it.copy(
+                    publication = server,
+                    categories = read.categories,
+                    baseDraft = serverDraft,
+                    dirtyFields = storefrontChangedDraftFields(serverDraft, current.draft),
+                    busy = false,
+                    serverVersionUnverified = false
+                )
+            }
+            mutateStorefrontOnline(product, StorefrontMutationOperation.SAVE_DRAFT, current.draft)
+        }
+    }
+
+    fun adoptOperationalImageForStorefront(product: Product) {
+        val current = _storefrontEditorState.value
+        val publicationId = current.publication?.publicationId
+        if (publicationId == null) {
+            _storefrontEditorState.value = current.copy(errorCode = "save_draft_before_image")
+            return
+        }
+        if (!storefrontNetworkAvailable()) {
+            _storefrontEditorState.value = current.copy(errorCode = "network_or_image_required")
+            return
+        }
+        if (storefrontMutationJob?.isActive == true) return
+        val scope = storefrontScopeProvider() ?: return
+        val generation = productImageScopeGeneration
+        storefrontMutationJob = viewModelScope.launch {
+            _storefrontEditorState.update { it.copy(busy = true, errorCode = null) }
+            try {
+                val imageId = productImageService.adoptForStorefront(product.id, publicationId)
+                if (!storefrontScopeStillCurrent(scope, generation)) return@launch
+                _storefrontEditorState.update {
+                    val updatedDraft = it.draft.copy(publicImageId = imageId)
+                    it.copy(
+                        draft = updatedDraft,
+                        dirtyFields = storefrontChangedDraftFields(it.baseDraft, updatedDraft),
+                        publicImageState = ProductImageUiState(ProductImageUiStatus.ABSENT),
+                        busy = false,
+                        errorCode = null
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: ProductImageException) {
+                if (storefrontScopeStillCurrent(scope, generation)) {
+                    _storefrontEditorState.update { it.copy(busy = false, errorCode = error.code) }
+                }
+            }
+        }
+    }
+
+    fun loadStorefrontSummaries(products: List<Product>) {
+        if (!storefrontEnabled || !storefrontRemote.isConfigured) return
+        val missing = products
+            .distinctBy(Product::id)
+            .filterNot { _storefrontSummaries.value.containsKey(it.id) }
+        if (missing.isEmpty()) return
+        storefrontSummaryJob?.cancel()
+        storefrontSummaryJob = viewModelScope.launch {
+            for (bounded in missing.chunked(100)) {
+                val remoteIds = try {
+                    repository.getSyncedProductRemoteIds(bounded.map(Product::id))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    emptyMap()
+                }
+                _storefrontSummaries.update { existing ->
+                    bounded.fold(existing) { current, product ->
+                        val remoteId = remoteIds[product.id]
+                        val publication = remoteId?.let(storefrontPublicationsByRemoteId::get)
+                        current + (product.id to storefrontSummary(product, remoteId, publication))
+                    }
+                }
+                val scope = storefrontScopeProvider() ?: continue
+                if (!storefrontNetworkAvailable()) continue
+                val requested = remoteIds.values.distinct()
+                if (requested.isEmpty()) continue
+                val generation = productImageScopeGeneration
+                val response = storefrontRemote.readSummary(
+                    shopId = scope.second,
+                    filter = StorefrontSummaryFilter.ALL,
+                    sourceProductIds = requested,
+                    pageSize = requested.size
+                ).getOrNull()
+                    ?: continue
+                if (!response.ok || !storefrontScopeStillCurrent(scope, generation)) return@launch
+                val summariesByRemoteId = response.rows.associateBy(
+                    StorefrontPublicationListSummary::sourceProductId
+                )
+                response.rows.forEach { summary ->
+                    if (summary.publicationStatus == StorefrontPublicationStatus.UNPUBLISHED) {
+                        storefrontKnownUnpublishedRemoteIds.add(summary.sourceProductId)
+                    } else {
+                        storefrontKnownUnpublishedRemoteIds.remove(summary.sourceProductId)
+                    }
+                }
+                _storefrontSummaries.update { existing ->
+                    bounded.fold(existing) { current, product ->
+                        val remoteId = remoteIds[product.id]
+                        val summary = remoteId?.let(summariesByRemoteId::get)
+                        current + (product.id to storefrontListSummary(product, remoteId, summary))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun loadStorefrontEditor(product: Product) {
+        storefrontEditorJob?.cancel()
+        storefrontMutationJob?.cancel()
+        storefrontPendingKeys.clear()
+        val enabled = storefrontEnabled && storefrontRemote.isConfigured
+        val initialDraft = StorefrontEditorDraft(publicName = product.productName.orEmpty())
+        _storefrontEditorState.value = StorefrontEditorUiState(
+            enabled = enabled,
+            loading = enabled && product.id > 0L,
+            draft = initialDraft,
+            baseDraft = initialDraft
+        )
+        if (!enabled || product.id <= 0L) return
+        storefrontEditorJob = viewModelScope.launch {
+            val remoteProductId = try {
+                repository.getSyncedProductRemoteIds(listOf(product.id))[product.id]
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (_productEditorTarget.value?.id != product.id) return@launch
+            if (remoteProductId == null) {
+                val unsyncedDraft = StorefrontEditorDraft(
+                    publicName = product.productName.orEmpty()
+                )
+                _storefrontEditorState.value = StorefrontEditorUiState(
+                    enabled = true,
+                    expanded = _storefrontEditorState.value.expanded,
+                    errorCode = "product_not_synced",
+                    draft = unsyncedDraft,
+                    baseDraft = unsyncedDraft
+                )
+                _storefrontSummaries.update {
+                    it + (product.id to storefrontSummary(product, null, null))
+                }
+                return@launch
+            }
+            val cached = storefrontPublicationsByRemoteId[remoteProductId]
+            if (!storefrontNetworkAvailable()) {
+                val cachedDraft = cached?.let(StorefrontEditorDraft::fromPublication)
+                    ?: StorefrontEditorDraft(publicName = product.productName.orEmpty())
+                _storefrontEditorState.value = StorefrontEditorUiState(
+                    enabled = true,
+                    expanded = _storefrontEditorState.value.expanded,
+                    remoteProductId = remoteProductId,
+                    publication = cached,
+                    draft = cachedDraft,
+                    baseDraft = cachedDraft,
+                    serverVersionUnverified = true,
+                    errorCode = if (cached == null) "network_required" else null
+                )
+                return@launch
+            }
+            val scope = storefrontScopeProvider()
+            if (scope == null) {
+                _storefrontEditorState.update {
+                    it.copy(loading = false, remoteProductId = remoteProductId, errorCode = "scope_unavailable")
+                }
+                return@launch
+            }
+            val generation = productImageScopeGeneration
+            val result = storefrontRemote.read(scope.second, listOf(remoteProductId))
+            if (!storefrontScopeStillCurrent(scope, generation) ||
+                _productEditorTarget.value?.id != product.id
+            ) return@launch
+            val response = result.getOrNull()
+            if (response == null || !response.ok) {
+                _storefrontEditorState.update {
+                    val fallbackDraft = cached?.let(StorefrontEditorDraft::fromPublication)
+                        ?: it.draft
+                    it.copy(
+                        loading = false,
+                        remoteProductId = remoteProductId,
+                        publication = cached,
+                        draft = fallbackDraft,
+                        baseDraft = fallbackDraft,
+                        dirtyFields = emptySet(),
+                        serverVersionUnverified = cached != null,
+                        errorCode = response?.code ?: "backend_unavailable"
+                    )
+                }
+                return@launch
+            }
+            val publication = response.rows.singleOrNull()
+            if (publication != null) {
+                storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
+                storefrontPublicationsByRemoteId[remoteProductId] = publication
+            } else {
+                storefrontPublicationsByRemoteId.remove(remoteProductId)
+                storefrontKnownUnpublishedRemoteIds.add(remoteProductId)
+            }
+            val serverDraft = publication?.let(StorefrontEditorDraft::fromPublication)
+                ?: StorefrontEditorDraft(publicName = product.productName.orEmpty())
+            _storefrontEditorState.value = StorefrontEditorUiState(
+                enabled = true,
+                expanded = _storefrontEditorState.value.expanded,
+                remoteProductId = remoteProductId,
+                publication = publication,
+                draft = serverDraft,
+                baseDraft = serverDraft,
+                categories = response.categories
+            )
+            _storefrontSummaries.update {
+                it + (product.id to storefrontSummary(product, remoteProductId, publication))
+            }
+            publication?.let {
+                loadStorefrontPublicPreview(it, product.id, generation)
+            }
+        }
+    }
+
+    private fun mutateStorefrontOnline(
+        product: Product,
+        operation: StorefrontMutationOperation,
+        draft: StorefrontEditorDraft
+    ) {
+        val current = _storefrontEditorState.value
+        val validation = validateStorefrontDraft(operation, draft)
+        if (validation != null) {
+            _storefrontEditorState.value = current.copy(errorCode = validation)
+            return
+        }
+        val scope = storefrontScopeProvider() ?: run {
+            _storefrontEditorState.value = current.copy(errorCode = "scope_unavailable")
+            return
+        }
+        val remoteProductId = current.remoteProductId ?: return
+        val expectedVersion = current.publication?.version ?: 0L
+        val key = storefrontPendingKeys.getOrPut(operation) { UUID.randomUUID().toString() }
+        val generation = productImageScopeGeneration
+        storefrontMutationJob = viewModelScope.launch {
+            _storefrontEditorState.update { it.copy(busy = true, errorCode = null) }
+            val result = storefrontRemote.mutate(
+                shopId = scope.second,
+                sourceProductId = remoteProductId,
+                operation = operation,
+                draft = draft,
+                expectedVersion = expectedVersion,
+                idempotencyKey = key
+            )
+            if (!storefrontScopeStillCurrent(scope, generation) ||
+                _productEditorTarget.value?.id != product.id
+            ) return@launch
+            val response = result.getOrNull()
+            if (response?.ok == true && response.payload != null) {
+                val publication = response.payload
+                val acknowledgedDraft = StorefrontEditorDraft.fromPublication(publication)
+                storefrontPendingKeys.remove(operation)
+                storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
+                storefrontPublicationsByRemoteId[remoteProductId] = publication
+                _storefrontEditorState.update {
+                    it.copy(
+                        publication = publication,
+                        draft = acknowledgedDraft,
+                        baseDraft = acknowledgedDraft,
+                        dirtyFields = emptySet(),
+                        pendingConnection = false,
+                        serverVersionUnverified = false,
+                        busy = false,
+                        conflict = null,
+                        errorCode = null
+                    )
+                }
+                _storefrontSummaries.update {
+                    it + (product.id to storefrontSummary(product, remoteProductId, publication))
+                }
+                _storefrontPagingRefresh.value += 1L
+                loadStorefrontPublicPreview(publication, product.id, generation)
+            } else if (response?.code == "stale_revision" && response.server != null) {
+                storefrontPendingKeys.remove(operation)
+                _storefrontEditorState.update {
+                    it.copy(
+                        busy = false,
+                        pendingConnection = false,
+                        serverVersionUnverified = false,
+                        conflict = StorefrontConflictState(
+                            draft,
+                            response.server,
+                            operation,
+                            current.dirtyFields
+                        ),
+                        errorCode = "stale_revision"
+                    )
+                }
+                _storefrontSummaries.update { summaries ->
+                    val summary = summaries[product.id]
+                        ?: storefrontSummary(product, remoteProductId, response.server)
+                    summaries + (product.id to summary.copy(hasConflict = true))
+                }
+                if (_storefrontListFilter.value == StorefrontListFilter.CONFLICT) {
+                    _storefrontFilteredProductIds.value = _storefrontSummaries.value.values
+                        .filter(StorefrontPublicationSummary::hasConflict)
+                        .map(StorefrontPublicationSummary::localProductId)
+                        .toSet()
+                }
+            } else {
+                _storefrontEditorState.update {
+                    it.copy(busy = false, errorCode = response?.code ?: "backend_unavailable")
+                }
+            }
+        }
+    }
+
+    private suspend fun loadStorefrontPublicPreview(
+        publication: StorefrontPublication,
+        localProductId: Long,
+        generation: Long
+    ) {
+        val imageId = publication.publicImageId
+        val publicUrl = publication.publicImageDetailUrl
+        if (imageId == null || publicUrl == null) {
+            _storefrontEditorState.update {
+                if (_productEditorTarget.value?.id == localProductId) {
+                    it.copy(publicImageState = ProductImageUiState(ProductImageUiStatus.ABSENT))
+                } else {
+                    it
+                }
+            }
+            return
+        }
+        _storefrontEditorState.update {
+            it.copy(publicImageState = ProductImageUiState(ProductImageUiStatus.LOADING))
+        }
+        try {
+            val bytes = productImageService.loadStorefrontPublicImage(
+                imagePublicationId = imageId,
+                publicUrl = publicUrl,
+                variant = StorefrontPublicImageVariant.DETAIL
+            )
+            if (generation != productImageScopeGeneration ||
+                _productEditorTarget.value?.id != localProductId ||
+                _storefrontEditorState.value.publication?.publicationId != publication.publicationId
+            ) return
+            _storefrontEditorState.update {
+                it.copy(
+                    publicImageState = ProductImageUiState(
+                        status = ProductImageUiStatus.READY,
+                        bytes = bytes,
+                        versionId = imageId,
+                        source = ProductImageLoadSource.NETWORK
+                    )
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: ProductImageException) {
+            if (generation == productImageScopeGeneration &&
+                _productEditorTarget.value?.id == localProductId
+            ) {
+                _storefrontEditorState.update {
+                    it.copy(
+                        publicImageState = ProductImageUiState(
+                            status = ProductImageUiStatus.ERROR,
+                            versionId = imageId,
+                            errorCode = error.code
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun validateStorefrontDraft(
+        operation: StorefrontMutationOperation,
+        draft: StorefrontEditorDraft
+    ): String? {
+        if (operation == StorefrontMutationOperation.HIDE ||
+            operation == StorefrontMutationOperation.ARCHIVE
+        ) return null
+        if (draft.publicName.trim().length !in 1..200) return "public_name_invalid"
+        if (draft.publicDescription.length > 5000 || draft.publicBrand.length > 120) {
+            return "public_text_invalid"
+        }
+        val price = draft.publicPrice ?: return "public_price_required"
+        if (price !in 0..999_999_999_999L) return "public_price_invalid"
+        if (draft.compareAtPrice != null && draft.compareAtPrice < price) {
+            return "compare_at_price_invalid"
+        }
+        if (draft.priceSourceMode !in setOf("override", "operational", "promotion")) {
+            return "price_source_invalid"
+        }
+        if ((draft.promotionStartsAt == null) != (draft.promotionEndsAt == null)) {
+            return "promotion_window_invalid"
+        }
+        if (draft.priceSourceMode == "promotion" &&
+            (draft.promotionStartsAt == null || draft.promotionEndsAt == null)
+        ) return "promotion_window_invalid"
+        if (operation in setOf(StorefrontMutationOperation.PUBLISH, StorefrontMutationOperation.SCHEDULE)) {
+            if (draft.storefrontCategoryId == null) return "storefront_category_required"
+            if (!draft.pickupEnabled && !draft.deliveryEnabled && !draft.reservationEnabled) {
+                return "storefront_fulfillment_required"
+            }
+        }
+        return null
+    }
+
+    private fun storefrontSummary(
+        product: Product,
+        remoteProductId: String?,
+        publication: StorefrontPublication?
+    ): StorefrontPublicationSummary {
+        val publicPriceDiffers = publication?.publicPrice?.let { publicPrice ->
+            val operational = product.retailPrice
+            operational == null || !operational.isFinite() || operational % 1.0 != 0.0 ||
+                operational.toLong() != publicPrice
+        } ?: false
+        return StorefrontPublicationSummary(
+            localProductId = product.id,
+            syncedRemoteIdentity = remoteProductId != null,
+            status = publication?.publicationStatus ?: StorefrontPublicationStatus.UNPUBLISHED,
+            publicName = publication?.publicName,
+            publicPrice = publication?.publicPrice,
+            storefrontCategoryId = publication?.storefrontCategoryId,
+            publicImageId = publication?.publicImageId,
+            version = publication?.version,
+            updatedAt = publication?.updatedAt,
+            differsFromOperational = publication != null &&
+                (publication.publicName != product.productName.orEmpty() || publicPriceDiffers),
+            hasConflict = _storefrontEditorState.value.conflict != null &&
+                _productEditorTarget.value?.id == product.id
+        )
+    }
+
+    private fun storefrontListSummary(
+        product: Product,
+        remoteProductId: String?,
+        summary: StorefrontPublicationListSummary?
+    ): StorefrontPublicationSummary = StorefrontPublicationSummary(
+        localProductId = product.id,
+        syncedRemoteIdentity = remoteProductId != null,
+        status = summary?.publicationStatus ?: StorefrontPublicationStatus.UNPUBLISHED,
+        publicName = summary?.publicName,
+        publicPrice = summary?.publicPrice,
+        storefrontCategoryId = summary?.storefrontCategoryId,
+        publicImageId = summary?.publicImageId,
+        version = summary?.version,
+        updatedAt = summary?.updatedAt,
+        differsFromOperational = summary?.differsFromOperational ?: false,
+        hasConflict = _storefrontEditorState.value.conflict != null &&
+            _productEditorTarget.value?.id == product.id
+    )
+
+    private fun storefrontScopeStillCurrent(
+        scope: Pair<String, String>,
+        generation: Long
+    ): Boolean = generation == productImageScopeGeneration && storefrontScopeProvider() == scope
+
+    private fun clearStorefrontEditor() {
+        storefrontEditorJob?.cancel()
+        storefrontMutationJob?.cancel()
+        storefrontEditorJob = null
+        storefrontMutationJob = null
+        storefrontPendingKeys.clear()
+        _storefrontEditorState.value = StorefrontEditorUiState(
+            enabled = storefrontEnabled && storefrontRemote.isConfigured
+        )
     }
 
     fun stageNewProductImage(sourceUri: Uri, onFinished: () -> Unit = {}) {
@@ -1092,6 +1873,17 @@ class DatabaseViewModel(
                     if (oldScope.accountId.isBlank() && currentScope.accountId.isNotBlank()) {
                         productImageScopeGeneration += 1
                         _productImageScopeEpoch.value = productImageScopeGeneration
+                        storefrontPublicationsByRemoteId.clear()
+                        storefrontKnownUnpublishedRemoteIds.clear()
+                        _storefrontListFilter.value = StorefrontListFilter.ALL
+                        _storefrontFilteredProductIds.value = null
+                        _storefrontFilterLoading.value = false
+                        _storefrontSummaries.value = emptyMap()
+                        _storefrontImportSummary.value = null
+                        if (_productEditorTarget.value != null) {
+                            _productEditorTarget.value = null
+                        }
+                        clearStorefrontEditor()
                         recoverPendingStagedProductImages(
                             currentScope.accountId,
                             currentScope.shopId
@@ -1105,6 +1897,14 @@ class DatabaseViewModel(
                     productEditorSaveJob = null
                     _productEditorTarget.value = null
                     _productEditorOperationState.value = ProductEditorOperationState.Idle
+                    storefrontPublicationsByRemoteId.clear()
+                    storefrontKnownUnpublishedRemoteIds.clear()
+                    _storefrontListFilter.value = StorefrontListFilter.ALL
+                    _storefrontFilteredProductIds.value = null
+                    _storefrontFilterLoading.value = false
+                    _storefrontSummaries.value = emptyMap()
+                    _storefrontImportSummary.value = null
+                    clearStorefrontEditor()
                     clearStagedProductImage(deleteFile = true)
                     pendingStagedImageStore.clear().forEach(::deleteStagedImageFile)
                     pendingStagedProductImages.values.forEach(::deleteStagedImageFile)
@@ -1907,8 +2707,13 @@ class DatabaseViewModel(
                         )
 
                         Log.d("DB_IMPORT", "APPLY_IMPORT SUCCESS previewId=$previewId")
+                        val storefrontSummary = buildStorefrontImportSummary(
+                            internalProductsUpdated = newProducts.size + updatedProducts.size,
+                            updatedProducts = updatedProducts
+                        )
+                        _storefrontImportSummary.value = storefrontSummary
                         _importFlowState.value = ImportFlowState.Success(previewId)
-                        _uiState.value = UiState.Success(context.getString(R.string.import_success))
+                        _uiState.value = UiState.Idle
                     }
                     ImportApplyResult.AlreadyRunning -> {
                         val userMessage = context.getString(R.string.operation_in_progress)
@@ -1950,6 +2755,64 @@ class DatabaseViewModel(
                 Log.e("DB_IMPORT", "APPLY_IMPORT FAILED previewId=$previewId", e)
             }
         }
+    }
+
+    private suspend fun buildStorefrontImportSummary(
+        internalProductsUpdated: Int,
+        updatedProducts: List<ProductUpdate>
+    ): StorefrontImportSummary {
+        if (!storefrontEnabled || updatedProducts.isEmpty()) {
+            return StorefrontImportSummary(internalProductsUpdated, 0)
+        }
+        val productsById = updatedProducts.associateBy { it.newProduct.id }
+        val remoteIds = try {
+            repository.getSyncedProductRemoteIds(productsById.keys.toList())
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        val summariesByRemoteId = linkedMapOf<String, StorefrontPublicationListSummary>()
+        val scope = storefrontScopeProvider()
+        val generation = productImageScopeGeneration
+        if (scope != null && storefrontNetworkAvailable()) {
+            for (chunk in remoteIds.values.distinct().chunked(100)) {
+                val response = storefrontRemote.readSummary(
+                    shopId = scope.second,
+                    filter = StorefrontSummaryFilter.ALL,
+                    sourceProductIds = chunk,
+                    pageSize = 100
+                ).getOrNull()
+                if (response?.ok != true || !storefrontScopeStillCurrent(
+                        scope,
+                        generation
+                    )
+                ) break
+                response.rows.associateByTo(
+                    summariesByRemoteId,
+                    StorefrontPublicationListSummary::sourceProductId
+                )
+            }
+        }
+        productsById.keys.forEach { localId ->
+            val remoteId = remoteIds[localId] ?: return@forEach
+            if (remoteId !in summariesByRemoteId) {
+                storefrontPublicationsByRemoteId[remoteId]?.let { publication ->
+                    summariesByRemoteId[remoteId] = StorefrontPublicationListSummary(
+                        sourceProductId = publication.sourceProductId,
+                        status = publication.status,
+                        publicName = publication.publicName,
+                        publicPrice = publication.publicPrice
+                    )
+                }
+            }
+        }
+        val different = countStorefrontImportDifferences(
+            updatedProducts,
+            remoteIds,
+            summariesByRemoteId
+        )
+        return StorefrontImportSummary(internalProductsUpdated, different)
     }
 
     fun exportDatabase(
@@ -2273,6 +3136,12 @@ class DatabaseViewModel(
     fun deleteProduct(product: Product) {
         viewModelScope.launch {
             try {
+                if (!operationalDeleteAllowedByStorefront(product)) {
+                    _uiState.value = UiState.Error(
+                        appContext.getString(R.string.storefront_delete_archive_required)
+                    )
+                    return@launch
+                }
                 productDetailsOverrideMutex.withLock {
                     repository.deleteProduct(product)
                     _productDetailsOverrides.update { current ->
@@ -2285,6 +3154,23 @@ class DatabaseViewModel(
                 _uiState.value = UiState.Error(appContext.getString(R.string.error_product_deleted))
             }
         }
+    }
+
+    private suspend fun operationalDeleteAllowedByStorefront(product: Product): Boolean {
+        if (!storefrontEnabled || !storefrontRemote.isConfigured) return true
+        val remoteId = repository.getSyncedProductRemoteIds(listOf(product.id))[product.id]
+            ?: return true
+        val cached = storefrontPublicationsByRemoteId[remoteId]
+        if (cached?.publicationStatus == StorefrontPublicationStatus.ARCHIVED) return true
+        if (!storefrontNetworkAvailable()) return false
+        val scope = storefrontScopeProvider() ?: return false
+        val generation = productImageScopeGeneration
+        val response = storefrontRemote.read(scope.second, listOf(remoteId)).getOrNull()
+            ?: return false
+        if (!response.ok || !storefrontScopeStillCurrent(scope, generation)) return false
+        val publication = response.rows.singleOrNull()
+        if (publication != null) storefrontPublicationsByRemoteId[remoteId] = publication
+        return publication == null || publication.publicationStatus == StorefrontPublicationStatus.ARCHIVED
     }
 
     fun analyzeGridData(

@@ -63,6 +63,11 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         )
         buildConfigField(
             "boolean",
+            "STOREFRONT_AUTHORING_ENABLED",
+            readBooleanLocalOrEnv("STOREFRONT_AUTHORING_ENABLED").toString()
+        )
+        buildConfigField(
+            "boolean",
             "WECHAT_AUTH_ANDROID_ENABLED",
             readBooleanLocalOrEnv("WECHAT_AUTH_ANDROID_ENABLED").toString()
         )

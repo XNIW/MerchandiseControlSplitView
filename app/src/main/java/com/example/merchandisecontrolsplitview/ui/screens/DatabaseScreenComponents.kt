@@ -4,6 +4,8 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +43,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -55,6 +58,7 @@ import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -98,6 +102,9 @@ import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSectionUiState
+import com.example.merchandisecontrolsplitview.viewmodel.StorefrontListFilter
+import com.example.merchandisecontrolsplitview.viewmodel.StorefrontPublicationSummary
+import com.example.merchandisecontrolsplitview.data.StorefrontPublicationStatus
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseHubTab
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
@@ -507,7 +514,11 @@ internal fun DatabaseProductListSection(
     modifier: Modifier = Modifier,
     productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
     productImageStates: Map<ProductImageUiKey, ProductImageUiState> = emptyMap(),
-    onProductImageVisibilityChanged: (Product, Boolean) -> Unit = { _, _ -> }
+    onProductImageVisibilityChanged: (Product, Boolean) -> Unit = { _, _ -> },
+    storefrontSummaries: Map<Long, StorefrontPublicationSummary> = emptyMap(),
+    storefrontFilter: StorefrontListFilter = StorefrontListFilter.ALL,
+    onStorefrontFilterChange: (StorefrontListFilter) -> Unit = {},
+    storefrontFilterLoading: Boolean = false
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
@@ -534,38 +545,47 @@ internal fun DatabaseProductListSection(
                 modifier = Modifier.align(Alignment.Center)
             )
         } else if (presentation.primaryState == ProductPagingPrimaryState.EMPTY) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            Column(modifier = Modifier.fillMaxSize()) {
+                StorefrontFilterRow(
+                    selected = storefrontFilter,
+                    onSelected = onStorefrontFilterChange,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.SearchOff,
-                        contentDescription = stringResource(R.string.no_products_found),
-                        modifier = Modifier.size(56.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = if (filter.isEmpty()) {
-                            stringResource(R.string.no_products_in_db)
-                        } else {
-                            stringResource(R.string.no_results_for, filter)
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center
-                    )
-                    if (filter.isEmpty()) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SearchOff,
+                            contentDescription = stringResource(R.string.no_products_found),
+                            modifier = Modifier.size(56.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Text(
-                            text = stringResource(R.string.add_first_product_prompt),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = if (filter.isEmpty()) {
+                                stringResource(R.string.no_products_in_db)
+                            } else {
+                                stringResource(R.string.no_results_for, filter)
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
                             textAlign = TextAlign.Center
                         )
+                        if (filter.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.add_first_product_prompt),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             }
@@ -576,6 +596,12 @@ internal fun DatabaseProductListSection(
                 contentPadding = DatabaseListContentPadding,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item(key = "storefront-filters") {
+                    StorefrontFilterRow(
+                        selected = storefrontFilter,
+                        onSelected = onStorefrontFilterChange
+                    )
+                }
                 if (presentation.showRefreshError) {
                     item(key = "refresh-error") {
                         ProductPagingErrorCard(
@@ -589,6 +615,11 @@ internal fun DatabaseProductListSection(
                     products[idx]?.let { details ->
                         val effectiveDetails = productDetailsOverrides[details.product.id] ?: details
                         val currentProduct = effectiveDetails.productWithCurrentPrices()
+                        val storefrontSummary = storefrontSummaries[currentProduct.id]
+
+                        if (!storefrontSummaryMatches(storefrontFilter, storefrontSummary)) {
+                            return@let
+                        }
 
                         @Suppress("DEPRECATION")
                         val dismissState = rememberSwipeToDismissBoxState(
@@ -620,6 +651,7 @@ internal fun DatabaseProductListSection(
                                         onProductImageVisibilityChanged(currentProduct, visible)
                                     },
                                     onImageClick = { onProductImageClick(currentProduct) },
+                                    storefrontSummary = storefrontSummary,
                                     onClick = { onProductClick(currentProduct) },
                                     onShowHistory = { onShowHistory(currentProduct) }
                                 )
@@ -650,13 +682,35 @@ internal fun DatabaseProductListSection(
                 }
             }
 
-            if (isRefreshing) {
+            if (isRefreshing || storefrontFilterLoading) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
                 )
             }
+        }
+    }
+}
+
+@Composable
+internal fun StorefrontFilterRow(
+    selected: StorefrontListFilter,
+    onSelected: (StorefrontListFilter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StorefrontListFilter.entries.forEach { item ->
+            FilterChip(
+                selected = selected == item,
+                onClick = { onSelected(item) },
+                label = { Text(storefrontFilterLabel(item)) }
+            )
         }
     }
 }
@@ -779,6 +833,7 @@ internal fun ProductRow(
     imageState: ProductImageUiState? = null,
     onImageVisibilityChanged: (Boolean) -> Unit = {},
     onImageClick: () -> Unit = {},
+    storefrontSummary: StorefrontPublicationSummary? = null,
     onClick: () -> Unit,
     onShowHistory: () -> Unit = {}
 ) {
@@ -824,6 +879,7 @@ internal fun ProductRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    StorefrontSummaryBadge(storefrontSummary)
                 }
                 Text(
                     text = "${stringResource(R.string.barcode_prefix)} ${product.barcode}  |  ${stringResource(R.string.item_number_prefix)} ${product.itemNumber ?: "-"}",
@@ -933,6 +989,99 @@ internal fun ProductRow(
             }
         }
     }
+}
+
+@Composable
+private fun StorefrontSummaryBadge(summary: StorefrontPublicationSummary?) {
+    if (summary == null) return
+    val differsDescription = stringResource(R.string.storefront_data_differs)
+    val conflictDescription = stringResource(R.string.storefront_conflict_title)
+    val label = if (!summary.syncedRemoteIdentity) {
+        stringResource(R.string.storefront_not_synced_badge)
+    } else {
+        storefrontStatusLabel(summary.status)
+    }
+    Row(
+        modifier = Modifier.padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = if (summary.hasConflict) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer
+            }
+        ) {
+            Text(
+                text = label,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        if (summary.differsFromOperational) {
+            Text(
+                text = "↔",
+                modifier = Modifier.semantics {
+                    stateDescription = differsDescription
+                },
+                color = MaterialTheme.colorScheme.tertiary,
+                style = MaterialTheme.typography.labelLarge
+            )
+        }
+        if (summary.hasConflict) {
+            Text(
+                text = "⚠",
+                modifier = Modifier.semantics {
+                    stateDescription = conflictDescription
+                },
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun storefrontStatusLabel(status: StorefrontPublicationStatus): String =
+    stringResource(
+        when (status) {
+            StorefrontPublicationStatus.UNPUBLISHED -> R.string.storefront_status_unpublished
+            StorefrontPublicationStatus.DRAFT -> R.string.storefront_status_draft
+            StorefrontPublicationStatus.SCHEDULED -> R.string.storefront_status_scheduled
+            StorefrontPublicationStatus.PUBLISHED -> R.string.storefront_status_published
+            StorefrontPublicationStatus.HIDDEN -> R.string.storefront_status_hidden
+            StorefrontPublicationStatus.ARCHIVED -> R.string.storefront_status_archived
+        }
+    )
+
+@Composable
+private fun storefrontFilterLabel(filter: StorefrontListFilter): String =
+    stringResource(
+        when (filter) {
+            StorefrontListFilter.ALL -> R.string.storefront_filter_all
+            StorefrontListFilter.PUBLISHED -> R.string.storefront_filter_published
+            StorefrontListFilter.UNPUBLISHED -> R.string.storefront_filter_unpublished
+            StorefrontListFilter.DRAFT -> R.string.storefront_filter_drafts
+            StorefrontListFilter.SCHEDULED -> R.string.storefront_filter_scheduled
+            StorefrontListFilter.HIDDEN -> R.string.storefront_filter_hidden
+            StorefrontListFilter.NEEDS_UPDATE -> R.string.storefront_filter_needs_update
+            StorefrontListFilter.CONFLICT -> R.string.storefront_filter_conflict
+        }
+    )
+
+internal fun storefrontSummaryMatches(
+    filter: StorefrontListFilter,
+    summary: StorefrontPublicationSummary?
+): Boolean = when (filter) {
+    StorefrontListFilter.ALL -> true
+    StorefrontListFilter.PUBLISHED -> summary?.status == StorefrontPublicationStatus.PUBLISHED
+    StorefrontListFilter.UNPUBLISHED -> summary?.status == StorefrontPublicationStatus.UNPUBLISHED
+    StorefrontListFilter.DRAFT -> summary?.status == StorefrontPublicationStatus.DRAFT
+    StorefrontListFilter.SCHEDULED -> summary?.status == StorefrontPublicationStatus.SCHEDULED
+    StorefrontListFilter.HIDDEN -> summary?.status == StorefrontPublicationStatus.HIDDEN
+    StorefrontListFilter.NEEDS_UPDATE -> summary?.differsFromOperational == true
+    StorefrontListFilter.CONFLICT -> summary?.hasConflict == true
 }
 
 @Composable

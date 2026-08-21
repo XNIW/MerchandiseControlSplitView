@@ -76,6 +76,15 @@ internal class ProductImageApiClient(
         )
     }
 
+    override suspend fun adoptForStorefront(
+        accessToken: String,
+        body: StorefrontImageAdoptBody
+    ): StorefrontImageAdoptResponse = postJsonPath(
+        path = "api/shop/storefront/images/adopt",
+        accessToken = accessToken,
+        body = body
+    )
+
     override suspend fun putSignedJpeg(
         signedUrl: String,
         bytes: ByteArray,
@@ -175,6 +184,35 @@ internal class ProductImageApiClient(
         return bytes
     }
 
+    override suspend fun downloadPublicStorefrontWebp(
+        publicUrl: String,
+        variant: StorefrontPublicImageVariant
+    ): ByteArray {
+        val safeUrl = validatePublicStorefrontUrl(publicUrl)
+        val response = try {
+            http.get(safeUrl) { accept(ContentType.parse("image/webp")) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            throw ProductImageException("image_request_failed")
+        }
+        if (response.status.value !in 200..299) {
+            throw ProductImageException("image_request_failed", response.status.value)
+        }
+        val declaredLength = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+        if (declaredLength != null && declaredLength !in 1..variant.maxBytes.toLong()) {
+            throw ProductImageException("image_download_invalid")
+        }
+        val mediaType = response.headers[HttpHeaders.ContentType]
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase()
+        if (mediaType != "image/webp") throw ProductImageException("image_download_invalid")
+        val bytes = readProductImageBodyBounded(response.bodyAsChannel(), variant.maxBytes)
+        if (!isWebp(bytes)) throw ProductImageException("image_download_invalid")
+        return bytes
+    }
+
     override fun close() {
         http.close()
     }
@@ -185,10 +223,24 @@ internal class ProductImageApiClient(
         body: Request,
         maximumResponseBytes: Int = PRODUCT_IMAGE_API_BODY_MAX_BYTES
     ): Response {
+        return postJsonPath(
+            path = "api/shop/product-images/$operation",
+            accessToken = accessToken,
+            body = body,
+            maximumResponseBytes = maximumResponseBytes
+        )
+    }
+
+    private suspend inline fun <reified Request : Any, reified Response : Any> postJsonPath(
+        path: String,
+        accessToken: String,
+        body: Request,
+        maximumResponseBytes: Int = PRODUCT_IMAGE_API_BODY_MAX_BYTES
+    ): Response {
         val root = baseUrl ?: throw ProductImageException("image_request_failed")
         if (accessToken.isBlank()) throw ProductImageException("image_session_missing")
         val response = try {
-            http.post("$root/api/shop/product-images/$operation") {
+            http.post("$root/$path") {
                 bearerAuth(accessToken)
                 accept(ContentType.Application.Json)
                 contentType(ContentType.Application.Json)
@@ -289,6 +341,24 @@ internal class ProductImageApiClient(
         return uri.toASCIIString()
     }
 
+    private fun validatePublicStorefrontUrl(value: String): String {
+        val root = storageRoot ?: throw ProductImageException("image_signed_url_invalid")
+        val uri = try {
+            URI(value)
+        } catch (_: Throwable) {
+            throw ProductImageException("image_signed_url_invalid")
+        }
+        if (uri.userInfo != null || uri.query != null || uri.fragment != null ||
+            uri.scheme != root.scheme || uri.host != root.host || uri.port != root.port ||
+            !uri.path.startsWith(
+                "/storage/v1/object/public/storefront-product-images/shops/"
+            ) || uri.path.contains("/../") || uri.path.contains("/./")
+        ) {
+            throw ProductImageException("image_signed_url_invalid")
+        }
+        return uri.toASCIIString()
+    }
+
     private fun sameOrigin(left: URI, right: URI): Boolean =
         left.scheme.equals(right.scheme, ignoreCase = true) &&
             left.host.equals(right.host, ignoreCase = true) &&
@@ -321,6 +391,11 @@ internal class ProductImageApiClient(
         }
     }
 }
+
+private fun isWebp(bytes: ByteArray): Boolean =
+    bytes.size >= 12 &&
+        bytes.copyOfRange(0, 4).contentEquals("RIFF".encodeToByteArray()) &&
+        bytes.copyOfRange(8, 12).contentEquals("WEBP".encodeToByteArray())
 
 internal suspend fun readProductImageBodyBounded(
     channel: ByteReadChannel,

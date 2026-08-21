@@ -973,6 +973,31 @@ class ProductImageServiceTest {
         assertEquals(0, remote.finalizeCalls)
     }
 
+    @Test
+    fun `storefront adoption uses finalized operational version without linking publication`() = runTest {
+        val sourceVersionId = uuid(30_901)
+        val imagePublicationId = uuid(40_901)
+        val publicationId = uuid(50_901)
+        val productId = insertProduct(901, sourceVersionId)
+        val remote = FakeProductImageRemote(accountScope, jpegBytes()).apply {
+            storefrontAdoptResponse = StorefrontImageAdoptResponse(
+                imagePublicationId = imagePublicationId,
+                ok = true,
+                status = "finalized"
+            )
+        }
+        val service = service(remote)
+
+        val adopted = service.adoptForStorefront(productId, publicationId)
+
+        assertEquals(imagePublicationId, adopted)
+        assertEquals(1, remote.storefrontAdoptCalls)
+        assertEquals(publicationId, remote.lastStorefrontAdoptBody?.publicationId)
+        assertEquals(sourceVersionId, remote.lastStorefrontAdoptBody?.sourceImageVersionId)
+        assertEquals(shopId, remote.lastStorefrontAdoptBody?.shopId)
+        assertEquals(sourceVersionId, database.productDao().getById(productId)?.primaryImageVersionId)
+    }
+
     private suspend fun insertProduct(
         index: Int,
         versionId: String?,
@@ -1106,6 +1131,9 @@ private class FakeProductImageRemote(
     var intentCalls = 0
     var finalizeCalls = 0
     var removeCalls = 0
+    var storefrontAdoptCalls = 0
+    var storefrontAdoptResponse = StorefrontImageAdoptResponse()
+    var lastStorefrontAdoptBody: StorefrontImageAdoptBody? = null
     var intentGate: CompletableDeferred<Unit>? = null
     val intentEntered = CompletableDeferred<Unit>()
     var uploadGate: CompletableDeferred<Unit>? = null
@@ -1241,6 +1269,15 @@ private class FakeProductImageRemote(
             status = "removed",
             versionId = body.expectedVersionId
         )
+    }
+
+    override suspend fun adoptForStorefront(
+        accessToken: String,
+        body: StorefrontImageAdoptBody
+    ): StorefrontImageAdoptResponse {
+        storefrontAdoptCalls += 1
+        lastStorefrontAdoptBody = body
+        return storefrontAdoptResponse
     }
 
     private suspend fun awaitMutationGate(gate: CompletableDeferred<Unit>?) {
