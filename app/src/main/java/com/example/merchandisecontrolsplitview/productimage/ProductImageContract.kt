@@ -48,6 +48,11 @@ enum class ProductImageVariant(val wireName: String, val maxBytes: Int) {
     THUMB("thumb", PRODUCT_IMAGE_THUMB_MAX_BYTES)
 }
 
+enum class StorefrontPublicImageVariant(val wireName: String, val maxBytes: Int) {
+    THUMB("thumb", 120 * 1024),
+    DETAIL("detail", 900 * 1024)
+}
+
 data class ProductImageMetadata(
     val bytes: Int,
     val height: Int,
@@ -233,6 +238,20 @@ internal data class ProductImageReadMetadataResponse(
     val width: Int? = null
 )
 
+@Serializable
+internal data class StorefrontImageAdoptBody(
+    val publicationId: String,
+    val shopId: String,
+    val sourceImageVersionId: String
+)
+
+@Serializable
+internal data class StorefrontImageAdoptResponse(
+    val imagePublicationId: String? = null,
+    val ok: Boolean = false,
+    val status: String? = null
+)
+
 internal interface ProductImageRemoteGateway {
     val isConfigured: Boolean
 
@@ -255,6 +274,16 @@ internal interface ProductImageRemoteGateway {
         accessToken: String,
         body: ProductImageReadBody
     ): ProductImageReadResponse
+
+    suspend fun adoptForStorefront(
+        accessToken: String,
+        body: StorefrontImageAdoptBody
+    ): StorefrontImageAdoptResponse = throw ProductImageException("image_request_failed")
+
+    suspend fun downloadPublicStorefrontWebp(
+        publicUrl: String,
+        variant: StorefrontPublicImageVariant
+    ): ByteArray = throw ProductImageException("image_request_failed")
 
     suspend fun putSignedJpeg(
         signedUrl: String,

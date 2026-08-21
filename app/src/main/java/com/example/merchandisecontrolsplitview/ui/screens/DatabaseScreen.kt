@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -43,6 +44,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.DatabaseHubTab
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ScannedBarcodeLookupResult
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
+import com.example.merchandisecontrolsplitview.viewmodel.StorefrontListFilter
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanOptions.ALL_CODE_TYPES
@@ -110,9 +112,21 @@ fun DatabaseScreen(
     val categoryOptions by viewModel.categories.collectAsState()
     val productDetailsOverrides by viewModel.productDetailsOverrides.collectAsState()
     val productImageStates by viewModel.productImageStates.collectAsState()
+    val storefrontSummaries by viewModel.storefrontSummaries.collectAsState()
+    val storefrontFilter by viewModel.storefrontListFilter.collectAsState()
+    val storefrontFilterLoading by viewModel.storefrontFilterLoading.collectAsState()
+    val storefrontImportSummary by viewModel.storefrontImportSummary.collectAsState()
     val productEditorTarget by viewModel.productEditorTarget.collectAsState()
     val productEditorSessionId by viewModel.productEditorSessionId.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
+    val visibleStorefrontProducts = products.itemSnapshotList.items.map { details ->
+        (productDetailsOverrides[details.product.id] ?: details).productWithCurrentPrices()
+    }
+    LaunchedEffect(
+        visibleStorefrontProducts.map { Triple(it.id, it.productName, it.retailPrice) }
+    ) {
+        viewModel.loadStorefrontSummaries(visibleStorefrontProducts)
+    }
     val productListState = key(appliedProductFilter.orEmpty()) { rememberLazyListState() }
     val supplierListState = key(supplierCatalogQuery) { rememberLazyListState() }
     val categoryListState = key(categoryCatalogQuery) { rememberLazyListState() }
@@ -235,6 +249,28 @@ fun DatabaseScreen(
         }
     }
 
+    val storefrontImportVerifyLabel = stringResource(R.string.storefront_import_verify)
+    val storefrontImportMessage = storefrontImportSummary?.let { summary ->
+        stringResource(
+            R.string.storefront_import_summary,
+            summary.internalProductsUpdated,
+            summary.publicProductsNowDifferent
+        )
+    }
+    LaunchedEffect(storefrontImportSummary, storefrontImportMessage) {
+        if (storefrontImportSummary == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = storefrontImportMessage ?: return@LaunchedEffect,
+            actionLabel = storefrontImportVerifyLabel,
+            withDismissAction = true,
+            duration = SnackbarDuration.Long
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            viewModel.setStorefrontListFilter(StorefrontListFilter.NEEDS_UPDATE)
+        }
+        viewModel.consumeStorefrontImportSummary()
+    }
+
     LaunchedEffect(exportUiState.inProgress) {
         if (!exportUiState.inProgress) {
             exportLoadingTimedOut = false
@@ -338,6 +374,10 @@ fun DatabaseScreen(
                             products = products,
                             productDetailsOverrides = productDetailsOverrides,
                             productImageStates = productImageStates,
+                            storefrontSummaries = storefrontSummaries,
+                            storefrontFilter = storefrontFilter,
+                            onStorefrontFilterChange = viewModel::setStorefrontListFilter,
+                            storefrontFilterLoading = storefrontFilterLoading,
                             listState = productListState,
                             onProductImageVisibilityChanged = { product, visible ->
                                 viewModel.setProductImageVisible(

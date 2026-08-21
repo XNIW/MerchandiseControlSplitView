@@ -36,6 +36,7 @@ import com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinator
 import com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryResult
 import com.example.merchandisecontrolsplitview.data.SupabaseLinkedShopRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SupabaseStorefrontAuthoringRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseSyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSource
@@ -282,6 +283,11 @@ class MerchandiseControlApplication : Application() {
             delegate = rawCatalogRemoteDataSource,
             authorization = shopDeviceAuthorizationRepository
         )
+    }
+
+    /** Boundary Storefront condiviso con Admin; usa la sessione Supabase corrente. */
+    val storefrontAuthoringRemoteDataSource by lazy {
+        SupabaseStorefrontAuthoringRemoteDataSource(supabaseClient)
     }
 
     /** Transport PostgREST storico prezzi (task 016). */

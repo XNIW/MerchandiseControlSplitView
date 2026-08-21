@@ -87,6 +87,19 @@ interface ProductDao {
     """)
     suspend fun getDetailsById(productId: Long): ProductWithDetails?
 
+    @Query("""
+        SELECT p.*,
+               s.name AS supplier_name,
+               c.name AS category_name,
+               v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+        FROM products p
+        LEFT JOIN suppliers s ON p.supplierId = s.id
+        LEFT JOIN categories c ON p.categoryId = c.id
+        LEFT JOIN product_price_summary v ON v.productId = p.id
+        WHERE p.id IN (:productIds)
+    """)
+    suspend fun getDetailsByIds(productIds: List<Long>): List<ProductWithDetails>
+
     /**
      * Task 041 (hardening): match barcode tollerante a whitespace sul lato locale.
      * Coerente con la partial UNIQUE remota `(owner_user_id, barcode) WHERE deleted_at IS NULL`:
@@ -240,6 +253,32 @@ WHERE (:filter IS NULL
 ORDER BY p.id ASC
 """)
     fun getAllWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
+
+    @Transaction
+    @Query("""
+SELECT
+  p.*,
+  s.name AS supplier_name,
+  c.name AS category_name,
+  v.lastPurchase, v.prevPurchase, v.lastRetail, v.prevRetail
+FROM products p
+LEFT JOIN suppliers s ON p.supplierId = s.id
+LEFT JOIN categories c ON p.categoryId = c.id
+LEFT JOIN product_price_summary v ON v.productId = p.id
+WHERE (:applyProductIds = 0 OR p.id IN (:productIds))
+  AND (:filter IS NULL
+   OR p.barcode LIKE '%' || :filter || '%'
+   OR p.productName LIKE '%' || :filter || '%'
+   OR s.name LIKE '%' || :filter || '%'
+   OR p.itemNumber LIKE '%' || :filter || '%'
+   OR c.name LIKE '%' || :filter || '%')
+ORDER BY p.id ASC
+""")
+    fun getAllWithDetailsPagedForProductIds(
+        filter: String?,
+        applyProductIds: Boolean,
+        productIds: List<Long>
+    ): PagingSource<Int, ProductWithDetails>
 
 
 

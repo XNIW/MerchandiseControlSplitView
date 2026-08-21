@@ -1776,7 +1776,7 @@ class DatabaseViewModelTest {
             context = app
         )
         advanceUntilIdle()
-        waitForCondition { viewModel.uiState.value is UiState.Success || viewModel.uiState.value is UiState.Error }
+        waitForCondition { viewModel.importFlowState.value is ImportFlowState.Success }
 
         coVerify(timeout = 3_000, exactly = 1) {
             repository.applyImport(
@@ -1791,13 +1791,9 @@ class DatabaseViewModelTest {
         coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
         coVerify(exactly = 0) { repository.getHistoryEntryByUid(any()) }
         assertEquals(ImportFlowState.Success(previewId), viewModel.importFlowState.value)
-        viewModel.uiState.test {
-            assertEquals(
-                UiState.Success(app.getString(R.string.import_success)),
-                awaitItem()
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
+        assertEquals(UiState.Idle, viewModel.uiState.value)
+        assertEquals(2, viewModel.storefrontImportSummary.value?.internalProductsUpdated)
+        assertEquals(0, viewModel.storefrontImportSummary.value?.publicProductsNowDifferent)
     }
 
     @Test

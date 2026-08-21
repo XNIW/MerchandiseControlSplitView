@@ -98,12 +98,22 @@ data class LocalDatabaseStatusSnapshot(
 interface InventoryRepository {
     // Product methods
     fun getProductsWithDetailsPaged(filter: String?): PagingSource<Int, ProductWithDetails>
+    fun getProductsWithDetailsPaged(
+        filter: String?,
+        productIds: Set<Long>?
+    ): PagingSource<Int, ProductWithDetails> = getProductsWithDetailsPaged(filter)
     suspend fun findProductByBarcode(barcode: String): Product?
     suspend fun findProductsByBarcodes(barcodes: List<String>): List<Product>
     suspend fun getAllProducts(): List<Product>
     suspend fun getProductDetailsById(productId: Long): ProductWithDetails?
+    /** Mapping bounded remote identity -> righe locali, nell'ordine remoto richiesto. */
+    suspend fun getProductsWithDetailsByRemoteIds(
+        remoteIds: List<String>
+    ): List<ProductWithDetails> = emptyList()
     /** True solo dopo che il bridge prodotto e' stato applicato almeno una volta al remoto. */
     suspend fun hasSyncedProductRemoteRef(productId: Long): Boolean = false
+    /** Identita' remote stabili e gia' riconciliate, mai barcode. */
+    suspend fun getSyncedProductRemoteIds(productIds: List<Long>): Map<Long, String> = emptyMap()
     val remoteAppliedProductIds: Flow<Set<Long>>
         get() = emptyFlow()
     suspend fun addProduct(product: Product)
@@ -602,6 +612,15 @@ class DefaultInventoryRepository(
     var onCatalogChanged: (() -> Unit)? = null
     // --- Product Implementations ---
     override fun getProductsWithDetailsPaged(filter: String?) = productDao.getAllWithDetailsPaged(filter)
+    override fun getProductsWithDetailsPaged(
+        filter: String?,
+        productIds: Set<Long>?
+    ) = productDao.getAllWithDetailsPagedForProductIds(
+        filter = filter,
+        applyProductIds = productIds != null,
+        productIds = productIds?.toList()?.ifEmpty { listOf(Long.MIN_VALUE) }
+            ?: listOf(Long.MIN_VALUE)
+    )
     override suspend fun findProductByBarcode(barcode: String) =
         withContext(Dispatchers.IO) { productDao.findDetailsByBarcode(barcode)?.productWithCurrentPrices() }
 
@@ -613,9 +632,34 @@ class DefaultInventoryRepository(
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
     override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
         withContext(Dispatchers.IO) { productDao.getDetailsById(productId) }
+    override suspend fun getProductsWithDetailsByRemoteIds(
+        remoteIds: List<String>
+    ): List<ProductWithDetails> = withContext(Dispatchers.IO) {
+        if (remoteIds.isEmpty()) return@withContext emptyList()
+        require(remoteIds.size <= 100 && remoteIds.all(::isStorefrontRemoteIdentity))
+        val refsByRemoteId = productRemoteRefDao.getByRemoteIds(remoteIds.distinct())
+            .asSequence()
+            .filter { it.lastRemoteAppliedAt != null }
+            .associateBy(ProductRemoteRef::remoteId)
+        val orderedLocalIds = remoteIds.mapNotNull { refsByRemoteId[it]?.productId }
+        val detailsById = productDao.getDetailsByIds(orderedLocalIds.distinct())
+            .associateBy { it.product.id }
+        orderedLocalIds.mapNotNull(detailsById::get)
+    }
     override suspend fun hasSyncedProductRemoteRef(productId: Long): Boolean =
         withContext(Dispatchers.IO) {
             productRemoteRefDao.getByProductId(productId)?.lastRemoteAppliedAt != null
+        }
+    override suspend fun getSyncedProductRemoteIds(productIds: List<Long>): Map<Long, String> =
+        withContext(Dispatchers.IO) {
+            if (productIds.isEmpty()) emptyMap()
+            else productRemoteRefDao.getByProductIds(productIds.distinct())
+                .asSequence()
+                .filter {
+                    it.lastRemoteAppliedAt != null &&
+                        isStorefrontRemoteIdentity(it.remoteId)
+                }
+                .associate { it.productId to it.remoteId }
         }
 
     override suspend fun addProduct(product: Product) {
