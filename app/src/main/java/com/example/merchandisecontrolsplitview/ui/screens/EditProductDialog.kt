@@ -1177,10 +1177,11 @@ internal fun StorefrontEditorSection(
             }
             if (state.pendingConnection) {
                 Text(
-                    stringResource(R.string.storefront_local_draft_waiting),
+                    stringResource(if (state.pendingOperation == StorefrontMutationOperation.SAVE_DRAFT)
+                        R.string.storefront_local_draft_waiting else R.string.storefront_request_pending),
                     color = MaterialTheme.colorScheme.tertiary
                 )
-                TextButton(onClick = onRetryPending, enabled = !state.busy) {
+                TextButton(onClick = onRetryPending, enabled = !state.busy && !state.pendingRecoveryRequired) {
                     Text(stringResource(R.string.retry))
                 }
             } else if (state.serverVersionUnverified) {
@@ -1199,6 +1200,13 @@ internal fun StorefrontEditorSection(
                         liveRegion = LiveRegionMode.Polite
                     }
                 )
+            }
+
+            if (state.pendingRecoveryRequired) {
+                Text(stringResource(R.string.storefront_expired_request_help))
+                TextButton(onClick = onCancelConflict, enabled = !state.busy) {
+                    Text(stringResource(R.string.storefront_discard_pending))
+                }
             }
 
             state.conflict?.let { conflict ->
@@ -1415,29 +1423,29 @@ internal fun StorefrontEditorSection(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(
                         onClick = { onAction(StorefrontMutationOperation.SAVE_DRAFT) },
-                        enabled = !state.busy && status !in setOf(
+                        enabled = !state.busy && !state.pendingRecoveryRequired && status !in setOf(
                             StorefrontPublicationStatus.PUBLISHED,
                             StorefrontPublicationStatus.ARCHIVED
                         )
                     ) { Text(stringResource(R.string.storefront_save_draft)) }
                     Button(
                         onClick = { onAction(StorefrontMutationOperation.PUBLISH) },
-                        enabled = !state.busy && status != StorefrontPublicationStatus.ARCHIVED
+                        enabled = !state.busy && !state.pendingRecoveryRequired && status != StorefrontPublicationStatus.ARCHIVED
                     ) { Text(stringResource(R.string.storefront_publish)) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TextButton(
                         onClick = { onAction(StorefrontMutationOperation.SCHEDULE) },
-                        enabled = !state.busy && status != StorefrontPublicationStatus.ARCHIVED
+                        enabled = !state.busy && !state.pendingRecoveryRequired && status != StorefrontPublicationStatus.ARCHIVED
                     ) { Text(stringResource(R.string.storefront_schedule)) }
                     TextButton(
                         onClick = { onAction(StorefrontMutationOperation.HIDE) },
-                        enabled = !state.busy && state.publication != null &&
+                        enabled = !state.busy && !state.pendingRecoveryRequired && state.publication != null &&
                             status != StorefrontPublicationStatus.ARCHIVED
                     ) { Text(stringResource(R.string.storefront_hide)) }
                     TextButton(
                         onClick = { onAction(StorefrontMutationOperation.ARCHIVE) },
-                        enabled = !state.busy && state.publication != null &&
+                        enabled = !state.busy && !state.pendingRecoveryRequired && state.publication != null &&
                             status != StorefrontPublicationStatus.ARCHIVED
                     ) { Text(stringResource(R.string.storefront_archive)) }
                 }
@@ -1615,6 +1623,8 @@ private fun storefrontAvailabilityLabel(value: StorefrontAvailability): String =
 
 @Composable
 private fun storefrontErrorLabel(code: String): String = when (code) {
+    "local_persistence_failed" -> stringResource(R.string.storefront_local_persistence_failed)
+    "mutation_recovery_required" -> stringResource(R.string.storefront_mutation_recovery_required)
     "product_not_synced" -> stringResource(R.string.storefront_sync_before_publish)
     "network_required", "network_or_image_required" ->
         stringResource(R.string.storefront_network_required)

@@ -1,0 +1,60 @@
+{
+  "fixtureVersion": "mobile_storefront_intent_parity_v1",
+  "source": "existing storefront_publication_authoring_mutate_v1 canonical JSON payload; synthetic values only",
+  "cases": [
+    {
+      "id": "unicode_clp_draft_a",
+      "operation": "save_draft",
+      "expectedVersion": 7,
+      "draft": {
+        "publicName": "Té 茶 — caffè",
+        "publicDescription": "Descripción áéíóú",
+        "publicBrand": "Marca Ñ",
+        "publicPrice": 12990,
+        "compareAtPrice": 14990,
+        "priceSourceMode": "override",
+        "availability": "available",
+        "pickupEnabled": true,
+        "deliveryEnabled": false,
+        "reservationEnabled": false,
+        "featured": false,
+        "homeOrder": 0
+      }
+    },
+    {
+      "id": "unicode_clp_draft_b",
+      "operation": "save_draft",
+      "expectedVersion": 8,
+      "draft": {
+        "publicName": "Té 茶 — caffè nuevo",
+        "publicDescription": "Descripción áéíóú",
+        "publicBrand": "Marca Ñ",
+        "publicPrice": 13990,
+        "compareAtPrice": 14990,
+        "priceSourceMode": "override",
+        "availability": "available",
+        "pickupEnabled": true,
+        "deliveryEnabled": false,
+        "reservationEnabled": false,
+        "featured": false,
+        "homeOrder": 0
+      }
+    }
+  ],
+  "retryContract": {
+    "samePayloadSameVersion": "same_key",
+    "differentPayload": "reconcile_unknown_then_new_key",
+    "lostAcknowledgement": "replay_exact_intent_before_version_read_conflict",
+    "receiptLifetimeDays": 7,
+    "afterReceiptExpiry": "preserve_intent_and_reconcile_or_conflict_no_blind_new_key"
+  },
+  "filterCases": [
+    "A_to_B_while_A_suspended",
+    "A_to_all",
+    "same_filter_new_query",
+    "inverted_responses",
+    "late_error",
+    "scope_switch",
+    "next_page_reset"
+  ]
+}

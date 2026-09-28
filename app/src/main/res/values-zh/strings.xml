@@ -825,4 +825,10 @@
     <string name="storefront_not_synced_badge">未同步</string>
     <string name="storefront_data_differs">公开资料与内部商品不同</string>
     <string name="storefront_delete_archive_required">请先归档客户端发布并验证服务器版本。</string>
+    <string name="product_editor_conflict">编辑期间商品已更改。请重新打开以查看最新数据。</string>
+    <string name="storefront_local_persistence_failed">无法在此设备上保存草稿。您输入的数据仍然保留。</string>
+    <string name="storefront_mutation_recovery_required">发送其他更改前，需要先核实待处理请求的结果。</string>
+    <string name="storefront_request_pending">请求已保存，等待服务器确认。</string>
+    <string name="storefront_expired_request_help">已保存的请求无法再自动重试。丢弃此请求后即可重新保存；输入的数据将保留。</string>
+    <string name="storefront_discard_pending">丢弃已保存的请求</string>
 </resources>

@@ -149,6 +149,46 @@ class StorefrontEditorComposeDeviceTest {
         composeRule.runOnIdle { assert(selected.value == StorefrontListFilter.ALL) }
     }
 
+    @Test
+    fun rapidFilterChangesKeepCurrentSelectionAndAllAvailable() {
+        val selected = mutableStateOf(StorefrontListFilter.ALL)
+        val seen = mutableListOf<StorefrontListFilter>()
+        composeRule.setContent {
+            MerchandiseControlTheme(darkTheme = false) {
+                StorefrontFilterRow(selected = selected.value, onSelected = { selected.value = it; seen += it })
+            }
+        }
+        composeRule.onNodeWithText(context.getString(R.string.storefront_filter_published)).performClick()
+        composeRule.onNodeWithText(context.getString(R.string.storefront_filter_drafts)).performClick()
+        composeRule.onNodeWithText(context.getString(R.string.storefront_filter_all)).performClick()
+        composeRule.runOnIdle {
+            org.junit.Assert.assertEquals(listOf(StorefrontListFilter.PUBLISHED, StorefrontListFilter.DRAFT, StorefrontListFilter.ALL), seen)
+            org.junit.Assert.assertEquals(StorefrontListFilter.ALL, selected.value)
+        }
+    }
+
+    @Test
+    fun expiredRequestShowsExplicitDiscardAction() {
+        var discarded = false
+        composeRule.setContent {
+            MerchandiseControlTheme(darkTheme = false) {
+                StorefrontEditorSection(
+                    product = product(),
+                    state = StorefrontEditorUiState(enabled = true, remoteProductId = REMOTE_ID,
+                        draft = StorefrontEditorDraft(publicName = "Saved input", publicPrice = 1990),
+                        pendingConnection = true, pendingRecoveryRequired = true),
+                    operationalImageState = null,
+                    onExpandedChange = {}, onDraftChange = {}, onAlign = {}, onAction = {},
+                    onPreview = {}, onReload = {}, onRetryPending = {}, onReapplyConflict = {},
+                    onCancelConflict = { discarded = true }, onUseOperationalImage = {}, onDismissPreview = {}
+                )
+            }
+        }
+        composeRule.onNodeWithText(context.getString(R.string.storefront_discard_pending))
+            .assertIsEnabled().performClick()
+        composeRule.runOnIdle { org.junit.Assert.assertTrue(discarded) }
+    }
+
     private fun product() = Product(
         id = 42,
         barcode = "780000000001",

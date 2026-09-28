@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-09-28T17:44:51.940Z" hostname="MindeMacBook-Pro.local" time="7.772">
+  <properties/>
+  <testcase name="measure real repository queries and local editor writes at large scale" classname="com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest" time="7.615"/>
+  <system-out><![CDATA[MOBILE_PARITY_LARGE_BENCHMARK_RESULT /tmp/mobile-parity-android-large-benchmark.json
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -852,4 +852,10 @@
     <string name="storefront_not_synced_badge">Non sincronizzato</string>
     <string name="storefront_data_differs">I dati pubblici differiscono dal prodotto interno</string>
     <string name="storefront_delete_archive_required">Archivia prima la pubblicazione App Client e verifica la versione server.</string>
+    <string name="product_editor_conflict">Il prodotto è cambiato durante la modifica. Riaprilo per verificare i valori aggiornati.</string>
+    <string name="storefront_local_persistence_failed">Impossibile salvare la bozza sul dispositivo. I dati inseriti sono ancora disponibili.</string>
+    <string name="storefront_mutation_recovery_required">La richiesta in sospeso deve essere riconciliata prima di inviare altre modifiche.</string>
+    <string name="storefront_request_pending">Richiesta salvata in attesa della conferma del server.</string>
+    <string name="storefront_expired_request_help">La richiesta salvata non può più essere ripetuta automaticamente. Scarta la richiesta per poter salvare di nuovo; i dati inseriti restano disponibili.</string>
+    <string name="storefront_discard_pending">Scarta richiesta salvata</string>
 </resources>

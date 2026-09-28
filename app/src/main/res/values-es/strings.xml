@@ -846,4 +846,10 @@
     <string name="storefront_not_synced_badge">Sin sincronizar</string>
     <string name="storefront_data_differs">Los datos públicos difieren del producto interno</string>
     <string name="storefront_delete_archive_required">Archiva primero la publicación de la App Cliente y verifica la versión del servidor.</string>
+    <string name="product_editor_conflict">El producto cambió durante la edición. Vuelve a abrirlo para revisar los valores actuales.</string>
+    <string name="storefront_local_persistence_failed">No se pudo guardar el borrador en este dispositivo. Los datos introducidos siguen disponibles.</string>
+    <string name="storefront_mutation_recovery_required">Es necesario conciliar la solicitud pendiente antes de enviar otro cambio.</string>
+    <string name="storefront_request_pending">Solicitud guardada en espera de confirmación del servidor.</string>
+    <string name="storefront_expired_request_help">La solicitud guardada ya no puede reintentarse automáticamente. Descarta la solicitud para volver a guardar; los datos introducidos se conservarán.</string>
+    <string name="storefront_discard_pending">Descartar solicitud guardada</string>
 </resources>

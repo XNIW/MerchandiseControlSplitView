@@ -124,6 +124,10 @@ interface InventoryRepository {
         }
     }
     suspend fun updateProduct(product: Product)
+    /** Merge only the fields changed since opening the editor, atomically against the current row. */
+    suspend fun updateProductFromEditor(baseline: Product, product: Product) {
+        throw UnsupportedOperationException("Product editor concurrency is not supported")
+    }
     suspend fun deleteProduct(product: Product)
     suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult
 
@@ -706,44 +710,87 @@ class DefaultInventoryRepository(
         notifyProductCatalogChanged(persistedId)
         persistedId
     }
-    override suspend fun updateProduct(product: Product) = withLocalBusinessMutation {
+    override suspend fun updateProduct(product: Product) = persistProductUpdate(product)
+
+    override suspend fun updateProductFromEditor(baseline: Product, product: Product) =
+        persistProductUpdate(product, baseline)
+
+    private suspend fun persistProductUpdate(product: Product, baseline: Product? = null) = withLocalBusinessMutation {
         val canonicalProduct = CatalogTextCanonicalizer.product(product).product
-        withContext(Dispatchers.IO) {
+        val canonicalBaseline = baseline?.let { CatalogTextCanonicalizer.product(it).product }
+        require(canonicalBaseline == null || canonicalBaseline.id == canonicalProduct.id) {
+            "Product editor baseline must match the saved product"
+        }
+        val didWrite = withContext(Dispatchers.IO) {
             db.withTransaction {
                 val existing = productDao.getById(canonicalProduct.id)
-                productDao.update(canonicalProduct)
+                val updated = if (canonicalBaseline != null) {
+                    mergeProductEditorChanges(
+                        canonicalBaseline,
+                        canonicalProduct,
+                        existing ?: throw ProductEditConflictException()
+                    )
+                } else canonicalProduct
+                if (canonicalBaseline != null && existing == updated) return@withTransaction false
+                val changedFields = existing
+                    ?.let { productChangedFields(it, updated) }
+                    .orEmpty()
+                productDao.update(updated)
                 DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
 
                 val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
                     ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
 
-                canonicalProduct.purchasePrice?.let {
+                updated.purchasePrice?.takeIf {
+                    canonicalBaseline == null || "purchaseprice" in changedFields
+                }?.let {
                     priceDao.insertIfChanged(
-                        canonicalProduct.id,
+                        updated.id,
                         "PURCHASE",
                         it,
-                        uniquePriceEffectiveAtLocked(canonicalProduct.id, "PURCHASE", requestedAt),
+                        uniquePriceEffectiveAtLocked(updated.id, "PURCHASE", requestedAt),
                         "MANUAL",
                     )
                 }
-                canonicalProduct.retailPrice?.let {
+                updated.retailPrice?.takeIf {
+                    canonicalBaseline == null || "retailprice" in changedFields
+                }?.let {
                     priceDao.insertIfChanged(
-                        canonicalProduct.id,
+                        updated.id,
                         "RETAIL",
                         it,
-                        uniquePriceEffectiveAtLocked(canonicalProduct.id, "RETAIL", requestedAt),
+                        uniquePriceEffectiveAtLocked(updated.id, "RETAIL", requestedAt),
                         "MANUAL",
                     )
                 }
-                val changedFields = existing
-                    ?.let { productChangedFields(it, canonicalProduct) }
-                    .orEmpty()
                 if (changedFields.isNotEmpty()) {
-                    touchProductDirty(canonicalProduct.id, changedFields)
+                    touchProductDirty(updated.id, changedFields)
                 }
+                true
             }
         }
-        notifyProductCatalogChanged(canonicalProduct.id)
+        if (didWrite) notifyProductCatalogChanged(canonicalProduct.id)
+    }
+
+    private fun mergeProductEditorChanges(baseline: Product, edited: Product, current: Product): Product {
+        val editedFields = productChangedFields(baseline, edited)
+        val concurrentFields = productChangedFields(baseline, current)
+        val differentValues = productChangedFields(current, edited)
+        if ((editedFields intersect concurrentFields intersect differentValues).isNotEmpty()) {
+            throw ProductEditConflictException()
+        }
+        // Historical prices and image metadata have separate owners; never restore their editor snapshot.
+        return current.copy(
+            barcode = if ("barcode" in editedFields) edited.barcode else current.barcode,
+            itemNumber = if ("itemnumber" in editedFields) edited.itemNumber else current.itemNumber,
+            productName = if ("productname" in editedFields) edited.productName else current.productName,
+            secondProductName = if ("secondproductname" in editedFields) edited.secondProductName else current.secondProductName,
+            purchasePrice = if ("purchaseprice" in editedFields) edited.purchasePrice else current.purchasePrice,
+            retailPrice = if ("retailprice" in editedFields) edited.retailPrice else current.retailPrice,
+            supplierId = if ("supplier" in editedFields) edited.supplierId else current.supplierId,
+            categoryId = if ("category" in editedFields) edited.categoryId else current.categoryId,
+            stockQuantity = if ("stockquantity" in editedFields) edited.stockQuantity else current.stockQuantity
+        )
     }
 
     override suspend fun updateCurrentPriceFromHistory(
@@ -871,18 +918,20 @@ class DefaultInventoryRepository(
             val normalizedName = CatalogTextCanonicalizer.supplierName(name)
             val lookupKey = normalizedName.lowercase(Locale.ROOT)
             supplierMutex.withLock {
-                supplierDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
-                val newSupplier = Supplier(name = normalizedName)
-                val insertedId = supplierDao.insert(newSupplier)
-                val created = if (insertedId > 0L) {
-                    supplierDao.getById(insertedId)
-                } else {
-                    supplierDao.findByNormalizedName(lookupKey)
+                db.withTransaction {
+                    supplierDao.findByNormalizedName(lookupKey)?.let { return@withTransaction it to false }
+                    val newSupplier = Supplier(name = normalizedName)
+                    val insertedId = supplierDao.insert(newSupplier)
+                    val created = if (insertedId > 0L) {
+                        supplierDao.getById(insertedId)
+                    } else {
+                        supplierDao.findByNormalizedName(lookupKey)
+                    }
+                    Pair(
+                        created?.also { touchSupplierDirty(it.id) },
+                        created != null && insertedId > 0L
+                    )
                 }
-                Pair(
-                    created?.also { touchSupplierDirty(it.id) },
-                    created != null && insertedId > 0L
-                )
             }
         }
         if (didCreate) {
@@ -919,12 +968,14 @@ class DefaultInventoryRepository(
     ): CatalogListItem = withLocalBusinessMutation {
         val item = withContext(Dispatchers.IO) {
             withCatalogMutationLock(kind) {
-                val created = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
-                when (kind) {
-                    CatalogEntityKind.SUPPLIER -> touchSupplierDirty(created.id)
-                    CatalogEntityKind.CATEGORY -> touchCategoryDirty(created.id)
+                db.withTransaction {
+                    val created = createCatalogEntryLocked(kind, normalizedNameFor(kind, name))
+                    when (kind) {
+                        CatalogEntityKind.SUPPLIER -> touchSupplierDirty(created.id)
+                        CatalogEntityKind.CATEGORY -> touchCategoryDirty(created.id)
+                    }
+                    created
                 }
-                created
             }
         }
         notifyCatalogChanged()
@@ -938,21 +989,23 @@ class DefaultInventoryRepository(
     ): CatalogListItem = withLocalBusinessMutation {
         val item = withContext(Dispatchers.IO) {
             withCatalogMutationLock(kind) {
-                val current = getCatalogEntityRef(kind, id)
-                    ?: throw CatalogNotFoundException(kind, id)
-                val normalizedName = normalizedNameFor(kind, newName, currentId = id)
-                if (current.name != normalizedName) {
-                    renameCatalogEntity(kind, id, normalizedName)
+                db.withTransaction {
+                    val current = getCatalogEntityRef(kind, id)
+                        ?: throw CatalogNotFoundException(kind, id)
+                    val normalizedName = normalizedNameFor(kind, newName, currentId = id)
+                    if (current.name != normalizedName) {
+                        renameCatalogEntity(kind, id, normalizedName)
+                    }
+                    when (kind) {
+                        CatalogEntityKind.SUPPLIER -> touchSupplierDirty(id)
+                        CatalogEntityKind.CATEGORY -> touchCategoryDirty(id)
+                    }
+                    CatalogListItem(
+                        id = id,
+                        name = normalizedName,
+                        productCount = linkedProductCount(kind, id)
+                    )
                 }
-                when (kind) {
-                    CatalogEntityKind.SUPPLIER -> touchSupplierDirty(id)
-                    CatalogEntityKind.CATEGORY -> touchCategoryDirty(id)
-                }
-                CatalogListItem(
-                    id = id,
-                    name = normalizedName,
-                    productCount = linkedProductCount(kind, id)
-                )
             }
         }
         notifyCatalogChanged()
@@ -1110,18 +1163,20 @@ class DefaultInventoryRepository(
             val normalizedName = CatalogTextCanonicalizer.categoryName(name)
             val lookupKey = normalizedName.lowercase(Locale.ROOT)
             categoryMutex.withLock {
-                categoryDao.findByNormalizedName(lookupKey)?.let { return@withLock it to false }
-                val newCategory = Category(name = normalizedName)
-                val insertedId = categoryDao.insert(newCategory)
-                val created = if (insertedId > 0L) {
-                    categoryDao.getById(insertedId)
-                } else {
-                    categoryDao.findByNormalizedName(lookupKey)
+                db.withTransaction {
+                    categoryDao.findByNormalizedName(lookupKey)?.let { return@withTransaction it to false }
+                    val newCategory = Category(name = normalizedName)
+                    val insertedId = categoryDao.insert(newCategory)
+                    val created = if (insertedId > 0L) {
+                        categoryDao.getById(insertedId)
+                    } else {
+                        categoryDao.findByNormalizedName(lookupKey)
+                    }
+                    Pair(
+                        created?.also { touchCategoryDirty(it.id) },
+                        created != null && insertedId > 0L
+                    )
                 }
-                Pair(
-                    created?.also { touchCategoryDirty(it.id) },
-                    created != null && insertedId > 0L
-                )
             }
         }
         if (didCreate) {
