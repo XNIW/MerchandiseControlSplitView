@@ -184,3 +184,7 @@ Limiti espliciti: niente app Android autenticata su staging in questa lane, nien
 | CA-12 | ESEGUITO per tracciamento, consegna finale in corso | stato REVIEW, niente DONE; rapporto aggregato esterno MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE_RESULT.md raccoglie anche SHA/PR/CI finali senza commit autoreferenziali |
 
 Ordine integrazione: le due app sono indipendenti e usano il contratto backend già esistente; nessuna migrazione/deploy prerequisite. Merge NOT_MERGED e distribuzione NOT_DEPLOYED fino ad autorizzazione distinta.
+
+### Pubblicazione e coordinamento
+
+PR [#10](https://github.com/XNIW/MerchandiseControlSplitView/pull/10) aperta; CI exact-SHA raccolta nel rapporto finale e nei check della PR. Consenso diretto dell'utente verificato nella chat «Completa attivazione WECHAT-010»: ownership nativa qui, collaudo autenticato sui dispositivi separati dell'altra lane, installazione preservando i dati. Nessun E2E PASS attribuito prima della ricevuta. Nessun merge implicito.
