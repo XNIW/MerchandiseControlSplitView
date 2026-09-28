@@ -286,6 +286,89 @@ class Task139BusinessDataScopeBindingTest {
     }
 
     @Test
+    fun `confirmed mismatch without device identity bootstraps once before recovery ready`() = runTest {
+        val previousScope = scope(OWNER_A, SHOP_A)
+        val activeScope = scope(OWNER_A, SHOP_B)
+        db.businessDataScopeBindingDao().upsert(
+            BusinessDataScopeBinding.from(previousScope, boundAtMs = 139L)
+        )
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH,
+                boundScope = previousScope
+            )
+        )
+        val guardedRepository = DefaultInventoryRepository(db, businessDataScopeRuntimeGuard = tracker)
+        assertNull(db.syncEventDeviceStateDao().get())
+
+        val first = tracker.withBusinessDataScopeTransition {
+            guardedRepository.replaceMismatchedBusinessDataAndBind(activeScope)
+        }
+
+        assertEquals(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, first.status)
+        assertEquals("sync_recovery_required", first.errorCode)
+        val device = requireNotNull(db.syncEventDeviceStateDao().get())
+        assertEquals(device.deviceId, java.util.UUID.fromString(device.deviceId).toString())
+        assertEquals(device.deviceId, DeviceInstallIdProvider(db.syncEventDeviceStateDao()).getOrCreate())
+        val journal = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals(device.deviceId, journal.deviceId)
+        assertEquals(activeScope.storeId, journal.storeScope)
+        assertEquals(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED, journal.authorizationMode)
+        assertScopeMatches(previousScope, db.businessDataScopeBindingDao().get()!!.toOwnerStoreScope())
+        assertEquals(0, db.productDao().count())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+
+        tracker.withBusinessDataScopeTransition {
+            guardedRepository.replaceMismatchedBusinessDataAndBind(activeScope)
+        }
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertEquals(device.deviceId, db.syncRecoveryJournalDao().get()?.deviceId)
+        assertFalse(tracker.allowsBusinessDataScope(OWNER_A, selectedShop(SHOP_B)))
+    }
+
+    @Test
+    fun `missing identity bootstrap rolls back with recovery journal persistence failure`() = runTest {
+        val previousScope = scope(OWNER_A, SHOP_A)
+        db.businessDataScopeBindingDao().upsert(
+            BusinessDataScopeBinding.from(previousScope, boundAtMs = 139L)
+        )
+        db.openHelper.writableDatabase.execSQL(
+            """CREATE TRIGGER task143_fail_journal BEFORE INSERT ON sync_recovery_journal
+                BEGIN SELECT RAISE(ABORT, 'task143 journal failure'); END"""
+        )
+
+        val failure = runCatching {
+            repository.replaceMismatchedBusinessDataAndBind(scope(OWNER_A, SHOP_B))
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertNull(db.syncEventDeviceStateDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertScopeMatches(previousScope, db.businessDataScopeBindingDao().get()!!.toOwnerStoreScope())
+    }
+
+    @Test
+    fun `missing identity bootstrap fails closed when identity cannot persist`() = runTest {
+        val previousScope = scope(OWNER_A, SHOP_A)
+        db.businessDataScopeBindingDao().upsert(
+            BusinessDataScopeBinding.from(previousScope, boundAtMs = 139L)
+        )
+        db.openHelper.writableDatabase.execSQL(
+            """CREATE TRIGGER task143_fail_device BEFORE INSERT ON sync_event_device_state
+                BEGIN SELECT RAISE(ABORT, 'task143 device failure'); END"""
+        )
+
+        val failure = runCatching {
+            repository.replaceMismatchedBusinessDataAndBind(scope(OWNER_A, SHOP_B))
+        }.exceptionOrNull()
+
+        assertNotNull(failure)
+        assertNull(db.syncEventDeviceStateDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertScopeMatches(previousScope, db.businessDataScopeBindingDao().get()!!.toOwnerStoreScope())
+    }
+
+    @Test
     fun `mismatch recovery attempt counter saturates instead of wrapping`() = runTest {
         val previousScope = scope(OWNER_A, SHOP_A)
         val activeScope = scope(OWNER_B, SHOP_B)

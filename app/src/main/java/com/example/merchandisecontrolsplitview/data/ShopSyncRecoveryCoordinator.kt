@@ -96,6 +96,7 @@ internal class ShopSyncRecoveryCoordinator(
     private val activeDb: AppDatabase,
     private val activeRepository: DefaultInventoryRepository,
     private val remote: ShopSyncReadRemoteDataSource,
+    private val registerDeviceForRecovery: suspend (shopId: String) -> Result<ShopDeviceRegistrationResult>,
     private val scopeStillValid: suspend (accountId: String, shopId: String) -> Boolean,
     private val activationBoundary: suspend (block: suspend () -> Unit) -> Unit,
     /**
@@ -233,6 +234,31 @@ internal class ShopSyncRecoveryCoordinator(
             )
             updateJournal(expected = journal, next = runJournal)
             ShopSyncRecoveryTestHooks.afterStagingJournalPersisted?.invoke()
+            if (replaceConfirmed) {
+                // Normal enrollment requires READY, which this confirmed recovery
+                // is restoring. Use the same server enrollment with the recovery's
+                // existing scope fences; checkpoint authorization remains mandatory.
+                if (!leaseStillValid(accountId, shopId, currentDevice)) {
+                    throw ShopSyncContractException("recovery_lease_invalid_before_registration")
+                }
+                if (requireOwnedJournal(generationId) != runJournal) {
+                    throw ShopSyncContractException("recovery_journal_changed")
+                }
+                val registration = registerDeviceForRecovery(shopId)
+                if (!leaseStillValid(accountId, shopId, currentDevice)) {
+                    throw ShopSyncContractException("recovery_lease_invalid_after_registration")
+                }
+                if (requireOwnedJournal(generationId) != runJournal) {
+                    throw ShopSyncContractException("recovery_journal_changed")
+                }
+                val response = registration.getOrElse {
+                    if (it is CancellationException) throw it
+                    throw ShopSyncContractException("recovery_device_registration_failed")
+                }
+                if (!response.ok || response.shopId?.lowercase() != shopId) {
+                    throw ShopSyncContractException("recovery_device_registration_denied")
+                }
+            }
             val checkpointA = fetchCheckpoint(accountId, shopId, currentDevice, null)
             if (checkpointA.integrity.totalViolationCount != 0L) {
                 throw ShopSyncContractException("recovery_remote_integrity_violation")

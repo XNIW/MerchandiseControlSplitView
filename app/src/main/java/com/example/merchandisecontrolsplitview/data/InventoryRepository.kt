@@ -2809,9 +2809,10 @@ class DefaultInventoryRepository(
                                     it.ownerHash == activeScope.ownerHash &&
                                         it.storeScope == activeScope.storeId
                                 }
-                            val deviceId = checkNotNull(syncEventDeviceStateDao.get()?.deviceId) {
-                                "binding_replace_device_identity_missing"
-                            }
+                            // A restored binding may precede the first READY scope and
+                            // therefore the first normal device registration. Persist the
+                            // canonical install identity atomically with the recovery intent.
+                            val deviceId = DeviceInstallIdProvider(syncEventDeviceStateDao).getOrCreate()
                             syncRecoveryJournalDao.upsert(
                                 SyncRecoveryJournal(
                                     ownerHash = activeScope.ownerHash,

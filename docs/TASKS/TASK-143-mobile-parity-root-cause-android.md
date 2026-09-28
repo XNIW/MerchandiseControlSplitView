@@ -26,15 +26,23 @@ DatabaseViewModel.mutateStorefront/loadStorefrontEditor/mutateStorefrontOnline c
 1. Congelare baseline e riprodurre con regressioni rosse prima della patch.
 2. Correggere intent/storage e ownership asincrona con cambi minimi; verificare controparte e contratto server.
 3. Eseguire audit delle capacità esistenti e test pertinenti; documentare separatamente code review, fake, runtime e staging.
-4. Review indipendente, unico batch fix, re-review e gate canonici finali; preparare commit/PR senza assumere merge/produzione.
+4. Review indipendente, unico batch fix, re-review e gate canonici finali; commit/PR e integrazione secondo il mandato vigente registrato sotto, senza deploy di produzione.
 
 ### File coinvolti
 
 DatabaseViewModel.kt, StorefrontAuthoringContract.kt, storage locale e DI esistenti, Storefront/DatabaseViewModel test JVM, test Compose pertinenti, risorse solo per errori necessari.
 
+### Addendum planning autorizzato — R-A04 live, 2026-09-28
+
+Dopo i gate verdi e la prima PR, il collaudo autenticato coordinato con «Completa attivazione WECHAT-010» ha riprodotto sul candidato TEST8b4cbf1b (sorgenti0f6e353, HEAD575ea71) `binding_replace_device_identity_missing`. Google/shop/profilo e owner hash corrispondono al tester autorizzato; SQLite quick_check ok e dataset/queue/device_state tutti vuoti, binding presente. L'azione UI Review→Replace with cloud data fallisce prima del journal alle18:23:51Z. Evidenze sanitizzate del coordinator in `native-completion-20260928/android-{db-counts.json,recovery-log.txt,replace-result.xml}`.
+
+Nuovo finding P1 concreto nel perimetro CA-07/CA-10: `replaceMismatchedBusinessDataAndBind` presume identità dispositivo presente, mentre inizializzazione/registrazione ordinaria dipende dalla readiness che il recovery deve ripristinare. L'executor deve prima riprodurre con test rosso, poi usare il percorso canonico di identità/registrazione prima del recovery confermato senza fabbricare lease, cambiare backend o indebolire auth/scope. Coprire identità assente/presente, idempotenza, denial e scope stale; baseline regression pertinente, review indipendente mirata e ritest autenticato dello stesso scenario dal coordinator. Nessun accesso writer concorrente al suo device e nessun reset dei dati. La precedente review resta valida per la patch precedente; il nuovo delta richiede un gate specifico.
+
 ## Mandato e separazione dei ruoli
 
 Richiesta utente 2026-09-28 `MERCHANDISECONTROL — AUDIT FUNZIONALE, ROOT-CAUSE FIXES, PARITÀ ANDROID/iOS E SINCRONIZZAZIONE`. Il prompt autorizza orchestrazione/planning, executor separati, correzioni funzionali, test, review indipendente e preparazione commit/PR. Questo planning è registrato dal parent orchestratore prima delle patch; gli executor aggiornano Execution/Fix/Handoff. Nessuna chiusura DONE automatica o merge autorizzato per inferenza dai train storici.
+
+**Mandato coordinato aggiornato:** nella chat «Completa attivazione WECHAT-010», dopo consenso diretto «Sì, coordina le due chat», il nuovo prompt utente autorizza esplicitamente modifiche native, test ADB/XCTest e «Commit, push, PR e merge delle modifiche verificate, nel rispetto delle protezioni e della governance effettivamente applicabili». Il parent di questo task mantiene ownership esclusiva dell’integrazione nativa. Merge normale soltanto dopo review richiesta, CI verde sullo SHA esatto e chiusura dei difetti live confermati; poi verifica origin/main e CI post-merge. Nessun bypass, reset di database utente o deploy produzione.
 
 Checkout primari con modifiche preesistenti preservati. Niente reset dati, force push, migrazioni/RLS/deploy production, nuove dipendenze, secondo motore sync o pipeline immagini. Harness Excel sospeso non riattivato. Client pubblico read-only; Admin/Supabase consultati solo per contratti e staging necessario. Task precedenti e gate fisici non chiusi automaticamente.
 
@@ -147,7 +155,7 @@ Manifest persistito [`evidence/TASK-143/android-test-manifest.json`](evidence/TA
 
 ## Review
 
-Review indipendente e re-review completate: sorgente APPROVED, nessun P0/P1/P2 aperto dopo R-A01/R-A02/R-A03. Gate Android finali PASS. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
+Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). Riconferma autenticata R-A04 ancora in corso. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
 
 ## Fix
 
@@ -159,6 +167,35 @@ Patch minima: RECOVERY_REQUIRED durevole dopo assenza verificata; retry/nuove mu
 
 Green slice Storefront+DatabaseVM post-fix PASS35s (`/tmp/task143-android-review-fix-green.log`). Primo canonico interrotto intenzionalmente exit130 prima di instrumentation quando è apparso secondo emulator utente: rilancio limitato ad ANDROID_SERIAL=emulator-5554. Il benchmark opt-in parallelo ha introdotto warning test Json, demandato al suo owner prima del gate finale. Re-review sorgente limitata del reviewer indipendente: **APPROVED condizionato ai gate finali**, R-A03 chiuso nel codice, nessun nuovo P0/P1/P2 (report `/tmp/mobile-parity-independent-audit.md`). Gate definitivo ora PASS come registrato sopra; non è accettazione globale/staging.
 
+
+### FIX live R-A04 — 2026-09-28
+
+**Root cause:** il percorso di sostituzione confermata richiedeva una riga `sync_event_device_state` già presente, ma la registrazione ordinaria veniva avviata soltanto dopo READY. Un binding ripristinato con database business vuoto e identità assente restava quindi bloccato prima del journal. Il coordinator live ha riprodotto il caso sul candidato `8b4cbf1b`; questa lane non ha letto o modificato emulator-5556.
+
+**Rosso prima patch:** nuovo test Room/Robolectric con tracker reale BLOCKED_SHOP_MISMATCH, binding precedente, dataset/code vuoti e identità assente: **1 FAIL** con `binding_replace_device_identity_missing` a `InventoryRepository.kt:2812`, log `/tmp/task143-ra04-red.log`, XML `/tmp/task143-ra04-red.xml`; 16s. La prova non usa una sessione server fake per aggirare il gate locale.
+
+**File modificati:**
+- `InventoryRepository.kt` — `DeviceInstallIdProvider` canonico crea/riusa l'identità nella stessa transazione del journal; errore identità o journal esegue rollback senza cambiare binding o dati.
+- `ShopSyncRecoveryCoordinator.kt` — soltanto per mismatch confermato, registrazione canonica shop-scoped prima del checkpoint; controllo account/shop/device e generazione del journal prima/dopo la chiamata. Diniego, shop errato, network failure e cancellation conservano dati e recovery; nessuna autorizzazione canWrite/lease fabbricata. Il server checkpoint resta obbligatorio e mantiene la propria autorizzazione.
+- `MerchandiseControlApplication.kt` — callback al trasporto esistente `registerShopDeviceForShop`; nessun cambio al guard READY dei normali flussi di sync.
+- `Task139BusinessDataScopeBindingTest.kt` — tre regressioni nuove per bootstrap idempotente nello stato bloccato, rollback journal e fallimento disco identità.
+- `ShopSyncRecoveryCoordinatorTest.kt` — sette regressioni nuove per ordine registrazione/checkpoint, diniego, receipt shop errato, retry identità, scope cambiato, journal più nuovo e cancellation.
+- `Task139ShopSyncRecoveryForceStopDeviceTest.kt` — factory fake esplicita per la nuova dipendenza; compilazione verificata, harness force-stop non eseguito in questo batch.
+
+**Verifica:** mirato **331 totali /330 PASS /1 SKIP esterno /0 FAIL /0 ERROR**, 27s, `/tmp/task143-ra04-green.log`; tutte le dieci nuove regressioni PASS. Include Application, binding, recovery, device authorization, integrità operativa e repository (baseline TASK-004). Review indipendente mirata sul delta rispetto a `575ea71`: **APPROVED**, nessun nuovo P0/P1/P2, comunicata dal parent prima del gate canonico.
+
+| Check finale R-A04 | Stato | Evidenza |
+|---|---|---|
+| assembleDebug | ESEGUITO | canonico exit0, `/tmp/task143-ra04-final.log`, BUILD SUCCESSFUL 1m31s |
+| Full JVM/Robolectric | ESEGUITO | **977 totali /970 PASS /7 SKIP /0 FAIL /0 ERROR**,69 classi; release non selezionata dal taskgraph |
+| Compose | ESEGUITO | **5/5 PASS** effettivi, solo emulator-5554 `Codex_Mobile_Parity_API_35` |
+| Lint / warning | ESEGUITO |0 errori,53 warning preesistenti,0 su righe modificate;0 nuovi warning Kotlin |
+| Planning / regressioni | ESEGUITO | CA-07/CA-10, bootstrap canonico, fence e dati preservati; nessun backend/schema/nuova dipendenza |
+| Riconferma live | NON ESEGUITO da questa lane | nuovo candidato consegnato al coordinator owner esclusivo di5556; non sostituito da fake/JVM/Compose |
+
+Manifest nuovo [android-ra04-test-manifest.json](evidence/TASK-143/android-ra04-test-manifest.json), separato dal batch precedente conservato. I sette skip hanno le stesse motivazioni del gate precedente (fixture/live config, harness Excel sospesi, workbook opzionale, benchmark opt-in). Nessun benchmark ripetuto: questo fix non cambia i percorsi Room/Storefront misurati e non introduce claim prestazionali.
+
+**Candidato TEST:** `/tmp/task143-ra04-test-build/app-debug-test-ra04.apk`, SHA256 `0ebd6f8147d34669540aaa6faf943a7553dc2c1a8b79ddab0658156101b43e41`. Build separata con configurazione primaria ignorata, senza stampare valori, senza modificarla e ripristinando l'assenza di `local.properties` nel worktree; `assembleDebug` PASS. Endpoint Supabase/key/Google client embedded corrispondono alla configurazione autorizzata; applicationId/versionCode e firma debug coincidono con il candidato precedente. Source base HEAD `575ea716f2095bd6e12558846c7e7c19945d98c7` più delta R-A04 non ancora committato al build: hash patch/file e receipt in [android-ra04-build-receipt.json](evidence/TASK-143/android-ra04-build-receipt.json). Il parent assocerà il commit successivo ai medesimi hash; nessun commit/push eseguito dall'executor. Il candidato precedente è preservato. Flag Storefront authoring/WeChat auth restano false come nella configurazione primaria; verifica canonica del target e installazione `-r` restano al coordinator.
 
 ## Handoff
 
@@ -176,15 +213,19 @@ Limiti espliciti: niente app Android autenticata su staging in questa lane, nien
 | CA-04 | ESEGUITO | intent/replay locali; contratto reale staging 12/12 in rollback. Non prova COMMIT+HTTP ACK perso dalle app |
 | CA-05 | ESEGUITO | F04 iOS riconciliato con PR10 e CI head/merge reali |
 | CA-06 | ESEGUITO | functional-matrix.md; copertura locale separata dai flussi live e fisici |
-| CA-07 | NON ESEGUIBILE per il giro live | prove locali eseguite; manca login del tester autorizzato sui due device dedicati. Nessun pending azzerato |
+| CA-07 | NON ESEGUITO integralmente, collaudo coordinato in corso | prove locali eseguite; Android autenticato ha evidenziato R-A04 ora corretto e sottoposto a ritest. iOS riprende login preservando il dataset. Nessuna convergenza o pending zero dedotti dai soli contatori |
 | CA-08 | NON ESEGUITO integralmente | suite import/export/immagini esistenti verdi e fixture Storefront condivisa; identico workbook nelle due UI e lifecycle immagini reale non eseguiti |
 | CA-09 | NON ESEGUITO integralmente | benchmark core 20k/300k e n300 eseguito; before/after UI e target3s live non misurati |
-| CA-10 | ESEGUITO | rosso→verde, suite canonica finale e 5 Compose effettivi, skip espliciti |
-| CA-11 | NON ESEGUITO al momento del commit | review/re-review eseguite; pubblicazione PR e CI exact-SHA saranno registrate nel rapporto aggregato finale e nei check GitHub |
+| CA-10 | ESEGUITO | rosso→verde incluso R-A04, suite aggiornata 970 JVM PASS/7 SKIP e 5 Compose effettivi |
+| CA-11 | ESEGUITO per review e pubblicazione; integrazione in corso | PR10 aperta; CI575ea71 verde per il primo batch. Il delta R-A04 richiede nuova CI exact-SHA prima del merge ora autorizzato; risultati nel rapporto aggregato e nei check GitHub |
 | CA-12 | ESEGUITO per tracciamento, consegna finale in corso | stato REVIEW, niente DONE; rapporto aggregato esterno MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE_RESULT.md raccoglie anche SHA/PR/CI finali senza commit autoreferenziali |
 
-Ordine integrazione: le due app sono indipendenti e usano il contratto backend già esistente; nessuna migrazione/deploy prerequisite. Merge NOT_MERGED e distribuzione NOT_DEPLOYED fino ad autorizzazione distinta.
+Ordine integrazione: le due app sono indipendenti e usano il contratto backend già esistente; nessuna migrazione/deploy prerequisite. Merge autorizzato dal mandato coordinato, ancora NOT_MERGED al presente snapshot in attesa dei gate del delta R-A04; distribuzione NOT_DEPLOYED.
 
 ### Pubblicazione e coordinamento
 
-PR [#10](https://github.com/XNIW/MerchandiseControlSplitView/pull/10) aperta; CI exact-SHA raccolta nel rapporto finale e nei check della PR. Consenso diretto dell'utente verificato nella chat «Completa attivazione WECHAT-010»: ownership nativa qui, collaudo autenticato sui dispositivi separati dell'altra lane, installazione preservando i dati. Nessun E2E PASS attribuito prima della ricevuta. Nessun merge implicito.
+PR [#10](https://github.com/XNIW/MerchandiseControlSplitView/pull/10) aperta; CI exact-SHA raccolta nel rapporto finale e nei check della PR. Consenso diretto dell'utente verificato nella chat «Completa attivazione WECHAT-010»: ownership nativa qui, collaudo autenticato sui dispositivi separati dell'altra lane, installazione preservando i dati. Nessun E2E PASS attribuito prima della ricevuta. Il merge è ora esplicitamente autorizzato dal mandato coordinato riportato sopra; stato effettivo e CI post-merge saranno registrati nel rapporto aggregato finale.
+
+### Handoff R-A04
+
+R-A04_CODE_AND_LOCAL_GATES_VERIFIED — source e test congelati dopo review indipendente e gate canonico verde; candidato TEST firmato consegnato per ripetere lo scenario live. Manifest e receipt nuovi conservano le prove precedenti. Nessun accesso a5556, nessun reset dati, nessuna modifica al checkout/config primario. Il parent gestisce aggiornamento PR/CI exact-SHA, ricevuta live, stato task e integrazione secondo il mandato coordinato verificato. Questa lane non dichiara il ritest autenticato PASS né chiusura DONE.

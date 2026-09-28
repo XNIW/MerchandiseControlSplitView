@@ -235,6 +235,9 @@ class Task139ShopSyncRecoveryForceStopDeviceTest {
         activeDb = database,
         activeRepository = DefaultInventoryRepository(database),
         remote = remote,
+        registerDeviceForRecovery = { shopId ->
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+        },
         scopeStillValid = { accountId, shopId -> accountId == ACCOUNT && shopId == SHOP },
         activationBoundary = { block -> block() },
         nowMs = System::currentTimeMillis,

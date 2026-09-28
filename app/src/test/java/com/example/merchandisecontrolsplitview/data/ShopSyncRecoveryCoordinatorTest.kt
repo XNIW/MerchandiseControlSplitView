@@ -109,6 +109,115 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun `confirmed replacement registers the same install identity before checkpoint`() = runTest {
+        val device = seedOldMismatchGeneration()
+        var registrations = 0
+        val result = coordinator(registerDeviceForRecovery = { shopId ->
+            registrations++
+            assertEquals(SHOP, shopId)
+            assertEquals(device.deviceId, DeviceInstallIdProvider(db.syncEventDeviceStateDao()).getOrCreate())
+            assertEquals(0, remote.checkpointCalls)
+            assertOldGenerationAndManifestIntact()
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        assertEquals(1, registrations)
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+    }
+
+    @Test
+    fun `registration denial preserves old generation and prevents checkpoint`() = runTest {
+        seedOldMismatchGeneration()
+        val result = coordinator(registerDeviceForRecovery = { shopId ->
+            Result.success(ShopDeviceRegistrationResult(ok = false, code = "unauthorized", shopId = shopId))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals("recovery_device_registration_denied", (result as ShopSyncRecoveryResult.RetryRequired).code)
+        assertEquals(0, remote.checkpointCalls)
+        assertEquals(0, remote.pageCalls)
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
+    fun `registration receipt for another shop cannot authorize recovery`() = runTest {
+        seedOldMismatchGeneration()
+        val result = coordinator(registerDeviceForRecovery = {
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = "other-shop"))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals("recovery_device_registration_denied", (result as ShopSyncRecoveryResult.RetryRequired).code)
+        assertEquals(0, remote.checkpointCalls)
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
+    fun `registration failure retries the persisted identity without data loss`() = runTest {
+        val device = seedOldMismatchGeneration()
+        val first = coordinator(registerDeviceForRecovery = {
+            Result.failure(IllegalStateException("fixture network failure"))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+        assertEquals("recovery_device_registration_failed", (first as ShopSyncRecoveryResult.RetryRequired).code)
+        assertEquals(0, remote.checkpointCalls)
+        assertOldGenerationAndManifestIntact()
+
+        val second = coordinator(registerDeviceForRecovery = { shopId ->
+            assertEquals(device.deviceId, DeviceInstallIdProvider(db.syncEventDeviceStateDao()).getOrCreate())
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(second.toString(), second is ShopSyncRecoveryResult.Activated)
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+    }
+
+    @Test
+    fun `scope changed during registration prevents checkpoint and local activation`() = runTest {
+        seedOldMismatchGeneration()
+        var scopeCurrent = true
+        val result = coordinator(
+            scopeStillValid = { _, _ -> scopeCurrent },
+            registerDeviceForRecovery = { shopId ->
+                scopeCurrent = false
+                Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+            }
+        ).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals("recovery_lease_invalid_after_registration", (result as ShopSyncRecoveryResult.RetryRequired).code)
+        assertEquals(0, remote.checkpointCalls)
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
+    fun `newer journal during registration cannot be overwritten or used for checkpoint`() = runTest {
+        seedOldMismatchGeneration()
+        var newer: SyncRecoveryJournal? = null
+        val result = coordinator(registerDeviceForRecovery = { shopId ->
+            newer = requireNotNull(db.syncRecoveryJournalDao().get()).copy(runId = "newer-registration-run")
+            db.syncRecoveryJournalDao().upsert(requireNotNull(newer))
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+        }).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals("recovery_journal_changed", (result as ShopSyncRecoveryResult.RetryRequired).code)
+        assertEquals(newer, db.syncRecoveryJournalDao().get())
+        assertEquals(0, remote.checkpointCalls)
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
+    fun `registration cancellation remains cancellation and keeps recovery durable`() = runTest {
+        seedOldMismatchGeneration()
+        val failure = runCatching {
+            coordinator(registerDeviceForRecovery = {
+                Result.failure(CancellationException("fixture registration cancelled"))
+            }).recover(ACCOUNT, selectedShop(), activeScope())
+        }.exceptionOrNull()
+
+        assertTrue(failure is CancellationException)
+        assertEquals("recovery_cancelled", db.syncRecoveryJournalDao().get()?.reason)
+        assertEquals(0, remote.checkpointCalls)
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
     fun `recovery rejects a UUIDv7 product entity before activation`() = runTest {
         val productId = "018f0ad4-77f2-7c9d-a8be-4f6b9d234567"
         seedOldMismatchGeneration()
@@ -2103,6 +2212,9 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     private fun coordinator(
+        registerDeviceForRecovery: suspend (String) -> Result<ShopDeviceRegistrationResult> = { shopId ->
+            Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
+        },
         onActivated: suspend () -> Unit = {},
         onScopedActivated: (suspend (accountId: String, shopId: String) -> Unit)? = null,
         scopeStillValid: suspend (accountId: String, shopId: String) -> Boolean = { accountId, shopId ->
@@ -2123,6 +2235,7 @@ class ShopSyncRecoveryCoordinatorTest {
         activeDb = db,
         activeRepository = repository,
         remote = remote,
+        registerDeviceForRecovery = registerDeviceForRecovery,
         scopeStillValid = scopeStillValid,
         activationBoundary = activationBoundary,
         onActivated = { accountId, shopId ->

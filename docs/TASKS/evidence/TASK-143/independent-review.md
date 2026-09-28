@@ -1,7 +1,3 @@
-# Esito finale del sorgente
-
-Android e iOS APPROVED nella re-review indipendente; i verdetti intermedi sotto sono cronologici e superati dagli addendum finali. Gate Android locali PASS; gate iOS e CI raccolti separatamente dal parent. Nessuna approvazione live implicita.
-
 # Audit funzionale indipendente — 2026-09-28
 
 Reviewer: agente `independent_reviewer`, separato dagli executor Android/iOS. Prima fase: ispezione sorgente read-only; nessuna build/test avviata e nessuna modifica ai repository. Baseline assegnate: Android `d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac`, iOS `30d226d0fb9b8679a1dd034c6e82319645337f22`. Worktree: `/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/{MerchandiseControlSplitView,ios}`. Questo documento non è ancora la review del diff finale.
@@ -144,3 +140,40 @@ Questa conclusione non dichiara PASS di suite canonicali/Compose/XCUITest ancora
 Re-review **limitata al delta**: la nuova chiamata `validateCurrentScope` prima di rimuovere conflitti/aggiornare summary/restituire ACK copre anche il ramo in cui il readback sospeso riprende con `.offline` o `.unavailable`. Il controllo esistente interno al `do` non veniva raggiunto in quei due catch; ora cancellazione, generation e active scope sono ricontrollati prima di qualsiasi effetto UI. La persistenza della ricevuta già confermata resta correttamente conclusa nel vecchio scope prima dell'attesa.
 
 Il test controllato `testScopeSwitchDuringReceiptReadbackCannotApplyOfflineFallbackToNewScope` sospende il readback, cambia shop, riprende con offline e richiede CancellationError, summary assente e nessun conflitto nel nuovo scope. Nessuna temporizzazione arbitraria e nessuna assertion precedente indebolita. **Delta source APPROVED; nessun nuovo P0/P1/P2.** `git diff --check` PASS. Questo test non è ancora dichiarato PASS dal reviewer: la full suite in corso era partita prima del delta; slice Storefront/UI/build/analyze successivi e CI sull'exact SHA finale restano gate espliciti.
+
+## Verifica evidenze gate locali finali — 2026-09-28
+
+**Android: gate locali verificati PASS**, commit `0f6e353488578ce946b7d1a8a1a2be8786af0ec1`. I 16 hash `changed_app_files_sha256` del manifest TASK-143 coincidono sia con il working tree sia con i blob del commit. Lettura diretta di tutti gli XML elencati: JVM debug **960 PASS, 7 SKIP, 0 FAIL/ERROR** (967 totali); Compose su emulator-5554 **5 PASS, 0 SKIP/FAIL/ERROR**. Nessuna divergenza XML/manifest. Log finale `BUILD SUCCESSFUL in 1m 4s`; lint eseguito, 53 warning preesistenti e nessuno sulle righe cambiate secondo manifest. I JVM output riutilizzati dal comando finale provengono dal precedente run sul medesimo sorgente produzione/JVM; era fallita esclusivamente la compilazione del nuovo callsite androidTest poi corretta. Test release JVM non eseguiti, correttamente distinti nel manifest. I sette skip restano tali (fixture live/benchmark opzionale/workbook/harness sospesi), non trasformati in PASS.
+
+**iOS: slice finale e gate build/static verificati PASS.** Lettura diretta con `xcresulttool get test-results summary` di `post-review-final.xcresult`: **50 PASS, 0 FAIL, 0 SKIP**, 46 unit +4 UI; include `testScopeSwitchDuringReceiptReadbackCannotApplyOfflineFallbackToNewScope`. Log Release post-guard: BUILD SUCCEEDED; log analyze: ANALYZE SUCCEEDED. I 303 hash `final_files` del manifest coincidono con il working tree esaminato. La feature non è ancora nel commit HEAD `4575eefbd4e71914f0031c580de43325f3942b30` al momento della verifica; manifest valida il sorgente finale, mentre l'exact commit sarà verificato dopo il commit/CI.
+
+La ricostruzione in memoria dei due file della full precedente mediante inversione di `post-full-scope-guard.patch` coincide esattamente con entrambi gli hash `full_differing_files`. Quella full precede l'ultima guardia ed è quindi distinta dal gate finale 50-test. Il log attuale contiene **1.353 test-case unici passati, 36 skipped, zero failed**; il precedente riepilogo 1.352 differisce di uno. Il risultato ufficiale della full resta da attendere perché xcresult sta finalizzando diagnostica. Non sommare full e slice come test unici.
+
+**Conclusione locale:** sorgente APPROVED, regressioni mirate e gate finali Android/iOS sopracitati confermati. Nessuna nuova build o audit effettuata dal reviewer. Restano separati CI sui commit finali, completamento ufficiale della full iOS e accettazione autenticata mobile↔mobile/staging; nessuna dichiarazione di rilascio o di E2E completo.
+
+## Review mirata R-A04 — bootstrap identità prima del recovery confermato
+
+**R-A04 chiuso nel sorgente; APPROVED condizionato ai nuovi gate e al ritest live dello stesso scenario.** Delta revisionato rispetto a HEAD `575ea71`; nessun nuovo audit generale, nessuna build o modifica del reviewer.
+
+La riproduzione autenticata del coordinator è concreta: binding presente, device_state e journal assenti, DB/queue vuoti; Review→Replace fallisce `binding_replace_device_identity_missing`. Il percorso ordinario di registrazione richiede READY, che il recovery deve ripristinare. La patch rompe questo ciclo senza dichiarare READY anticipatamente:
+
+- `replaceMismatchedBusinessDataAndBind` usa `DeviceInstallIdProvider.getOrCreate()` dentro la transazione Room già esistente per il journal. Il DAO canonico ha chiave singleton e INSERT IGNORE: identità presente riusata, nessuna rotazione; failure su identity/journal fa rollback di entrambe. Binding e dati precedenti restano fino all'attivazione verificata.
+- `ShopSyncRecoveryCoordinator` richiede il callback di registrazione esplicito, eseguito solo in `MISMATCH_REPLACE_CONFIRMED`. `MerchandiseControlApplication` collega l'RPC canonica `registerShopDeviceForShop`, con target shop catturato dal recovery. Nessun bypass al gate ordinario, lease fabbricato o mutazione backend.
+- Prima e dopo la sospensione RPC vengono verificati auth/shop tramite `scopeStillValid`, identità dispositivo e uguaglianza completa del journal del run. Solo risposta `ok` sullo stesso shop procede; autorizzazione checkpoint A e verifiche B/C/digest/attivazione preesistenti restano obbligatorie.
+- Denial, errore rete, shop errato, scope cambiato e journal più recente impediscono checkpoint/attivazione. CancellationException viene ripropagata dopo registrazione durevole del retry; la vecchia generazione resta integra.
+- Factory androidTest aggiornata con fake esplicito, nessun permissive default introdotto in produzione.
+
+**Prove lette direttamente:** `/tmp/task143-ra04-red.log`: 1 test eseguito/1 failure su identità mancante, BUILD FAILED 16s. `/tmp/task143-ra04-green.log`: BUILD SUCCESSFUL 27s. XML correnti: 331 test totali, **330 PASS, 1 SKIP, 0 FAIL/ERROR**: 66 recovery,20 binding,218 repository (1 fixture live SKIP),15 integrity,6 authorization,6 application. I 10 test nuovi coprono bootstrap idempotente, due rollback SQLite reali, ordine registrazione/checkpoint, identità riusata, denial/shop errato/network/retry, scope stale, journal concorrente e cancellazione. `git diff --check` PASS.
+
+La precedente accettazione locale riguarda il commit precedente. R-A04 richiede nuovo build/lint/test/CI e installazione/ritest autenticato coordinato prima della chiusura live; questi risultati non sono inferiti dalle prove JVM.
+
+### Gate canonico R-A04 verificato indipendentemente
+
+**PASS locale sul delta congelato.** Verificati `android-ra04-test-manifest.json`, `android-ra04-build-receipt.json`, XML e log effettivi; nessun file tracked modificato dal reviewer.
+
+- Sei hash sorgente/test correnti coincidono tra filesystem, manifest e build receipt. I tre hash produzione coincidono con quelli letti alla review R-A04. Il digest effettivo `git diff 575ea71 -- app` è `3b5f335b7cc069763f92f1c14216ad66a2ec33d6b6eb959daba46456e104505d`, identico a entrambe le evidenze: nessun delta produzione aggiuntivo.
+- Tutti gli XML elencati coincidono con i conteggi del manifest: **977 JVM debug, 970 PASS,7 SKIP,0 FAIL/ERROR;5 Compose PASS,0 SKIP/FAIL/ERROR** su emulator-5554. JVM release correttamente NON ESEGUITI.
+- `/tmp/task143-ra04-final.log`: cinque test device avviati e `BUILD SUCCESSFUL in 1m 31s`. XML lint letto direttamente: **0 errori,53 warning**; intersezione indipendente con le righe modificate del diff app: **zero**.
+- SHA256 del candidato APK letto direttamente: `0ebd6f8147d34669540aaa6faf943a7553dc2c1a8b79ddab0658156101b43e41`, uguale alla receipt. Verificato anche hash dell'APK precedente preservato. La receipt dichiara correttamente build da base575ea71 più patch non ancora committata; non attribuisce falsamente il nuovo APK al solo commit precedente.
+
+R-A04 ha ora review sorgente e gate canonico locale verificati. Commit/CI finale e ritest autenticato dello stesso APK sul dispositivo del coordinator rimangono evidenze separate e non vengono anticipati da questo PASS locale. Nessun accesso del reviewer al dispositivo o a configurazione/credenziali protette.
