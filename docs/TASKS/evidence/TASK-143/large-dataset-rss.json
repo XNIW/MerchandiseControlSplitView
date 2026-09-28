@@ -1,0 +1,280 @@
+{
+  "process_id": 36607,
+  "scope": "Host Gradle test executor JVM; not Android application RSS",
+  "method": "ps rss sampled every approximately 100 ms; peak observed, not kernel high-water maxRSS",
+  "sample_count": 54,
+  "peak_observed_rss_kib": 466848,
+  "last_status": "complete",
+  "samples": [
+    {
+      "elapsed_s": 12.168,
+      "rss_kib": 355760,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.274,
+      "rss_kib": 357376,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.389,
+      "rss_kib": 357552,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.499,
+      "rss_kib": 359472,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.606,
+      "rss_kib": 359488,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.717,
+      "rss_kib": 359488,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.825,
+      "rss_kib": 359488,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 12.936,
+      "rss_kib": 359488,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.05,
+      "rss_kib": 359504,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.159,
+      "rss_kib": 359776,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.27,
+      "rss_kib": 359904,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.382,
+      "rss_kib": 359920,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.496,
+      "rss_kib": 359920,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.601,
+      "rss_kib": 359920,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.707,
+      "rss_kib": 368560,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.816,
+      "rss_kib": 380096,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 13.927,
+      "rss_kib": 387008,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.038,
+      "rss_kib": 392512,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.146,
+      "rss_kib": 400816,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.256,
+      "rss_kib": 409792,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.36,
+      "rss_kib": 423520,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.472,
+      "rss_kib": 432464,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.587,
+      "rss_kib": 441552,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.693,
+      "rss_kib": 450160,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.805,
+      "rss_kib": 459280,
+      "status": "seeding"
+    },
+    {
+      "elapsed_s": 14.917,
+      "rss_kib": 462048,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.032,
+      "rss_kib": 462528,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.144,
+      "rss_kib": 463312,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.254,
+      "rss_kib": 466848,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.367,
+      "rss_kib": 438992,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.473,
+      "rss_kib": 436816,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.584,
+      "rss_kib": 436896,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.69,
+      "rss_kib": 437088,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.796,
+      "rss_kib": 437152,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 15.908,
+      "rss_kib": 437232,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.023,
+      "rss_kib": 437408,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.136,
+      "rss_kib": 437408,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.243,
+      "rss_kib": 437424,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.357,
+      "rss_kib": 437424,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.463,
+      "rss_kib": 437616,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.572,
+      "rss_kib": 437632,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.68,
+      "rss_kib": 437664,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.795,
+      "rss_kib": 437664,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 16.901,
+      "rss_kib": 437680,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.012,
+      "rss_kib": 437680,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.123,
+      "rss_kib": 437728,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.23,
+      "rss_kib": 437728,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.344,
+      "rss_kib": 437680,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.453,
+      "rss_kib": 437728,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.564,
+      "rss_kib": 437744,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.679,
+      "rss_kib": 437760,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.786,
+      "rss_kib": 435680,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 17.897,
+      "rss_kib": 435040,
+      "status": "measuring"
+    },
+    {
+      "elapsed_s": 18.011,
+      "rss_kib": 430704,
+      "status": "complete"
+    }
+  ]
+}

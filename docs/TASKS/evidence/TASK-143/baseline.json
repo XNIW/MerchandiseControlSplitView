@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-28T17:23:20Z",
+  "platform": "android",
+  "originalCheckout": "/Users/minxiang/AndroidStudioProjects/MerchandiseControlSplitView",
+  "originalHead": "ca0a58d8f63fa6447427c2e06846b4c9198e4be5",
+  "originalStatus": "M gradle/libs.versions.toml\n M gradle/wrapper/gradle-wrapper.properties\n?? .idea/deploymentTargetSelector.xml",
+  "isolatedCheckout": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView",
+  "branch": "codex/mobile-parity-root-cause-android",
+  "baseline": "d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac",
+  "originMain": "d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac",
+  "openPRsAtStart": [],
+  "baselineCI": [
+    {
+      "conclusion": "success",
+      "databaseId": 32512999137,
+      "headSha": "d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac",
+      "status": "completed"
+    }
+  ]
+}

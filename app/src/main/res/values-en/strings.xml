@@ -837,4 +837,10 @@
     <string name="storefront_not_synced_badge">Not synced</string>
     <string name="storefront_data_differs">Public data differs from the internal product</string>
     <string name="storefront_delete_archive_required">Archive the customer app publication and verify the server version first.</string>
+    <string name="product_editor_conflict">This product changed while you were editing. Reopen it to review the latest values.</string>
+    <string name="storefront_local_persistence_failed">The draft could not be saved on this device. Your input is still available.</string>
+    <string name="storefront_mutation_recovery_required">The pending request needs reconciliation before another change can be sent.</string>
+    <string name="storefront_request_pending">Saved request awaiting server confirmation.</string>
+    <string name="storefront_expired_request_help">The saved request can no longer be retried automatically. Discard the request to save again; your input will be kept.</string>
+    <string name="storefront_discard_pending">Discard saved request</string>
 </resources>

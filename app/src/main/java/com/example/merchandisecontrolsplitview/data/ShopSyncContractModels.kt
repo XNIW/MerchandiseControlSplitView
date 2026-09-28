@@ -398,4 +398,8 @@ interface ShopSyncReadRemoteDataSource {
     ): Result<ShopSyncTargetedRows>
 }
 
-class ShopSyncContractException(val code: String) : IllegalStateException(code)
+class ShopSyncContractException(
+    val code: String,
+    val rpcName: String? = null,
+    val missingFields: List<String> = emptyList()
+) : IllegalStateException(code)

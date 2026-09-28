@@ -1,0 +1,16 @@
+# Review mirata Android R-A05 — short denial checkpoint/convergence marker
+
+**Sorgente APPROVED condizionato al nuovo gate canonico e al retry autenticato. R-A05 chiuso nel codice; nessun nuovo P0/P1/P2.** Review limitata al delta rispetto `78d1fbc8163b7e06f5dc8d5d92406450c59b182f`. Otto hash del freeze `/tmp/task143-ra05-freeze.json` coincidono con i file correnti (3 produzione,2 test,3 fixture); nessuna build o modifica del reviewer.
+
+- `validateResponseStatus` decodifica l'envelope obbligatoria prima dei cinque domain success-only: schema, shop, scope/account/device/legacy-owner, history kind, digest checkpoint e scope atteso vengono controllati prima di interpretare status. Aggiunto confronto `expectedBaselineScopeKey` anche quando non è presente l'intero expectedScope.
+- La logica è comune a checkpoint e convergence marker; controllato il costruttore SQL canonico del marker, che deriva status/scope/digest dal checkpoint e può avere domain null nel rifiuto breve. Il test marker esercita proprio quel caso. Denial riconosciuti `resource_exceeded`, `invalid_baseline`, `integrity_blocked`; status ignoti diventano codice statico unsupported, senza riportare il valore remoto non fidato.
+- Solo `ready` prosegue verso i DTO completi originali, ancora rigorosi. I cinque domain non ricevono default vuoti; missing status, ready incompleto e JSON non decodificabile sono errori di contratto. Budget e trasporto bounded/controlli di scope esistenti non modificati. Le due fixture coincidono semanticamente con gli envelope sintetici prodotti dalla diagnosi SQL; non sono catture di una sessione app.
+- Il coordinator conserva il motivo nel journal retry e la generazione precedente, cancella staging non attivato e restituisce Rejected per i rifiuti deterministici. Il scheduler esistente termina **la finestra corrente**; un successivo trigger può ritentare dopo una correzione server. Questo non viene descritto come blocco permanente di ogni trigger automatico. Nessuna publication o recovery riuscita viene sintetizzata.
+- Diagnostica limitata a codice/RPC noti e nomi dei campi mancanti filtrati; niente payload, account/shop/device o dati business nei nuovi log.
+
+**Prove lette:** `/tmp/task143-ra05-red.xml`:2 test/2 failure MissingFieldException dei cinque domain. `/tmp/task143-ra05-scope-red.xml`:test scope fallito con denial al posto di baseline_scope_key_mismatch prima dell'ultima guardia. `/tmp/task143-ra05-green2.log`:BUILD SUCCESSFUL11s; XML congelati in `/tmp/task143-ra05-targeted/`:113 PASS,0 FAIL/ERROR/SKIP. Coperti denial, ready incompleto, scope/account/device/shop/schema errati, marker breve, diagnostic privacy, conservazione dati/journal e recupero dopo trigger successivo.
+
+Il difetto classificazione è corretto; il preflight reale `resourceExceeded` relativo a storia compressa resta un blocco server da riportare, non è risolto dal decoder. La sua attribuzione al request autenticato esatto richiede il retry del coordinator. Nessuna autorizzazione implicita a decomprimere/cambiare dati o allargare limiti/policy.
+
+
+Gate canonico successivo verificato dal parent: 978 JVM PASS/7 SKIP, build/lint PASS, hash8/8 identici; ritest autenticato typed denial e preservazione in android-ra05-live-retest.json. La recovery business resta bloccata dalla policy server, non dichiarata PASS.

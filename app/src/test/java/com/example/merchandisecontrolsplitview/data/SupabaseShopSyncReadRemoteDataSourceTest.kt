@@ -5,6 +5,7 @@ import java.security.MessageDigest
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -19,6 +20,89 @@ import org.junit.Test
  * before it can turn a server divergence into a client noWork result.
  */
 class SupabaseShopSyncReadRemoteDataSourceTest {
+
+    @Test
+    fun `short resource exceeded checkpoint returns explicit denial without success sections`() = runTest {
+        val source = SupabaseShopSyncReadRemoteDataSource(
+            RecordingInvoker { _, _ -> shortCheckpointJson("resource_exceeded") }
+        )
+        val error = source.checkpoint(shortCheckpointContext("resource_exceeded")).exceptionOrNull()
+        assertTrue(error.toString(), error is ShopSyncContractException)
+        assertEquals("checkpoint_resource_exceeded", (error as ShopSyncContractException).code)
+    }
+
+    @Test
+    fun `short invalid baseline checkpoint returns explicit denial without success sections`() = runTest {
+        val source = SupabaseShopSyncReadRemoteDataSource(
+            RecordingInvoker { _, _ -> shortCheckpointJson("invalid_baseline") }
+        )
+        val error = source.checkpoint(shortCheckpointContext("invalid_baseline")).exceptionOrNull()
+        assertTrue(error.toString(), error is ShopSyncContractException)
+        assertEquals("checkpoint_invalid_baseline", (error as ShopSyncContractException).code)
+    }
+
+    @Test
+    fun `denial envelope validates account device shop schema and scope before status`() = runTest {
+        val payload = shortCheckpointJson("resource_exceeded")
+        val scope = payload.getValue("scope").jsonObject
+        val mismatches = listOf(
+            JsonObject(payload + ("shopId" to JsonPrimitive(ACCOUNT_ID))) to "response_shop_mismatch",
+            JsonObject(payload + ("schemaVersion" to JsonPrimitive("other"))) to "schema_version_mismatch",
+            JsonObject(payload + ("scope" to JsonObject(scope + ("accountKey" to JsonPrimitive(DIGEST))))) to "scope_account_identity_mismatch",
+            JsonObject(payload + ("scope" to JsonObject(scope + ("deviceKey" to JsonPrimitive(DIGEST))))) to "scope_device_identity_mismatch",
+            JsonObject(payload + ("scope" to JsonObject(scope + ("key" to JsonPrimitive(DIGEST))))) to "baseline_scope_key_mismatch"
+        )
+        mismatches.forEach { (response, code) ->
+            val source = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> response })
+            val error = source.checkpoint(shortCheckpointContext("resource_exceeded")).exceptionOrNull()
+            assertEquals(error.toString(), code, (error as ShopSyncContractException).code)
+        }
+    }
+
+    @Test
+    fun `ready checkpoint cannot use short denial envelope or omit status`() = runTest {
+        val payload = shortCheckpointJson("resource_exceeded")
+        listOf(
+            JsonObject(payload + ("status" to JsonPrimitive("ready"))) to setOf("catalog", "prices", "history", "images", "integrity"),
+            JsonObject(payload - "status") to setOf("status")
+        ).forEach { (response, fields) ->
+            val error = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> response })
+                .checkpoint(shortCheckpointContext("resource_exceeded")).exceptionOrNull() as ShopSyncContractException
+            assertEquals("rpc_response_missing_fields", error.code)
+            assertEquals("shop_sync_recovery_checkpoint_v1", error.rpcName)
+            assertEquals(fields, error.missingFields.toSet())
+        }
+    }
+
+    @Test
+    fun `integrity and unknown status stay explicit without echoing untrusted status`() = runTest {
+        listOf("integrity_blocked" to "checkpoint_integrity_blocked", "PRIVATE_STATUS_VALUE" to "checkpoint_status_unsupported")
+            .forEach { (status, code) ->
+                val payload = JsonObject(checkpointJson() + ("status" to JsonPrimitive(status)))
+                val error = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> payload })
+                    .checkpoint(context()).exceptionOrNull() as ShopSyncContractException
+                assertEquals(code, error.code)
+                assertFalse(error.toString().contains("PRIVATE_STATUS_VALUE"))
+            }
+    }
+
+    @Test
+    fun `marker derived from short checkpoint refuses null success sections before decoding them`() = runTest {
+        val payload = shortCheckpointJson("resource_exceeded")
+        val marker = JsonObject(payload + mapOf(
+            "schemaVersion" to JsonPrimitive("shop-sync-convergence-marker-v1"),
+            "catalog" to kotlinx.serialization.json.JsonNull,
+            "prices" to kotlinx.serialization.json.JsonNull,
+            "history" to kotlinx.serialization.json.JsonNull,
+            "images" to kotlinx.serialization.json.JsonNull,
+            "integrity" to parseObject("""{"totalViolationCount":null}"""),
+            "serverNoWorkEligible" to JsonPrimitive(false)
+        ))
+        val error = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> marker })
+            .convergenceMarker(shortCheckpointContext("resource_exceeded")).exceptionOrNull() as ShopSyncContractException
+        assertEquals("convergence_marker_resource_exceeded", error.code)
+        assertEquals("shop_sync_convergence_marker_v1", error.rpcName)
+    }
 
     @Test
     fun `resource-limit overrides can narrow but never widen V6 domain caps`() {
@@ -380,6 +464,24 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
         accountKey = accountKey,
         deviceKey = deviceKey
     )
+
+    private fun fixtureJson(name: String): JsonObject = requireNotNull(
+        javaClass.classLoader?.getResourceAsStream("fixtures/$name")
+    ).bufferedReader().use { parseObject(it.readText()) }
+
+    private fun shortCheckpointJson(status: String): JsonObject =
+        fixtureJson("mobile-recovery-short-${status.replace('_', '-')}-v1.json")
+
+    private fun shortCheckpointContext(status: String): ShopSyncRpcContext {
+        val fixture = fixtureJson("mobile-recovery-short-context-v1.json")
+        return ShopSyncRpcContext(
+            accountId = fixture.getValue("accountId").jsonPrimitive.content,
+            shopId = fixture.getValue("shopId").jsonPrimitive.content,
+            deviceIdentifier = fixture.getValue("deviceIdentifier").jsonPrimitive.content,
+            verifiedBaselineId = fixture.getValue("verifiedBaselineByStatus").jsonObject.getValue(status).jsonPrimitive.content,
+            expectedBaselineScopeKey = shortCheckpointJson(status).getValue("scope").jsonObject.getValue("key").jsonPrimitive.content
+        )
+    }
 
     private fun checkpointJson(
         maxId: String = "42",

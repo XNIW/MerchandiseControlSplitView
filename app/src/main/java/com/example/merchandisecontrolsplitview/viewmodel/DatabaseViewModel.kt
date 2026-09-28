@@ -213,6 +213,8 @@ data class StorefrontEditorUiState(
     val dirtyFields: Set<StorefrontDraftField> = emptySet(),
     val categories: List<StorefrontCategory> = emptyList(),
     val pendingConnection: Boolean = false,
+    val pendingOperation: StorefrontMutationOperation? = null,
+    val pendingRecoveryRequired: Boolean = false,
     val serverVersionUnverified: Boolean = false,
     val busy: Boolean = false,
     val previewVisible: Boolean = false,
@@ -319,6 +321,8 @@ class DatabaseViewModel(
     private val storefrontRemote: StorefrontAuthoringRemoteDataSource =
         (app as MerchandiseControlApplication).storefrontAuthoringRemoteDataSource,
     private val storefrontEnabled: Boolean = BuildConfig.STOREFRONT_AUTHORING_ENABLED,
+    private val storefrontPendingStore: StorefrontPendingMutationStore = FileStorefrontPendingMutationStore(app),
+    private val storefrontStorageDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
     private val storefrontNetworkAvailable: () -> Boolean = {
         (app as MerchandiseControlApplication)
             .catalogSyncStateTracker.networkAvailable.value == true
@@ -417,7 +421,6 @@ class DatabaseViewModel(
     private var storefrontEditorJob: Job? = null
     private var storefrontMutationJob: Job? = null
     private val _storefrontPagingRefresh = MutableStateFlow(0L)
-    private val storefrontPendingKeys = mutableMapOf<StorefrontMutationOperation, String>()
     val filter: StateFlow<String?> = _filter.asStateFlow()
 
     private val _supplierCatalogQuery = MutableStateFlow("")
@@ -564,116 +567,102 @@ class DatabaseViewModel(
         _productEditorTarget.value?.takeIf { it.id > 0L }?.let(::loadStorefrontEditor)
     }
 
-    fun reapplyStorefrontConflict() {
-        val current = _storefrontEditorState.value
-        val conflict = current.conflict ?: return
-        val serverDraft = StorefrontEditorDraft.fromPublication(conflict.server)
-        val mergedDraft = serverDraft
-            .overlayChangedFields(conflict.localDraft, conflict.dirtyFields)
-        _storefrontEditorState.value = current.copy(
-            publication = conflict.server,
-            draft = mergedDraft,
-            baseDraft = serverDraft,
-            dirtyFields = storefrontChangedDraftFields(serverDraft, mergedDraft),
-            conflict = null,
-            serverVersionUnverified = false,
-            errorCode = null
-        )
-    }
+    fun reapplyStorefrontConflict() = resolveStorefrontConflict(reapply = true)
 
     fun cancelStorefrontConflict() {
+        if (_storefrontEditorState.value.pendingRecoveryRequired) discardExpiredStorefrontIntent()
+        else resolveStorefrontConflict(reapply = false)
+    }
+
+    private fun discardExpiredStorefrontIntent() {
         val current = _storefrontEditorState.value
-        val server = current.conflict?.server ?: return
-        _storefrontEditorState.value = current.copy(
-            publication = server,
-            draft = StorefrontEditorDraft.fromPublication(server),
-            baseDraft = StorefrontEditorDraft.fromPublication(server),
-            dirtyFields = emptySet(),
-            conflict = null,
-            serverVersionUnverified = false,
-            errorCode = null
-        )
+        if (current.busy || !current.pendingRecoveryRequired) return
+        val scope = storefrontScopeProvider() ?: return
+        val remoteProductId = current.remoteProductId ?: return
+        val generation = productImageScopeGeneration
+        val session = _productEditorSessionId.value
+        storefrontMutationJob = viewModelScope.launch {
+            _storefrontEditorState.update { it.copy(busy = true) }
+            try {
+                withContext(storefrontStorageDispatcher) {
+                    val saved = storefrontPendingStore.read(scope.first, scope.second, remoteProductId)
+                    check(saved?.state == StorefrontIntentState.RECOVERY_REQUIRED)
+                    // Explicit user discard affects the expired intent only; editable input survives.
+                    storefrontPendingStore.remove(scope.first, scope.second, remoteProductId)
+                }
+                if (!storefrontScopeStillCurrent(scope, generation) || _productEditorSessionId.value != session) return@launch
+                _storefrontEditorState.update {
+                    it.copy(busy = false, pendingConnection = false, pendingOperation = null,
+                        pendingRecoveryRequired = false, publication = null, errorCode = null)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (storefrontScopeStillCurrent(scope, generation) && _productEditorSessionId.value == session) {
+                    _storefrontEditorState.update { it.copy(busy = false, errorCode = "local_persistence_failed") }
+                }
+            }
+        }
+    }
+
+    private fun resolveStorefrontConflict(reapply: Boolean) {
+        val current = _storefrontEditorState.value
+        val conflict = current.conflict ?: return
+        if (current.busy) return
+        val scope = storefrontScopeProvider() ?: return
+        val remoteProductId = current.remoteProductId ?: return
+        val generation = productImageScopeGeneration
+        val session = _productEditorSessionId.value
+        val serverDraft = StorefrontEditorDraft.fromPublication(conflict.server)
+        val nextDraft = if (reapply) serverDraft.overlayChangedFields(conflict.localDraft, conflict.dirtyFields) else serverDraft
+        storefrontMutationJob = viewModelScope.launch {
+            _storefrontEditorState.update { it.copy(busy = true) }
+            try {
+                withContext(storefrontStorageDispatcher) {
+                    if (reapply) storefrontPendingStore.write(StorefrontPendingMutation(
+                        accountId = scope.first, shopId = scope.second, remoteProductId = remoteProductId,
+                        operation = conflict.intendedOperation, draft = nextDraft, baseDraft = serverDraft,
+                        basePublication = conflict.server, expectedVersion = conflict.server.version,
+                        idempotencyKey = UUID.randomUUID().toString()
+                    )) else storefrontPendingStore.remove(scope.first, scope.second, remoteProductId)
+                }
+                if (!storefrontScopeStillCurrent(scope, generation) || _productEditorSessionId.value != session) return@launch
+                _storefrontEditorState.value = current.copy(
+                    publication = conflict.server, draft = nextDraft, baseDraft = serverDraft,
+                    dirtyFields = storefrontChangedDraftFields(serverDraft, nextDraft), conflict = null,
+                    pendingConnection = reapply, pendingOperation = if (reapply) conflict.intendedOperation else null,
+                    serverVersionUnverified = false, busy = false, errorCode = null
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (storefrontScopeStillCurrent(scope, generation) && _productEditorSessionId.value == session) {
+                    _storefrontEditorState.update { it.copy(busy = false, errorCode = "local_persistence_failed") }
+                }
+            }
+        }
     }
 
     fun mutateStorefront(operation: StorefrontMutationOperation) {
         val product = _productEditorTarget.value ?: return
         if (storefrontMutationJob?.isActive == true) return
         val current = _storefrontEditorState.value
-        if (!current.canAuthor || current.loading || current.conflict != null) return
-        if (!storefrontNetworkAvailable()) {
-            if (operation == StorefrontMutationOperation.SAVE_DRAFT) {
-                storefrontPendingKeys.getOrPut(operation) { UUID.randomUUID().toString() }
-                _storefrontEditorState.value = current.copy(
-                    pendingConnection = true,
-                    serverVersionUnverified = true,
-                    errorCode = null
-                )
-            } else {
-                _storefrontEditorState.value = current.copy(errorCode = "network_required")
-            }
+        if (!current.canAuthor || current.loading || current.conflict != null || current.pendingRecoveryRequired) return
+        if (!storefrontNetworkAvailable() && operation != StorefrontMutationOperation.SAVE_DRAFT) {
+            _storefrontEditorState.value = current.copy(errorCode = "network_required")
             return
         }
         mutateStorefrontOnline(product, operation, current.draft)
     }
 
     fun retryPendingStorefrontDraft() {
-        val product = _productEditorTarget.value ?: return
         val current = _storefrontEditorState.value
-        if (!current.pendingConnection || storefrontMutationJob?.isActive == true) return
+        if (!current.pendingConnection) return
         if (!storefrontNetworkAvailable()) {
             _storefrontEditorState.value = current.copy(errorCode = "network_required")
             return
         }
-        val scope = storefrontScopeProvider() ?: run {
-            _storefrontEditorState.value = current.copy(errorCode = "scope_unavailable")
-            return
-        }
-        val remoteProductId = current.remoteProductId ?: return
-        val generation = productImageScopeGeneration
-        storefrontMutationJob = viewModelScope.launch {
-            _storefrontEditorState.update { it.copy(busy = true, errorCode = null) }
-            val response = storefrontRemote.read(scope.second, listOf(remoteProductId))
-            if (!storefrontScopeStillCurrent(scope, generation)) return@launch
-            val read = response.getOrNull()
-            if (read == null || !read.ok) {
-                _storefrontEditorState.update {
-                    it.copy(busy = false, errorCode = read?.code ?: "backend_unavailable")
-                }
-                return@launch
-            }
-            val server = read.rows.singleOrNull()
-            val expected = current.publication?.version ?: 0L
-            val serverVersion = server?.version ?: 0L
-            if (serverVersion != expected && server != null) {
-                _storefrontEditorState.update {
-                    it.copy(
-                        busy = false,
-                        pendingConnection = false,
-                        conflict = StorefrontConflictState(
-                            localDraft = current.draft,
-                            server = server,
-                            intendedOperation = StorefrontMutationOperation.SAVE_DRAFT,
-                            dirtyFields = current.dirtyFields
-                        ),
-                        errorCode = "stale_revision"
-                    )
-                }
-                return@launch
-            }
-            val serverDraft = server?.let(StorefrontEditorDraft::fromPublication)
-                ?: current.baseDraft
-            _storefrontEditorState.update {
-                it.copy(
-                    publication = server,
-                    categories = read.categories,
-                    baseDraft = serverDraft,
-                    dirtyFields = storefrontChangedDraftFields(serverDraft, current.draft),
-                    busy = false,
-                    serverVersionUnverified = false
-                )
-            }
-            mutateStorefrontOnline(product, StorefrontMutationOperation.SAVE_DRAFT, current.draft)
-        }
+        mutateStorefront(current.pendingOperation ?: StorefrontMutationOperation.SAVE_DRAFT)
     }
 
     fun adoptOperationalImageForStorefront(product: Product) {
@@ -775,111 +764,79 @@ class DatabaseViewModel(
     private fun loadStorefrontEditor(product: Product) {
         storefrontEditorJob?.cancel()
         storefrontMutationJob?.cancel()
-        storefrontPendingKeys.clear()
         val enabled = storefrontEnabled && storefrontRemote.isConfigured
         val initialDraft = StorefrontEditorDraft(publicName = product.productName.orEmpty())
         _storefrontEditorState.value = StorefrontEditorUiState(
-            enabled = enabled,
-            loading = enabled && product.id > 0L,
-            draft = initialDraft,
-            baseDraft = initialDraft
+            enabled = enabled, loading = enabled && product.id > 0L, draft = initialDraft, baseDraft = initialDraft
         )
         if (!enabled || product.id <= 0L) return
+        val scope = storefrontScopeProvider()
+        val generation = productImageScopeGeneration
+        val session = _productEditorSessionId.value
+        fun stillCurrent() = scope != null && storefrontScopeStillCurrent(scope, generation) &&
+            _productEditorSessionId.value == session && _productEditorTarget.value?.id == product.id
+        if (scope == null) {
+            _storefrontEditorState.update { it.copy(loading = false, errorCode = "scope_unavailable") }
+            return
+        }
         storefrontEditorJob = viewModelScope.launch {
-            val remoteProductId = try {
-                repository.getSyncedProductRemoteIds(listOf(product.id))[product.id]
+            try {
+                val remoteProductId = repository.getSyncedProductRemoteIds(listOf(product.id))[product.id]
+                if (!stillCurrent()) return@launch
+                if (remoteProductId == null) {
+                    _storefrontEditorState.update { it.copy(loading = false, errorCode = "product_not_synced") }
+                    return@launch
+                }
+                val pending = withContext(storefrontStorageDispatcher) {
+                    storefrontPendingStore.read(scope.first, scope.second, remoteProductId)
+                }
+                if (!stillCurrent()) return@launch
+                val cached = storefrontPublicationsByRemoteId[remoteProductId]
+                val base = pending?.baseDraft ?: cached?.let(StorefrontEditorDraft::fromPublication) ?: initialDraft
+                val restored = pending?.desiredDraft ?: base
+                _storefrontEditorState.update {
+                    it.copy(remoteProductId = remoteProductId, publication = pending?.basePublication ?: cached,
+                        draft = restored, baseDraft = base, dirtyFields = storefrontChangedDraftFields(base, restored),
+                        pendingConnection = pending != null, pendingOperation = pending?.desiredOperation, serverVersionUnverified = true,
+                        pendingRecoveryRequired = pending?.state == StorefrontIntentState.RECOVERY_REQUIRED,
+                        conflict = pending?.server?.takeIf { pending.state == StorefrontIntentState.CONFLICT }?.let { server ->
+                            StorefrontConflictState(restored, server, pending.desiredOperation, storefrontChangedDraftFields(base, restored))
+                        })
+                }
+                if (!storefrontNetworkAvailable()) {
+                    _storefrontEditorState.update {
+                        it.copy(loading = false, errorCode = pending?.errorCode ?: if (pending == null && cached == null) "network_required" else null)
+                    }
+                    return@launch
+                }
+                val response = storefrontRemote.read(scope.second, listOf(remoteProductId)).getOrNull()
+                if (!stillCurrent()) return@launch
+                if (response == null || !response.ok) {
+                    _storefrontEditorState.update { it.copy(loading = false, errorCode = response?.code ?: "backend_unavailable") }
+                    return@launch
+                }
+                val publication = response.rows.singleOrNull()
+                if (publication != null) {
+                    storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
+                    storefrontPublicationsByRemoteId[remoteProductId] = publication
+                } else {
+                    storefrontPublicationsByRemoteId.remove(remoteProductId)
+                    storefrontKnownUnpublishedRemoteIds.add(remoteProductId)
+                }
+                val serverDraft = publication?.let(StorefrontEditorDraft::fromPublication) ?: initialDraft
+                _storefrontEditorState.update {
+                    if (pending != null) it.copy(loading = false, categories = response.categories, errorCode = pending.errorCode)
+                    else it.copy(loading = false, publication = publication, draft = serverDraft, baseDraft = serverDraft,
+                        dirtyFields = emptySet(), categories = response.categories, serverVersionUnverified = false, errorCode = null)
+                }
+                _storefrontSummaries.update { it + (product.id to storefrontSummary(product, remoteProductId, publication)) }
+                if (pending == null && publication != null) loadStorefrontPublicPreview(publication, product.id, generation)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                null
-            }
-            if (_productEditorTarget.value?.id != product.id) return@launch
-            if (remoteProductId == null) {
-                val unsyncedDraft = StorefrontEditorDraft(
-                    publicName = product.productName.orEmpty()
-                )
-                _storefrontEditorState.value = StorefrontEditorUiState(
-                    enabled = true,
-                    expanded = _storefrontEditorState.value.expanded,
-                    errorCode = "product_not_synced",
-                    draft = unsyncedDraft,
-                    baseDraft = unsyncedDraft
-                )
-                _storefrontSummaries.update {
-                    it + (product.id to storefrontSummary(product, null, null))
+                if (stillCurrent()) _storefrontEditorState.update {
+                    it.copy(loading = false, errorCode = "local_persistence_failed")
                 }
-                return@launch
-            }
-            val cached = storefrontPublicationsByRemoteId[remoteProductId]
-            if (!storefrontNetworkAvailable()) {
-                val cachedDraft = cached?.let(StorefrontEditorDraft::fromPublication)
-                    ?: StorefrontEditorDraft(publicName = product.productName.orEmpty())
-                _storefrontEditorState.value = StorefrontEditorUiState(
-                    enabled = true,
-                    expanded = _storefrontEditorState.value.expanded,
-                    remoteProductId = remoteProductId,
-                    publication = cached,
-                    draft = cachedDraft,
-                    baseDraft = cachedDraft,
-                    serverVersionUnverified = true,
-                    errorCode = if (cached == null) "network_required" else null
-                )
-                return@launch
-            }
-            val scope = storefrontScopeProvider()
-            if (scope == null) {
-                _storefrontEditorState.update {
-                    it.copy(loading = false, remoteProductId = remoteProductId, errorCode = "scope_unavailable")
-                }
-                return@launch
-            }
-            val generation = productImageScopeGeneration
-            val result = storefrontRemote.read(scope.second, listOf(remoteProductId))
-            if (!storefrontScopeStillCurrent(scope, generation) ||
-                _productEditorTarget.value?.id != product.id
-            ) return@launch
-            val response = result.getOrNull()
-            if (response == null || !response.ok) {
-                _storefrontEditorState.update {
-                    val fallbackDraft = cached?.let(StorefrontEditorDraft::fromPublication)
-                        ?: it.draft
-                    it.copy(
-                        loading = false,
-                        remoteProductId = remoteProductId,
-                        publication = cached,
-                        draft = fallbackDraft,
-                        baseDraft = fallbackDraft,
-                        dirtyFields = emptySet(),
-                        serverVersionUnverified = cached != null,
-                        errorCode = response?.code ?: "backend_unavailable"
-                    )
-                }
-                return@launch
-            }
-            val publication = response.rows.singleOrNull()
-            if (publication != null) {
-                storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
-                storefrontPublicationsByRemoteId[remoteProductId] = publication
-            } else {
-                storefrontPublicationsByRemoteId.remove(remoteProductId)
-                storefrontKnownUnpublishedRemoteIds.add(remoteProductId)
-            }
-            val serverDraft = publication?.let(StorefrontEditorDraft::fromPublication)
-                ?: StorefrontEditorDraft(publicName = product.productName.orEmpty())
-            _storefrontEditorState.value = StorefrontEditorUiState(
-                enabled = true,
-                expanded = _storefrontEditorState.value.expanded,
-                remoteProductId = remoteProductId,
-                publication = publication,
-                draft = serverDraft,
-                baseDraft = serverDraft,
-                categories = response.categories
-            )
-            _storefrontSummaries.update {
-                it + (product.id to storefrontSummary(product, remoteProductId, publication))
-            }
-            publication?.let {
-                loadStorefrontPublicPreview(it, product.id, generation)
             }
         }
     }
@@ -900,77 +857,177 @@ class DatabaseViewModel(
             return
         }
         val remoteProductId = current.remoteProductId ?: return
-        val expectedVersion = current.publication?.version ?: 0L
-        val key = storefrontPendingKeys.getOrPut(operation) { UUID.randomUUID().toString() }
         val generation = productImageScopeGeneration
+        val session = _productEditorSessionId.value
+        fun stillCurrent() = storefrontScopeStillCurrent(scope, generation) &&
+            _productEditorSessionId.value == session && _productEditorTarget.value?.id == product.id
         storefrontMutationJob = viewModelScope.launch {
             _storefrontEditorState.update { it.copy(busy = true, errorCode = null) }
-            val result = storefrontRemote.mutate(
-                shopId = scope.second,
-                sourceProductId = remoteProductId,
-                operation = operation,
-                draft = draft,
-                expectedVersion = expectedVersion,
-                idempotencyKey = key
-            )
-            if (!storefrontScopeStillCurrent(scope, generation) ||
-                _productEditorTarget.value?.id != product.id
-            ) return@launch
-            val response = result.getOrNull()
-            if (response?.ok == true && response.payload != null) {
-                val publication = response.payload
-                val acknowledgedDraft = StorefrontEditorDraft.fromPublication(publication)
-                storefrontPendingKeys.remove(operation)
-                storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
-                storefrontPublicationsByRemoteId[remoteProductId] = publication
-                _storefrontEditorState.update {
-                    it.copy(
-                        publication = publication,
-                        draft = acknowledgedDraft,
-                        baseDraft = acknowledgedDraft,
-                        dirtyFields = emptySet(),
-                        pendingConnection = false,
-                        serverVersionUnverified = false,
-                        busy = false,
-                        conflict = null,
-                        errorCode = null
+            try {
+                val previous = withContext(storefrontStorageDispatcher) {
+                    storefrontPendingStore.read(scope.first, scope.second, remoteProductId)
+                }
+                if (!stillCurrent()) return@launch
+                var intent = if (previous?.state == StorefrontIntentState.DISPATCHED) {
+                    // A may already be committed. Persist B separately, then recover exactly A.
+                    previous.copy(desiredDraft = draft, desiredOperation = operation)
+                } else if (previous?.state == StorefrontIntentState.QUEUED && previous.matches(operation, draft)) {
+                    previous
+                } else {
+                    StorefrontPendingMutation(
+                        accountId = scope.first, shopId = scope.second, remoteProductId = remoteProductId,
+                        operation = operation, draft = draft, baseDraft = current.baseDraft,
+                        basePublication = current.publication, expectedVersion = current.publication?.version ?: 0L,
+                        idempotencyKey = UUID.randomUUID().toString()
                     )
                 }
-                _storefrontSummaries.update {
-                    it + (product.id to storefrontSummary(product, remoteProductId, publication))
+                withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                if (!stillCurrent()) return@launch
+                _storefrontEditorState.update { it.copy(pendingConnection = true, pendingOperation = operation, serverVersionUnverified = true) }
+                if (!storefrontNetworkAvailable()) {
+                    _storefrontEditorState.update { it.copy(busy = false) }
+                    return@launch
                 }
-                _storefrontPagingRefresh.value += 1L
-                loadStorefrontPublicPreview(publication, product.id, generation)
-            } else if (response?.code == "stale_revision" && response.server != null) {
-                storefrontPendingKeys.remove(operation)
-                _storefrontEditorState.update {
-                    it.copy(
-                        busy = false,
-                        pendingConnection = false,
-                        serverVersionUnverified = false,
-                        conflict = StorefrontConflictState(
-                            draft,
-                            response.server,
-                            operation,
-                            current.dirtyFields
-                        ),
-                        errorCode = "stale_revision"
+                // At most the unresolved request and the explicit successor saved by the user.
+                repeat(2) {
+                    val recovering = intent.state == StorefrontIntentState.DISPATCHED
+                    if (recovering && System.currentTimeMillis() - (intent.dispatchedAtMs ?: 0L) >=
+                        java.util.concurrent.TimeUnit.DAYS.toMillis(7)) {
+                        val readback = storefrontRemote.read(scope.second, listOf(remoteProductId)).getOrNull()
+                        if (!stillCurrent()) return@launch
+                        val server = readback?.rows?.singleOrNull()
+                        if (readback?.ok == true && server?.sourceProductId == remoteProductId) {
+                            intent = intent.copy(state = StorefrontIntentState.CONFLICT, server = server, errorCode = "stale_revision")
+                            withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                            if (!stillCurrent()) return@launch
+                            _storefrontEditorState.update {
+                                it.copy(busy = false, conflict = StorefrontConflictState(intent.desiredDraft, server,
+                                    intent.desiredOperation, storefrontChangedDraftFields(intent.baseDraft, intent.desiredDraft)),
+                                    errorCode = "stale_revision")
+                            }
+                        } else if (readback?.ok == true && readback.rows.isEmpty()) {
+                            intent = intent.copy(state = StorefrontIntentState.RECOVERY_REQUIRED, errorCode = "mutation_recovery_required")
+                            withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                            if (!stillCurrent()) return@launch
+                            _storefrontEditorState.update {
+                                it.copy(busy = false, pendingRecoveryRequired = true, errorCode = "mutation_recovery_required")
+                            }
+                        } else _storefrontEditorState.update { it.copy(busy = false, errorCode = "mutation_recovery_required") }
+                        return@launch
+                    }
+                    intent = intent.copy(
+                        state = StorefrontIntentState.DISPATCHED,
+                        dispatchedAtMs = intent.dispatchedAtMs ?: System.currentTimeMillis()
                     )
+                    withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                    if (!stillCurrent()) return@launch
+                    val response = storefrontRemote.mutate(
+                        shopId = scope.second, sourceProductId = remoteProductId,
+                        operation = intent.operation, draft = intent.draft,
+                        expectedVersion = intent.expectedVersion, idempotencyKey = intent.idempotencyKey
+                    ).getOrNull()
+                    if (!stillCurrent()) return@launch
+                    if (response?.ok == true && response.payload != null) {
+                        var publication = response.payload
+                        if (publication.sourceProductId != remoteProductId ||
+                            (response.shopId != null && response.shopId != scope.second)) {
+                            _storefrontEditorState.update { it.copy(busy = false, errorCode = "scope_unavailable") }
+                            return@launch
+                        }
+                        val receiptDraft = StorefrontEditorDraft.fromPublication(publication)
+                        val hasSuccessor = !intent.matches(intent.desiredOperation, intent.desiredDraft)
+                        if (recovering || response.idempotent) {
+                            // Receipts return the original snapshot, even after another platform's write.
+                            val readback = storefrontRemote.read(scope.second, listOf(remoteProductId)).getOrNull()
+                            if (!stillCurrent()) return@launch
+                            val latest = readback?.rows?.singleOrNull()
+                            if (readback?.ok != true || latest == null || latest.sourceProductId != remoteProductId) {
+                                _storefrontEditorState.update { it.copy(busy = false, errorCode = "mutation_recovery_required") }
+                                return@launch
+                            }
+                            if (latest.version != publication.version && hasSuccessor) {
+                                intent = intent.copy(state = StorefrontIntentState.CONFLICT, server = latest,
+                                    baseDraft = receiptDraft, basePublication = publication, errorCode = "stale_revision")
+                                withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                                if (!stillCurrent()) return@launch
+                                _storefrontEditorState.update {
+                                    it.copy(busy = false, publication = latest, baseDraft = receiptDraft,
+                                        conflict = StorefrontConflictState(intent.desiredDraft, latest, intent.desiredOperation,
+                                            storefrontChangedDraftFields(receiptDraft, intent.desiredDraft)), errorCode = "stale_revision")
+                                }
+                                return@launch
+                            }
+                            publication = latest
+                        }
+                        val acknowledgedDraft = StorefrontEditorDraft.fromPublication(publication)
+                        if (hasSuccessor) {
+                            val successorDraft = acknowledgedDraft.overlayChangedFields(
+                                intent.desiredDraft, storefrontChangedDraftFields(intent.draft, intent.desiredDraft)
+                            )
+                            intent = StorefrontPendingMutation(
+                                accountId = scope.first, shopId = scope.second, remoteProductId = remoteProductId,
+                                operation = intent.desiredOperation, draft = successorDraft,
+                                baseDraft = acknowledgedDraft, basePublication = publication,
+                                expectedVersion = publication.version, idempotencyKey = UUID.randomUUID().toString()
+                            )
+                            withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                            if (!stillCurrent()) return@launch
+                            _storefrontEditorState.update {
+                                it.copy(publication = publication, draft = successorDraft, baseDraft = acknowledgedDraft,
+                                    dirtyFields = storefrontChangedDraftFields(acknowledgedDraft, successorDraft))
+                            }
+                        } else {
+                            withContext(storefrontStorageDispatcher) {
+                                storefrontPendingStore.remove(scope.first, scope.second, remoteProductId)
+                            }
+                            if (!stillCurrent()) return@launch
+                            storefrontKnownUnpublishedRemoteIds.remove(remoteProductId)
+                            storefrontPublicationsByRemoteId[remoteProductId] = publication
+                            _storefrontEditorState.update {
+                                it.copy(publication = publication, draft = acknowledgedDraft, baseDraft = acknowledgedDraft,
+                                    dirtyFields = emptySet(), pendingConnection = false, pendingOperation = null, serverVersionUnverified = false,
+                                    busy = false, conflict = null, errorCode = null)
+                            }
+                            _storefrontSummaries.update { it + (product.id to storefrontSummary(product, remoteProductId, publication)) }
+                            _storefrontPagingRefresh.value += 1L
+                            loadStorefrontPublicPreview(publication, product.id, generation)
+                            return@launch
+                        }
+                    } else if (response?.code == "stale_revision" && response.server != null) {
+                        intent = intent.copy(state = StorefrontIntentState.CONFLICT, server = response.server, errorCode = response.code)
+                        withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                        if (!stillCurrent()) return@launch
+                        _storefrontEditorState.update {
+                            it.copy(busy = false, pendingConnection = true, serverVersionUnverified = false,
+                                conflict = StorefrontConflictState(intent.desiredDraft, response.server, intent.desiredOperation,
+                                    storefrontChangedDraftFields(intent.baseDraft, intent.desiredDraft)), errorCode = response.code)
+                        }
+                        _storefrontSummaries.update { summaries ->
+                            val summary = summaries[product.id] ?: storefrontSummary(product, remoteProductId, response.server)
+                            summaries + (product.id to summary.copy(hasConflict = true))
+                        }
+                        if (_storefrontListFilter.value == StorefrontListFilter.CONFLICT) {
+                            setStorefrontListFilter(StorefrontListFilter.CONFLICT)
+                        }
+                        return@launch
+                    } else {
+                        // Auth/product validation precedes receipt lookup: a denial while recovering
+                        // does not establish that the earlier attempt never committed.
+                        if (!recovering && response?.code in setOf("validation_failed", "permission_denied", "not_found", "invalid_state", "session_expired")) {
+                            intent = intent.copy(state = StorefrontIntentState.REJECTED, errorCode = response?.code)
+                            withContext(storefrontStorageDispatcher) { storefrontPendingStore.write(intent) }
+                        }
+                        if (stillCurrent()) _storefrontEditorState.update {
+                            it.copy(busy = false, errorCode = response?.code ?: "backend_unavailable")
+                        }
+                        return@launch
+                    }
                 }
-                _storefrontSummaries.update { summaries ->
-                    val summary = summaries[product.id]
-                        ?: storefrontSummary(product, remoteProductId, response.server)
-                    summaries + (product.id to summary.copy(hasConflict = true))
-                }
-                if (_storefrontListFilter.value == StorefrontListFilter.CONFLICT) {
-                    _storefrontFilteredProductIds.value = _storefrontSummaries.value.values
-                        .filter(StorefrontPublicationSummary::hasConflict)
-                        .map(StorefrontPublicationSummary::localProductId)
-                        .toSet()
-                }
-            } else {
-                _storefrontEditorState.update {
-                    it.copy(busy = false, errorCode = response?.code ?: "backend_unavailable")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (stillCurrent()) _storefrontEditorState.update {
+                    it.copy(busy = false, errorCode = "local_persistence_failed")
                 }
             }
         }
@@ -1125,7 +1182,6 @@ class DatabaseViewModel(
         storefrontMutationJob?.cancel()
         storefrontEditorJob = null
         storefrontMutationJob = null
-        storefrontPendingKeys.clear()
         _storefrontEditorState.value = StorefrontEditorUiState(
             enabled = storefrontEnabled && storefrontRemote.isConfigured
         )
@@ -2926,12 +2982,18 @@ class DatabaseViewModel(
      * il dialog. Il repository mantiene prodotto, history e dirty marker nella stessa
      * transazione; un retry parte quindi da uno stato interamente precedente o successivo.
      */
-    suspend fun saveProductFromEditor(product: Product): ProductEditorSaveResult =
-        persistProductFromEditor(product, isNewProduct = product.id == 0L)
+    suspend fun saveProductFromEditor(product: Product): ProductEditorSaveResult {
+        val baseline = _productEditorTarget.value?.takeIf { it.id == product.id }
+        if (product.id != 0L && baseline == null) {
+            return ProductEditorSaveResult.Failed(appContext.getString(R.string.product_editor_conflict))
+        }
+        return persistProductFromEditor(product, isNewProduct = product.id == 0L, baseline = baseline)
+    }
 
     private suspend fun persistProductFromEditor(
         product: Product,
-        isNewProduct: Boolean
+        isNewProduct: Boolean,
+        baseline: Product? = null
     ): ProductEditorSaveResult {
         return try {
             if (isNewProduct) {
@@ -2943,7 +3005,8 @@ class DatabaseViewModel(
                 return ProductEditorSaveResult.Saved(productId)
             } else {
                 productDetailsOverrideMutex.withLock {
-                    repository.updateProduct(product)
+                    if (baseline != null) repository.updateProductFromEditor(baseline, product)
+                    else repository.updateProduct(product)
                     try {
                         refreshProductDetailsOverridesLocked(listOf(product.id))
                     } catch (cancelled: CancellationException) {
@@ -2970,6 +3033,8 @@ class DatabaseViewModel(
             ProductEditorSaveResult.Saved(product.id.takeIf { it > 0L })
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: ProductEditConflictException) {
+            ProductEditorSaveResult.Failed(appContext.getString(R.string.product_editor_conflict))
         } catch (_: android.database.sqlite.SQLiteConstraintException) {
             ProductEditorSaveResult.Failed(
                 appContext.getString(R.string.error_barcode_already_exists)

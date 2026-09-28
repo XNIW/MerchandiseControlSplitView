@@ -324,6 +324,12 @@ class MerchandiseControlApplication : Application() {
             activeDb = database,
             activeRepository = repository,
             remote = shopSyncReadRemoteDataSource,
+            registerDeviceForRecovery = { shopId ->
+                shopDeviceRegistrationRemoteDataSource.registerShopDeviceForShop(
+                    shopId = shopId,
+                    reason = "mismatch_recovery"
+                )
+            },
             scopeStillValid = { accountId, shopId ->
                 val context = shopContextRepository.state.value
                 currentAuthAndShopMatch(accountId, context.selectedShop) &&

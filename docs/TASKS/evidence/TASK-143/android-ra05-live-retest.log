@@ -1,0 +1,2 @@
+09-28 16:12:31.437 I/MerchandiseApp( 6932): shop_sync_recovery failed type=ShopSyncContractException code=checkpoint_resource_exceeded rpc=shop_sync_recovery_checkpoint_v1 missingFields=none
+09-28 16:12:31.441 W/MerchandiseApp( 6932): Business recovery: rifiutato code=checkpoint_resource_exceeded

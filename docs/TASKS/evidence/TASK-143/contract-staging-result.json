@@ -1,0 +1,77 @@
+{
+  "checks": {
+    "one_publication": true,
+    "B_same_key_rejected": true,
+    "one_fixture_product": true,
+    "invalid_payload_rejected": true,
+    "save_A_applied_version_1": true,
+    "B_new_key_old_version_stale": true,
+    "ten_timed_mutations_and_replays": true,
+    "B_new_key_current_version_applied": true,
+    "A_replay_after_B_returns_original_ACK": true,
+    "independent_record_readback_B_version_2": true,
+    "replay_A_old_expected_version_idempotent": true,
+    "exactly_two_success_audits_before_benchmark": true
+  },
+  "errors": {
+    "B_same_key": "idempotency_conflict",
+    "invalid_payload": "validation_failed",
+    "B_new_key_old_version": "stale_revision"
+  },
+  "published": false,
+  "replay_ms": [
+    1.249,
+    1.107,
+    1.069,
+    1.02,
+    1.03,
+    1.019,
+    1.011,
+    1.006,
+    1.047,
+    1.034
+  ],
+  "shop_hash": "da11551e796819075558924ede8837ed",
+  "mutation_ms": [
+    15.456,
+    11.647,
+    12.107,
+    13.236,
+    10.53,
+    9.944,
+    10.215,
+    9.636,
+    10.468,
+    10.018
+  ],
+  "writes_role": "authenticated",
+  "profile_hash": "bf727712f2b9c4c17918cba5ba8e1e7a",
+  "classification": "SQL_CONTRACT_REAL_STAGING_TRANSACTION_ROLLBACK",
+  "fixture_prefix": "TASK143_MOBILE_PARITY_20260928_SQL",
+  "before_product_count": 19755,
+  "synthetic_product_hash": "97be03fd82ef002b46d38338b423579b",
+  "transaction_product_count": 19756,
+  "physical_commit_or_HTTP_loss_tested": false,
+  "performance": {
+    "unit": "milliseconds_server_function_wall_time",
+    "method": "10 sequential warm calls within one transaction; percentile_cont interpolation",
+    "mutation": {
+      "n": 10,
+      "p50": 10.498999999999999,
+      "p95": 14.456999999999997,
+      "max": 15.456
+    },
+    "replay": {
+      "n": 10,
+      "p50": 1.032,
+      "p95": 1.1850999999999998,
+      "max": 1.249
+    }
+  },
+  "rollback_verification": {
+    "products": 19755,
+    "synthetic_products": 0,
+    "synthetic_publications": 0,
+    "synthetic_audits": 0
+  }
+}

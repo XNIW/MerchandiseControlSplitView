@@ -33,6 +33,13 @@ internal object ShopSyncRecoveryReasons {
     const val RECOVERY_FAILED = "recovery_failed"
 }
 
+private val SERVER_RESPONSE_BLOCKING_CODES = setOf(
+    "checkpoint_resource_exceeded", "checkpoint_invalid_baseline", "checkpoint_integrity_blocked",
+    "checkpoint_status_unsupported", "convergence_marker_resource_exceeded",
+    "convergence_marker_invalid_baseline", "convergence_marker_integrity_blocked",
+    "convergence_marker_status_unsupported", "rpc_response_missing_fields", "rpc_response_invalid"
+)
+
 internal sealed interface ShopSyncRecoveryResult {
     data class Activated(
         val checkpoint: ShopSyncRecoveryCheckpoint,
@@ -96,6 +103,7 @@ internal class ShopSyncRecoveryCoordinator(
     private val activeDb: AppDatabase,
     private val activeRepository: DefaultInventoryRepository,
     private val remote: ShopSyncReadRemoteDataSource,
+    private val registerDeviceForRecovery: suspend (shopId: String) -> Result<ShopDeviceRegistrationResult>,
     private val scopeStillValid: suspend (accountId: String, shopId: String) -> Boolean,
     private val activationBoundary: suspend (block: suspend () -> Unit) -> Unit,
     /**
@@ -233,6 +241,31 @@ internal class ShopSyncRecoveryCoordinator(
             )
             updateJournal(expected = journal, next = runJournal)
             ShopSyncRecoveryTestHooks.afterStagingJournalPersisted?.invoke()
+            if (replaceConfirmed) {
+                // Normal enrollment requires READY, which this confirmed recovery
+                // is restoring. Use the same server enrollment with the recovery's
+                // existing scope fences; checkpoint authorization remains mandatory.
+                if (!leaseStillValid(accountId, shopId, currentDevice)) {
+                    throw ShopSyncContractException("recovery_lease_invalid_before_registration")
+                }
+                if (requireOwnedJournal(generationId) != runJournal) {
+                    throw ShopSyncContractException("recovery_journal_changed")
+                }
+                val registration = registerDeviceForRecovery(shopId)
+                if (!leaseStillValid(accountId, shopId, currentDevice)) {
+                    throw ShopSyncContractException("recovery_lease_invalid_after_registration")
+                }
+                if (requireOwnedJournal(generationId) != runJournal) {
+                    throw ShopSyncContractException("recovery_journal_changed")
+                }
+                val response = registration.getOrElse {
+                    if (it is CancellationException) throw it
+                    throw ShopSyncContractException("recovery_device_registration_failed")
+                }
+                if (!response.ok || response.shopId?.lowercase() != shopId) {
+                    throw ShopSyncContractException("recovery_device_registration_denied")
+                }
+            }
             val checkpointA = fetchCheckpoint(accountId, shopId, currentDevice, null)
             if (checkpointA.integrity.totalViolationCount != 0L) {
                 throw ShopSyncContractException("recovery_remote_integrity_violation")
@@ -462,7 +495,18 @@ internal class ShopSyncRecoveryCoordinator(
             }
             throw cancelled
         } catch (error: Exception) {
-            logger("shop_sync_recovery failed type=${error::class.java.simpleName}")
+            val contract = error as? ShopSyncContractException
+            val code = contract?.code
+                ?: error.message?.takeIf { it.startsWith("recovery_") }
+                ?: ShopSyncRecoveryReasons.RECOVERY_FAILED
+            val missingFields = contract?.missingFields.orEmpty()
+                .filter { it.matches(Regex("[A-Za-z0-9_]{1,80}")) }
+                .take(16).joinToString(",").ifEmpty { "none" }
+            logger(
+                "shop_sync_recovery failed type=${error::class.java.simpleName} " +
+                    "code=${contract?.code ?: ShopSyncRecoveryReasons.RECOVERY_FAILED} " +
+                    "rpc=${contract?.rpcName ?: "none"} missingFields=$missingFields"
+            )
             var cleanupComplete = activated
             if (!activated) {
                 stagingDb?.close()
@@ -471,15 +515,20 @@ internal class ShopSyncRecoveryCoordinator(
             }
             val latest = activeDb.syncRecoveryJournalDao().get()
                 ?: journal
-            retryAfterFailure(
+            val retry = retryAfterFailure(
                 journal = latest,
-                code = (error as? ShopSyncContractException)?.code
-                    ?: error.message?.takeIf { it.startsWith("recovery_") }
-                    ?: ShopSyncRecoveryReasons.RECOVERY_FAILED,
+                code = code,
                 keepActivatedPhase = activated,
                 expectedRunId = generationId,
                 retainStagingDatabase = !cleanupComplete || activated
             )
+            if (code in SERVER_RESPONSE_BLOCKING_CODES) {
+                // Preserve the durable reason, but do not spend the current
+                // automatic retry window on a deterministic server refusal.
+                ShopSyncRecoveryResult.Rejected(code)
+            } else {
+                retry
+            }
         } finally {
             stagingDb?.close()
         }

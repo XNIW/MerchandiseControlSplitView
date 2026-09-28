@@ -1,0 +1,42 @@
+{
+  "counts": {
+    "products": 0,
+    "suppliers": 0,
+    "categories": 0,
+    "history_entries": 0,
+    "product_prices": 0,
+    "sync_event_outbox": 0,
+    "sync_recovery_journal": 1
+  },
+  "observedCode": "checkpoint_resource_exceeded",
+  "observedRpc": "shop_sync_recovery_checkpoint_v1",
+  "missingFields": "none",
+  "recoveryPass": false,
+  "preservation_note": "Binding unchanged. Recovery journal retained as one row; not byte-identical: new-attempt runId, reason, attemptCount and retry timestamps change; other fields unchanged per authenticated coordinator comparison.",
+  "changed_journal_field_names": [
+    "runId",
+    "reason",
+    "attemptCount",
+    "updatedAtMs",
+    "nextRetryAtMs"
+  ],
+  "attempts": {
+    "reason": {
+      "before": "recovery_failed",
+      "after": "checkpoint_resource_exceeded"
+    },
+    "attemptCount": {
+      "before": 6,
+      "after": 7
+    }
+  },
+  "evidence_source_sha256": "a7d257015517653dad3a6d4f739cf077c9eb2588b4e5c52bc6e244b3856e49ad",
+  "candidate_apk_sha256": "dc11b6ee4be66480f48e50d3cebb0c64e2776d5c8cb8ebdf93a08650d70920d3",
+  "observed_utc": "2026-09-28T19:12:31Z",
+  "procedure": "Authorized coordinator install -r, Google session retained; pending recovery resumed on launch. No new Replace, queue reset, server mutation or manual journal edit.",
+  "preservation": {
+    "binding_byte_identical": true,
+    "journal_byte_identical": false,
+    "journal_retained_row_count": 1
+  }
+}

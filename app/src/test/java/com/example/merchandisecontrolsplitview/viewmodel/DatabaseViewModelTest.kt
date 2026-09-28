@@ -298,8 +298,9 @@ class DatabaseViewModelTest {
     @Test
     fun `editor save failure is recoverable and retry succeeds without an implicit second write`() = runTest {
         val product = sampleProduct(id = 9L, barcode = "22223333", productName = "Draft kept")
+        viewModel.openProductEditor(product)
         var attempts = 0
-        coEvery { repository.updateProduct(product) } coAnswers {
+        coEvery { repository.updateProductFromEditor(product, product) } coAnswers {
             attempts += 1
             if (attempts == 1) {
                 throw IllegalStateException("db unavailable")
@@ -323,14 +324,15 @@ class DatabaseViewModelTest {
             viewModel.uiState.value
         )
         assertEquals(2, attempts)
-        coVerify(exactly = 2) { repository.updateProduct(product) }
+        coVerify(exactly = 2) { repository.updateProductFromEditor(product, product) }
     }
 
     @Test
     fun `editor repeated retry performs exactly one repository attempt per explicit save`() = runTest {
         val product = sampleProduct(id = 10L, barcode = "33334444", productName = "Retry draft")
+        viewModel.openProductEditor(product)
         var attempts = 0
-        coEvery { repository.updateProduct(product) } coAnswers {
+        coEvery { repository.updateProductFromEditor(product, product) } coAnswers {
             attempts += 1
             if (attempts < 3) {
                 throw IllegalStateException("temporary failure $attempts")
@@ -342,13 +344,14 @@ class DatabaseViewModelTest {
         assertEquals(ProductEditorSaveResult.Saved(product.id), viewModel.saveProductFromEditor(product))
 
         assertEquals(3, attempts)
-        coVerify(exactly = 3) { repository.updateProduct(product) }
+        coVerify(exactly = 3) { repository.updateProductFromEditor(product, product) }
     }
 
     @Test
     fun `editor treats a post commit details refresh failure as saved without retrying the write`() = runTest {
         val product = sampleProduct(id = 11L, barcode = "44445555", productName = "Committed")
-        coEvery { repository.updateProduct(product) } returns Unit
+        viewModel.openProductEditor(product)
+        coEvery { repository.updateProductFromEditor(product, product) } returns Unit
         coEvery { repository.getProductDetailsById(product.id) } throws
             IllegalStateException("read-through unavailable")
 
@@ -359,8 +362,23 @@ class DatabaseViewModelTest {
             UiState.Success(app.getString(R.string.success_product_updated)),
             viewModel.uiState.value
         )
-        coVerify(exactly = 1) { repository.updateProduct(product) }
+        coVerify(exactly = 1) { repository.updateProductFromEditor(product, product) }
         coVerify(exactly = 1) { repository.getProductDetailsById(product.id) }
+    }
+
+    @Test
+    fun `editor conflict keeps opening baseline and input without unsafe legacy write`() = runTest {
+        val baseline = sampleProduct(id = 33L, barcode = "CONFLICT", productName = "Base")
+        val edited = baseline.copy(productName = "Local")
+        viewModel.openProductEditor(baseline)
+        coEvery { repository.updateProductFromEditor(baseline, edited) } throws
+            com.example.merchandisecontrolsplitview.data.ProductEditConflictException()
+        viewModel.startProductEditorSave(edited)
+        advanceUntilIdle()
+        assertEquals(baseline, viewModel.productEditorTarget.value)
+        assertEquals(ProductEditorOperationState.Failed(app.getString(R.string.product_editor_conflict)),
+            viewModel.productEditorOperationState.value)
+        coVerify(exactly = 0) { repository.updateProduct(any()) }
     }
 
     @Test

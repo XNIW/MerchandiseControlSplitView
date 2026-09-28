@@ -1,0 +1,103 @@
+{
+  "scope": {
+    "key": "caf7f7954d67a1bda046b29eaee991c3676a5172ee3cd12d64cc826e463189e6",
+    "kind": "authorized_shop_plus_legacy",
+    "deviceKey": "180ad731406f2800c49fc175cdb58563cfaf7e7118b19ccec75c488c239932b9",
+    "accountKey": "bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9",
+    "historyKind": "authorized_shop_plus_legacy",
+    "legacyOwnerKey": "f6222a1106eefe4f6b25302a9d963cfaba14bedfefacc2c311967e41c61cffe4"
+  },
+  "shopId": "22222222-2222-4222-8222-222222222222",
+  "status": "resource_exceeded",
+  "syncEvents": {
+    "maxId": "42",
+    "domainMaxIds": {
+      "prices": "41",
+      "catalog": "42",
+      "history": "40"
+    },
+    "scanComplete": false,
+    "blockingCount": null,
+    "inspectedCount": 0,
+    "inspectionLimit": 10000,
+    "newestBlockingId": null,
+    "oldestBlockingId": null,
+    "verifiedBaselineId": "0",
+    "requiresFullRecovery": true,
+    "historicalBlockingCountStatus": "not_scanned"
+  },
+  "schemaVersion": "shop-sync-recovery-checkpoint-v1",
+  "digestContract": {
+    "seedHex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "emptyDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stepEncoding": "previous-lowercase-hex + U+001F + decimal-byte-length + colon + value",
+    "valueEncoding": "utf8",
+    "rowSetAlgorithm": "sha256-chain-v1",
+    "checkpointAlgorithm": "postgres-jsonb-text-sha256-v1"
+  },
+  "payloadBudgets": {
+    "maxTotalRows": 350000,
+    "maxRowsByDomain": {
+      "images": 125000,
+      "prices": 175000,
+      "history": 25000,
+      "products": 125000,
+      "suppliers": 25000,
+      "categories": 25000
+    },
+    "maxResponseBytes": 4194304,
+    "maxSnapshotBytes": 536870912,
+    "maxPageRowsByDomain": {
+      "images": 240,
+      "prices": 120,
+      "history": 3,
+      "products": 60,
+      "suppliers": 240,
+      "categories": 240
+    },
+    "maxRowBytesByDomain": {
+      "images": 16384,
+      "prices": 32768,
+      "history": 1100000,
+      "products": 65536,
+      "suppliers": 16384,
+      "categories": 16384
+    },
+    "maxPageRowPayloadBytes": 4000000,
+    "maxSnapshotBytesByDomain": {
+      "images": 67108864,
+      "prices": 268435456,
+      "history": 268435456,
+      "products": 268435456,
+      "suppliers": 33554432,
+      "categories": 33554432
+    },
+    "compressedLegacyJsonbPolicy": "fail-closed-before-detoast-v1",
+    "maxUncompressedJsonbStorageBytesBeforeLogicalValidation": 1048576
+  },
+  "checkpointDigest": "bfe3808361ccab15a768e9702ab0539b1a80d84717a7ac3757db623d8e62e2d4",
+  "resourcePreflight": {
+    "rowCounts": {
+      "images": 1,
+      "prices": 41345,
+      "history": 178,
+      "products": 19832,
+      "suppliers": 135,
+      "categories": 104
+    },
+    "totalRowCount": 61595,
+    "violationCount": 1,
+    "resourceExceeded": true,
+    "storageScanStatus": "compressed_legacy_history_requires_remediation",
+    "storageViolations": {
+      "images": false,
+      "prices": false,
+      "history": true,
+      "products": false,
+      "suppliers": false,
+      "categories": false
+    },
+    "storageViolationCount": 1,
+    "activeCompressedHistoryCount": 16
+  }
+}
