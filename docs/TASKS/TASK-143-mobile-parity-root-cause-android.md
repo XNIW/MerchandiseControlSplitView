@@ -38,6 +38,10 @@ Dopo i gate verdi e la prima PR, il collaudo autenticato coordinato con «Comple
 
 Nuovo finding P1 concreto nel perimetro CA-07/CA-10: `replaceMismatchedBusinessDataAndBind` presume identità dispositivo presente, mentre inizializzazione/registrazione ordinaria dipende dalla readiness che il recovery deve ripristinare. L'executor deve prima riprodurre con test rosso, poi usare il percorso canonico di identità/registrazione prima del recovery confermato senza fabbricare lease, cambiare backend o indebolire auth/scope. Coprire identità assente/presente, idempotenza, denial e scope stale; baseline regression pertinente, review indipendente mirata e ritest autenticato dello stesso scenario dal coordinator. Nessun accesso writer concorrente al suo device e nessun reset dei dati. La precedente review resta valida per la patch precedente; il nuovo delta richiede un gate specifico.
 
+### Addendum planning autorizzato — R-A05 decode recovery live, 2026-09-28
+
+Il ritest autenticato del candidato R-A04 su DB business vuoto supera l'identità dispositivo ma fra18:45–18:47Z fallisce con `MissingFieldException`, esaurendo i retry `mismatch_replace_confirmed`. Journal preservato, nessun ulteriore Replace. Evidenza sanitizzata `native-completion-20260928/android-ra04-recovery-log.txt`. Nuovo P1 attuale in CA-07/CA-10: identificare RPC e campo realmente mancanti confrontando DTO con contratto TEST distribuito, poi test rosso sul payload rappresentativo e patch client minima coerente con il contratto. Vietati default che trasformino failure o campi obbligatori mancanti in successo, indebolimenti auth/scope, modifiche backend o reset dei dati. Controparte iOS da confrontare; non dedurre un difetto attuale dai vecchi log. Review mirata, gate aggiornati e ritest autenticato richiesti.
+
 ## Mandato e separazione dei ruoli
 
 Richiesta utente 2026-09-28 `MERCHANDISECONTROL — AUDIT FUNZIONALE, ROOT-CAUSE FIXES, PARITÀ ANDROID/iOS E SINCRONIZZAZIONE`. Il prompt autorizza orchestrazione/planning, executor separati, correzioni funzionali, test, review indipendente e preparazione commit/PR. Questo planning è registrato dal parent orchestratore prima delle patch; gli executor aggiornano Execution/Fix/Handoff. Nessuna chiusura DONE automatica o merge autorizzato per inferenza dai train storici.
@@ -155,7 +159,7 @@ Manifest persistito [`evidence/TASK-143/android-test-manifest.json`](evidence/TA
 
 ## Review
 
-Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). Riconferma autenticata R-A04 ancora in corso. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
+Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
 
 ## Fix
 
@@ -197,6 +201,37 @@ Manifest nuovo [android-ra04-test-manifest.json](evidence/TASK-143/android-ra04-
 
 **Candidato TEST:** `/tmp/task143-ra04-test-build/app-debug-test-ra04.apk`, SHA256 `0ebd6f8147d34669540aaa6faf943a7553dc2c1a8b79ddab0658156101b43e41`. Build separata con configurazione primaria ignorata, senza stampare valori, senza modificarla e ripristinando l'assenza di `local.properties` nel worktree; `assembleDebug` PASS. Endpoint Supabase/key/Google client embedded corrispondono alla configurazione autorizzata; applicationId/versionCode e firma debug coincidono con il candidato precedente. Source base HEAD `575ea716f2095bd6e12558846c7e7c19945d98c7` più delta R-A04 non ancora committato al build: hash patch/file e receipt in [android-ra04-build-receipt.json](evidence/TASK-143/android-ra04-build-receipt.json). Il parent assocerà il commit successivo ai medesimi hash; nessun commit/push eseguito dall'executor. Il candidato precedente è preservato. Flag Storefront authoring/WeChat auth restano false come nella configurazione primaria; verifica canonica del target e installazione `-r` restano al coordinator.
 
+### FIX live R-A05 — 2026-09-28
+
+**Root cause e contratto:** il DTO completo del checkpoint veniva decodificato prima di `status`; i rifiuti contrattuali `resource_exceeded` e `invalid_baseline` omettono intenzionalmente `catalog/prices/history/images/integrity`. Il marker derivato può avere tali sezioni nulle. Il validator ha confrontato source SQL e definizioni TEST distribuite, poi creato fixture sintetiche con helper digest SQL reali: [recovery-contract-diagnosis.md](evidence/TASK-143/recovery-contract-diagnosis.md). Le tre fixture sono byte-identiche a quelle condivise con iOS; nessuna identità reale, sessione, token o impersonazione è usata nei test.
+
+La query aggregata read-only sullo scope TEST canonico ha confermato un blocco distinto: `compressed_legacy_history_requires_remediation`,16 History attive compresse,1 violazione storage; i limiti per numero di righe non sono superati. Ciò spiega il ramo atteso dal contratto distribuito, ma il vecchio log app non cattura la risposta esatta. Il nuovo candidato permette al coordinator di verificare RPC/codice effettivi tramite retry dello stesso journal. Nessuna modifica, decompressione o cancellazione dei dati server è stata eseguita; il fix client non rende valido un recovery rifiutato dal server.
+
+**Rosso prima patch:**2/2 FAIL per `MissingFieldException` sulle cinque sezioni mancanti,11s, `/tmp/task143-ra05-red.log` e `/tmp/task143-ra05-red.xml`. Dopo il primo fix, una nuova prova negativa ha rivelato anche la mancata verifica del baseline scope key quando `expectedScope` è assente:112 PASS/1 FAIL, `/tmp/task143-ra05-green.log` e `/tmp/task143-ra05-scope-red.xml`. Aggiunto il confronto esplicito prima della classificazione del rifiuto; nessuna guardia rimossa.
+
+**File modificati:**
+- `data/ShopSyncContractModels.kt` — eccezione contrattuale con diagnostica scalare opzionale RPC/nomi campi.
+- `data/SupabaseShopSyncReadRemoteDataSource.kt` — envelope obbligatorio schema/shop/scope/account/device/expected scope key/digest prima del discriminante, per checkpoint e marker; solo `ready` prosegue al DTO completo rigoroso. Tre rifiuti noti classificati; stato sconosciuto o risposta malformata restano errori, senza default di successo. Missing field restituiti come nomi DTO, mai body o valori remoti.
+- `data/ShopSyncRecoveryCoordinator.kt` — mantiene dati/journal/motivo e termina la finestra corrente di retry per rifiuto o risposta contrattuale invalida. Un successivo trigger foreground/reconnect può rivalutare il server. Log limitato a tipo/codice/RPC e nomi campo filtrati; UI e messaggio localizzato esistente invariati.
+- `SupabaseShopSyncReadRemoteDataSourceTest.kt`, `ShopSyncRecoveryCoordinatorTest.kt` —8 nuove regressioni: short envelope, vincoli identità/schema/scope, DTO success incompleto, stato ignoto, marker con sezioni nulle, stop retry con dati preservati e successivo trigger, diagnostica senza identità o payload.
+- `fixtures/mobile-recovery-short-{context,invalid-baseline,resource-exceeded}-v1.json` — contratto condiviso con dati sintetici e preflight aggregato sanitizzato; hash nel manifest.
+
+**Mirato finale:**113/113 PASS,0 FAIL/ERROR/SKIP,11s (`/tmp/task143-ra05-green2.log`): Application6, coordinator68, transport19, binding20. Review indipendente del delta rispetto a `78d1fbc`: **APPROVED**, nessun P0/P1/P2; gli8 hash del freeze e il risultato113/113 sono stati verificati dal reviewer prima del canonico.
+
+| Check finale R-A05 | Stato | Evidenza |
+|---|---|---|
+| assembleDebug / test / lint | ESEGUITO | comando canonico exit0, BUILD SUCCESSFUL1m28s, `/tmp/task143-ra05-final.log` |
+| Full JVM/Robolectric | ESEGUITO | **985 totali /978 PASS /7 SKIP /0 FAIL /0 ERROR**,69 classi; testRelease non selezionato, non dichiarato eseguito |
+| Lint / warning | ESEGUITO |0 errori,53 warning preesistenti,0 sulle righe modificate;0 warning Kotlin/deprecation nuovi |
+| Compose precedente | ESEGUITO nel batch R-A04, riuso motivato |5 PASS effettivi su5554 nel gate R-A04; nessun nuovo run. Application, EditProductDialog, OptionsScreen e test Compose hanno hash identici a78d1fbc; parent autorizza riuso perché R-A05 modifica soltanto recovery/contratto e relative prove JVM |
+| Planning / regressioni TASK-004 | ESEGUITO | CA-07/CA-10; full JVM include repository/DatabaseVM/ExcelVM. Nessuna dipendenza, schema, backend, UI o harness aggiunto |
+| git diff --check | ESEGUITO | nessun whitespace error; sorgenti identici al freeze revisionato |
+| Riconferma autenticata | NON ESEGUITO da questa lane | candidata pronta per owner5556; solo retry journal, nessun ulteriore Replace |
+
+Nuovo manifest [android-ra05-test-manifest.json](evidence/TASK-143/android-ra05-test-manifest.json), per-classe/JVM/skip/lint/hash/riuso Compose, senza sovrascrivere i batch precedenti. XML finali e lint conservati in `/tmp/task143-ra05-final-reports/`. I7 skip restano:1 fixture locale Supabase/WeChat assente,1 config live realtime assente,3 harness Excel sospesi,1 workbook opzionale assente,1 benchmark opt-in. Nessun nuovo benchmark: i percorsi Room e persistenza Storefront già misurati non cambiano; nessuna nuova affermazione prestazionale.
+
+**Candidato TEST completo:** `/tmp/task143-ra05-complete-test-profile/app-debug-test-complete-profile-ra05.apk`, SHA256 `dc11b6ee4be66480f48e50d3cebb0c64e2776d5c8cb8ebdf93a08650d70920d3`; build separata PASS9s. Receipt [android-ra05-build-receipt.json](evidence/TASK-143/android-ra05-build-receipt.json): base HEAD78d1fbc più delta R-A05 non ancora committato, patch SHA256 e8 hash file congelati. Profilo primario TEST più sole aggiunte autorizzate image origin e Storefront=true; WeChat=false. Configurazione generata e valori embedded corrispondono al profilo autorizzato; firma debug/applicationId/versionCode uguali al candidato precedente `c31bc11e` preservato. Config primaria e profilo privato invariati, `local.properties` del worktree nuovamente assente. Nessun accesso o installazione su5554/5556 da questa lane. Il coordinator confermerà target runtime e risultato autenticato, il parent assocerà il commit ai medesimi hash.
+
 ## Handoff
 
 EXECUTION_AND_FIX_VALIDATED — sorgente Android congelata, review indipendente R-A01/R-A02/R-A03 risolta e re-review sorgente approvata condizionata ai gate ora PASS. Nessun commit/push/PR eseguito dagli executor. Il parent coordina Review/CA finali/report/commit/PR/CI; non dichiarare integrazione main o distribuzione. Checkout primario/toolchain preesistente preservati. Non includere `.kotlin/sessions/` nei file da integrare.
@@ -213,11 +248,11 @@ Limiti espliciti: niente app Android autenticata su staging in questa lane, nien
 | CA-04 | ESEGUITO | intent/replay locali; contratto reale staging 12/12 in rollback. Non prova COMMIT+HTTP ACK perso dalle app |
 | CA-05 | ESEGUITO | F04 iOS riconciliato con PR10 e CI head/merge reali |
 | CA-06 | ESEGUITO | functional-matrix.md; copertura locale separata dai flussi live e fisici |
-| CA-07 | NON ESEGUITO integralmente, collaudo coordinato in corso | prove locali eseguite; Android autenticato ha evidenziato R-A04 ora corretto e sottoposto a ritest. iOS riprende login preservando il dataset. Nessuna convergenza o pending zero dedotti dai soli contatori |
+| CA-07 | NON ESEGUIBILE per convergenza live completa; ritest client ESEGUITO | Android autenticato supera R-A04 e classifica R-A05; recupero rifiutato per16 History TOAST della policy server. Binding/dati invariati e journal1 preservato con metadata di tentativo aggiornati. Nessuna convergenza o pending zero dichiarati; nessun reset/remediation dati |
 | CA-08 | NON ESEGUITO integralmente | suite import/export/immagini esistenti verdi e fixture Storefront condivisa; identico workbook nelle due UI e lifecycle immagini reale non eseguiti |
 | CA-09 | NON ESEGUITO integralmente | benchmark core 20k/300k e n300 eseguito; before/after UI e target3s live non misurati |
-| CA-10 | ESEGUITO | rosso→verde incluso R-A04, suite aggiornata 970 JVM PASS/7 SKIP e 5 Compose effettivi |
-| CA-11 | ESEGUITO per review e pubblicazione; integrazione in corso | PR10 aperta; CI575ea71 verde per il primo batch. Il delta R-A04 richiede nuova CI exact-SHA prima del merge ora autorizzato; risultati nel rapporto aggregato e nei check GitHub |
+| CA-10 | ESEGUITO | rosso→verde incluso R-A04, suite aggiornata 978 JVM PASS/7 SKIP; 5 Compose del batch precedente con hash UI/Application/test invariati |
+| CA-11 | ESEGUITO per review e pubblicazione; integrazione in corso | PR10 aperta; CI78d1fbc verde per R-A04. R-A05 ha review e gate locali aggiornati; nuova CI exact-SHA necessaria prima del merge autorizzato, risultati nel rapporto aggregato e nei check GitHub |
 | CA-12 | ESEGUITO per tracciamento, consegna finale in corso | stato REVIEW, niente DONE; rapporto aggregato esterno MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE_RESULT.md raccoglie anche SHA/PR/CI finali senza commit autoreferenziali |
 
 Ordine integrazione: le due app sono indipendenti e usano il contratto backend già esistente; nessuna migrazione/deploy prerequisite. Merge autorizzato dal mandato coordinato, ancora NOT_MERGED al presente snapshot in attesa dei gate del delta R-A04; distribuzione NOT_DEPLOYED.
@@ -229,3 +264,11 @@ PR [#10](https://github.com/XNIW/MerchandiseControlSplitView/pull/10) aperta; CI
 ### Handoff R-A04
 
 R-A04_CODE_AND_LOCAL_GATES_VERIFIED — source e test congelati dopo review indipendente e gate canonico verde; candidato TEST firmato consegnato per ripetere lo scenario live. Manifest e receipt nuovi conservano le prove precedenti. Nessun accesso a5556, nessun reset dati, nessuna modifica al checkout/config primario. Il parent gestisce aggiornamento PR/CI exact-SHA, ricevuta live, stato task e integrazione secondo il mandato coordinato verificato. Questa lane non dichiara il ritest autenticato PASS né chiusura DONE.
+
+### Handoff R-A05
+
+R-A05_CODE_AND_LOCAL_GATES_VERIFIED — review indipendente e gate canonico PASS;8 file app/test/fixture congelati con hash verificati, manifest e candidato TEST completo consegnati al parent. CPU/Gradle rilasciati alle altre lane; nessun altro test o benchmark richiesto da questo fix. Il candidato è destinato al solo retry del journal live preservato: nessun nuovo Replace, reset o accesso concorrente a5556. La classificazione client è corretta; il blocco della policy History sul server resta esterno e non è un PASS di convergenza. Parent owner di commit/PR/CI exact-SHA, risultato live e integrazione; nessun DONE o merge dichiarato dall'executor.
+
+### Ritest autenticato R-A05 — parent, 2026-09-28
+
+Il coordinator autorizzato ha installato APK `dc11b6ee…` in-place su emulator-5556; sessione Google mantenuta. Il journal riparte al launch senza nuovo Replace. Alle19:12:31Z il boundary registra `checkpoint_resource_exceeded`, RPC `shop_sync_recovery_checkpoint_v1`, `missingFields=none`: rifiuto contrattuale esplicito, non recovery riuscito. Binding e dataset/outbox preservati; journal resta1, con runId/reason/attemptCount6→7 e timestamp del nuovo tentativo aggiornati, gli altri campi invariati. Receipt sanitizzata [android-ra05-live-retest.json](evidence/TASK-143/android-ra05-live-retest.json), log tecnico privo di payload associato. La policy server sui16 History TOAST richiede decisione/remediation separata autorizzata; nessun record esistente è stato modificato.

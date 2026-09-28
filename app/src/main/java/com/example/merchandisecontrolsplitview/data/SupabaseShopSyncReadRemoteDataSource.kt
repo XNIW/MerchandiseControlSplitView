@@ -21,6 +21,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.io.readByteArray
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.MissingFieldException
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -112,7 +115,7 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
 
     override suspend fun checkpoint(
         context: ShopSyncRpcContext
-    ): Result<ShopSyncRecoveryCheckpoint> = rpcResult {
+    ): Result<ShopSyncRecoveryCheckpoint> = rpcResult(SHOP_SYNC_RECOVERY_CHECKPOINT_RPC) {
         validateContext(context)
         val response = requireInvoker().call(
             SHOP_SYNC_RECOVERY_CHECKPOINT_RPC,
@@ -132,13 +135,17 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
             resourceLimits.defaultPageResponseBytes,
             null
         )
+        validateResponseStatus(
+            context, response.payload, SHOP_SYNC_RECOVERY_CHECKPOINT_SCHEMA,
+            "checkpoint", SHOP_SYNC_RECOVERY_CHECKPOINT_RPC
+        )
         SHOP_SYNC_JSON.decodeFromJsonElement<ShopSyncRecoveryCheckpoint>(response.payload)
             .also { validateCheckpoint(context, it) }
     }
 
     override suspend fun convergenceMarker(
         context: ShopSyncRpcContext
-    ): Result<ShopSyncConvergenceMarker> = rpcResult {
+    ): Result<ShopSyncConvergenceMarker> = rpcResult(SHOP_SYNC_CONVERGENCE_MARKER_RPC) {
         validateContext(context)
         val response = requireInvoker().call(
             SHOP_SYNC_CONVERGENCE_MARKER_RPC,
@@ -158,6 +165,10 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
             resourceLimits.defaultPageResponseBytes,
             null
         )
+        validateResponseStatus(
+            context, response.payload, SHOP_SYNC_CONVERGENCE_MARKER_SCHEMA,
+            "convergence_marker", SHOP_SYNC_CONVERGENCE_MARKER_RPC
+        )
         SHOP_SYNC_JSON.decodeFromJsonElement<ShopSyncConvergenceMarker>(response.payload)
             .also { validateConvergenceMarker(context, it) }
     }
@@ -167,7 +178,7 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
         domain: ShopSyncRowDomain,
         afterId: String?,
         limit: Int
-    ): Result<ShopSyncRecoveryPage> = rpcResult {
+    ): Result<ShopSyncRecoveryPage> = rpcResult(SHOP_SYNC_RECOVERY_PAGE_RPC) {
         validateContext(context)
         require(limit in 1..250) { throw ShopSyncContractException("page_limit_invalid") }
         val fence = requirePageFence(context)
@@ -242,7 +253,7 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
         context: ShopSyncRpcContext,
         afterId: Long,
         limit: Int
-    ): Result<ShopSyncEventPage> = rpcResult {
+    ): Result<ShopSyncEventPage> = rpcResult(SHOP_SYNC_EVENT_PAGE_RPC) {
         validateContext(context)
         if (afterId < 0L) contractFailure("event_cursor_invalid")
         if (limit !in 1..SHOP_SYNC_EVENT_PAGE_LIMIT) contractFailure("event_limit_invalid")
@@ -322,7 +333,7 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
         context: ShopSyncRpcContext,
         domain: ShopSyncRowDomain,
         ids: List<String>
-    ): Result<ShopSyncTargetedRows> = rpcResult {
+    ): Result<ShopSyncTargetedRows> = rpcResult(SHOP_SYNC_ROWS_BY_IDS_RPC) {
         validateContext(context)
         val fence = requirePageFence(context)
         if (ids.size !in 1..resourceLimits.targetedRows(domain)) {
@@ -397,6 +408,27 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
             responseBytes = response.bodyBytes,
             largestRowBytes = response.largestRawRowsElementBytes
         )
+    }
+
+    private fun validateResponseStatus(
+        context: ShopSyncRpcContext,
+        payload: JsonObject,
+        expectedSchemaVersion: String,
+        codePrefix: String,
+        rpcName: String
+    ) {
+        // Preflight refusals intentionally omit success-only domains. Validate
+        // the required identity envelope before interpreting the discriminator;
+        // only READY may proceed to the full, still-strict success DTO.
+        val envelope = SHOP_SYNC_JSON.decodeFromJsonElement<ShopSyncStatusEnvelope>(payload)
+        validateEnvelope(context, envelope.schemaVersion, expectedSchemaVersion, envelope.shopId, envelope.scope)
+        validateDigest(envelope.checkpointDigest, "checkpoint_digest_invalid")
+        when (envelope.status) {
+            SHOP_SYNC_READY_STATUS -> Unit
+            "resource_exceeded", "invalid_baseline", "integrity_blocked" ->
+                throw ShopSyncContractException("${codePrefix}_${envelope.status}", rpcName)
+            else -> throw ShopSyncContractException("${codePrefix}_status_unsupported", rpcName)
+        }
     }
 
     private fun validateCheckpoint(
@@ -574,6 +606,9 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
         }
         if (context.expectedScope != null && context.expectedScope != scope) {
             contractFailure("scope_changed")
+        }
+        if (context.expectedBaselineScopeKey != null && context.expectedBaselineScopeKey != scope.key) {
+            contractFailure("baseline_scope_key_mismatch")
         }
     }
 
@@ -903,10 +938,15 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
     private inline fun <reified T> params(value: T): JsonObject =
         SHOP_SYNC_JSON.encodeToJsonElement(value).jsonObject
 
-    private suspend fun <T> rpcResult(block: suspend () -> T): Result<T> = try {
+    @OptIn(ExperimentalSerializationApi::class)
+    private suspend fun <T> rpcResult(rpcName: String, block: suspend () -> T): Result<T> = try {
         Result.success(block())
     } catch (cancelled: CancellationException) {
         throw cancelled
+    } catch (error: MissingFieldException) {
+        Result.failure(ShopSyncContractException("rpc_response_missing_fields", rpcName, error.missingFields.sorted()))
+    } catch (_: SerializationException) {
+        Result.failure(ShopSyncContractException("rpc_response_invalid", rpcName))
     } catch (error: Exception) {
         Result.failure(error)
     }
@@ -1308,6 +1348,15 @@ internal data class ShopSyncRowsByIdsParams(
     @SerialName("p_expected_scope_key") val expectedScopeKey: String,
     @SerialName("p_expected_event_max_id") val expectedEventMaxId: String,
     @SerialName("p_expected_domain_event_max_id") val expectedDomainEventMaxId: String
+)
+
+@Serializable
+private data class ShopSyncStatusEnvelope(
+    val schemaVersion: String,
+    val status: String,
+    val shopId: String,
+    val scope: ShopSyncScope,
+    val checkpointDigest: String
 )
 
 @Serializable

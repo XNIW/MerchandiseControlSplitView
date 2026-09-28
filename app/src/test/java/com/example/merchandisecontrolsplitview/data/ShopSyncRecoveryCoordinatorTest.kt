@@ -218,6 +218,46 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun `server denial stops retry window without activation and later trigger can recover`() = runTest {
+        seedOldMismatchGeneration()
+        val logs = mutableListOf<String>()
+        listOf("resource_exceeded", "invalid_baseline", "integrity_blocked").forEach { status ->
+            val code = "checkpoint_$status"
+            remote.checkpointFailure = ShopSyncContractException(code, "shop_sync_recovery_checkpoint_v1")
+            val result = coordinator(logger = logs::add).recover(ACCOUNT, selectedShop(), activeScope())
+            assertEquals(code, (result as ShopSyncRecoveryResult.Rejected).code)
+            assertEquals(code, db.syncRecoveryJournalDao().get()?.reason)
+            assertEquals(SyncRecoveryJournalPhases.REQUIRED, db.syncRecoveryJournalDao().get()?.phase)
+            assertEquals(0, remote.pageCalls)
+            assertOldGenerationAndManifestIntact()
+            assertFalse(stageFiles().any())
+        }
+        assertTrue(logs.any { "code=checkpoint_resource_exceeded rpc=shop_sync_recovery_checkpoint_v1" in it })
+        assertFalse(logs.any { ACCOUNT in it || SHOP in it || DEVICE in it })
+
+        remote.checkpointFailure = null
+        val repaired = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(repaired.toString(), repaired is ShopSyncRecoveryResult.Activated)
+    }
+
+    @Test
+    fun `missing response fields remain durable technical diagnostics without business payload`() = runTest {
+        seedOldMismatchGeneration()
+        remote.checkpointFailure = ShopSyncContractException(
+            "rpc_response_missing_fields", "shop_sync_recovery_checkpoint_v1", listOf("catalog", "integrity")
+        )
+        val logs = mutableListOf<String>()
+        val result = coordinator(logger = logs::add).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals("rpc_response_missing_fields", (result as ShopSyncRecoveryResult.Rejected).code)
+        assertEquals("rpc_response_missing_fields", db.syncRecoveryJournalDao().get()?.reason)
+        assertEquals(0, remote.pageCalls)
+        assertTrue(logs.any { "missingFields=catalog,integrity" in it })
+        assertFalse(logs.any { ACCOUNT in it || SHOP in it || DEVICE in it || "old-barcode" in it })
+        assertOldGenerationAndManifestIntact()
+    }
+
+    @Test
     fun `recovery rejects a UUIDv7 product entity before activation`() = runTest {
         val productId = "018f0ad4-77f2-7c9d-a8be-4f6b9d234567"
         seedOldMismatchGeneration()
@@ -2212,6 +2252,7 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     private fun coordinator(
+        logger: (String) -> Unit = {},
         registerDeviceForRecovery: suspend (String) -> Result<ShopDeviceRegistrationResult> = { shopId ->
             Result.success(ShopDeviceRegistrationResult(ok = true, code = "success", shopId = shopId))
         },
@@ -2236,6 +2277,7 @@ class ShopSyncRecoveryCoordinatorTest {
         activeRepository = repository,
         remote = remote,
         registerDeviceForRecovery = registerDeviceForRecovery,
+        logger = logger,
         scopeStillValid = scopeStillValid,
         activationBoundary = activationBoundary,
         onActivated = { accountId, shopId ->
@@ -2400,6 +2442,7 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
     var configured = true
     override val isConfigured: Boolean get() = configured
     var checkpoints = mutableListOf(fixture.checkpoint)
+    var checkpointFailure: Exception? = null
     var cancelAtDomain: ShopSyncRowDomain? = null
     var fatalAtDomain: Pair<ShopSyncRowDomain, Error>? = null
     var afterPage: (suspend (ShopSyncRowDomain) -> Unit)? = null
@@ -2422,6 +2465,10 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
     override suspend fun checkpoint(
         context: ShopSyncRpcContext
     ): Result<ShopSyncRecoveryCheckpoint> {
+        checkpointFailure?.let {
+            checkpointCalls++
+            return Result.failure(it)
+        }
         val template = checkpoints.getOrElse(checkpointCalls) { checkpoints.last() }
         checkpointCalls++
         // The actual V6 RPC echoes the baseline supplied by the caller. The
