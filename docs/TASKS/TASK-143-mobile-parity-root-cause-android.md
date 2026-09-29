@@ -3,12 +3,12 @@
 ## Stato
 
 - File task: `docs/TASKS/TASK-143-mobile-parity-root-cause-android.md`
-- Stato: `REVIEW`
-- Fase: `REVIEW`
+- Stato: `FIX`
+- Fase: `FIX`
 - Responsabile: `CODEX_EXECUTOR_ANDROID`; orchestratore parent, reviewer indipendente separato.
 - Data: 2026-09-28
 - Baseline: `d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac`
-- Branch: `codex/mobile-parity-root-cause-android`
+- Branch: `codex/mobile-auth-session-restore` (follow-up da main `1bf758dd8d83a771dcfdb1844a223a036ba19eff`; primo batch integrato dalla PR10)
 - Coordination key: `MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE`
 
 ## Scopo / Obiettivo
@@ -41,6 +41,12 @@ Nuovo finding P1 concreto nel perimetro CA-07/CA-10: `replaceMismatchedBusinessD
 ### Addendum planning autorizzato — R-A05 decode recovery live, 2026-09-28
 
 Il ritest autenticato del candidato R-A04 su DB business vuoto supera l'identità dispositivo ma fra18:45–18:47Z fallisce con `MissingFieldException`, esaurendo i retry `mismatch_replace_confirmed`. Journal preservato, nessun ulteriore Replace. Evidenza sanitizzata `native-completion-20260928/android-ra04-recovery-log.txt`. Nuovo P1 attuale in CA-07/CA-10: identificare RPC e campo realmente mancanti confrontando DTO con contratto TEST distribuito, poi test rosso sul payload rappresentativo e patch client minima coerente con il contratto. Vietati default che trasformino failure o campi obbligatori mancanti in successo, indebolimenti auth/scope, modifiche backend o reset dei dati. Controparte iOS da confrontare; non dedurre un difetto attuale dai vecchi log. Review mirata, gate aggiornati e ritest autenticato richiesti.
+
+### Addendum planning autorizzato — ripristino sessione, 2026-09-29
+
+Dopo l’integrazione della PR10 (merge `1bf758dd`, CI main SUCCESS con 978 PASS / 7 SKIP), il coordinatore osserva sul TEST R-A05 un normale force-stop/restart senza reinstallazione o reset: Options passa da Connected a Not signed in e rimane così oltre 20 secondi. Il sintomo non prova perdita di storage o causa specifica; log sanitizzati richiesti. L’ispezione dei sorgenti SDK 3.6.0 effettivi e del client individua un ramo da riprodurre: refresh iniziale fino a 90 s o RefreshFailure ritentato, attesa applicativa 10 s, successivo Authenticated ignorato dall’observer. La precedente suite auth non esercita questo percorso.
+
+Il parent autorizza nello stesso task (CA-06/07/10), su branch separato dal main integrato, una regressione deterministica prima della patch per Initializing prolungato e RefreshFailure seguiti da Authenticated. Se confermata, correzione minima del ripristino tardivo, mantenendo validation, logout esplicito, switch scope e rejection delle sessioni invalide; nessun login implicito dopo logout, nessun token/sessione reale letto, nessuna modifica alla policy server o reset. Review indipendente, test mirati/adiacenti, gate canonici e PR separata con CI exact-SHA; distinguere difetto deterministico da attribuzione dell’episodio live. Gli artefatti e i PASS della PR10 restano validi per lo SHA precedente e non sono riciclati sul nuovo delta.
 
 ## Mandato e separazione dei ruoli
 
@@ -157,6 +163,26 @@ Manifest persistito [`evidence/TASK-143/android-test-manifest.json`](evidence/TA
 
 **Suite core incluse:**StorefrontVM25/store5/contract7/paging2/localization1;DatabaseVM61;OperationalMutationIntegrity15;DefaultInventoryRepository218 (217PASS,1external SKIP); resto nel manifest. Le cinque prove Compose verificano espansione/actions separate, preview senza immagine operativa, filtro vuoto→Tutti, cambio rapido Published→Draft→All, scarto esplicito richiesta scaduta. UI/locale generale, scanner/camera reale, auth staging da app e convergenza bidirezionale rimangono distinti e non surrogati da questi test.
 
+### Esecuzione R-A06 — 2026-09-29 UTC — ripristino auth tardivo
+
+**Osservazione e attribuzione:** il coordinator ha osservato Connected prima del force-stop e Not signed in stabile dopo il normale restart, senza reinstallazione/reset o nuovo login. Il log sanitizzato del processo corrente conferma attesa applicativa di10s e bootstrap `Timeout` alle22:19:30.821, poi SignedOut. Non prova perdita delle credenziali né un successivo Authenticated reale: questi due esiti non vengono dedotti dalla UI. Nessuna sessione, preferenza auth o token reale è stata letta; nessun accesso al device5556 da questa lane.
+
+**Contratto verificato nel codice SDK effettivo:** Supabase Auth3.6.0 abilita load/save automatici della sessione; il client Android usa lo storage privato tramite SettingsSessionManager. Il refresh iniziale può rimanere sospeso oltre10s e il retry transitorio può emettere RefreshFailure prima di Authenticated. L'app attendeva soltanto10s e ignorava Authenticated successivo nell'observer; il restore è chiamato una sola volta al bootstrap. Il test controllato dimostra questa lacuna separatamente dall'esito ancora pendente del cold restart live.
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt` — ripresa limitata al bootstrap Timeout/RefreshFailure, validazione esistente e fence per generazione/stato/identità prima di publish o cleanup.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManagerTest.kt` —15 nuove regressioni deterministiche, classe finale25 test; clock/status controllati, senza sleep reali o credenziali.
+- `docs/TASKS/evidence/TASK-143/android-ra06-test-manifest.json` — conteggi per classe, skip, lint, hash, prove rosse e Compose storico distinto dal nuovo gate.
+- `docs/TASKS/evidence/TASK-143/android-ra06-build-receipt.json` — candidato TEST, provenienza sorgenti e confronti configurazione/firma come booleani, senza valori protetti.
+
+**Azioni eseguite:**
+1. Prima della patch, su main1bf758dd, suite auth16 test:14 PASS/2 FAIL per Initializing oltre10s→Authenticated e RefreshFailure→Authenticated. Guardrail logout, invalid session, invalidazione SDK e switch account verdi. Log `/tmp/task143-auth-restore-red.log`, XML omonimo e receipt `/tmp/task143-auth-restore-red.json`.
+2. Latch soltanto per bootstrap interrotto: consumato prima del refresh sotto lo stesso mutex; observer rilegge lo stato SDK corrente quando acquisisce il lock. Successo riusa validazione/publish; errore transitorio conserva la policy locale offline esistente, invalidazione definitiva resta fail-closed.
+3. Login esplicito, logout, invalidazione SDK e shutdown invalidano il tentativo. Login/logout lo fanno prima di attendere il mutex; un vecchio refresh non può pubblicare o cancellare la sessione successiva. Cancellation propagata; nessun worker, timer, login generico da evento SDK, nuovo storage o cambio UI.
+4. Primo mirato118 PASS sul freeze iniziale; la successiva review ha individuato due regressioni della patch e richiesto quattro nuovi casi. Quel freeze e quel risultato restano storici, sostituiti dal freeze finale e dai gate sotto.
+
+**Incertezze/Handoff:** validazione locale completa sotto; esito autenticato del nuovo candidato PENDING al coordinator. Nessuna nuova affermazione prestazionale: le misure Room/Storefront precedenti non misurano il ripristino autenticato.
+
 ## Review
 
 Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
@@ -232,13 +258,36 @@ Nuovo manifest [android-ra05-test-manifest.json](evidence/TASK-143/android-ra05-
 
 **Candidato TEST completo:** `/tmp/task143-ra05-complete-test-profile/app-debug-test-complete-profile-ra05.apk`, SHA256 `dc11b6ee4be66480f48e50d3cebb0c64e2776d5c8cb8ebdf93a08650d70920d3`; build separata PASS9s. Receipt [android-ra05-build-receipt.json](evidence/TASK-143/android-ra05-build-receipt.json): base HEAD78d1fbc più delta R-A05 non ancora committato, patch SHA256 e8 hash file congelati. Profilo primario TEST più sole aggiunte autorizzate image origin e Storefront=true; WeChat=false. Configurazione generata e valori embedded corrispondono al profilo autorizzato; firma debug/applicationId/versionCode uguali al candidato precedente `c31bc11e` preservato. Config primaria e profilo privato invariati, `local.properties` del worktree nuovamente assente. Nessun accesso o installazione su5554/5556 da questa lane. Il coordinator confermerà target runtime e risultato autenticato, il parent assocerà il commit ai medesimi hash.
 
+### FIX review R-A06 e gate finale — 2026-09-29 UTC
+
+**Rosso di review prima della correzione:**24 test/3 FAIL per Checking lasciato sospeso dopo invalidazione SDK, cambio account noto durante refresh o richiesta Google esplicita mentre il mutex è occupato; poi25 test/4 FAIL aggiungendo il caso SDK supportato user locale null→identità server valida. Log/XML `/tmp/task143-auth-restore-review-red{,2}.{log,xml}`. Gli altri21 casi restano verdi, inclusi null finale fail-closed e account noto A→B protetto.
+
+**Correzione minima:** la cancellazione del tentativo Checking e il diniego/cambio identità osservati dopo refresh producono SignedOut anche se l'observer è accodato. Il confronto di identità blocca il cambio tra due account noti; un refresh valido può invece completare l'identità locale inizialmente assente, come supportato dal contratto SDK. Nessun clear su una sessione successiva; le guardie si applicano prima degli effetti e non soltanto prima del publish.
+
+**Verde mirato finale:**122/122 PASS,0 FAIL/ERROR/SKIP,11s, `/tmp/task143-auth-restore-review-green.log`; Auth25, Application6, RecoveryCoordinator68, ScopeRuntimeGuard3, Binding20. XML in `/tmp/task143-auth-restore-review-targeted/`. Reviewer indipendente **APPROVED**, nessun nuovo P0/P1/P2: verificati i due hash file, patch SHA256 `7ca32ee3251716d3359d61905d218502d3da0dcfb717ee40a3431f2038677d47` e rosso→verde prima del gate canonico.
+
+| Check finale R-A06 | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | `./gradlew assembleDebug test lint --console=plain`, JBR/SDK locali, exit0, BUILD SUCCESSFUL1m25s; `/tmp/task143-ra06-final.log` |
+| Full JVM/Robolectric | ESEGUITO |1000 totali,993 PASS,7 SKIP,0 FAIL/ERROR,69 classi; testRelease non selezionato, non dichiarato eseguito |
+| Lint / warning | ESEGUITO |0 errori,53 warning preesistenti,0 sulle righe modificate; nessun nuovo warning Kotlin/deprecation, soli avvisi JVM CDS già presenti |
+| Coerenza planning | ESEGUITO | addendum restore CA-06/07/10, patch di soli auth manager e test; nessuna dipendenza, UI, backend o nuova pipeline |
+| Baseline TASK-004 | ESEGUITO | full JVM include repository, DatabaseViewModel ed ExcelViewModel; harness sospesi invariati |
+| Compose | NON ESEGUITO nel batch, riuso autorizzato |5 PASS effettivi R-A04; Application, OptionsScreen, EditProductDialog e test Compose byte-identici a78d1fbc e main1bf758dd, hash nel manifest; non sostituisce il cold restart autenticato |
+| Scan auth / diff hygiene | ESEGUITO |8 callsite log aggiunti/spostati,0 interpolazioni dirette token/session/user; controllo limitato al delta app, logging SDK invariato; `git diff --check` PASS |
+| Riconferma autenticata | NON ESEGUITO da questa lane / PENDING coordinator | candidata pronta; installazione in-place e cold restart affidati all'owner5556, senza nuovo login/reset/Replace |
+
+I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-manifest.json): fixture Supabase locale assente, configurazione realtime live assente,3 harness Excel sospesi, workbook ShoppingHogar opzionale assente e benchmark grande opt-in. Nessuno skip mascherato come PASS. XML/lint copiati in `/tmp/task143-ra06-final-reports/`; nessun nuovo benchmark perché i percorsi misurati Room/Storefront non cambiano.
+
+**Candidato TEST completo:** `/tmp/task143-ra06-complete-test-profile/app-debug-test-complete-profile-ra06.apk`, SHA256 `e93b81e00de2979f108fd72df92be215f07754f6b5c75cd9c054a891d7e78e70`; build separata PASS9s. [Receipt R-A06](evidence/TASK-143/android-ra06-build-receipt.json): HEAD base1bf758dd più delta R-A06 non ancora committato, medesimi hash revisionati e testati. Stesso profilo autorizzato del candidato dc11b6ee: configurazione primaria TEST più image origin e Storefront=true; WeChat=false. Confronti configurazione generata/valori embedded, applicationId/versionCode e firma debug PASS. Primaria e profilo privato invariati; local.properties ignorato del worktree ripristinato assente. APK dc11 originale e copia preservati. Nessuna installazione o lettura della firma dal device da questa lane; target runtime e cold restart restano verifica indipendente del coordinator.
+
 ## Handoff
 
 EXECUTION_AND_FIX_VALIDATED — sorgente Android congelata, review indipendente R-A01/R-A02/R-A03 risolta e re-review sorgente approvata condizionata ai gate ora PASS. Nessun commit/push/PR eseguito dagli executor. Il parent coordina Review/CA finali/report/commit/PR/CI; non dichiarare integrazione main o distribuzione. Checkout primario/toolchain preesistente preservati. Non includere `.kotlin/sessions/` nei file da integrare.
 
 Limiti espliciti: niente app Android autenticata su staging in questa lane, niente E2E Android↔iOS per-record/render latency/background/force-stop, scanner/camera/share reali o sweep UI completo delle4lingue. Contratto SQL staging verificato separatamente dal parent; fake,JVM,Compose,benchmark core e test SQL restano evidenze distinte.
 
-### Criteri — snapshot pre-pubblicazione del parent
+### Criteri — snapshot storico precedente alla PR10, superato dagli aggiornamenti R-A06
 
 | Criterio | Stato | Evidenza / limite |
 |---|---|---|
@@ -257,7 +306,7 @@ Limiti espliciti: niente app Android autenticata su staging in questa lane, nien
 
 Ordine integrazione: le due app sono indipendenti e usano il contratto backend già esistente; nessuna migrazione/deploy prerequisite. Merge autorizzato dal mandato coordinato, ancora NOT_MERGED al presente snapshot in attesa dei gate del delta R-A04; distribuzione NOT_DEPLOYED.
 
-### Pubblicazione e coordinamento
+### Pubblicazione e coordinamento — snapshot storico PR10
 
 PR [#10](https://github.com/XNIW/MerchandiseControlSplitView/pull/10) aperta; CI exact-SHA raccolta nel rapporto finale e nei check della PR. Consenso diretto dell'utente verificato nella chat «Completa attivazione WECHAT-010»: ownership nativa qui, collaudo autenticato sui dispositivi separati dell'altra lane, installazione preservando i dati. Nessun E2E PASS attribuito prima della ricevuta. Il merge è ora esplicitamente autorizzato dal mandato coordinato riportato sopra; stato effettivo e CI post-merge saranno registrati nel rapporto aggregato finale.
 
@@ -272,3 +321,17 @@ R-A05_CODE_AND_LOCAL_GATES_VERIFIED — review indipendente e gate canonico PASS
 ### Ritest autenticato R-A05 — parent, 2026-09-28
 
 Il coordinator autorizzato ha installato APK `dc11b6ee…` in-place su emulator-5556; sessione Google mantenuta. Il journal riparte al launch senza nuovo Replace. Alle19:12:31Z il boundary registra `checkpoint_resource_exceeded`, RPC `shop_sync_recovery_checkpoint_v1`, `missingFields=none`: rifiuto contrattuale esplicito, non recovery riuscito. Binding e dataset/outbox preservati; journal resta1, con runId/reason/attemptCount6→7 e timestamp del nuovo tentativo aggiornati, gli altri campi invariati. Receipt sanitizzata [android-ra05-live-retest.json](evidence/TASK-143/android-ra05-live-retest.json), log tecnico privo di payload associato. La policy server sui16 History TOAST richiede decisione/remediation separata autorizzata; nessun record esistente è stato modificato.
+
+### Handoff R-A06
+
+R-A06_CODE_AND_LOCAL_GATES_VERIFIED — i due file app/test, manifest, receipt e sezioni executor sono congelati dopo review APPROVED,122 mirati verdi e canonico993 PASS/7 SKIP. Il parent ha verificato conteggi/hash e consegnato APK e93b81e0 al coordinator per il ritest in-place; **risultato live PENDING** al presente snapshot. Il timeout live è confermato, il successo SDK tardivo nell'episodio originario non è dimostrato e la persistenza credenziali non è stata ispezionata. Nessun nuovo test/build/device access richiesto a questa lane; slot CPU/Gradle rilasciato. Parent owner di commit, nuova PR separata, CI exact-SHA, ricevuta live e decisione d'integrazione; task non dichiarato DONE. Le prove della PR10 e i freeze intermedi restano conservati con il proprio ambito; nessun risultato precedente viene presentato come gate del nuovo delta.
+
+### Aggiornamento integrazione e ritest — parent, 2026-09-29 UTC
+
+Il primo batch è integrato: PR10 MERGED normalmente, head `84899b8e496130d9c96e61d98202b0526fb06f46`, merge `1bf758dd8d83a771dcfdb1844a223a036ba19eff`. CI head `36471042788` e CI main `36472844511` SUCCESS, entrambi verificati tramite XML: 978 PASS / 7 SKIP, nessun errore. Il follow-up R-A06 parte da quel main su branch separato; le tabelle pre-pubblicazione precedenti sono storiche, non lo stato corrente.
+
+R-A06 source e gate locali sono APPROVED/ESEGUITI: 122 test mirati, full JVM 993 PASS / 7 SKIP, build/lint senza nuovi warning, review con due finding risolti e re-review verificata. Il parent ha ricalcolato gli hash dei due sorgenti e del TEST APK e ha contato direttamente i 69 XML/1.000 casi. La review è conservata in [android-ra06-independent-review.md](evidence/TASK-143/android-ra06-independent-review.md).
+
+Ritest autenticato del nuovo APK: installazione `-r` riuscita, normale cold start e attesa oltre 120 s senza nuovo login/reset/Retry; Options resta Not signed in. Log sanitizzato conferma il timeout di 10 s, ma non un Authenticated successivo. È **NON VERIFICATO** il recupero reale/persistenza, non perdita di credenziali dimostrata. Il coordinator verifica se il filtro abbia escluso il nuovo messaggio `Restore in attesa del completamento SDK`; diagnosi read-only in corso. Questo non annulla il rosso→verde deterministico, ma impedisce di dichiarare il cold restart risolto. Task resta FIX e non DONE; PR/CI del follow-up e la decisione di merge sono del parent.
+
+Aggiornamento dipendenza TEST: la chat coordinata ha normalizzato le 16 History con ID/hash/updated_at invariati, compression null, zero marker ed eventi 2.074 invariati. Il nuovo Retry iOS supera il vecchio rifiuto ma fallisce con HTTP 500/SQL 57014, ancora in diagnosi backend; nessun secondo Retry cieco e nessuna DDL da questa lane. Convergenza per record, immagini remote e target 3 s restano NON ESEGUIBILI al gate corrente. Le prove UI isolate Android su workbook e quattro lingue, e le 240 misure prima/dopo, sono nel report aggregato con i rispettivi limiti; non equivalgono a tale accettazione autenticata.

@@ -32,6 +32,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class SupabaseSessionUser(
     val id: String,
@@ -203,6 +205,10 @@ class SupabaseAuthManager private constructor(
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
 
+    private data class BootstrapRestoreAttempt(val generation: Long, val awaitingSdk: Boolean = false)
+    private val authGeneration = AtomicLong(0L)
+    private val bootstrapRestore = AtomicReference<BootstrapRestoreAttempt?>(null)
+
     init {
         if (isEnabled) {
             observeSessionStatus()
@@ -227,67 +233,50 @@ class SupabaseAuthManager private constructor(
             Log.i(TAG, "restoreSession: disabled, going SignedOut")
             return
         }
+        val generation = authGeneration.get()
         scope.launch {
             if (!authMutex.tryLock()) {
                 Log.w(TAG, "restoreSession: mutex already locked, skipping")
                 return@launch
             }
+            val attempt = BootstrapRestoreAttempt(generation)
             try {
+                if (authGeneration.get() != generation) return@launch
+                bootstrapRestore.set(attempt)
                 Log.d(TAG, "restoreSession: waiting for session status (timeout ${RESTORE_TIMEOUT_MS}ms)")
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
                     controller.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
                 Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
+                if (!isCurrentBootstrap(attempt)) return@launch
                 when (status) {
                     is SessionStatus.Authenticated -> {
-                        val localUser = controller.currentUserOrNull()
-                        when (val refresh = controller.refreshStoredSession()) {
-                            StoredSessionRefreshResult.Refreshed -> {
-                                if (publishSignedIn(controller.currentUserOrNull() ?: localUser)) {
-                                    Log.i(TAG, "Sessione ripristinata e validata")
-                                } else {
-                                    try {
-                                        controller.clearSession()
-                                    } catch (_: Throwable) {
-                                        // Fail-closed applicativo anche se il cleanup storage fallisce.
-                                    }
-                                    Log.w(TAG, "Sessione validata senza identita account utilizzabile")
-                                }
-                            }
-
-                            is StoredSessionRefreshResult.Invalid -> {
-                                try {
-                                    controller.clearSession()
-                                } catch (_: Throwable) {
-                                    // Lo stato applicativo viene comunque invalidato; clear locale best-effort.
-                                }
-                                _state.value = AuthState.SignedOut
-                                Log.i(
-                                    TAG,
-                                    "Sessione persistita invalidata dal server code=${refresh.code}"
-                                )
-                            }
-
-                            StoredSessionRefreshResult.Deferred -> {
-                                // Offline-first: un errore rete/5xx non equivale a revoca della sessione.
-                                if (publishSignedIn(localUser)) {
-                                    Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
-                                } else {
-                                    Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
-                                }
-                            }
+                        validateStoredSession(controller, attempt)
+                    }
+                    null, is SessionStatus.RefreshFailure -> {
+                        val waiting = attempt.copy(awaitingSdk = true)
+                        if (bootstrapRestore.compareAndSet(attempt, waiting)) {
+                            _state.value = AuthState.SignedOut
+                            Log.i(TAG, "Restore in attesa del completamento SDK (status=${status.safeLogLabel()})")
+                            // Covers an SDK success that raced with arming the latch.
+                            resumePendingBootstrap(controller)
                         }
                     }
                     else -> {
+                        bootstrapRestore.compareAndSet(attempt, null)
                         _state.value = AuthState.SignedOut
                         Log.i(TAG, "Nessuna sessione valida al bootstrap (status=${status.safeLogLabel()})")
                     }
                 }
             } catch (e: CancellationException) {
+                bootstrapRestore.compareAndSet(attempt, null)
                 throw e
             } catch (e: Throwable) {
-                _state.value = AuthState.SignedOut
-                Log.w(TAG, "Restore sessione fallito", e)
+                if (isCurrentBootstrap(attempt)) {
+                    bootstrapRestore.compareAndSet(attempt, null)
+                    _state.value = AuthState.SignedOut
+                    Log.w(TAG, "Restore sessione fallito", e)
+                }
             } finally {
                 authMutex.unlock()
             }
@@ -306,6 +295,7 @@ class SupabaseAuthManager private constructor(
     suspend fun signInWithGoogle(activityContext: Context): Boolean {
         val controller = sessionController
         if (!isEnabled || controller == null) return false
+        invalidateBootstrapRestore()
         if (!authMutex.tryLock()) return false
         try {
             _state.value = AuthState.Checking
@@ -362,6 +352,7 @@ class SupabaseAuthManager private constructor(
             )
             return false
         }
+        invalidateBootstrapRestore()
         if (!authMutex.tryLock()) return false
 
         try {
@@ -461,6 +452,8 @@ class SupabaseAuthManager private constructor(
      */
     suspend fun signOut() {
         val controller = sessionController ?: return
+        // A pending logout must fence a suspended bootstrap before waiting for its mutex.
+        invalidateBootstrapRestore()
         authMutex.withLock {
             try {
                 controller.signOut(SignOutScope.LOCAL)
@@ -487,6 +480,7 @@ class SupabaseAuthManager private constructor(
 
     /** Chiude il manager e cancella il suo CoroutineScope. */
     fun shutdown() {
+        invalidateBootstrapRestore()
         scope.cancel()
     }
 
@@ -558,22 +552,119 @@ class SupabaseAuthManager private constructor(
 
     /**
      * Osserva i cambi di stato sessione dalla libreria Supabase.
-     * Reagisce solo a invalidazioni server-side (sessione era valida -> ora non lo e').
-     * I problemi di rete non vengono trattati come logout (planning: stato recuperabile).
+     * Le autenticazioni SDK riprendono soltanto un bootstrap rimasto in attesa.
+     * Un login esplicito o un'invalidazione chiudono definitivamente quel tentativo.
      */
     private fun observeSessionStatus() {
         scope.launch {
             sessionController!!.sessionStatus.collect { status ->
                 when (status) {
                     is SessionStatus.NotAuthenticated -> {
-                        if (_state.value is AuthState.SignedIn) {
+                        if (sessionController.sessionStatus.value != status) return@collect
+                        val restoring = bootstrapRestore.get() != null
+                        if (restoring) invalidateBootstrapRestore()
+                        if (restoring || _state.value is AuthState.SignedIn) {
                             _state.value = AuthState.SignedOut
                             Log.i(TAG, "Sessione invalidata (server-side o refresh non riuscito)")
                         }
                     }
+                    is SessionStatus.Authenticated -> resumePendingBootstrap(sessionController)
                     else -> { /* Altre transizioni gestite dai metodi espliciti */ }
                 }
             }
+        }
+    }
+
+    private fun invalidateBootstrapRestore() {
+        val cancelledAttempt = bootstrapRestore.getAndSet(null)
+        authGeneration.incrementAndGet()
+        if (cancelledAttempt != null && _state.value == AuthState.Checking) {
+            _state.value = AuthState.SignedOut
+        }
+    }
+
+    private fun isCurrentBootstrap(attempt: BootstrapRestoreAttempt): Boolean =
+        authGeneration.get() == attempt.generation && bootstrapRestore.get() == attempt
+
+    private fun resumePendingBootstrap(controller: SupabaseAuthSessionController) {
+        val pending = bootstrapRestore.get()?.takeIf { it.awaitingSdk } ?: return
+        scope.launch {
+            authMutex.withLock {
+                // Read current SDK state after acquiring the lock; the triggering event may be stale.
+                if (!isCurrentBootstrap(pending) || controller.sessionStatus.value !is SessionStatus.Authenticated) {
+                    return@withLock
+                }
+                val validating = pending.copy(awaitingSdk = false)
+                if (!bootstrapRestore.compareAndSet(pending, validating)) return@withLock
+                validateStoredSession(controller, validating)
+            }
+        }
+    }
+
+    private suspend fun validateStoredSession(
+        controller: SupabaseAuthSessionController,
+        attempt: BootstrapRestoreAttempt
+    ) {
+        val localUser = controller.currentUserOrNull()
+        try {
+            val refresh = controller.refreshStoredSession()
+            val currentUser = controller.currentUserOrNull()
+            // No old validation result may publish or clear a superseding session.
+            if (!isCurrentBootstrap(attempt)) return
+            if (controller.sessionStatus.value is SessionStatus.NotAuthenticated ||
+                (localUser != null && currentUser != null && currentUser.id != localUser.id)
+            ) {
+                invalidateBootstrapRestore()
+                _state.value = AuthState.SignedOut
+                return
+            }
+            when (refresh) {
+                StoredSessionRefreshResult.Refreshed -> {
+                    if (publishSignedIn(currentUser ?: localUser)) {
+                        Log.i(TAG, "Sessione ripristinata e validata")
+                    } else {
+                        clearStoredSessionIfCurrent(controller, attempt, localUser)
+                        Log.w(TAG, "Sessione validata senza identita account utilizzabile")
+                    }
+                }
+                is StoredSessionRefreshResult.Invalid -> {
+                    clearStoredSessionIfCurrent(controller, attempt, localUser)
+                    if (isCurrentBootstrap(attempt)) _state.value = AuthState.SignedOut
+                    Log.i(TAG, "Sessione persistita invalidata dal server code=${refresh.code}")
+                }
+                StoredSessionRefreshResult.Deferred -> {
+                    // Offline-first remains available for an already identified stored session.
+                    if (publishSignedIn(localUser)) {
+                        Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
+                    } else {
+                        Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (isCurrentBootstrap(attempt)) {
+                _state.value = AuthState.SignedOut
+                Log.w(TAG, "Restore sessione fallito", error)
+            }
+        } finally {
+            bootstrapRestore.compareAndSet(attempt, null)
+        }
+    }
+
+    private suspend fun clearStoredSessionIfCurrent(
+        controller: SupabaseAuthSessionController,
+        attempt: BootstrapRestoreAttempt,
+        expectedUser: SupabaseSessionUser?
+    ) {
+        if (!isCurrentBootstrap(attempt) || controller.currentUserOrNull()?.id != expectedUser?.id) return
+        try {
+            controller.clearSession()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // Definitive denial stays fail-closed even if local cleanup fails.
         }
     }
 
