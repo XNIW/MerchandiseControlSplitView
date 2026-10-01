@@ -1,0 +1,1146 @@
+{
+  "started_utc": "2026-10-01T22:33:39.103253+00:00",
+  "finished_utc": "2026-10-01T22:36:30.582103+00:00",
+  "command": "./gradlew assembleDebug test lint --max-workers=1 --console=plain",
+  "exit_code": 0,
+  "sourceBeforeSHA256": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt": "32a3ad26b12415cf1b8ba349bf85abedaed8724681474607ecf87baf44aeebfe",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459"
+  },
+  "sourceAfterSHA256": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt": "32a3ad26b12415cf1b8ba349bf85abedaed8724681474607ecf87baf44aeebfe",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459"
+  },
+  "sourceUnchanged": true,
+  "debugUnitTotal": {
+    "tests": 1040,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 7
+  },
+  "debugUnitPass": 1033,
+  "debugUnitClasses": [
+    {
+      "name": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:33:56.156Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "3.421"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest",
+      "tests": "22",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:33:59.596Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "2.916"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest",
+      "tests": "31",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:02.529Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.444"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:02.986Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.332"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+      "tests": "218",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:04.435Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "12.636"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest",
+      "tests": "19",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:17.076Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.988"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.066Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.007"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.076Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.021"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest",
+      "tests": "15",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.105Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.403"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.511Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.001"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest",
+      "tests": "8",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.513Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.073"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.591Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.13"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest",
+      "tests": "13",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.724Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.025"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ShopContextTest",
+      "tests": "15",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.751Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.018"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.770Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.007"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+      "tests": "74",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:18.811Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "4.96"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:23.773Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.004"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:23.782Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.203"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
+      "tests": "1",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:23.987Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.031"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest",
+      "tests": "1",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:24.020Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.019"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest",
+      "tests": "26",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:24.057Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.719"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+      "tests": "25",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:25.780Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "2.684"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:28.466Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.011"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+      "tests": "19",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:28.483Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.094"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:28.580Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.339"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SyncEventContractTest",
+      "tests": "4",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:28.920Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.0"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:28.921Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.276"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest",
+      "tests": "2",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.203Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.032"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.238Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.0"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.240Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.004"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.248Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.042"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest",
+      "tests": "4",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.291Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.004"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest",
+      "tests": "4",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.297Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.002"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.300Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.001"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.301Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.002"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task130PriceContractTest",
+      "tests": "4",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.304Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.059"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest",
+      "tests": "20",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.379Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.307"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest",
+      "tests": "8",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.689Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.024"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest",
+      "tests": "16",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:29.732Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.155"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:30.893Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.183"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest",
+      "tests": "31",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:31.096Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "9.938"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest",
+      "tests": "8",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.039Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.028"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.069Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.007"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.081Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.036"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest",
+      "tests": "16",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.127Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.056"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest",
+      "tests": "4",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.190Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.016"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.212Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.001"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.216Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.047"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.268Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.005"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.280Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.037"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.318Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.017"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest",
+      "tests": "1",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.339Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.011"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest",
+      "tests": "1",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.351Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.006"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest",
+      "tests": "7",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.366Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.01"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest",
+      "tests": "16",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.380Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.002"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:41.399Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.822"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest",
+      "tests": "2",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.224Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.271"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.504Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.009"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest",
+      "tests": "1",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.516Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.319"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.844Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.011"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.859Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.008"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ExcelUtilsTest",
+      "tests": "48",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:43.882Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.178"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:45.063Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.191"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest",
+      "tests": "8",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:45.263Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.694"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest",
+      "tests": "34",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:45.972Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.598"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:46.570Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.002"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest",
+      "tests": "6",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:46.573Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.001"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+      "tests": "1",
+      "skipped": "1",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:46.578Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.007"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest",
+      "tests": "31",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:46.597Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.067"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest",
+      "tests": "61",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:47.688Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "2.458"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
+      "tests": "52",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:50.165Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.111"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest",
+      "tests": "25",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:34:51.286Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.305"
+    }
+  ],
+  "xmlSHA256": {
+    "TEST-com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest.xml": "52a75628c2b99204e60fae28921b4e93ab743fb50bd91ca2cf8e9e3fd59942d3",
+    "TEST-com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest.xml": "16586c4693f167f95e6464d4ec9d136bf46c710eb49e55153991f680c7301e6f",
+    "TEST-com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest.xml": "7514b3d98ce5d1b1ffcc2d474000468aac0b9c6c19c4e0d1c920917537000e02",
+    "TEST-com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest.xml": "7b4775df7fd0901b7838cb0120f24f1e80946f1ff01b2e30516ec0eaf39a3622",
+    "TEST-com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest.xml": "866c423bee86b28e30a7fd6abc7d6a76a46ee32f8b862ab27e52c8d5ee08c902",
+    "TEST-com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest.xml": "8c185fa06a0798959fa7ec838fdad2cb9b9233e963f4d37d73d8d47a66c77ea3",
+    "TEST-com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest.xml": "ec2d9aefbfabb339e3937f8b4e5efbbeb91eab9884be114c61f66f9dceb8d7de",
+    "TEST-com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest.xml": "d7124591d7808a7f3df2def424c4e46493f4d7f46e897e6f1525a9ec4705d13b",
+    "TEST-com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest.xml": "6e12890666c6d8271da5b30b947277f7ebe8fdca0180adef0fed8a97eea7fd4b",
+    "TEST-com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest.xml": "b86e2dac45f3ab2079bd6fce638e5b4b793c97893ed58b76dd0d43e765df966e",
+    "TEST-com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest.xml": "7a62ba3e69847d07f774e392bc4e5326907efb0522f690a54e565673b76cb3d1",
+    "TEST-com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest.xml": "74bcccbd10851e6afbe6ac5923f8e3af28506e8076349d6fa040bf462aea2117",
+    "TEST-com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest.xml": "9433f7104776c9f9473d360d61fa03ccf094ca4f488e98b289d658503ef91a7f",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopContextTest.xml": "1ffd5b00d2ae82e62028e850a936a4950934e1b6d80ab6db5355df8b10469917",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest.xml": "7c59400bca0525aca3a240092e9f6bf91867cae39719d865166e0db11786b6fa",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "bdd6286912eb17e04ea08a71635f12b4dfc7f61ddfc7348165ec5a78e4e8f2b1",
+    "TEST-com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest.xml": "a52f9789c91851f643ce0b1247be80f73ce4267481c150d0d9702aefc132bf82",
+    "TEST-com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest.xml": "a86aabdcd2a26bc27a88d97abd034551cfe5204288427748c56c7afc1b021286",
+    "TEST-com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest.xml": "fdbd5a48688d8e7387979ae46e7b599f48bd78ff5569a9e562f36a032fa80cef",
+    "TEST-com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest.xml": "9260a38718cde28899e4a45ad993c178137891658e07daafe356eb86ea7e87af",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest.xml": "4c68ff32c9f8b480c54daacc351f851ad61231b9c76a1c9a6ac7422027bc16fb",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest.xml": "36ec11351fda8c58da6577591db237deb0fdb6a369695d0aa5cbae313c610b98",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest.xml": "ac6aa14d38b0a41ef82236e5288f6485cf8ec9296f4ac53f695d588fa06708df",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest.xml": "f695363bce16d68e8a18deb7ed0680c80b82f3292e82da851141dcbb52a85772",
+    "TEST-com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest.xml": "8aa4a71ed702bd4e93ae0add0a63b76dabbbc067d3dcfa5873044c0262108439",
+    "TEST-com.example.merchandisecontrolsplitview.data.SyncEventContractTest.xml": "442c0e4fa343bc9368827555e746b534d0bc556c2bdadc2b16c47c80a2cbf88a",
+    "TEST-com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest.xml": "ac6c7807e3da68a19d975629dfa24298de00dbfba45b8c2771fbc5eb4ac69d2b",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest.xml": "866c41d260fbb327d0a17a8e937f3ffd98d3eaa1e8ef3e58ca370fe50d49db14",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest.xml": "4d7ecd96e9d290e3bc938fb1db0e23061680c35e8faa3f826ee3faf0af50e2e3",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest.xml": "2e2b0f55f351fc1f7699730a53bd877016e8907f4e41311007622f56dfd674d7",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest.xml": "26572a0cb3d835476268477c535174805989cc587cb671976e95620a450c13ea",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest.xml": "4756e0f1a9bf0bc19aaf1b7cfa838883ffa70873713a8e1ae179c550faac3229",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest.xml": "7eccd520a94625ffc90b3cbd49a1cbbadf134f935a9a8016264791cfd1f92e21",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest.xml": "41c32d176055083d6dc60e5b42f9b70eed21114969d361c4a3dfee53d3f28b85",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest.xml": "57385ad5e79b451e5b0ba4f687d1d43d98ebffe10f7c14d608665533e13ab5ed",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task130PriceContractTest.xml": "725719c79430159f916b37f865eba3e7ea46896ab572096b0f295b134f528858",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest.xml": "514c2a7eb1c3fe172d1b04928123d26592f55cb7739f72f2a7cd3c6478f5f4c1",
+    "TEST-com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest.xml": "dc9485a9ee73f5902845f9a7a1be93fc6aa5f3fdcf82089d69c8244420543118",
+    "TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest.xml": "809e0bba4a0ace51d8a9c09cb85b50f82fd73129f59a85db3e33fa459aa1c720",
+    "TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest.xml": "e4e5b7a3fb84b4a95e012a85fce1add5455a85e7fbe5dc2db595f9698c7d1e06",
+    "TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest.xml": "4f6c34237ffb91ae79bfda3e81a8c188488d5c1ef078e54389a242ade342833c",
+    "TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest.xml": "c4600df72d891b1e1051424e8066f8b1fd0d40ba87d0fa07af9ee036127861aa",
+    "TEST-com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest.xml": "4d3eed660b32c2f29540623196254c5e823e6113c899c53783e706ffc0b1ab0f",
+    "TEST-com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest.xml": "1315f9801d0c7c89f0caf0031b04e22b104f5d7392f4c898c0aeafaf3b21212c",
+    "TEST-com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest.xml": "3da46942cee9ae4193a3e89bf1995e1224f27af7823a440500a33433d92f66d4",
+    "TEST-com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest.xml": "90e8ede2317f54fc57f9705e69497a0efdd13f7ecc97128d90ee278c5c2c07ae",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest.xml": "f87f0cc72f24d562d7b18e9409c57469fa60daddc04432e514ab535124141db5",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest.xml": "db564c96e696b5a35bc170d09142e4ff7f0f592049e7f6ba00bbe81483ba9f04",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest.xml": "34c15bc404f3bcedb356dd5de833b72810cfde59404beff5c75b0b24d5ee0833",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest.xml": "80eb4dd5ef833310ad27305df069a255f9c6fcc1044b4f0646df563efac88efc",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest.xml": "a3147303d4d8720c4869978204c3d2d69790a11385791f10b6f0e07575322585",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest.xml": "df317ea60a385e2b6294abc6edfa0346621a13d13aaa2ed50c2645cd11b02ea1",
+    "TEST-com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest.xml": "397e11d3350ce5543e86560640b0f61e5bdfa9e5f4af452ffaa2c8bc820fcc0b",
+    "TEST-com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest.xml": "7a89f6ce4db0b8ed40144c59b61261dd1098311667375b1904589fcb27c28013",
+    "TEST-com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest.xml": "29f0da1ab433e4933d8d3c5f7c6af7cf52fdc564eaf48ad3b709f19dc7d58338",
+    "TEST-com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest.xml": "0afa2b2dc0d6e885844f7818b64cb7fbddaaecb771ff7f8bcf999ce0c02d5b4b",
+    "TEST-com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest.xml": "c5cc703c1c11366c502cb5a0f1c6e6043e35c249573092c7da395a6b9296ed82",
+    "TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest.xml": "554cdd49b91a9cefd0618eb123708e4babf9e1a9b8dc423192ef00790f6ebca1",
+    "TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest.xml": "ed83dd1e002461ff6fbfc749fbf1fea9dbe833ee256a91bbb364798ba3daadb9",
+    "TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest.xml": "cdaa3ed7d244e27be6970396ab974535272f729096abcd873dc47f239b2b5505",
+    "TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test.xml": "9a205b6a530c9ee8ebb25482368aeb70e7509f2f1d42764bf377e4f2e813ea1a",
+    "TEST-com.example.merchandisecontrolsplitview.util.ExcelUtilsTest.xml": "7e537c06fcb0e4ce1b3e09d2246d2961907b5116e93d900b2177110d6463a6c9",
+    "TEST-com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest.xml": "af05fe853578b1bf872616137dd708b74f1f5d0037bf4b92dfd8f7d3b9d1c975",
+    "TEST-com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest.xml": "e8bb1630da69b90f005462127e1fe639a410117a0e7adab9c1fe2f4d2619518a",
+    "TEST-com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest.xml": "009b656758dbc9fad14e6a114294b6cdaa5f6dd287efdd719bfb20dd296da285",
+    "TEST-com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest.xml": "19b1378fc67c25746ed1a3d3d45e7b041225204d27053ea47555f2440288c0df",
+    "TEST-com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest.xml": "5b0329908ad7848641bedf525645ead6530785f3b799d6140a46d39da7d1156b",
+    "TEST-com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest.xml": "efe69de2c2dda92e586e2aeccd4408379840e8c79aa8aac201426f2d22620c4a",
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest.xml": "e3e3913cf9d2997043c9ccb2d9065d97a05bc79f16aabfaa0f837a1dde231b39",
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest.xml": "75ce19aa409466fd49242e7160dcf37081090ef4336523f4de9f58b9fb835250",
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest.xml": "e950c66d4942da61f349e2b32940b750de82e4a24a03044b6fddc2b3851fee04",
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest.xml": "8af793768734e230aa96901152c9579844bf46b43a00cb2aa84fd3357130f8e3"
+  },
+  "skips": [
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+      "name": "wechat 004 real local Supabase fixture converges through production incremental apply"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+      "name": "measure real repository queries and local editor writes at large scale"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+      "name": "live realtime insert is materialized into Room"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+      "name": "runOrchestratedOracleLoopAndroidFirst"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+      "name": "auditDriveSupplierCorpusReadOnly"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+      "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle"
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+      "name": "dumpShoppingHogarCurrentMapping"
+    }
+  ],
+  "lintDebugCounts": {
+    "Warning": 54
+  },
+  "newLintSignaturesVsExactE4Ci": [
+    [
+      "AndroidGradlePluginVersion",
+      "Warning",
+      "A newer version of Gradle than 9.5.1 is available: 9.8.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/wrapper/gradle-wrapper.properties"
+      ]
+    ],
+    [
+      "AndroidGradlePluginVersion",
+      "Warning",
+      "A newer version of com.android.application than 9.2.1 is available: 9.4.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.core:core-ktx than 1.18.0 is available: 1.19.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.lifecycle:lifecycle-process than 2.10.0 is available: 2.11.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.10.0 is available: 2.11.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.navigation:navigation-compose than 2.9.8 is available: 2.10.2",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.compose:compose-bom than 2026.05.01 is available: 2026.09.00",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.compose.runtime:runtime-livedata than 1.11.2 is available: 1.12.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.room:room-compiler than 2.8.4 is available: 2.8.5",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.room:room-ktx than 2.8.4 is available: 2.8.5",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.room:room-paging than 2.8.4 is available: 2.8.5",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.room:room-runtime than 2.8.4 is available: 2.8.5",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.paging:paging-compose than 3.5.0 is available: 3.5.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.paging:paging-runtime-ktx than 3.5.0 is available: 3.5.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of androidx.work:work-runtime-ktx than 2.11.2 is available: 2.12.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "GradleDependency",
+      "Warning",
+      "A newer version of com.google.android.libraries.identity.googleid:googleid than 1.2.0 is available: 1.2.1",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of org.jetbrains.kotlin.plugin.compose than 2.3.21 is available: 2.4.20",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of org.jetbrains.kotlin.plugin.serialization than 2.3.21 is available: 2.4.20",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of org.apache.commons:commons-collections4 than 4.5.0 is available: 4.6.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of org.jsoup:jsoup than 1.22.2 is available: 1.23.2",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of org.robolectric:robolectric than 4.16.1 is available: 4.17",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of io.mockk:mockk than 1.14.9 is available: 1.14.11",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of io.github.jan-tennert.supabase:bom than 3.6.0 is available: 3.8.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of io.ktor:ktor-client-okhttp than 3.5.0 is available: 3.6.0",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "NewerVersionAvailable",
+      "Warning",
+      "A newer version of com.tencent.mm.opensdk:wechat-sdk-android than 6.8.34 is available: 6.8.40",
+      [
+        "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/gradle/libs.versions.toml"
+      ]
+    ],
+    [
+      "TrustAllX509TrustManager",
+      "Warning",
+      "`checkClientTrusted` is empty, which could cause insecure network traffic due to trusting arbitrary TLS/SSL certificates presented by peers",
+      [
+        "/Users/minxiang/.gradle/caches/modules-2/files-2.1/org.apache.poi/poi-ooxml/5.5.1/ff561a9cab46bfe95667d5085580fefb2353fdaf/poi-ooxml-5.5.1.jar"
+      ]
+    ],
+    [
+      "TrustAllX509TrustManager",
+      "Warning",
+      "`checkServerTrusted` is empty, which could cause insecure network traffic due to trusting arbitrary TLS/SSL certificates presented by peers",
+      [
+        "/Users/minxiang/.gradle/caches/modules-2/files-2.1/org.apache.poi/poi-ooxml/5.5.1/ff561a9cab46bfe95667d5085580fefb2353fdaf/poi-ooxml-5.5.1.jar"
+      ]
+    ],
+    [
+      "UseKtx",
+      "Warning",
+      "Use the KTX extension function `SharedPreferences.edit` instead?",
+      [
+        "src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt"
+      ]
+    ],
+    [
+      "UseKtx",
+      "Warning",
+      "Use the KTX extension function `SharedPreferences.edit` instead?",
+      [
+        "src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt"
+      ]
+    ]
+  ],
+  "lintBaselineXmlSHA256": "fa540447fd3fc32839ff870fe7bee5d458bef520f676683b3459c8dd751233a6",
+  "lintDebugXmlSHA256": "b6f2f3aa75220530aa9d4f8ad3ba21174e043187144467c7192f3bbb5e05e5cf",
+  "kotlinWarningLines": [],
+  "releaseUnitTaskSkipped": false,
+  "logSHA256": "6e798e1e1cd9ec52174d116e4e71a66d49b885a07b85154bde1aa9295c0f1588",
+  "canonicalApkSHA256": "88a2cfa16d7bc724e41423b82c2020124f46a60e994145625612c49cd672abf2",
+  "deviceAccess": false,
+  "newLintSignaturesVsExactE4CiNormalized": [
+    [
+      "UseKtx",
+      "Warning",
+      "Use the KTX extension function `SharedPreferences.edit` instead?",
+      [
+        "src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt"
+      ]
+    ],
+    [
+      "UseKtx",
+      "Warning",
+      "Use the KTX extension function `SharedPreferences.edit` instead?",
+      [
+        "src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt"
+      ]
+    ]
+  ],
+  "acceptedNewLintWarnings": {
+    "UseKtx": 2,
+    "reason": "CheckedAuthSettings must observe SharedPreferences.Editor.commit Boolean; KTX SharedPreferences.edit(commit=true) returns Unit and discards commit failure, contrary to verified durability contract. Root accepted these intentional warnings; no API substitution or suppression."
+  }
+}

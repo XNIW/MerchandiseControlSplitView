@@ -60,6 +60,11 @@ import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.SettingsSessionManager
+import io.github.jan.supabase.auth.SettingsCodeVerifierCache
+import io.github.jan.supabase.auth.createDefaultSettingsKey
+import io.github.jan.supabase.annotations.SupabaseInternal
+import com.example.merchandisecontrolsplitview.data.GenerationOwnedSupabaseClient
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.realtime.Realtime
@@ -189,21 +194,48 @@ class MerchandiseControlApplication : Application() {
         )
     }
 
+    @OptIn(SupabaseInternal::class)
     val supabaseClient: SupabaseClient? by lazy {
         val configPresent = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()
         if (configPresent) {
             try {
-                createSupabaseClient(
-                    supabaseUrl = BuildConfig.SUPABASE_URL,
-                    supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
-                ) {
-                    requestTimeout = 90.seconds
-                    install(Auth)
-                    install(Postgrest)
-                    install(Realtime) {
-                        reconnectDelay = 5.seconds
+                val settings = com.example.merchandisecontrolsplitview.data.CheckedAuthSettings(
+                    applicationContext.getSharedPreferences(
+                        "${applicationContext.packageName}_preferences",
+                        Context.MODE_PRIVATE
+                    )
+                )
+                val settingsKey = createDefaultSettingsKey(BuildConfig.SUPABASE_URL.split("//").last())
+                val sessionKey = "$settingsKey-${SettingsSessionManager.SETTINGS_KEY}"
+                val verifierKey = "$settingsKey-${SettingsCodeVerifierCache.SETTINGS_KEY}"
+                // Instantiate SDK migration once; every client receives a generation-bound lease.
+                val sessionManager = com.example.merchandisecontrolsplitview.data.ProjectSessionPersistence(
+                    settings = settings,
+                    sessionKey = sessionKey,
+                    projectUrl = BuildConfig.SUPABASE_URL
+                )
+                val verifierCache = SettingsCodeVerifierCache(settings = settings, key = verifierKey)
+                GenerationOwnedSupabaseClient(
+                    sessionManager = sessionManager,
+                    codeVerifierCache = verifierCache,
+                    isSessionStored = { sessionManager.isSessionStored() },
+                    factory = { sessionLease, verifierLease ->
+                        createSupabaseClient(
+                            supabaseUrl = BuildConfig.SUPABASE_URL,
+                            supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
+                        ) {
+                            requestTimeout = 90.seconds
+                            install(Auth) {
+                                this.sessionManager = sessionLease
+                                codeVerifierCache = verifierLease
+                            }
+                            install(Postgrest)
+                            install(Realtime) {
+                                reconnectDelay = 5.seconds
+                            }
+                        }
                     }
-                }
+                )
             } catch (e: Throwable) {
                 Log.w(TAG, "Creazione client Supabase fallita", e)
                 null

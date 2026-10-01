@@ -59,6 +59,7 @@ class SupabaseRealtimeSessionSubscriber(
     private var subscriptionGeneration = 0L
 
     private var channel: RealtimeChannel? = null
+    private var channelOwner: Realtime? = null
     private var collectorJob: Job? = null
     private var subscribeJob: Job? = null
 
@@ -93,7 +94,14 @@ class SupabaseRealtimeSessionSubscriber(
             }
             subscriptionGeneration += 1L
             val collectorGeneration = subscriptionGeneration
-            val realtimeChannel = client.channel("$CHANNEL_NAME-$collectorGeneration")
+            val creatingClient = try {
+                (client as? GenerationOwnedSupabaseClient)?.captureClient() ?: client
+            } catch (_: SupabaseClientLifecycleException) {
+                Log.i(TAG, "Supabase Realtime non avviato: transizione account")
+                return
+            }
+            val creatingRealtime = creatingClient.realtime
+            val realtimeChannel = creatingClient.channel("$CHANNEL_NAME-$collectorGeneration")
             collectorJob = realtimeChannel
                 .postgresChangeFlow<PostgresAction>(schema = SCHEMA) {
                     table = TABLE_NAME
@@ -110,6 +118,7 @@ class SupabaseRealtimeSessionSubscriber(
                 subscribeLoop(realtimeChannel)
             }
             channel = realtimeChannel
+            channelOwner = creatingRealtime
             startedForScope = normalizedScope
         }
     }
@@ -123,20 +132,23 @@ class SupabaseRealtimeSessionSubscriber(
     }
 
     fun stop() {
-        val realtimeChannel = synchronized(stateLock) {
+        val retired = synchronized(stateLock) {
             subscriptionGeneration += 1L
             startedForScope = null
             collectorJob?.cancel()
             subscribeJob?.cancel()
             collectorJob = null
             subscribeJob = null
-            channel.also { channel = null }
+            (channel to channelOwner).also {
+                channel = null
+                channelOwner = null
+            }
         }
 
         scope.launch {
             try {
-                realtimeChannel?.let { oldChannel ->
-                    client?.realtime?.removeChannel(oldChannel)
+                retired.first?.let { oldChannel ->
+                    retired.second?.removeChannel(oldChannel)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -147,9 +159,10 @@ class SupabaseRealtimeSessionSubscriber(
     }
 
     fun shutdown() {
+        val creatingRealtime = synchronized(stateLock) { channelOwner }
         stop()
         try {
-            client?.realtime?.disconnect()
+            creatingRealtime?.disconnect()
         } catch (error: Throwable) {
             Log.w(TAG, "Errore durante disconnect realtime", error)
         }

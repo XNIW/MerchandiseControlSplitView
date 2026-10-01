@@ -23,6 +23,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +33,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class SupabaseSessionUser(
     val id: String,
@@ -46,28 +50,40 @@ internal sealed interface StoredSessionRefreshResult {
 
 internal interface SupabaseAuthSessionController {
     val sessionStatus: StateFlow<SessionStatus>
+    val ownsGenerationBoundLifecycle: Boolean get() = false
 
     fun currentUserOrNull(): SupabaseSessionUser?
     suspend fun refreshStoredSession(): StoredSessionRefreshResult
     suspend fun clearSession()
+    suspend fun clearSupersededInteractiveSession() = clearSession()
     suspend fun signInWithGoogleIdToken(idToken: String)
+    suspend fun signInWithGoogleIdToken(idToken: String, isCurrentAttempt: () -> Boolean) = signInWithGoogleIdToken(idToken)
     suspend fun importWeChatSession(accessToken: String, refreshToken: String)
+    suspend fun importWeChatSession(accessToken: String, refreshToken: String, isCurrentAttempt: () -> Boolean) = importWeChatSession(accessToken, refreshToken)
     suspend fun signOut(scope: SignOutScope)
+    suspend fun signOut(scope: SignOutScope, isCurrentAttempt: () -> Boolean) = signOut(scope)
+    fun localSessionCleared(): Boolean = false
 }
 
 private class SupabaseClientAuthSessionController(
     private val client: SupabaseClient
 ) : SupabaseAuthSessionController {
+    private val owner: GenerationOwnedSupabaseClient? = client as? GenerationOwnedSupabaseClient
+    private var interactiveClient: SupabaseClient? = null
+    override val ownsGenerationBoundLifecycle: Boolean get() = owner != null
+
     override val sessionStatus: StateFlow<SessionStatus>
-        get() = client.auth.sessionStatus
+        get() = owner?.sessionStatus ?: client.auth.sessionStatus
 
     override fun currentUserOrNull(): SupabaseSessionUser? =
-        client.auth.currentUserOrNull()?.let { user ->
+        owner?.captureClientOrNull()?.auth?.currentUserOrNull()?.let { user ->
             SupabaseSessionUser(id = user.id, email = user.email)
-        }
+        } ?: if (owner == null) client.auth.currentUserOrNull()?.let { user ->
+            SupabaseSessionUser(id = user.id, email = user.email)
+        } else null
 
     override suspend fun refreshStoredSession(): StoredSessionRefreshResult = try {
-        client.auth.refreshCurrentSession()
+        (owner?.captureClient() ?: client).auth.refreshCurrentSession()
         StoredSessionRefreshResult.Refreshed
     } catch (error: CancellationException) {
         throw error
@@ -83,18 +99,30 @@ private class SupabaseClientAuthSessionController(
     }
 
     override suspend fun clearSession() {
-        client.auth.clearSession()
+        if (owner != null) owner.prepareForSignIn() else client.auth.clearSession()
     }
 
     override suspend fun signInWithGoogleIdToken(idToken: String) {
-        client.auth.signInWith(IDToken) {
+        signInWithGoogleIdToken(idToken) { true }
+    }
+
+    override suspend fun signInWithGoogleIdToken(idToken: String, isCurrentAttempt: () -> Boolean) {
+        val operationClient = owner?.prepareForSignIn(isCurrentAttempt) ?: client
+        interactiveClient = operationClient
+        operationClient.auth.signInWith(IDToken) {
             provider = Google
             this.idToken = idToken
         }
     }
 
     override suspend fun importWeChatSession(accessToken: String, refreshToken: String) {
-        client.auth.importAuthToken(
+        importWeChatSession(accessToken, refreshToken) { true }
+    }
+
+    override suspend fun importWeChatSession(accessToken: String, refreshToken: String, isCurrentAttempt: () -> Boolean) {
+        val operationClient = owner?.prepareForSignIn(isCurrentAttempt) ?: client
+        interactiveClient = operationClient
+        operationClient.auth.importAuthToken(
             accessToken = accessToken,
             refreshToken = refreshToken,
             retrieveUser = true
@@ -102,7 +130,28 @@ private class SupabaseClientAuthSessionController(
     }
 
     override suspend fun signOut(scope: SignOutScope) {
-        client.auth.signOut(scope)
+        signOut(scope) { true }
+    }
+
+    override suspend fun signOut(scope: SignOutScope, isCurrentAttempt: () -> Boolean) {
+        if (owner != null) {
+            check(scope == SignOutScope.LOCAL)
+            owner.signOut(isCurrentAttempt)
+        } else {
+            try {
+                client.auth.signOut(scope)
+            } finally {
+                if (scope == SignOutScope.LOCAL) withContext(NonCancellable) { client.auth.clearSession() }
+            }
+        }
+    }
+
+    override fun localSessionCleared(): Boolean = owner?.isLocalSessionCleared == true
+
+    override suspend fun clearSupersededInteractiveSession() {
+        if (owner != null) {
+            interactiveClient?.let { owner.prepareForSignIn(expectedClient = it) }
+        } else client.auth.clearSession()
     }
 }
 
@@ -165,6 +214,7 @@ class SupabaseAuthManager private constructor(
     companion object {
         private const val TAG = "SupabaseAuth"
         internal const val RESTORE_TIMEOUT_MS = 10_000L
+        internal const val SESSION_CLEANUP_ERROR = "auth_session_cleanup_failed"
 
         internal fun createForTest(
             sessionController: SupabaseAuthSessionController,
@@ -203,6 +253,10 @@ class SupabaseAuthManager private constructor(
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
 
+    private data class BootstrapRestoreAttempt(val generation: Long, val awaitingSdk: Boolean = false)
+    private val authGeneration = AtomicLong(0L)
+    private val bootstrapRestore = AtomicReference<BootstrapRestoreAttempt?>(null)
+
     init {
         if (isEnabled) {
             observeSessionStatus()
@@ -227,67 +281,50 @@ class SupabaseAuthManager private constructor(
             Log.i(TAG, "restoreSession: disabled, going SignedOut")
             return
         }
+        val generation = authGeneration.get()
         scope.launch {
             if (!authMutex.tryLock()) {
                 Log.w(TAG, "restoreSession: mutex already locked, skipping")
                 return@launch
             }
+            val attempt = BootstrapRestoreAttempt(generation)
             try {
+                if (authGeneration.get() != generation) return@launch
+                bootstrapRestore.set(attempt)
                 Log.d(TAG, "restoreSession: waiting for session status (timeout ${RESTORE_TIMEOUT_MS}ms)")
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
                     controller.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
                 Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
+                if (!isCurrentBootstrap(attempt)) return@launch
                 when (status) {
                     is SessionStatus.Authenticated -> {
-                        val localUser = controller.currentUserOrNull()
-                        when (val refresh = controller.refreshStoredSession()) {
-                            StoredSessionRefreshResult.Refreshed -> {
-                                if (publishSignedIn(controller.currentUserOrNull() ?: localUser)) {
-                                    Log.i(TAG, "Sessione ripristinata e validata")
-                                } else {
-                                    try {
-                                        controller.clearSession()
-                                    } catch (_: Throwable) {
-                                        // Fail-closed applicativo anche se il cleanup storage fallisce.
-                                    }
-                                    Log.w(TAG, "Sessione validata senza identita account utilizzabile")
-                                }
-                            }
-
-                            is StoredSessionRefreshResult.Invalid -> {
-                                try {
-                                    controller.clearSession()
-                                } catch (_: Throwable) {
-                                    // Lo stato applicativo viene comunque invalidato; clear locale best-effort.
-                                }
-                                _state.value = AuthState.SignedOut
-                                Log.i(
-                                    TAG,
-                                    "Sessione persistita invalidata dal server code=${refresh.code}"
-                                )
-                            }
-
-                            StoredSessionRefreshResult.Deferred -> {
-                                // Offline-first: un errore rete/5xx non equivale a revoca della sessione.
-                                if (publishSignedIn(localUser)) {
-                                    Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
-                                } else {
-                                    Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
-                                }
-                            }
+                        validateStoredSession(controller, attempt)
+                    }
+                    null, is SessionStatus.RefreshFailure -> {
+                        val waiting = attempt.copy(awaitingSdk = true)
+                        if (bootstrapRestore.compareAndSet(attempt, waiting)) {
+                            _state.value = AuthState.SignedOut
+                            Log.i(TAG, "Restore in attesa del completamento SDK (status=${status.safeLogLabel()})")
+                            // Covers an SDK success that raced with arming the latch.
+                            resumePendingBootstrap(controller)
                         }
                     }
                     else -> {
+                        bootstrapRestore.compareAndSet(attempt, null)
                         _state.value = AuthState.SignedOut
                         Log.i(TAG, "Nessuna sessione valida al bootstrap (status=${status.safeLogLabel()})")
                     }
                 }
             } catch (e: CancellationException) {
+                bootstrapRestore.compareAndSet(attempt, null)
                 throw e
             } catch (e: Throwable) {
-                _state.value = AuthState.SignedOut
-                Log.w(TAG, "Restore sessione fallito", e)
+                if (isCurrentBootstrap(attempt)) {
+                    bootstrapRestore.compareAndSet(attempt, null)
+                    _state.value = AuthState.SignedOut
+                    Log.w(TAG, "Restore sessione fallito", e)
+                }
             } finally {
                 authMutex.unlock()
             }
@@ -306,7 +343,16 @@ class SupabaseAuthManager private constructor(
     suspend fun signInWithGoogle(activityContext: Context): Boolean {
         val controller = sessionController
         if (!isEnabled || controller == null) return false
+        val preserveCleanupError = hasUnverifiedCleanupError(controller)
+        invalidateBootstrapRestore()
         if (!authMutex.tryLock()) return false
+        val generation = authGeneration.get()
+        var completedSignIn = false
+        fun publishFailure(fallback: AuthState) {
+            _state.value = if (preserveCleanupError && !controller.localSessionCleared()) {
+                AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
+            } else fallback
+        }
         try {
             _state.value = AuthState.Checking
 
@@ -315,9 +361,12 @@ class SupabaseAuthManager private constructor(
                 credentialManager = credentialManager,
                 activityContext = activityContext
             )
+            if (interactiveAttemptSupersededBeforeExchange(generation)) return false
 
             // 2. Scambio token con Supabase Auth
-            controller.signInWithGoogleIdToken(googleIdToken)
+            controller.signInWithGoogleIdToken(googleIdToken) { authGeneration.get() == generation }
+
+            if (abandonSupersededInteractiveSession(controller, generation)) return false
 
             if (!publishSignedIn(controller.currentUserOrNull())) {
                 controller.clearSession()
@@ -325,21 +374,28 @@ class SupabaseAuthManager private constructor(
                 return false
             }
             Log.i(TAG, "Sign-in Google completato")
+            completedSignIn = true
             return true
         } catch (e: CancellationException) {
+            if (authGeneration.get() != generation) return false
             throw e
         } catch (e: GetCredentialCancellationException) {
             // Cancel utente != errore tecnico (planning: esito neutro)
-            _state.value = AuthState.SignedOut
+            if (authGeneration.get() == generation) publishFailure(AuthState.SignedOut)
             Log.i(TAG, "Sign-in annullato dall'utente")
             return false
         } catch (e: Throwable) {
-            _state.value = AuthState.ErrorRecoverable(
-                e.localizedMessage ?: "Errore durante il login"
-            )
+            if (authGeneration.get() != generation) return false
+            publishFailure(AuthState.ErrorRecoverable(
+                if (e is SupabaseSessionPersistenceException) SESSION_CLEANUP_ERROR
+                else e.localizedMessage ?: "Errore durante il login"
+            ))
             Log.w(TAG, "Sign-in fallito", e)
             return false
         } finally {
+            if (preserveCleanupError && !completedSignIn && authGeneration.get() == generation && !controller.localSessionCleared()) {
+                _state.value = AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
+            }
             authMutex.unlock()
         }
     }
@@ -354,58 +410,72 @@ class SupabaseAuthManager private constructor(
         val codeProvider = wechatCodeProvider
         val gateway = wechatGateway
         val installId = wechatDeviceIdProvider
+        val preserveCleanupError = controller?.let(::hasUnverifiedCleanupError) == true
         if (!isWeChatEnabled || controller == null || codeProvider == null ||
             gateway == null || installId == null
         ) {
-            _state.value = AuthState.ErrorRecoverable(
+            _state.value = if (preserveCleanupError) AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR) else AuthState.ErrorRecoverable(
                 activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_configured)
             )
             return false
         }
+        invalidateBootstrapRestore()
         if (!authMutex.tryLock()) return false
+        val generation = authGeneration.get()
+        var completedSignIn = false
+        fun publishFailure(fallback: AuthState) {
+            _state.value = if (preserveCleanupError && !controller.localSessionCleared()) {
+                AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
+            } else fallback
+        }
 
         try {
             _state.value = AuthState.Checking
             if (!codeProvider.isWeChatInstalled(activityContext)) {
-                _state.value = AuthState.ErrorRecoverable(
+                publishFailure(AuthState.ErrorRecoverable(
                     activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_installed)
-                )
+                ))
                 return false
             }
 
             val request = WeChatAuthRequest.create(nowEpochMillis())
             val deviceId = installId()
-            val challenge = when (val issued = gateway.issueChallenge(deviceId, request)) {
+            if (interactiveAttemptSupersededBeforeExchange(generation)) return false
+            val issued = gateway.issueChallenge(deviceId, request)
+            if (interactiveAttemptSupersededBeforeExchange(generation)) return false
+            val challenge = when (issued) {
                 is WeChatGatewayResult.Success -> issued.value
                 is WeChatGatewayResult.Failure -> {
-                    _state.value = AuthState.ErrorRecoverable(
+                    publishFailure(AuthState.ErrorRecoverable(
                         wechatErrorMessage(activityContext, issued.error)
-                    )
+                    ))
                     return false
                 }
             }
-            val callback = when (val result = codeProvider.requestCode(activityContext, request.state)) {
+            val result = codeProvider.requestCode(activityContext, request.state)
+            if (interactiveAttemptSupersededBeforeExchange(generation)) return false
+            val callback = when (result) {
                 is WeChatCodeResult.Success -> result
                 WeChatCodeResult.Cancelled -> {
-                    _state.value = AuthState.SignedOut
+                    publishFailure(AuthState.SignedOut)
                     return false
                 }
                 WeChatCodeResult.Denied -> {
-                    _state.value = AuthState.ErrorRecoverable(
+                    publishFailure(AuthState.ErrorRecoverable(
                         activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_denied)
-                    )
+                    ))
                     return false
                 }
                 WeChatCodeResult.NotInstalled -> {
-                    _state.value = AuthState.ErrorRecoverable(
+                    publishFailure(AuthState.ErrorRecoverable(
                         activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_not_installed)
-                    )
+                    ))
                     return false
                 }
                 is WeChatCodeResult.Failure -> {
-                    _state.value = AuthState.ErrorRecoverable(
+                    publishFailure(AuthState.ErrorRecoverable(
                         wechatErrorMessage(activityContext, result.error)
-                    )
+                    ))
                     return false
                 }
             }
@@ -415,42 +485,52 @@ class SupabaseAuthManager private constructor(
                 createdAtEpochMillis = request.createdAtEpochMillis
             ).consume(callback.state, nowEpochMillis())
             if (callbackDecision != WeChatCallbackDecision.ACCEPT) {
-                _state.value = AuthState.ErrorRecoverable(
+                publishFailure(AuthState.ErrorRecoverable(
                     activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_state_invalid)
-                )
+                ))
                 return false
             }
 
-            val session = when (val exchanged = gateway.exchange(challenge, callback.code, deviceId)) {
+            val exchanged = gateway.exchange(challenge, callback.code, deviceId)
+            if (interactiveAttemptSupersededBeforeExchange(generation)) return false
+            val session = when (exchanged) {
                 is WeChatGatewayResult.Success -> exchanged.value
                 is WeChatGatewayResult.Failure -> {
-                    _state.value = AuthState.ErrorRecoverable(
+                    publishFailure(AuthState.ErrorRecoverable(
                         wechatErrorMessage(activityContext, exchanged.error)
-                    )
+                    ))
                     return false
                 }
             }
-            controller.importWeChatSession(session.accessToken, session.refreshToken)
+            controller.importWeChatSession(session.accessToken, session.refreshToken) { authGeneration.get() == generation }
+            if (abandonSupersededInteractiveSession(controller, generation)) return false
             if (!publishSignedIn(controller.currentUserOrNull())) {
                 controller.clearSession()
-                _state.value = AuthState.ErrorRecoverable(
+                publishFailure(AuthState.ErrorRecoverable(
                     activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
-                )
+                ))
                 return false
             }
             Log.i(TAG, "Sign-in WeChat completato")
+            completedSignIn = true
             return true
         } catch (error: CancellationException) {
+            if (authGeneration.get() != generation) return false
             throw error
-        } catch (_: Throwable) {
-            _state.value = AuthState.ErrorRecoverable(
-                activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
-            )
+        } catch (error: Throwable) {
+            if (authGeneration.get() != generation) return false
+            publishFailure(AuthState.ErrorRecoverable(
+                if (error is SupabaseSessionPersistenceException) SESSION_CLEANUP_ERROR
+                else activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
+            ))
             // Provider/transport exceptions can contain request metadata. Keep the
             // diagnostic categorical so codes and session tokens never reach logs.
             Log.w(TAG, "Sign-in WeChat fallito: errore redatto")
             return false
         } finally {
+            if (preserveCleanupError && !completedSignIn && authGeneration.get() == generation && !controller.localSessionCleared()) {
+                _state.value = AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
+            }
             authMutex.unlock()
         }
     }
@@ -461,14 +541,35 @@ class SupabaseAuthManager private constructor(
      */
     suspend fun signOut() {
         val controller = sessionController ?: return
-        authMutex.withLock {
-            try {
-                controller.signOut(SignOutScope.LOCAL)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                Log.w(TAG, "Errore durante signOut", e)
+        // A pending logout must fence a suspended bootstrap before waiting for its mutex.
+        invalidateBootstrapRestore()
+        val generation = authGeneration.get()
+        _state.value = AuthState.Checking
+        if (controller.ownsGenerationBoundLifecycle) {
+            // SDK/storage retirement has its own lock and cannot depend on a suspended picker.
+            completeLocalSignOut(controller, generation)
+        } else authMutex.withLock { completeLocalSignOut(controller, generation) }
+    }
+
+    private suspend fun completeLocalSignOut(controller: SupabaseAuthSessionController, generation: Long) {
+        if (authGeneration.get() != generation) return
+        try {
+            controller.signOut(SignOutScope.LOCAL) { authGeneration.get() == generation }
+        } catch (cancelled: CancellationException) {
+            if (authGeneration.get() == generation) {
+                _state.value = if (controller.localSessionCleared()) AuthState.SignedOut
+                    else AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
             }
+            throw cancelled
+        } catch (_: Throwable) {
+            if (authGeneration.get() != generation) return
+            if (!controller.localSessionCleared()) {
+                _state.value = AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR)
+                Log.w(TAG, "Logout locale non completato: persistenza non verificata")
+                return
+            }
+        }
+        if (authGeneration.get() == generation) {
             _state.value = AuthState.SignedOut
             Log.i(TAG, "Logout completato")
         }
@@ -480,13 +581,14 @@ class SupabaseAuthManager private constructor(
      */
     fun dismissError() {
         val current = _state.value
-        if (current is AuthState.ErrorRecoverable) {
+        if (current is AuthState.ErrorRecoverable && current.message != SESSION_CLEANUP_ERROR) {
             _state.value = AuthState.SignedOut
         }
     }
 
     /** Chiude il manager e cancella il suo CoroutineScope. */
     fun shutdown() {
+        invalidateBootstrapRestore()
         scope.cancel()
     }
 
@@ -558,22 +660,137 @@ class SupabaseAuthManager private constructor(
 
     /**
      * Osserva i cambi di stato sessione dalla libreria Supabase.
-     * Reagisce solo a invalidazioni server-side (sessione era valida -> ora non lo e').
-     * I problemi di rete non vengono trattati come logout (planning: stato recuperabile).
+     * Le autenticazioni SDK riprendono soltanto un bootstrap rimasto in attesa.
+     * Un login esplicito o un'invalidazione chiudono definitivamente quel tentativo.
      */
     private fun observeSessionStatus() {
         scope.launch {
             sessionController!!.sessionStatus.collect { status ->
                 when (status) {
                     is SessionStatus.NotAuthenticated -> {
-                        if (_state.value is AuthState.SignedIn) {
+                        if (sessionController.sessionStatus.value != status) return@collect
+                        val restoring = bootstrapRestore.get() != null
+                        if (restoring) invalidateBootstrapRestore()
+                        if (restoring || _state.value is AuthState.SignedIn) {
                             _state.value = AuthState.SignedOut
                             Log.i(TAG, "Sessione invalidata (server-side o refresh non riuscito)")
                         }
                     }
+                    is SessionStatus.Authenticated -> resumePendingBootstrap(sessionController)
                     else -> { /* Altre transizioni gestite dai metodi espliciti */ }
                 }
             }
+        }
+    }
+
+    private fun invalidateBootstrapRestore() {
+        val cancelledAttempt = bootstrapRestore.getAndSet(null)
+        authGeneration.incrementAndGet()
+        if (cancelledAttempt != null && _state.value == AuthState.Checking) {
+            _state.value = AuthState.SignedOut
+        }
+    }
+
+    private fun hasUnverifiedCleanupError(controller: SupabaseAuthSessionController): Boolean =
+        _state.value == AuthState.ErrorRecoverable(SESSION_CLEANUP_ERROR) && !controller.localSessionCleared()
+
+    private suspend fun abandonSupersededInteractiveSession(
+        controller: SupabaseAuthSessionController,
+        generation: Long
+    ): Boolean {
+        if (authGeneration.get() == generation) return false
+        // The app mutex still owns this exchange; a later explicit operation has not entered yet.
+        controller.clearSupersededInteractiveSession()
+        return true
+    }
+
+    private fun interactiveAttemptSupersededBeforeExchange(generation: Long): Boolean {
+        if (authGeneration.get() == generation) return false
+        return true
+    }
+
+    private fun isCurrentBootstrap(attempt: BootstrapRestoreAttempt): Boolean =
+        authGeneration.get() == attempt.generation && bootstrapRestore.get() == attempt
+
+    private fun resumePendingBootstrap(controller: SupabaseAuthSessionController) {
+        val pending = bootstrapRestore.get()?.takeIf { it.awaitingSdk } ?: return
+        scope.launch {
+            authMutex.withLock {
+                // Read current SDK state after acquiring the lock; the triggering event may be stale.
+                if (!isCurrentBootstrap(pending) || controller.sessionStatus.value !is SessionStatus.Authenticated) {
+                    return@withLock
+                }
+                val validating = pending.copy(awaitingSdk = false)
+                if (!bootstrapRestore.compareAndSet(pending, validating)) return@withLock
+                validateStoredSession(controller, validating)
+            }
+        }
+    }
+
+    private suspend fun validateStoredSession(
+        controller: SupabaseAuthSessionController,
+        attempt: BootstrapRestoreAttempt
+    ) {
+        val localUser = controller.currentUserOrNull()
+        try {
+            val refresh = controller.refreshStoredSession()
+            val currentUser = controller.currentUserOrNull()
+            // No old validation result may publish or clear a superseding session.
+            if (!isCurrentBootstrap(attempt)) return
+            if (controller.sessionStatus.value is SessionStatus.NotAuthenticated ||
+                (localUser != null && currentUser != null && currentUser.id != localUser.id)
+            ) {
+                invalidateBootstrapRestore()
+                _state.value = AuthState.SignedOut
+                return
+            }
+            when (refresh) {
+                StoredSessionRefreshResult.Refreshed -> {
+                    if (publishSignedIn(currentUser ?: localUser)) {
+                        Log.i(TAG, "Sessione ripristinata e validata")
+                    } else {
+                        clearStoredSessionIfCurrent(controller, attempt, localUser)
+                        Log.w(TAG, "Sessione validata senza identita account utilizzabile")
+                    }
+                }
+                is StoredSessionRefreshResult.Invalid -> {
+                    clearStoredSessionIfCurrent(controller, attempt, localUser)
+                    if (isCurrentBootstrap(attempt)) _state.value = AuthState.SignedOut
+                    Log.i(TAG, "Sessione persistita invalidata dal server code=${refresh.code}")
+                }
+                StoredSessionRefreshResult.Deferred -> {
+                    // Offline-first remains available for an already identified stored session.
+                    if (publishSignedIn(localUser)) {
+                        Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
+                    } else {
+                        Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            if (isCurrentBootstrap(attempt)) {
+                _state.value = AuthState.SignedOut
+                Log.w(TAG, "Restore sessione fallito", error)
+            }
+        } finally {
+            bootstrapRestore.compareAndSet(attempt, null)
+        }
+    }
+
+    private suspend fun clearStoredSessionIfCurrent(
+        controller: SupabaseAuthSessionController,
+        attempt: BootstrapRestoreAttempt,
+        expectedUser: SupabaseSessionUser?
+    ) {
+        if (!isCurrentBootstrap(attempt) || controller.currentUserOrNull()?.id != expectedUser?.id) return
+        try {
+            controller.clearSession()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // Definitive denial stays fail-closed even if local cleanup fails.
         }
     }
 

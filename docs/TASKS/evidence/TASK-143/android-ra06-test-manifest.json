@@ -1,0 +1,1520 @@
+{
+  "batch": "R-A06",
+  "source_freeze": {
+    "base_head": "1bf758dd8d83a771dcfdb1844a223a036ba19eff",
+    "source_patch_sha256": "7ca32ee3251716d3359d61905d218502d3da0dcfb717ee40a3431f2038677d47",
+    "files": {
+      "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "536f365d905bad74f0ffc38b54b26cd2d3f50300d905293432ba2a6bd7d65007",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManagerTest.kt": "023b96ab49a7825f43a2c6362d477b546334d3695176a93243ab0df81061887a"
+    },
+    "targeted": [
+      {
+        "class": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+        "tests": 68,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+        "tests": 25,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest",
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ],
+    "targeted_log": "/tmp/task143-auth-restore-review-green.log",
+    "red_receipt": "/tmp/task143-auth-restore-red.json",
+    "review_red": [
+      "/tmp/task143-auth-restore-review-red.xml",
+      "/tmp/task143-auth-restore-review-red2.xml"
+    ],
+    "superseded_initial_freeze": "/tmp/task143-ra06-freeze-initial.json"
+  },
+  "canonical_command": "JAVA_HOME=<JBR17> ANDROID_HOME=<SDK> ./gradlew assembleDebug test lint --console=plain",
+  "canonical_log": "/tmp/task143-ra06-final.log",
+  "canonical_exit_code": 0,
+  "review": "APPROVED R-A06 delta; no new P0/P1/P2 per independent reviewer",
+  "compose_device": {
+    "serial": "emulator-5554",
+    "avd": "Codex_Mobile_Parity_API_35",
+    "tests_executed_in_this_batch": false,
+    "previous_batch": "R-A04",
+    "previous_pass_count": 5,
+    "status": "NOT_RUN_THIS_BATCH: parent authorizes unchanged Compose evidence reuse; auth restart requires separate live retest",
+    "reuse_authorized_by_parent": true,
+    "identical_files": {
+      "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": {
+        "sha256": "68687e011b5d2d6feb0d254491947bed713c92cdb4fd3d48627c7ab9da017ffe",
+        "identical_to_main_1bf758dd": true,
+        "identical_to_ra04_compose_gate": true
+      },
+      "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/EditProductDialog.kt": {
+        "sha256": "8128c39bc71941bb32129ad649f9cb787312f0fab45f9271aa8e18263b92321b",
+        "identical_to_main_1bf758dd": true,
+        "identical_to_ra04_compose_gate": true
+      },
+      "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": {
+        "sha256": "71349786d8dd51bcabd184ee4f78ca08af0557175c1275796c8bd9c013b8716a",
+        "identical_to_main_1bf758dd": true,
+        "identical_to_ra04_compose_gate": true
+      },
+      "app/src/androidTest/java/com/example/merchandisecontrolsplitview/ui/screens/StorefrontEditorComposeDeviceTest.kt": {
+        "sha256": "fff473c2da7a49899739da590d69d03f093ccaf499f01f93a6889de18fc58c61",
+        "identical_to_main_1bf758dd": true,
+        "identical_to_ra04_compose_gate": true
+      }
+    }
+  },
+  "authenticated_live_retest": "PENDING independent coordinator on emulator-5556; no device access by executor",
+  "suites": {
+    "jvm_debug": {
+      "status": "EXECUTED",
+      "totals": {
+        "tests": 1000,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 7,
+        "passed": 993
+      },
+      "classes": [
+        {
+          "class": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest.xml",
+          "tests": 22,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest.xml",
+          "tests": 31,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest.xml",
+          "tests": 218,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "wechat 004 real local Supabase fixture converges through production incremental apply",
+              "reason": "org.junit.AssumptionViolatedException: WECHAT_004_LOCAL_E2E_FIXTURE is required for the real local gate"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest.xml",
+          "tests": 19,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "measure real repository queries and local editor writes at large scale",
+              "reason": "org.junit.AssumptionViolatedException: Opt-in large synthetic dataset benchmark"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest.xml",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest.xml",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest.xml",
+          "tests": 13,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.ShopContextTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.ShopContextTest.xml",
+          "tests": 15,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml",
+          "tests": 68,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest.xml",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest.xml",
+          "tests": 25,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "live realtime insert is materialized into Room",
+              "reason": "org.junit.AssumptionViolatedException: SUPABASE realtime config assente"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest.xml",
+          "tests": 19,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SyncEventContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SyncEventContractTest.xml",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest.xml",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest.xml",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest.xml",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest.xml",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task130PriceContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task130PriceContractTest.xml",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest.xml",
+          "tests": 20,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest.xml",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest.xml",
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest.xml",
+          "tests": 31,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest.xml",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest.xml",
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest.xml",
+          "tests": 4,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest.xml",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest.xml",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest.xml",
+          "tests": 16,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest.xml",
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "runOrchestratedOracleLoopAndroidFirst",
+              "reason": "org.junit.AssumptionViolatedException: Oracle loop runs only via :app:excelRecognitionOracleLoop"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "auditDriveSupplierCorpusReadOnly",
+              "reason": "org.junit.AssumptionViolatedException: Drive batch audit runs only via :app:excelRecognitionDriveBatchAudit"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+              "reason": "org.junit.AssumptionViolatedException: Oracle v2 runs only via :app:excelRecognitionOracleV2"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelUtilsTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ExcelUtilsTest.xml",
+          "tests": 48,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest.xml",
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest.xml",
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest.xml",
+          "tests": 34,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest.xml",
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest.xml",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 1,
+          "skipped_cases": [
+            {
+              "name": "dumpShoppingHogarCurrentMapping",
+              "reason": "org.junit.AssumptionViolatedException: Fixture locale opzionale assente (test ignorato): $USER_DOWNLOADS/20260404-Shopping Hogar.xls"
+            }
+          ],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest.xml",
+          "tests": 31,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest.xml",
+          "tests": 61,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest.xml",
+          "tests": 52,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest",
+          "report": "app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest.xml",
+          "tests": 25,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "skipped_cases": [],
+          "failed_cases": []
+        }
+      ]
+    },
+    "jvm_release": {
+      "status": "NOT_RUN: not selected by canonical Gradle task graph",
+      "totals": {
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "passed": 0
+      },
+      "classes": []
+    }
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 53,
+    "issues_on_changed_lines": 0,
+    "issues": [
+      {
+        "id": "ApplySharedPref",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 66,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "ApplySharedPref",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 76,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "OldTargetApi",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/build.gradle.kts",
+            "line": 39,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "AndroidGradlePluginVersion",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/wrapper/gradle-wrapper.properties",
+            "line": 3,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "AndroidGradlePluginVersion",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 2,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 4,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 5,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 5,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 7,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 8,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 9,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 10,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 10,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 10,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 10,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 11,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 11,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 20,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 21,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "GradleDependency",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 31,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 3,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 3,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 14,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 22,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 23,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 26,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 28,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 29,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "NewerVersionAvailable",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "gradle/libs.versions.toml",
+            "line": 32,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "ModifierParameter",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/DatabaseScreenComponents.kt",
+            "line": 399,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "ModifierParameter",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/DatabaseScreenComponents.kt",
+            "line": 514,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "PluralsCandidate",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values-en/strings.xml",
+            "line": 155,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "PluralsCandidate",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 157,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "PluralsCandidate",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values-en/strings.xml",
+            "line": 807,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "PluralsCandidate",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 822,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "TrustAllX509TrustManager",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "$GRADLE_USER_HOME/caches/modules-2/files-2.1/org.apache.poi/poi-ooxml/5.5.1/ff561a9cab46bfe95667d5085580fefb2353fdaf/poi-ooxml-5.5.1.jar",
+            "line": 0,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "TrustAllX509TrustManager",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "$GRADLE_USER_HOME/caches/modules-2/files-2.1/org.apache.poi/poi-ooxml/5.5.1/ff561a9cab46bfe95667d5085580fefb2353fdaf/poi-ooxml-5.5.1.jar",
+            "line": 0,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 97,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 574,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 599,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 605,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 607,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 611,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UnusedResources",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/res/values/strings.xml",
+            "line": 671,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UsableSpace",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt",
+            "line": 121,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UsableSpace",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt",
+            "line": 121,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 51,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 59,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 66,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 76,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/productimage/PendingStagedProductImageStore.kt",
+            "line": 91,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt",
+            "line": 255,
+            "changed_line": false
+          }
+        ]
+      },
+      {
+        "id": "UseKtx",
+        "severity": "Warning",
+        "locations": [
+          {
+            "file": "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt",
+            "line": 259,
+            "changed_line": false
+          }
+        ]
+      }
+    ]
+  },
+  "skip_categories": {
+    "local_supabase_wechat_fixture_not_configured": 1,
+    "live_realtime_configuration_absent": 1,
+    "suspended_excel_harness_not_activated": 3,
+    "optional_local_shoppinghogar_workbook_absent": 1,
+    "large_dataset_benchmark_opt_in_not_repeated": 1
+  },
+  "benchmark_not_repeated_reason": "R-A06 changes bounded auth bootstrap continuation and fences; Room query and Storefront persistence paths are unchanged. No new performance claim. Previous UI measurements do not establish authenticated restart recovery.",
+  "targeted_regression": [
+    {
+      "class": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+      "tests": 68,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "class": "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "red_before_fix": {
+    "head": "1bf758dd8d83a771dcfdb1844a223a036ba19eff",
+    "production_diff_empty": true,
+    "counts": {
+      "tests": 16,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0
+    },
+    "failed_cases": [
+      "stored session authenticated after restore timeout still completes validated restore",
+      "transient SDK refresh failure at bootstrap can later restore authenticated session"
+    ],
+    "log": "/tmp/task143-auth-restore-red.log",
+    "xml": "/tmp/task143-auth-restore-red.xml"
+  },
+  "review_red": {
+    "tests": 25,
+    "failures": 4,
+    "errors": 0,
+    "skipped": 0,
+    "log": "/tmp/task143-auth-restore-review-red2.log",
+    "xml": "/tmp/task143-auth-restore-review-red2.xml"
+  },
+  "live_observation": {
+    "observed": "restoreSession Timeout after 10000ms; UI SignedOut",
+    "late_sdk_authentication_observed": false,
+    "session_loss_established": false,
+    "candidate_retest_pending": true
+  },
+  "auth_logging_scan": {
+    "new_log_statements": [
+      "Log.i(TAG, \"Restore in attesa del completamento SDK (status=${status.safeLogLabel()})\")",
+      "Log.w(TAG, \"Restore sessione fallito\", e)",
+      "Log.i(TAG, \"Sessione ripristinata e validata\")",
+      "Log.w(TAG, \"Sessione validata senza identita account utilizzabile\")",
+      "Log.i(TAG, \"Sessione persistita invalidata dal server code=${refresh.code}\")",
+      "Log.w(TAG, \"Validazione sessione rinviata per errore transitorio\")",
+      "Log.w(TAG, \"Validazione rinviata senza identita account locale utilizzabile\")",
+      "Log.w(TAG, \"Restore sessione fallito\", error)"
+    ],
+    "direct_secret_interpolation_matches": 0,
+    "scope": "added app log callsites only; SDK logging unchanged; no runtime credentials inspected"
+  }
+}

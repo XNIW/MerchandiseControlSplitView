@@ -1520,7 +1520,9 @@ class DatabaseViewModelTest {
         viewModel.startImportAnalysis(app, Uri.fromFile(workbookFile))
         advanceUntilIdle()
         waitForCondition {
-            viewModel.importAnalysisResult.value != null || viewModel.uiState.value is UiState.Error
+            (viewModel.importAnalysisResult.value != null &&
+                viewModel.uiState.value == UiState.Idle) ||
+                viewModel.uiState.value is UiState.Error
         }
 
         val result = viewModel.importAnalysisResult.value

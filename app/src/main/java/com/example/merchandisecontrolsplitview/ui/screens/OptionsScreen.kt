@@ -700,7 +700,9 @@ private fun AccountCloudSyncSection(
         is AuthState.Checking -> stringResource(R.string.account_checking)
         is AuthState.SignedOut -> stringResource(R.string.account_not_signed_in)
         is AuthState.SignedIn -> catalogSyncUi?.primaryMessage ?: stringResource(R.string.account_signed_in)
-        is AuthState.ErrorRecoverable -> authState.message
+        is AuthState.ErrorRecoverable -> if (authState.message == "auth_session_cleanup_failed") {
+            stringResource(R.string.account_session_cleanup_failed)
+        } else authState.message
     }
 
     OptionsGroup(
@@ -778,10 +780,10 @@ private fun AccountCloudSyncSection(
                         }
                     }
                     OutlinedButton(
-                        onClick = onDismissError,
+                        onClick = if (authState.message == "auth_session_cleanup_failed") onSignOut else onDismissError,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(stringResource(R.string.close))
+                        Text(stringResource(if (authState.message == "auth_session_cleanup_failed") R.string.retry else R.string.close))
                     }
                 }
             }
