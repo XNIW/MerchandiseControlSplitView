@@ -51,8 +51,6 @@ internal fun interface ShopSyncRpcInvoker {
 private class SupabaseShopSyncRpcInvoker(
     private val client: SupabaseClient
 ) : ShopSyncRpcInvoker {
-    private val api = client.authenticatedSupabaseApi(client.postgrest)
-
     override suspend fun call(
         function: String,
         params: JsonObject,
@@ -62,14 +60,16 @@ private class SupabaseShopSyncRpcInvoker(
         if (maximumResponseBytes !in 1..Int.MAX_VALUE.toLong()) {
             contractFailure("rpc_response_limit_invalid")
         }
+        val operationClient = (client as? GenerationOwnedSupabaseClient)?.captureClient() ?: client
+        val api = operationClient.authenticatedSupabaseApi(operationClient.postgrest)
         return api.prepareRequest("rpc/$function") {
             method = HttpMethod.Post
             contentType(ContentType.Application.Json)
             accept(ContentType.Application.Json)
-            headers.append("Content-Profile", client.postgrest.config.defaultSchema)
+            headers.append("Content-Profile", operationClient.postgrest.config.defaultSchema)
             setBody(params)
             timeout {
-                requestTimeoutMillis = client.postgrest.config.timeout.inWholeMilliseconds
+                requestTimeoutMillis = operationClient.postgrest.config.timeout.inWholeMilliseconds
             }
         }.execute { response ->
             if (!response.status.isSuccess()) {

@@ -1,0 +1,220 @@
+{
+  "version": 2,
+  "status": "SOURCE_APPROVED_AND_LOCAL_GATES_PASS_INTEGRATION_PENDING",
+  "timestamp_utc": "2026-10-01T22:29:32.987196+00:00",
+  "baseHead": "e4bdac44a45fbaa5d7b8dfd752d55e8e3cc40bb9",
+  "authFiles": [
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt",
+    "app/src/main/res/values/strings.xml",
+    "app/src/main/res/values-en/strings.xml",
+    "app/src/main/res/values-es/strings.xml",
+    "app/src/main/res/values-zh/strings.xml",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt"
+  ],
+  "relatedFrozenFiles": [
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json"
+  ],
+  "sourceSHA256": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt": "32a3ad26b12415cf1b8ba349bf85abedaed8724681474607ecf87baf44aeebfe",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459"
+  },
+  "sourceUnchangedThroughTargeted": true,
+  "auth14MatchApprovedV4": true,
+  "targetedClasses": [
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest",
+      "tests": "26",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:39.452Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.089"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:39.283Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.077"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:38.451Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.826"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+      "tests": "25",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:40.543Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.479"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+      "tests": "74",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:31.972Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "6.472"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+      "tests": "19",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:42.026Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.073"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest",
+      "tests": "13",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:27:39.371Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.063"
+    }
+  ],
+  "total": {
+    "tests": 165,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "patchSHA256": "275ea8953438b506f8d391cde94f2a27170d5ed19f70b1831a0fae1fe1f930ee",
+  "logSHA256": "f39ef2b978fa44fc128272880627a39cf6f759fc0d7edc2794942e96db343172",
+  "xmlSHA256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest.xml": "32e177b221b63718e9fe6ec26480d77ecd7c7e1031ea9b5e8c4ed3355d8859dc",
+    "TEST-com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest.xml": "16d9b86184dc1b187d4c9a3183cf486e01e2f90313382d55741bc1d35796a486",
+    "TEST-com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest.xml": "657c3be7e098553359da0284bfeae4a4a1b912bc7a036946bb262cc25e4796ed",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest.xml": "193ffddf324cb4a3f8b7cadab3dc3103bffda316907a588d4a3056d3c93de65a",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "d25fe1103881d52378a232f5a1a7ef07650806d79dbc02f1e27ab6df0d6e0075",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest.xml": "31bfb12e1707c32ca3b8d424398095cf5d50564cbf6c1592aba161c6aad6979f",
+    "TEST-com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest.xml": "c63845576010f053260cdeaf2f13d8eba64b070f74271b3d4cdea2374efc3c6e"
+  },
+  "historySupplement": {
+    "source": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "test": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "fixture": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459",
+    "redXmlSHA256": "9c187d222d825e3430f0631f354c3ad3b2b403260685f23f7d985f545053da7f",
+    "red": "Only legacy-year-zero accepted incorrectly after all45 checked",
+    "green": "Actual wireDTO + recovery45/45 in wholeclass74, baseline73 unchanged"
+  },
+  "canonicalGate": {
+    "status": "PASS",
+    "receipt": "android-ra07-ra08-canonical-receipt.json",
+    "receiptSHA256": "4b68f76a130725f12d39e4118ac1bdc5e62e51192be03633b28deac06ea25381",
+    "rawRoot": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/canonical-final",
+    "tests": 1040,
+    "passed": 1033,
+    "skipped": 7,
+    "failures": 0,
+    "errors": 0,
+    "lintErrors": 0,
+    "lintWarnings": 54,
+    "acceptedNewLintWarnings": {
+      "UseKtx": 2,
+      "reason": "CheckedAuthSettings must observe SharedPreferences.Editor.commit Boolean; KTX SharedPreferences.edit(commit=true) returns Unit and discards commit failure, contrary to verified durability contract. Root accepted these intentional warnings; no API substitution or suppression."
+    },
+    "source18Unchanged": true
+  },
+  "deviceCompose": {
+    "status": "PASS",
+    "receipt": "android-ra07-ra08-compose-receipt.json",
+    "rawReceiptSHA256": "c4629fd8d850cf6d454b49a2d00dc45afc51d418d750c275fbee3d8ce4d04473",
+    "rawRoot": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/compose-final",
+    "serial": "emulator-5554",
+    "avdName": "Codex_Mobile_Parity_Final_API_35",
+    "tests": 5,
+    "passed": 5,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "source18Unchanged": true,
+    "scope": "existing Storefront Compose affordance tests; no auth/storage disk failure claim"
+  },
+  "freezeManifestSHA256": "0ae8cb2a7f20ee33a0166e00870516d2b7e4759a78db2d71025ca91fd52eaa6d",
+  "rawEvidenceRoot": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/freeze-composite-final",
+  "rawEvidenceAvailable": true,
+  "testBuild": {
+    "status": "PASS",
+    "receipt": "android-ra07-ra08-test-build-receipt.json",
+    "receiptSHA256": "7f5fb5a0608869798d6d87f9446ad9b2c8ee70f802441c91d2ec4c1cd043c627",
+    "apk": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/test-builds/android/ra07-ra08/app-debug-test-complete-profile-ra07-ra08.apk",
+    "apkSHA256": "96b3d6134ea50b61e226a14105f8de014ebefa1d8f86c66e3ee740cccac6be70",
+    "source18Unchanged": true,
+    "profileAndSignatureEquivalenceVerified": true,
+    "runtimeAuthenticatedGate": "parent/coordinator; not executed in this lane"
+  },
+  "independentReview": {
+    "status": "APPROVED",
+    "authV4Report": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/independent-review-resumed/android-ra07-freeze-v4-review.md",
+    "historyCompositeReport": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/independent-review-resumed/android-ra08-oracle-supplement-review.md",
+    "reportSHA256": {
+      "android-ra07-freeze-v4-review.md": "b463e79e1506f98c3006bb79a0d7fec29ee2339c6c66cfc23d843a0dc895d5d5",
+      "android-ra08-oracle-supplement-review.md": "e122d44522ae5ad11fc854d7e8092f1d17023cdbab1ddfb08b9f79791c9fae44"
+    }
+  },
+  "updatedUtc": "2026-10-01T22:53:34.742639+00:00",
+  "parentIndependentGateVerification": [
+    {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/canonical-final/parent-verified-canonical.json",
+      "available": true,
+      "sha256": "790253cee6ad7ab11b24afd21b03a41a776277591fc18238ec3fb4a0e19c524c"
+    },
+    {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/compose-final/parent-verified-compose.json",
+      "available": true,
+      "sha256": "f95b0fd822cd848626fabb8aa2a621629bc388903fee16fc7910be467e2ec478"
+    },
+    {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/test-builds/android/ra07-ra08/parent-verified-build.json",
+      "available": true,
+      "sha256": "02ddf59395140ca8ecf38a6abd54242dcd5076c50cd50d492125eeb77241ab92"
+    }
+  ]
+}

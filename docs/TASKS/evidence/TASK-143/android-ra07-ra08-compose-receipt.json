@@ -1,0 +1,203 @@
+{
+  "startedUtc": "2026-10-01T22:51:31.857935+00:00",
+  "serial": "emulator-5554",
+  "avdName": "Codex_Mobile_Parity_Final_API_35",
+  "targetClass": "com.example.merchandisecontrolsplitview.ui.screens.StorefrontEditorComposeDeviceTest",
+  "commands": {
+    "boot": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "shell",
+      "getprop",
+      "sys.boot_completed"
+    ],
+    "geometry": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "shell",
+      "wm",
+      "size"
+    ],
+    "density": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "shell",
+      "wm",
+      "density"
+    ],
+    "install-app": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "install",
+      "-r",
+      "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/canonical-final/canonical-app-debug.apk"
+    ],
+    "install-test": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "install",
+      "-r",
+      "-t",
+      "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
+    ],
+    "instrumentation": [
+      "/Users/minxiang/Library/Android/sdk/platform-tools/adb",
+      "-s",
+      "emulator-5554",
+      "shell",
+      "am",
+      "instrument",
+      "-w",
+      "-r",
+      "-e",
+      "class",
+      "com.example.merchandisecontrolsplitview.ui.screens.StorefrontEditorComposeDeviceTest",
+      "com.example.merchandisecontrolsplitview.test/androidx.test.runner.AndroidJUnitRunner"
+    ]
+  },
+  "sourceBefore": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt": "32a3ad26b12415cf1b8ba349bf85abedaed8724681474607ecf87baf44aeebfe",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459"
+  },
+  "appSha256": "88a2cfa16d7bc724e41423b82c2020124f46a60e994145625612c49cd672abf2",
+  "androidTestApkSha256": "847aee447925205bca30c2e17a6ab1031e6307ab6f01b7c9caebbda471ee4a41",
+  "androidTestSourceSha256": "fff473c2da7a49899739da590d69d03f093ccaf499f01f93a6889de18fc58c61",
+  "results": {
+    "boot": {
+      "exitCode": 0,
+      "logSha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    "geometry": {
+      "exitCode": 0,
+      "logSha256": "07377115fb06f1cbbbfdc0f30fb6862024571638f1173d6dc4311c06f720df45"
+    },
+    "density": {
+      "exitCode": 0,
+      "logSha256": "c4d910beb2bd2a0e1934a659e6f50c1ce400c0186723be9ba5dacf57bc99b11e"
+    },
+    "install-app": {
+      "exitCode": 0,
+      "logSha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    "install-test": {
+      "exitCode": 0,
+      "logSha256": "781a31c82430c97897af612ece5e0ca2205e301cb5ff121ce2660541ea5182c7"
+    },
+    "instrumentation": {
+      "exitCode": 0,
+      "logSha256": "ee24066aaad0c241ee66f3fe6759301591af26184a5bf2ad449542d7ccae371c"
+    }
+  },
+  "testsAuthOrDiskFailure": false,
+  "sourceAfter": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt": "32a3ad26b12415cf1b8ba349bf85abedaed8724681474607ecf87baf44aeebfe",
+    "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459"
+  },
+  "source18Unchanged": true,
+  "passedMethods": [
+    "zeroResultFilterRowKeepsAllAvailable",
+    "expiredRequestShowsExplicitDiscardAction",
+    "rapidFilterChangesKeepCurrentSelectionAndAllAvailable",
+    "collapsedSummaryExpandsToSeparateOperationalAndPublicationActions",
+    "publicCardNeverPresentsOperationalImageAsThePublicVariant"
+  ],
+  "runSummaryOK5": true,
+  "instrumentationResultCode": [
+    "-1"
+  ],
+  "passed": true,
+  "finishedUtc": "2026-10-01T22:51:40.478274+00:00",
+  "tests": 5,
+  "passedCount": 5,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "avdCreation": {
+    "createdAtUtc": "2026-10-01T22:50:02.115287+00:00",
+    "avdName": "Codex_Mobile_Parity_Final_API_35",
+    "serial": "emulator-5554",
+    "sdk": "/Users/minxiang/Library/Android/sdk",
+    "imagePackage": "system-images;android-35;google_apis_playstore;arm64-v8a",
+    "imageAlreadyInstalled": true,
+    "deviceTemplate": "pixel_7",
+    "geometry": {
+      "hw.lcd.width": "1080",
+      "hw.lcd.height": "2400",
+      "hw.lcd.density": "420",
+      "hw.ramSize": "2G",
+      "hw.cpu.ncore": "4",
+      "hw.gpu.enabled": "no",
+      "hw.gpu.mode": "auto",
+      "disk.dataPartition.size": "10G"
+    },
+    "newSyntheticUserdata": true,
+    "copiedExistingUserdata": false,
+    "touchedBaseAvdOrOtherInstances": false,
+    "createCommand": [
+      "/Users/minxiang/Library/Android/sdk/cmdline-tools/latest/bin/avdmanager",
+      "create",
+      "avd",
+      "-n",
+      "Codex_Mobile_Parity_Final_API_35",
+      "-k",
+      "system-images;android-35;google_apis_playstore;arm64-v8a",
+      "--device",
+      "pixel_7"
+    ],
+    "configSha256": "a085e3443d2bf7e7b34abd5d89552ad1ebd66f96316cedb9db132b50e40b9365",
+    "configPath": "/Users/minxiang/.android/avd/Codex_Mobile_Parity_Final_API_35.avd/config.ini",
+    "createExitCode": 0
+  },
+  "emulatorAttempts": [
+    {
+      "avdName": "Codex_Mobile_Parity_API_35",
+      "normalLaunchFailed": "existing instance on5580",
+      "readOnlySecondLaunchFailed": "emulator requires all instances read-only",
+      "touchedExistingInstance": false
+    },
+    {
+      "avdName": "Codex_Mobile_Parity_Final_API_35",
+      "authorizedFreshSyntheticUserdata": true,
+      "bootCompleted": true
+    }
+  ],
+  "rawEvidenceRoot": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/compose-final",
+  "rawEvidenceAvailable": true
+}

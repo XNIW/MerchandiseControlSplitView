@@ -1,0 +1,102 @@
+{
+  "sha256": {
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "4aecaf98f3fd6292de5a8b9717a78c4a8bdb0ef47ae9417361f6c03c6891750b",
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MerchandiseControlSplitView/app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt": "c10e5a7fec87a658a846dddeb4dd122ce4f8917b89df64a69cbeccb2c2a6368f",
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/green.xml": "a9d40e6740cdcff4c4ab438bcec821f9252e14ee64f8ef51a5ea103a96e6c91c"
+  },
+  "version": 2,
+  "status": "73_PASS_0_FAIL_ERROR_SKIP",
+  "methodsAdded": 5,
+  "syntheticVectors": 27,
+  "rawArtifacts": {
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/red.xml": {
+      "sha256": "538ac4fd3d07e4c4a439c4332ef263fe145d605e0400831986080d8992678521",
+      "available": true
+    },
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/red.log": {
+      "sha256": "0f7a6a23f21980bd744fbe381d342239b1480e66a838d4c5bb0deec4c4431d63",
+      "available": true
+    },
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/red-source-receipt.json": {
+      "sha256": "bc350e58f8a4a15df0a1a1e401c29f9cda49af675bd46319b3cfac7f0b91dd20",
+      "available": true
+    },
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/green-final.xml": {
+      "sha256": "92a67834d5cd9e2a171678e55f3fba1844a9c189e1e1bd0f1e38eb1d38057b01",
+      "available": true
+    },
+    "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/green.log": {
+      "sha256": "2e7227cc2af851d5ce217204ef15578138fd5a6fb2428c3572c7a2df06d8366b",
+      "available": true
+    }
+  },
+  "unchangedRedGreenTestSHA256": "c10e5a7fec87a658a846dddeb4dd122ce4f8917b89df64a69cbeccb2c2a6368f",
+  "productionRedSHA256": "754c3bf7360f641e250eb0e7381a521e782095cb631fcf790b9b00170f37ffee",
+  "productionGreenSHA256": "4aecaf98f3fd6292de5a8b9717a78c4a8bdb0ef47ae9417361f6c03c6891750b",
+  "finalSupplement": {
+    "sourceSHA256": "46bc3f6bac9752bbd1363e80fd7ea596876fc68956da09f92d3552b0e7322109",
+    "testSHA256": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a",
+    "fixturePath": "app/src/test/resources/fixtures/history-timestamp-compatibility-v1.json",
+    "fixtureSHA256": "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459",
+    "red": {
+      "tests": 1,
+      "failures": 1,
+      "onlyMismatch": "legacy-year-zero accepted incorrectly after45 checked"
+    },
+    "green": {
+      "wholeClass": 74,
+      "pass": 74,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "newMethod": 1,
+      "sharedOracleCases": 45,
+      "sharedOraclePass": 45,
+      "originalMethodsPreserved": 73
+    },
+    "productionDelta": "Move existing History year0000 guard before legacy helper delegation; sharedlegacy/price/UTC6 unchanged",
+    "review": "APPROVED"
+  },
+  "supplementRawArtifacts": {
+    "oracle45-red.log": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-red.log",
+      "available": true,
+      "SHA256": "8212d2885a26044b1ba1773481d1bd8a8c743c686a15130d4e43925e43ae133e"
+    },
+    "oracle45-red.xml": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-red.xml",
+      "available": true,
+      "SHA256": "9c187d222d825e3430f0631f354c3ad3b2b403260685f23f7d985f545053da7f"
+    },
+    "oracle45-red-tests.kt": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-red-tests.kt",
+      "available": true,
+      "SHA256": "9ae2dba1907e7a3c2924499bacd2134ba73e02f9207d83718fcfe5d6885c1b9a"
+    },
+    "oracle45-red-source.kt": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-red-source.kt",
+      "available": true,
+      "SHA256": "4aecaf98f3fd6292de5a8b9717a78c4a8bdb0ef47ae9417361f6c03c6891750b"
+    },
+    "oracle45-red-receipt.json": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-red-receipt.json",
+      "available": true,
+      "SHA256": "d1ff927f4b9d9e0742a6c8446631b20ffa1c30383003052db40b970d79ffef0c"
+    },
+    "oracle45-green.log": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-green.log",
+      "available": true,
+      "SHA256": "f39ef2b978fa44fc128272880627a39cf6f759fc0d7edc2794942e96db343172"
+    },
+    "oracle45-green.xml": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-green.xml",
+      "available": true,
+      "SHA256": "d25fe1103881d52378a232f5a1a7ef07650806d79dbc02f1e27ab6df0d6e0075"
+    },
+    "oracle45-green-receipt.json": {
+      "path": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-history-timestamp-ra08/oracle45-green-receipt.json",
+      "available": true,
+      "SHA256": "80c37e0188b8439ecdeaa4bd1f34438bbea5aa3283a69dbfe1c8635bb2fadb0e"
+    }
+  }
+}

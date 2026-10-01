@@ -2731,7 +2731,7 @@ private fun ShopSyncRows.toManifestRows(
                 if (deleted) {
                     add("-")
                 } else {
-                    add(canonicalLegacyTimestampForDigest(value.timestamp))
+                    add(canonicalHistoryTimestampForDigest(value.timestamp))
                     add(sha256(value.supplier))
                     add(sha256(value.category))
                     add(value.isManualEntry.toString())
@@ -2940,6 +2940,19 @@ private fun canonicalLegacyTimestampForDigest(value: String?): String {
     }
 }
 
+/** History also has valid UTC ISO millisecond rows; the digest keeps their original spelling. */
+private fun canonicalHistoryTimestampForDigest(value: String?): String {
+    if (value == null || value.startsWith("0000-")) return "invalid"
+    if (LEGACY_TIMESTAMP_PATTERN.matches(value)) return canonicalLegacyTimestampForDigest(value)
+    if (!HISTORY_ISO_MILLISECOND_PATTERN.matches(value)) return "invalid"
+    return try {
+        LocalDateTime.parse(value, HISTORY_ISO_MILLISECOND_FORMATTER)
+        value
+    } catch (_: Exception) {
+        "invalid"
+    }
+}
+
 private fun requiredRecoveryDigest(value: String?, code: String): String {
     if (value == null || !SHA256_PATTERN.matches(value)) {
         throw ShopSyncContractException(code)
@@ -3141,5 +3154,10 @@ private val LEGACY_TIMESTAMP_PATTERN = Regex(
 )
 private val LEGACY_TIMESTAMP_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm:ss").withResolverStyle(ResolverStyle.STRICT)
+private val HISTORY_ISO_MILLISECOND_PATTERN = Regex(
+    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+)
+private val HISTORY_ISO_MILLISECOND_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss.SSS'Z'").withResolverStyle(ResolverStyle.STRICT)
 private val CANONICAL_PRICE_PATTERN = Regex("^(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,3})?$")
 private val KNOWN_SQLITE_SIDECAR_SUFFIXES = listOf("-journal", "-wal", "-shm")

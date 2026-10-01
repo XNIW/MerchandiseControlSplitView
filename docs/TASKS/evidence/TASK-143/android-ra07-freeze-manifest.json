@@ -1,0 +1,131 @@
+{
+  "version": 4,
+  "status": "AUTH_TARGETED_GREEN_RE_REVIEW_PENDING",
+  "timestamp_utc": "2026-10-01T22:20:33.777889+00:00",
+  "baseHead": "e4bdac44a45fbaa5d7b8dfd752d55e8e3cc40bb9",
+  "authFiles": [
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt",
+    "app/src/main/res/values/strings.xml",
+    "app/src/main/res/values-en/strings.xml",
+    "app/src/main/res/values-es/strings.xml",
+    "app/src/main/res/values-zh/strings.xml",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt"
+  ],
+  "sourceSHA256": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "bd8056aa3b062446a18feec8759868bace02b6c762576d483864d9542856ecd3",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/GenerationOwnedSupabaseClient.kt": "33745be209280ee58a2887760551dba5deb61a6a5876e9520b59f62b73cb574a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistence.kt": "dce9afa34238a4253e71803bd2eb0878a2d128e1fd10b6645ef81271fdac80ee",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthManager.kt": "63d4f0bdf88e5974b2f8d2565592080b14613d9640a60fcbd3d95388a3d86232",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseRealtimeSessionSubscriber.kt": "705a7302b63f4fc91fb40dd3cff8fe35976e11a45748cda8fc1e5f9349e5d270",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "0f12e8e5b95b5304b55441df8f37e390cd8c44245ae5ecbac6b803a51772326d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "ed2bdea0761ded88e9deac8ea70458176f9649a246e94a3f8580e4f11ae15afe",
+    "app/src/main/res/values/strings.xml": "9b7776245f715af7cf331ece80a1b8921073ad68480f4df3d1d06205dc5411ec",
+    "app/src/main/res/values-en/strings.xml": "b48a35b0b0789d7b5d1f7dda344670d1953ccc61d0790a8229f71c6fec04ca21",
+    "app/src/main/res/values-es/strings.xml": "1c2bf17f1086dac8afd7c8e0e46b18ccdbc6026b10ecb40a58bce77ec94f3cac",
+    "app/src/main/res/values-zh/strings.xml": "399571565fd64802690b3c49cc48b58fd52c640d0c02eed8b4ed002242924ee6",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseAuthLifecycleTest.kt": "92445865ce67d1c168b15e178d1764e7f23c1d064906fb813b1f9b70e66fa214",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/ProjectSessionPersistenceTest.kt": "21dc8b52ad615a5c92021b84d7b4159a9171e4b8fa7e72bbba4c7870c814041d",
+    "app/src/test/java/com/example/merchandisecontrolsplitview/data/CheckedAuthSettingsTest.kt": "93724f8c0c40b140c7411e4221ede717f62415508182f59cbb76bcc9bce8fa17"
+  },
+  "sourceUnchangedThroughTargeted": true,
+  "targetedClasses": [
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest",
+      "tests": "26",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:17.973Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.882"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest",
+      "tests": "5",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:15.346Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.89"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest",
+      "tests": "3",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:17.241Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.627"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+      "tests": "25",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:18.858Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "1.191"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+      "tests": "19",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:20.053Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.092"
+    },
+    {
+      "name": "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest",
+      "tests": "13",
+      "skipped": "0",
+      "failures": "0",
+      "errors": "0",
+      "timestamp": "2026-10-01T22:19:17.872Z",
+      "hostname": "MindeMacBook-Pro.local",
+      "time": "0.077"
+    }
+  ],
+  "total": {
+    "tests": 91,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "patchSHA256": "feab2db67bb3df8a7077260cf9b14f151dab1b988af444d5cf86d60bc7ce1c53",
+  "logSHA256": "cf0255384c36487e16778ef9cdc80b0f325dc82663d1f42c58d2ad3481b17ea0",
+  "xmlSHA256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest.xml": "c877fe1f033ee883d0518bd09d8df0416c89b0516204454e35cbcf67272d5878",
+    "TEST-com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest.xml": "4146a61be1b770ed6bb1b71feea3b826ff7028a24502685047fe51848070b38a",
+    "TEST-com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest.xml": "6abc463c56bb4f037460f835b8e33b3c4408946cfee82095558271c799028a5e",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest.xml": "1dc2435a0ce4cba4626fe7f17bd0bb4bd20f596556d687bbeebb0121316a51c6",
+    "TEST-com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest.xml": "cc2c7466bf1399bba717f0030170d72a44c7a1e55812445f92435d04e93fac1a",
+    "TEST-com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest.xml": "693c6a889983a9f9c17b79a96d638bdc26406f414e92f0737645f8daf0360257"
+  },
+  "reviewFixRed": {
+    "checked-commit-red.xml": "d7bf71e623814074e3eb5b595642a14c1897bb4794341a4d1c316624f83f3861",
+    "cleanup-publication-sequence-red.xml": "f5c08d70a4afa31255b4e4ecaec83031b3372cc26911d291f98b516a4ea7893a",
+    "interactive-new-cleanup-error-red.xml": "816493c4ac5c745c9ea8ab55531e9b7968dd8b9cd8f17476d9f435ed4a00a4c1"
+  },
+  "excludedSetup": "consolidated-v4-failure:164total/163PASS1FAIL0ERROR0SKIP in bare storage constructor with default real SDK autoRefresh plus virtual test clock; only that no-network fixture alwaysAutoRefresh=false. Original all assertions unchanged. Actual SDK ownedautoRefresh lifecycle control true unchanged. Earlier setup/intermediate fixtures separate.",
+  "rawEvidenceRoot": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/android-auth-lifecycle/freeze-v4",
+  "rawEvidenceAvailable": true,
+  "freezeManifestSHA256": "166af1a166652ff6761179e9612ae5498b807debe477b6315671944f037716c7",
+  "review": "APPROVED",
+  "reviewReport": "/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/evidence/independent-review-resumed/android-ra07-freeze-v4-review.md",
+  "canonicalGate": "PASS; see android-ra07-ra08-final-manifest.json",
+  "deviceCompose": "5 PASS; separate Storefront scope, see android-ra07-ra08-compose-receipt.json",
+  "integration": "parent owned; pending at local executor handoff"
+}

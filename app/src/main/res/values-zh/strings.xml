@@ -831,4 +831,5 @@
     <string name="storefront_request_pending">请求已保存，等待服务器确认。</string>
     <string name="storefront_expired_request_help">已保存的请求无法再自动重试。丢弃此请求后即可重新保存；输入的数据将保留。</string>
     <string name="storefront_discard_pending">丢弃已保存的请求</string>
+    <string name="account_session_cleanup_failed">无法确认本地退出，请重试。</string>
 </resources>

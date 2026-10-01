@@ -843,4 +843,5 @@
     <string name="storefront_request_pending">Saved request awaiting server confirmation.</string>
     <string name="storefront_expired_request_help">The saved request can no longer be retried automatically. Discard the request to save again; your input will be kept.</string>
     <string name="storefront_discard_pending">Discard saved request</string>
+    <string name="account_session_cleanup_failed">Local sign-out could not be verified. Try again.</string>
 </resources>

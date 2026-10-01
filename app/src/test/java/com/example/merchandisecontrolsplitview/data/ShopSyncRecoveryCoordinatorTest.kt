@@ -6,6 +6,15 @@ import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,6 +72,233 @@ class ShopSyncRecoveryCoordinatorTest {
             "d35cc83a5331da3caac79921218db4c55d400a32b0a03846002fff8dfadaa08e",
             shopSyncCheckpointChainDigest(listOf("abc", "é", "xyz"))
         )
+    }
+
+    @Test
+    fun `real recovery and wire DTO match all 45 shared History timestamp oracle cases`() = runTest {
+        val oracleText = requireNotNull(javaClass.classLoader).getResourceAsStream(
+            "fixtures/history-timestamp-compatibility-v1.json"
+        )!!.use { it.readBytes().toString(Charsets.UTF_8) }
+        assertEquals(
+            "b5848df09494112d85509297c5430d8e4d64398428b3b71631a195f9caae6459",
+            testSha256(oracleText)
+        )
+        val oracle = Json.parseToJsonElement(oracleText).jsonObject
+        assertEquals("history-timestamp-compatibility-v1", oracle.getValue("schemaVersion").jsonPrimitive.content)
+        val cases = oracle.getValue("cases").jsonArray
+        assertEquals(45, cases.size)
+        assertEquals(45, cases.map { it.jsonObject.getValue("name").jsonPrimitive.content }.toSet().size)
+        val disagreements = mutableListOf<String>()
+        var checked = 0
+        cases.forEachIndexed { index, element ->
+            val case = element.jsonObject
+            val name = case.getValue("name").jsonPrimitive.content
+            val wireTimestamp = case.getValue("value")
+            val rawTimestamp = wireTimestamp.takeUnless { it == JsonNull }?.jsonPrimitive?.content
+            val expectedAccepted = case.getValue("historyAccepted").jsonPrimitive.boolean
+            // legacyAccepted is backend metadata; no assertion or widening outside History.
+            db.close()
+            db = openDatabase("${ACTIVE_DATABASE}_history_oracle_$index")
+            repository = DefaultInventoryRepository(db)
+            val fixture = targetFixture(historyTimestamp = rawTimestamp ?: "null-wire-template")
+            remote = RecoveryRemoteFixture(fixture)
+            seedOldMismatchGeneration()
+            val row = (fixture.rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History)
+                .values.single()
+            val encoded = JsonObject(
+                Json.parseToJsonElement(Json.encodeToString(row)).jsonObject + ("timestamp" to wireTimestamp)
+            )
+            val decoded = runCatching { Json.decodeFromString<SharedSheetSessionRecord>(encoded.toString()) }
+            val accepted: Boolean
+            val outcome: String
+            if (rawTimestamp == null) {
+                // The actual wire model rejects null before a recovery page can reach Room.
+                assertTrue(name, decoded.exceptionOrNull() is SerializationException)
+                assertEquals(0, remote.pageCalls)
+                assertOldGenerationAndManifestIntact()
+                accepted = false
+                outcome = "wire_timestamp_rejected"
+            } else {
+                val decodedRow = decoded.getOrThrow()
+                assertEquals(name, rawTimestamp, decodedRow.timestamp)
+                remote = RecoveryRemoteFixture(
+                    fixture.copy(rows = fixture.rows + (ShopSyncRowDomain.HISTORY to ShopSyncRows.History(listOf(decodedRow))))
+                )
+                val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+                accepted = result is ShopSyncRecoveryResult.Activated
+                outcome = if (accepted) "Activated" else (result as ShopSyncRecoveryResult.RetryRequired).code
+                assertTrue(name, remote.requestedPageLimits.containsKey(ShopSyncRowDomain.HISTORY))
+                if (accepted) {
+                    assertEquals(name, rawTimestamp, db.historyEntryDao().getById(row.remoteId)?.timestamp)
+                    assertEquals(
+                        name,
+                        fixture.checkpoint.history.versionDigest,
+                        decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson)
+                            .history.versionDigest
+                    )
+                    assertNull(db.syncRecoveryJournalDao().get())
+                    assertForeignKeysClean(db)
+                } else {
+                    assertEquals(name, "recovery_manifest_digest_mismatch_history", outcome)
+                    assertOldGenerationAndManifestIntact()
+                    assertFalse(stageFiles().any())
+                }
+            }
+            if (accepted != expectedAccepted) {
+                disagreements += "$name expectedAccepted=$expectedAccepted actualAccepted=$accepted outcome=$outcome"
+            }
+            checked++
+        }
+        assertEquals(45, checked)
+        assertEquals("All shared cases must match the actual History recovery boundary", emptyList<String>(), disagreements)
+    }
+
+    @Test
+    fun `recovery preserves ISO millisecond History timestamp and raw checkpoint across Room restart`() = runTest {
+        val rawTimestamp = "2026-07-05T15:40:11.305Z"
+        val fixture = targetFixture(historyTimestamp = rawTimestamp)
+        val history = (fixture.rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History)
+            .values.single()
+        remote = RecoveryRemoteFixture(fixture)
+        seedOldMismatchGeneration()
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        assertEquals(rawTimestamp, db.historyEntryDao().getById(history.remoteId)?.timestamp)
+        assertEquals(
+            fixture.checkpoint.history.versionDigest,
+            decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson)
+                .history.versionDigest
+        )
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        assertEquals(rawTimestamp, db.historyEntryDao().getById(history.remoteId)?.timestamp)
+        val persistedCheckpoint = decodeRecoveryCheckpointJson(
+            requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson
+        )
+        assertEquals(fixture.checkpoint.history.versionDigest, persistedCheckpoint.history.versionDigest)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun `recovery accepts Gregorian leap day and ISO millisecond boundaries`() = runTest {
+        listOf(
+            "2024-02-29T00:00:00.000Z",
+            "2000-02-29T23:59:59.999Z",
+            "0001-01-01T00:00:00.001Z",
+            "9999-12-31T23:59:59.999Z"
+        ).forEachIndexed { index, rawTimestamp ->
+            db.close()
+            db = openDatabase("${ACTIVE_DATABASE}_history_valid_$index")
+            repository = DefaultInventoryRepository(db)
+            val fixture = targetFixture(historyTimestamp = rawTimestamp)
+            remote = RecoveryRemoteFixture(fixture)
+            seedOldMismatchGeneration()
+
+            val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+            assertTrue(rawTimestamp + ": " + result, result is ShopSyncRecoveryResult.Activated)
+            assertEquals(rawTimestamp, db.historyEntryDao().getAllUserVisibleSnapshot().single().timestamp)
+            assertEquals(
+                fixture.checkpoint.history.versionDigest,
+                decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson)
+                    .history.versionDigest
+            )
+        }
+    }
+
+    @Test
+    fun `recovery rejects unsupported ISO History grammar and invalid Gregorian values`() = runTest {
+        listOf(
+            "2026-07-05T15:40:11Z",
+            "2026-07-05T15:40:11.3Z",
+            "2026-07-05T15:40:11.30Z",
+            "2026-07-05T15:40:11.3050Z",
+            "2026-07-05T15:40:11.305000Z",
+            "2026-07-05T15:40:11.3050000Z",
+            "2026-07-05T15:40:11.305+00:00",
+            "2026-07-05T15:40:11.305z",
+            "2026-07-05 15:40:11.305Z",
+            " 2026-07-05T15:40:11.305Z",
+            "2026-07-05T15:40:11.305Z ",
+            "2026-7-05T15:40:11.305Z",
+            "2026-13-05T15:40:11.305Z",
+            "2026-02-29T15:40:11.305Z",
+            "1900-02-29T15:40:11.305Z",
+            "2026-04-31T15:40:11.305Z",
+            "2026-07-05T24:00:00.305Z",
+            "2026-07-05T15:60:11.305Z",
+            "2026-07-05T15:40:60.305Z",
+            "0000-07-05T15:40:11.305Z"
+        ).forEachIndexed { index, rawTimestamp ->
+            db.close()
+            db = openDatabase("${ACTIVE_DATABASE}_history_invalid_$index")
+            repository = DefaultInventoryRepository(db)
+            remote = RecoveryRemoteFixture(targetFixture(historyTimestamp = rawTimestamp))
+            seedOldMismatchGeneration()
+
+            val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+            assertEquals(
+                rawTimestamp,
+                "recovery_manifest_digest_mismatch_history",
+                (result as ShopSyncRecoveryResult.RetryRequired).code
+            )
+            assertTrue(rawTimestamp, remote.requestedPageLimits.containsKey(ShopSyncRowDomain.HISTORY))
+            assertOldGenerationAndManifestIntact()
+            assertFalse(stageFiles().any())
+        }
+    }
+
+    @Test
+    fun `recovery rejects ISO History raw checkpoint digest mismatch`() = runTest {
+        val fixture = targetFixture(historyTimestamp = "2026-07-05T15:40:11.305Z")
+        val differentMillisecondCheckpoint = targetFixture(
+            historyTimestamp = "2026-07-05T15:40:11.306Z"
+        ).checkpoint
+        remote = RecoveryRemoteFixture(fixture.copy(checkpoint = differentMillisecondCheckpoint))
+        seedOldMismatchGeneration()
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals(
+            "recovery_manifest_digest_mismatch_history",
+            (result as ShopSyncRecoveryResult.RetryRequired).code
+        )
+        assertOldGenerationAndManifestIntact()
+        assertFalse(stageFiles().any())
+    }
+
+    @Test
+    fun `ISO History support does not widen legacy price timestamp grammar`() = runTest {
+        val fixture = targetFixture(historyTimestamp = "2026-07-05T15:40:11.305Z")
+        val price = (fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices)
+            .values.single().copy(effectiveAt = "2026-07-05T15:40:11.305Z")
+        remote = RecoveryRemoteFixture(
+            fixture.copy(
+                checkpoint = fixture.checkpoint.copy(
+                    prices = checkpointDomain(listOf(price.id), listOf(testPriceVersion(price)))
+                ),
+                rows = fixture.rows + (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(listOf(price)))
+            )
+        )
+        seedOldMismatchGeneration()
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertEquals(
+            "recovery_manifest_digest_mismatch_prices",
+            (result as ShopSyncRecoveryResult.RetryRequired).code
+        )
+        assertOldGenerationAndManifestIntact()
+        assertFalse(stageFiles().any())
     }
 
     @Test
@@ -2645,7 +2881,8 @@ private fun ShopSyncRows.filterRowsByIds(ids: Set<String>): ShopSyncRows = when 
 }
 
 private fun targetFixture(
-    productId: String = "20000000-0000-4000-8000-000000000003"
+    productId: String = "20000000-0000-4000-8000-000000000003",
+    historyTimestamp: String = "2026-07-21 10:00:00"
 ): RecoveryFixture {
     val supplierId = "20000000-0000-4000-8000-000000000001"
     val categoryId = "20000000-0000-4000-8000-000000000002"
@@ -2689,7 +2926,7 @@ private fun targetFixture(
         remoteId = historyId,
         payloadVersion = 1,
         displayName = "Target history",
-        timestamp = "2026-07-21 10:00:00",
+        timestamp = historyTimestamp,
         supplier = "Target supplier",
         category = "Target category",
         isManualEntry = false,

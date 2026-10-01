@@ -858,4 +858,5 @@
     <string name="storefront_request_pending">Richiesta salvata in attesa della conferma del server.</string>
     <string name="storefront_expired_request_help">La richiesta salvata non può più essere ripetuta automaticamente. Scarta la richiesta per poter salvare di nuovo; i dati inseriti restano disponibili.</string>
     <string name="storefront_discard_pending">Scarta richiesta salvata</string>
+    <string name="account_session_cleanup_failed">Impossibile verificare il logout locale. Riprova.</string>
 </resources>

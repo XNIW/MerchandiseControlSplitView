@@ -852,4 +852,5 @@
     <string name="storefront_request_pending">Solicitud guardada en espera de confirmación del servidor.</string>
     <string name="storefront_expired_request_help">La solicitud guardada ya no puede reintentarse automáticamente. Descarta la solicitud para volver a guardar; los datos introducidos se conservarán.</string>
     <string name="storefront_discard_pending">Descartar solicitud guardada</string>
+    <string name="account_session_cleanup_failed">No se pudo verificar el cierre de sesión local. Inténtalo de nuevo.</string>
 </resources>
