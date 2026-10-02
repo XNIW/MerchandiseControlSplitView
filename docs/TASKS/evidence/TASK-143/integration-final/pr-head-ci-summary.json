@@ -1,0 +1,126 @@
+{
+  "verdict": "PASS_EXACT_CHECKOUT_VERIFIED",
+  "verified_utc": "2026-10-01T23:38:42.677483+00:00",
+  "run_id": 36940178169,
+  "run_url": "https://github.com/XNIW/MerchandiseControlSplitView/actions/runs/36940178169",
+  "requested_head_sha": "1d7dfd188dcc082c0a172f28dee0b0f412431bf7",
+  "run_metadata_head_sha": "1d7dfd188dcc082c0a172f28dee0b0f412431bf7",
+  "actual_checkout_sha": "1d7dfd188dcc082c0a172f28dee0b0f412431bf7",
+  "checkout_evidence": "full-job.log: Checkout git log -1 --format=%H output",
+  "conclusion": "success",
+  "steps": [
+    {
+      "name": "Set up job",
+      "conclusion": "success"
+    },
+    {
+      "name": "Checkout",
+      "conclusion": "success"
+    },
+    {
+      "name": "Setup Java",
+      "conclusion": "success"
+    },
+    {
+      "name": "Setup Gradle",
+      "conclusion": "success"
+    },
+    {
+      "name": "Assemble debug",
+      "conclusion": "success"
+    },
+    {
+      "name": "Run lint",
+      "conclusion": "success"
+    },
+    {
+      "name": "Run tests",
+      "conclusion": "success"
+    },
+    {
+      "name": "Upload reports",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Setup Gradle",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Setup Java",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Checkout",
+      "conclusion": "success"
+    },
+    {
+      "name": "Complete job",
+      "conclusion": "success"
+    }
+  ],
+  "artifact": 11199583451,
+  "official_xml_suites": 72,
+  "unique_test_cases": 1040,
+  "test_counts": {
+    "PASS": 1033,
+    "SKIP": 7
+  },
+  "prior_7363_case_ids_and_statuses_identical": true,
+  "skipped_cases": [
+    {
+      "classname": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+      "name": "wechat 004 real local Supabase fixture converges through production incremental apply",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+      "name": "measure real repository queries and local editor writes at large scale",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+      "name": "live realtime insert is materialized into Room",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+      "name": "runOrchestratedOracleLoopAndroidFirst",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+      "name": "auditDriveSupplierCorpusReadOnly",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+      "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+      "status": "SKIP"
+    },
+    {
+      "classname": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+      "name": "dumpShoppingHogarCurrentMapping",
+      "status": "SKIP"
+    }
+  ],
+  "lint_counts": {
+    "Warning": 54
+  },
+  "lint_issues_identical_to_prior_7363": true,
+  "accepted_added_lint_warnings_from_e4": "2 UseKtx at ProjectSessionPersistence.kt:19,25; root explicitly accepted raw Editor.commit Boolean durability rationale",
+  "compiler_warning_lines": [
+    "Build\tRun tests\t2026-10-01T23:27:33.7729052Z OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended",
+    "Build\tRun tests\t2026-10-01T23:27:55.9767189Z OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended"
+  ],
+  "limitations": [
+    "CI unit/JVM tests do not constitute the separately verified device Compose checks, live Supabase pilot, or performance measurements."
+  ],
+  "evidence_sha256": {
+    "run.json": "48533985f2a221116a35c150ea82a74a8191975d504e7803b861c076f54f7d94",
+    "artifacts.json": "3f29e9d1a522ed1652bbce9233bd40a099b45b376ad4aa8b4bd03499b441ac27",
+    "full-job.log": "1129f0e4cfeedf1fef68fd0bca51eabd2cbb2e426542b5e08d4051e24162ae1e",
+    "cases.json": "c2f93a17b32054b014fc6efc27bd4805094fa1c64662d5d402a40450ffab2f52",
+    "xml-manifest.json": "d056160819863de7a52cb49e5ab8c67f4ba10e34ca97f63882cac8046df09fed",
+    "lint-summary.json": "1d4f4ef85fecb7d0bd21ceedd00020833d68f90b7b9d92bc20bab811c5718af5"
+  }
+}

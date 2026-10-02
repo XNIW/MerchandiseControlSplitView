@@ -1,0 +1,20 @@
+{
+  "verifiedUtc": "2026-10-01T23:40:21.078162+00:00",
+  "pr": {
+    "headRefOid": "1d7dfd188dcc082c0a172f28dee0b0f412431bf7",
+    "mergeCommit": {
+      "oid": "0613339f11a4962bd898ae79f10ee1984579dcee"
+    },
+    "mergedAt": "2026-10-01T23:39:45Z",
+    "state": "MERGED",
+    "url": "https://github.com/XNIW/MerchandiseControlSplitView/pull/11"
+  },
+  "originMain": "0613339f11a4962bd898ae79f10ee1984579dcee",
+  "headIsAncestor": true,
+  "normalMerge": true,
+  "adminOverride": false,
+  "firstAttempt": "GraphQL transient error, PR readback remained OPEN; identical request retried normally",
+  "checkoutClean": true,
+  "exactHeadCi": 36940178169,
+  "postMergeCi": "PENDING"
+}

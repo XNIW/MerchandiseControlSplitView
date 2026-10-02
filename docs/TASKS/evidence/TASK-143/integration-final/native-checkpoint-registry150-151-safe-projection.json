@@ -1,0 +1,109 @@
+{
+  "applicationArtifacts": {
+    "AndroidSHA256": "96b3d6134ea50b61e226a14105f8de014ebefa1d8f86c66e3ee740cccac6be70",
+    "iOSBinarySHA256": "4a708a4776cada737685542f0e94f4ad89eb15548b7ab473f38ab882c96d9c30"
+  },
+  "at": "2026-10-02T01:45:47.290069+00:00",
+  "authenticAttempts": [
+    {
+      "actionAt": "2026-10-02T00:55:08Z",
+      "checkpointStage": "final integrity SELECT",
+      "completedAt": "2026-10-02T00:55:17.357182Z",
+      "httpStatus": 500,
+      "originMs": 8141,
+      "platform": "iOS",
+      "receipt": {
+        "sha256": "ad3ea741878007e55262b249bd31dee714f695fedbf6279a82103b76d23beed5",
+        "sourceReceipt": "price-digest-ios-failure-logs.json"
+      },
+      "registryCount": 150,
+      "sqlState": "57014",
+      "status": "FAIL_REPRODUCED",
+      "upstreamMs": 8045
+    },
+    {
+      "actionAt": "2026-10-02T00:59:12Z",
+      "checkpointStage": "final integrity SELECT",
+      "completedAt": "2026-10-02T00:59:26.228Z",
+      "httpStatus": 500,
+      "originMs": 8094,
+      "platform": "Android",
+      "receipt": {
+        "sha256": "6808edab35e4aa43a60c6c9963d7c542fa2a1f34c803877cfeaf2658ea499c23",
+        "sourceReceipt": "price-digest-android-failure-logs.json"
+      },
+      "registryCount": 150,
+      "sqlState": "57014",
+      "status": "FAIL_REPRODUCED",
+      "upstreamMs": 8013
+    },
+    {
+      "actionAt": "2026-10-02T01:39:43Z",
+      "authenticatedUI": true,
+      "bindingUnchanged": true,
+      "canonicalShopVisible": true,
+      "checkpointStage": "final integrity SELECT",
+      "completedAt": "2026-10-02T01:39:52.012612Z",
+      "httpStatus": 500,
+      "newFinalizationPresent": false,
+      "newManifestPresent": false,
+      "normalRetryTaps": 1,
+      "originMs": 8256,
+      "pendingBefore": 0,
+      "platform": "iOS",
+      "receipt": {
+        "sha256": "b81b16e5ea34e0a60b8d5e40ea3943a863a45779ea5490b2f8b77a21ea5660f1",
+        "sourceReceipt": "checkpoint-integrity-ios-failure-logs.json"
+      },
+      "registryCount": 151,
+      "sqlState": "57014",
+      "status": "FAIL_REPRODUCED",
+      "upstreamMs": 8127,
+      "verifiedConvergence": false
+    },
+    {
+      "platform": "Android",
+      "reason": "Same shared backend failure; duplicate attempt deferred while complete checkpoint is profiled.",
+      "registryCount": 151,
+      "status": "NOT_RUN"
+    }
+  ],
+  "businessRecoveryAccepted": false,
+  "credentialContentRead": false,
+  "crossClientRoundtripAccepted": false,
+  "currentGate": "FAIL_REPRODUCED_BACKEND_CHECKPOINT_TIMEOUT",
+  "deployments": [
+    {
+      "main": "e4377f836a1642d4f5168a012e653e51875192d2",
+      "metadataPermissionsAndDataUnchanged": true,
+      "migrationVersion": "20261002005414",
+      "postMergeCI": "PASS",
+      "postcheck": "PASS",
+      "pr": 123,
+      "receipt": {
+        "sha256": "9a4134158979e7a671b546a9141eb62aa033b471be63af1682fa405ef22316ce",
+        "sourceReceipt": "price-digest-performance-postcheck.json"
+      },
+      "registryCount": 150,
+      "sqlSHA256": "54bc73e0dcbd4bd1d4323989b3bce6dc1c528117fe45509c35b5301243d8474a"
+    },
+    {
+      "main": "2e23658656b6f09ab5976fd581ec3ac33cdcbc93",
+      "metadataPermissionsAndDataUnchanged": true,
+      "migrationVersion": "20261002013745",
+      "postMergeCI": "PASS",
+      "postcheck": "PASS",
+      "pr": 124,
+      "receipt": {
+        "sha256": "375b19d67e583ed4f2e106cd75e8e9327764ca6aa9748cc9012b6172ae5df971",
+        "sourceReceipt": "checkpoint-integrity-performance-postcheck.json"
+      },
+      "registryCount": 151,
+      "sqlSHA256": "c3960c7e7c4ffd49dd61e5a84b9108ddd2fb0fa34f1d5e87d6439fe3d546c07b"
+    }
+  ],
+  "nextAction": "Profile complete checkpoint and validate candidate equivalence; no further identical Retry until meaningful fix.",
+  "provenance": "Root coordinator observed authenticated TEST UI actions and read-only backend postchecks; sanitised projection, no identities, credentials or business content. Previous receipts remain immutable.",
+  "resetLogoutOrUninstall": false,
+  "schemaVersion": 1
+}

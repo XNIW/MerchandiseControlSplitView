@@ -1,0 +1,29 @@
+{
+  "parent_verified_utc": "2026-10-02T01:17:58.650959+00:00",
+  "source_receipt_path": "/Users/minxiang/Projects/_codex-private/wechat-010-admin-audit/native-completion-20260928/android-price-digest-after/receipt.json",
+  "source_receipt_sha256": "d60b9248161ddd3a4801fc242771f7cd60d1d3f308e21e9fc64117a793f4cac4",
+  "provenance": "Coordinator readonly snapshot while its Android app stopped; parent read only named public fields, not raw DB/files or device.",
+  "owner_observed_fields": {
+    "at": "2026-10-02T01:15:10.844264+00:00",
+    "appStopped": true,
+    "quickCheck": "ok",
+    "counts": {
+      "sync_recovery_baseline": 0,
+      "sync_recovery_journal": 1,
+      "sync_recovery_manifest": 0,
+      "sync_event_watermarks": 0,
+      "business_data_scope_binding": 1,
+      "products": 0,
+      "product_prices": 0,
+      "history_entries": 0,
+      "sync_event_outbox": 0
+    },
+    "journal": {
+      "phase": "required",
+      "reason": "shop_sync_rpc_http_500",
+      "attemptCount": 16,
+      "updatedAtMs": 1790902766226,
+      "nextRetryAtMs": 1790903066225
+    }
+  }
+}
