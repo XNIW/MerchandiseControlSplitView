@@ -8,7 +8,7 @@
 - Responsabile: `CODEX_EXECUTOR_ANDROID`; orchestratore parent, reviewer indipendente separato.
 - Data: 2026-09-28
 - Baseline: `d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac`
-- Branch: `codex/mobile-auth-session-restore` (follow-up da main `1bf758dd8d83a771dcfdb1844a223a036ba19eff`; primo batch integrato dalla PR10)
+- Branch corrente: `codex/mobile-parity-validation-ledger` (documentazione dal main integrato `0613339f`; follow-up sorgente `codex/mobile-auth-session-restore` integrato con PR11, primo batch con PR10)
 - Coordination key: `MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE`
 
 ## Scopo / Obiettivo
@@ -112,6 +112,37 @@ Copiare la fixture condivisa senza trasformazioni e verificare i 45 vettori attr
 Il mandato richiede CI sullo SHA esatto. Il checkout predefinito della PR usa il merge temporaneo: metadata headSha non prova la revisione Git testata. Modifica minima autorizzata al solo input ref di actions/checkout: head.sha per pull_request, github.sha per push/workflow_dispatch. Versioni/pin, permessi, trigger e tutti i gate invariati; app/test/fixture invariati. Verificare indipendentemente il diff, quindi la revisione effettiva nel log e CI sul nuovo head prima del merge normale; conservare run precedenti con il loro tested SHA/tree. Nessun nuovo gate locale sull'app dedotto da questa modifica.
 
 ## Execution
+
+### Esecuzione — integrazione e CI finali, 2026-10-02 UTC (root)
+
+**File modificati:**
+- `docs/MASTER-PLAN.md` — riallineamento dell'integrazione verificata e dei prossimi controlli.
+- `docs/TASKS/TASK-143-mobile-parity-root-cause-android.md` — nuova evidenza parent, snapshot precedenti conservati.
+- `docs/TASKS/evidence/TASK-143/integration-final/*.json` — ricevute pubbliche CI/merge/live e ledger con riferimenti portabili/12statiCA; ricevuta portabile di checkout CI, conteggi e snapshot live sanitizzato.
+
+**Azioni eseguite:**
+1. PR [#11](https://github.com/XNIW/MerchandiseControlSplitView/pull/11) integrata con merge normale il 2026-10-01 alle 23:39:45Z: head `1d7dfd188dcc082c0a172f28dee0b0f412431bf7`, main `0613339f11a4962bd898ae79f10ee1984579dcee`. Origin/main e ancestry verificati; nessun bypass o modifica delle protezioni.
+2. CI [head36940178169](https://github.com/XNIW/MerchandiseControlSplitView/actions/runs/36940178169) e [main36941982412](https://github.com/XNIW/MerchandiseControlSplitView/actions/runs/36941982412) SUCCESS. Checkout effettivo provato dai log: rispettivamente `1d7dfd18` e `0613339f`. Ciascun artifact ufficiale contiene 72 XML, 1.040 ID unici: **1.033 PASS / 7 SKIP / 0 FAIL / 0 ERROR**, stessi casi e stati. Assemble/lint/test/upload PASS; lint 54 warning/0 errori. Le due UseKtx già accettate preservano il Boolean di commit; nessun warning Kotlin/deprecation nuovo. Avvisi JVM CDS separati.
+3. Gate locali e review conservati: source18 `e1b1ed54…`, 165 mirati PASS, canonico 1.033 PASS/7 SKIP e cinque Compose effettivi PASS. Sorgenti invariati attraverso test e build TEST; questo addendum modifica solo documentazione.
+4. Snapshot live del coordinatore alle 00:42:29Z: APK `96b3d613…`, auth ripristinata e owner/shop corretti dopo normale riavvio AVD con gli stessi dati, senza nuovo login/reset. Recovery automatica fallita HTTP500/SQL57014 nel digest prezzi del checkpoint. Conteggi dopo il fallimento NON RILETTI e generazione terminale NON VERIFICATA; auth PASS non prova convergenza. Ricevuta sanitizzata SHA `b8bb4f7d…` vincolata nel [ledger](evidence/TASK-143/integration-final/validation-ledger.json). Il ritest dopo correzione backend e le misure restano separati.
+
+5. Cronologia successiva separata dal receipt00:42: registry150/AdminPR123 preserva dati/permessi ma iOS00:55 e Android00:59 falliscono nella verifica finale v_integrity/57014. Registry151/AdminPR124/main2e236586, CI/postcheckPASS e dati/permessi invariati; unicoRetry iOS01:39:43→01:39:52.012612 ancora500/57014, no nuovo manifest/finalization, binding invariato. Android151 non ripetuto per la stessa failure backend. Ricevuta safe consolidata SHA a291f9c6… nel ledger; authPASS resta distinta. ReadbackAndroid01:15 a appferma: quick_checkok, journalrequired1/attempt16, binding1, manifest/baseline/watermark/business/outbox0 (proiezione c97bea0d…). Profilare l’interaRPC prima di un altrodelta/Retry.
+
+**Check obbligatori dell'aggiornamento solo documentale:**
+
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | N/A | Solo documentazione; gate del codice finale verificati sopra. |
+| Lint | N/A | Nessuna modifica a codice, risorse o build. |
+| Warning nuovi | N/A | Nessuna nuova compilazione; warning CI classificati e conservati. |
+| Coerenza con planning | ESEGUITO | Mandato coordinato e CA-10/11; nessuna riapertura o modifica del backlog. |
+| Criteri di accettazione | ESEGUITO per tracciamento | CA-10/11 gate e integrazione ESEGUITI. CA-07/09/12 ancora NON ESEGUITI integralmente per recovery, convergenza e misure residue. |
+
+**Baseline regressione TASK-004:** N/A per questa modifica solo documentale; suite JVM/Robolectric finali già riportate, distinte dai cinque Compose. Skip e run fallite storiche preservati.
+
+**Incertezze:** recovery terminale, confronto per record e misure finali restano da verificare; nessuna perdita dati o convergenza inferita dai soli contatori. Stato FIX, non DONE; nessun deploy produzione.
+
+**Handoff notes:** parent responsabile di integrazione e rapporto; coordinatore owner dei simulatori autenticati. Retry soltanto dopo diagnosi e gate backend, niente azioni concorrenti sui suoi dispositivi.
 
 ### Esecuzione — CI checkout del candidato, 2026-10-01 (root)
 
@@ -422,6 +453,8 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 
 ## Handoff
 
+**CURRENT — INTEGRATED / CI_VERIFIED, task FIX, non DONE.** PR11/main `0613339f` e CI esatte head/main PASS; iOS PR11/main `2322c5e1` con CI 1.403 PASS/36 SKIP verificata separatamente. Auth nativa PASS nel relativo snapshot; recovery business ancora HTTP500/SQL57014 nella verifica finale anche dopo registry151, convergenza e misure ancora aperte. Il ledger e la nuova Execution prevalgono sui riferimenti futuri degli snapshot sotto. Nessuna distribuzione produzione o chiusura globale inferita.
+
 ### Handoff finale R-A07/R-A08 — 2026-10-01
 
 R-A07_R-A08_CODE_AND_LOCAL_GATES_VERIFIED — source18 congelati e revisionati APPROVED,165 mirati PASS; canonico1.040 totali/1.033 PASS/7 SKIP, build/lint PASS e0 warning Kotlin/deprecation. Lint54 contro baseline52:2 UseKtx intenzionali motivati dal checked commit Boolean e accettati dal parent, senza suppression. Cinque Compose Storefront effettivi PASS sul fresh AVD Codex_Mobile_Parity_Final_API_35/emulator-5554; geometria1080×2400/density420, nuova userdata sintetica, nessun accesso a5556/5580. Rimane acceso per le misure coordinate.
@@ -430,7 +463,7 @@ APK TEST separato96b3d6134ea50b61e226a14105f8de014ebefa1d8f86c66e3ee740cccac6be7
 
 Parent owner di Git/PR/CI exact-SHA, misure before/after e coordinator autenticato; nessun commit/push/device5556 da questa lane. I fake controllati e Compose non provano la convergenza live. Stato task FIX conservato, non DONE; chiusura globale solo dopo i criteri coordinati finali.
 
-EXECUTION_AND_FIX_VALIDATED — sorgente Android congelata, review indipendente R-A01/R-A02/R-A03 risolta e re-review sorgente approvata condizionata ai gate ora PASS. Nessun commit/push/PR eseguito dagli executor. Il parent coordina Review/CA finali/report/commit/PR/CI; non dichiarare integrazione main o distribuzione. Checkout primario/toolchain preesistente preservati. Non includere `.kotlin/sessions/` nei file da integrare.
+**Snapshot executor del primo batch, precedente alle integrazioni PR10/PR11:** EXECUTION_AND_FIX_VALIDATED — sorgente Android congelata, review indipendente R-A01/R-A02/R-A03 risolta e re-review sorgente approvata condizionata ai gate ora PASS. Nessun commit/push/PR eseguito dagli executor. Il parent coordina Review/CA finali/report/commit/PR/CI; non dichiarare integrazione main o distribuzione da questo solo snapshot. Checkout primario/toolchain preesistente preservati. Non includere `.kotlin/sessions/` nei file da integrare.
 
 Limiti espliciti: niente app Android autenticata su staging in questa lane, niente E2E Android↔iOS per-record/render latency/background/force-stop, scanner/camera/share reali o sweep UI completo delle4lingue. Contratto SQL staging verificato separatamente dal parent; fake,JVM,Compose,benchmark core e test SQL restano evidenze distinte.
 
