@@ -6753,14 +6753,18 @@ class DefaultInventoryRepositoryTest {
             kind = ShopSyncScopeKinds.SHOP_SCOPED,
             key = "a".repeat(64),
             historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
-            accountKey = "e".repeat(64),
-            deviceKey = "b".repeat(64)
+            accountKey = task126OwnerHash(owner),
+            deviceKey = task126OwnerHash(deviceId)
         )
+        val emptyDigest = shopSyncCheckpointChainDigest(emptyList())
+        val catalogDigest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest((emptyDigest + "\n" + emptyDigest + "\n" + emptyDigest).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
         val domain = ShopSyncDomainCheckpoint(
             activeCount = 0,
             tombstoneCount = 0,
-            idSetDigest = "a".repeat(64),
-            versionDigest = "b".repeat(64)
+            idSetDigest = emptyDigest,
+            versionDigest = emptyDigest
         )
         val baselineCheckpoint = ShopSyncRecoveryCheckpoint(
             schemaVersion = "shop-sync-recovery-checkpoint-v1",
@@ -6780,8 +6784,8 @@ class DefaultInventoryRepositoryTest {
             catalog = ShopSyncCatalogCheckpoint(
                 suppliers = domain,
                 categories = domain,
-                products = domain.copy(identityDigest = "c".repeat(64)),
-                digest = "d".repeat(64)
+                products = domain.copy(identityDigest = emptyDigest),
+                digest = catalogDigest
             ),
             prices = domain,
             history = domain,
@@ -6789,6 +6793,9 @@ class DefaultInventoryRepositoryTest {
             integrity = ShopSyncIntegrityCheckpoint(0, 0, 0, 0, 0, 0),
             checkpointDigest = "f".repeat(64)
         )
+        shopSyncReader.checkpointFixture = baselineCheckpoint
+        db.businessDataScopeBindingDao().upsert(BusinessDataScopeBinding.from(
+            task126ActiveOwnerStoreScope(owner, selectedShop(shopId)), 1L))
         db.syncEventDeviceStateDao().insert(
             SyncEventDeviceState(deviceId = deviceId, createdAtMs = 1L)
         )
@@ -6837,14 +6844,18 @@ class DefaultInventoryRepositoryTest {
             kind = ShopSyncScopeKinds.SHOP_SCOPED,
             key = "a".repeat(64),
             historyKind = ShopSyncScopeKinds.SHOP_SCOPED,
-            accountKey = "e".repeat(64),
-            deviceKey = "b".repeat(64)
+            accountKey = task126OwnerHash(owner),
+            deviceKey = task126OwnerHash(deviceId)
         )
+        val emptyDigest = shopSyncCheckpointChainDigest(emptyList())
+        val catalogDigest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest((emptyDigest + "\n" + emptyDigest + "\n" + emptyDigest).toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
         val domain = ShopSyncDomainCheckpoint(
             activeCount = 0,
             tombstoneCount = 0,
-            idSetDigest = "a".repeat(64),
-            versionDigest = "b".repeat(64)
+            idSetDigest = emptyDigest,
+            versionDigest = emptyDigest
         )
         val baselineCheckpoint = ShopSyncRecoveryCheckpoint(
             schemaVersion = "shop-sync-recovery-checkpoint-v1",
@@ -6864,8 +6875,8 @@ class DefaultInventoryRepositoryTest {
             catalog = ShopSyncCatalogCheckpoint(
                 suppliers = domain,
                 categories = domain,
-                products = domain.copy(identityDigest = "c".repeat(64)),
-                digest = "d".repeat(64)
+                products = domain.copy(identityDigest = emptyDigest),
+                digest = catalogDigest
             ),
             prices = domain,
             history = domain,
@@ -6873,6 +6884,8 @@ class DefaultInventoryRepositoryTest {
             integrity = ShopSyncIntegrityCheckpoint(0, 0, 0, 0, 0, 0),
             checkpointDigest = "f".repeat(64)
         )
+        db.businessDataScopeBindingDao().upsert(BusinessDataScopeBinding.from(
+            task126ActiveOwnerStoreScope(owner, selectedShop(shopId)), 1L))
         db.syncEventDeviceStateDao().insert(
             SyncEventDeviceState(deviceId = deviceId, createdAtMs = 1L)
         )
@@ -6904,6 +6917,9 @@ class DefaultInventoryRepositoryTest {
             createdAt = "2026-07-23T07:00:00Z"
         )
 
+        val baselineBefore = db.syncRecoveryBaselineDao().get()
+        val productsBefore = db.productDao().count()
+        val pricesBefore = db.productPriceDao().countAll()
         val summary = repository.drainSyncEventsFromRemote(
             remote = FakeCatalogRemote016(),
             priceRemote = RecordingPriceRemote016(configured = false),
@@ -6913,13 +6929,16 @@ class DefaultInventoryRepositoryTest {
             selectedShop = selectedShop(shopId)
         ).getOrThrow()
 
-        assertEquals(8L, summary.syncEventsWatermarkAfter)
+        assertEquals(7L, summary.syncEventsWatermarkAfter)
+        assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
+        assertEquals(productsBefore, db.productDao().count())
+        assertEquals(pricesBefore, db.productPriceDao().countAll())
         assertEquals("8", shopSyncReader.eventContexts.single().expectedEventMaxId)
         assertEquals(scope, shopSyncReader.eventContexts.single().expectedScope)
-        // The event was safely targeted under the checkpoint fence, but the
-        // immutable activated manifest still describes watermark 7. A server
-        // marker alone cannot prove the new local digest, therefore this must
-        // never be surfaced as idle/no-work.
+        // A is a valid canonical receipt at 7. The negative remote fixture
+        // captures max 8 with domain fences 7, then returns asOf domain fences 8.
+        // That inconsistent captured window cannot publish C or idle/no-work;
+        // a coherent ordinary delta is covered by the positive recovery tests.
         assertTrue(summary.manualFullSyncRequired)
         assertTrue(summary.syncEventsGapDetected)
         assertEquals(
@@ -8695,6 +8714,7 @@ private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
     val eventContexts = mutableListOf<ShopSyncRpcContext>()
     private val targetedResponses = mutableMapOf<ShopSyncRowDomain, java.util.ArrayDeque<ShopSyncRows>>()
     var beforeTargetedRequest: (suspend (ShopSyncRowDomain, List<String>) -> Unit)? = null
+    var checkpointFixture: ShopSyncRecoveryCheckpoint? = null
     var eventCalls = 0
         private set
 
@@ -8828,6 +8848,11 @@ private class FakeShopSyncReadRemote : ShopSyncReadRemoteDataSource {
     }
 
     private fun checkpointFor(context: ShopSyncRpcContext): ShopSyncRecoveryCheckpoint {
+        checkpointFixture?.let { fixture ->
+            return fixture.copy(syncEvents = fixture.syncEvents.copy(
+                maxId = eventRows.maxOfOrNull { it.id }?.toString() ?: context.verifiedBaselineId,
+                verifiedBaselineId = context.verifiedBaselineId))
+        }
         val scope = context.expectedScope ?: ShopSyncScope(
             kind = ShopSyncScopeKinds.SHOP_SCOPED,
             key = "a".repeat(64),

@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -331,6 +333,9 @@ internal object DefaultInventoryRepositoryTestHooks {
 
     @Volatile
     var afterLocalProductWrite: (suspend () -> Unit)? = null
+
+    @Volatile
+    var afterOrdinaryShopSyncWrites: (suspend () -> Unit)? = null
 
     @Volatile
     var localProductMutationNow: (() -> LocalDateTime)? = null
@@ -2654,7 +2659,62 @@ class DefaultInventoryRepository(
     }
 
     override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = withContext(Dispatchers.IO) {
-        productDao.count() == 0
+        if (productDao.count() > 0) return@withContext false
+        // A verified empty catalog is usable only under the caller's current managed lease.
+        // The receipt cannot select a shop, create an identity, or authorize a default watermark.
+        try {
+            businessDataScopeRuntimeGuard.withCurrentBusinessDataScopeFlight {
+                requireCurrentBusinessDataScope()
+                val lease = kotlinx.coroutines.currentCoroutineContext()[Task126BusinessDataScopeLeaseContext]?.lease
+                val scope = lease?.boundScope
+                if (lease == null || lease.unmanaged || scope == null ||
+                    scope.ownerHash != task126OwnerHash(ownerUserId)) {
+                    return@withCurrentBusinessDataScopeFlight true
+                }
+                val shopId = shopIdFromStoreScope(scope.storeId)
+                    ?: return@withCurrentBusinessDataScopeFlight true
+                db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    if (productDao.count() > 0) return@withTransaction false
+                    val binding = businessDataScopeBindingDao.get() ?: return@withTransaction true
+                    if (Task126OwnerStoreGate.validate(binding.toOwnerStoreScope(), scope) !=
+                        Task126OwnerStoreGateDecision.Allowed) return@withTransaction true
+                    val device = syncEventDeviceStateDao.get() ?: return@withTransaction true
+                    val captured = syncRecoveryBaselineDao.get() ?: return@withTransaction true
+                    val watermark = syncEventWatermarkDao.get(ownerUserId, scope.storeId)
+                        ?: return@withTransaction true
+                    if (syncRecoveryJournalDao.get() != null ||
+                        ordinaryShopSyncPendingCount(ownerUserId, scope.storeId) > 0) return@withTransaction true
+                    val checkpoint = shopSyncBaselineForEventDrain(ownerUserId, scope.storeId, shopId,
+                        device.deviceId, watermark.lastSyncEventId, captured, watermark)
+                        ?: return@withTransaction true
+                    if (checkpoint.syncEvents.domainMaxIds.keys != setOf(SyncEventDomains.CATALOG,
+                        SyncEventDomains.PRICES, SyncEventDomains.HISTORY) ||
+                        checkpoint.syncEvents.domainMaxIds.values.any {
+                            parseShopSyncMaxEventId(it) > watermark.lastSyncEventId
+                        }) return@withTransaction true
+                    validateRecoveryScopeIdentity(checkpoint.scope, ownerUserId, device.deviceId)
+                    validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
+                    validateShopSyncActiveReceipt(db, captured.generationId, checkpoint)
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    requireCurrentBusinessDataScope()
+                    val changed = syncRecoveryBaselineDao.get() != captured ||
+                        businessDataScopeBindingDao.get() != binding ||
+                        syncEventDeviceStateDao.get() != device ||
+                        syncEventWatermarkDao.get(ownerUserId, scope.storeId) != watermark ||
+                        syncRecoveryJournalDao.get() != null ||
+                        ordinaryShopSyncPendingCount(ownerUserId, scope.storeId) > 0
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    requireCurrentBusinessDataScope()
+                    changed
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            true
+        }
     }
 
     override suspend fun getLocalDatabaseStatusSnapshot(
@@ -4158,7 +4218,8 @@ class DefaultInventoryRepository(
     ): SyncEventDrainResult {
         val shopId = selectedShop?.shopId
         val storeScope = shopScopedStoreScope(selectedShop)
-        var watermark = currentSyncEventWatermark(ownerUserId, storeScope)
+        val capturedWatermark = syncEventWatermarkDao.get(ownerUserId, storeScope)
+        var watermark = capturedWatermark?.lastSyncEventId ?: 0L
         val watermarkBefore = watermark
         var fetched = 0
         var processed = 0
@@ -4182,6 +4243,10 @@ class DefaultInventoryRepository(
         var capturedShopDomainEventMaxIds: Map<String, String> = emptyMap()
         var verifiedBaselineScopeKey: String? = null
         var verifiedShopBaseline: ShopSyncRecoveryCheckpoint? = null
+        var verifiedShopBaselineEntity: SyncRecoveryBaseline? = null
+        var verifiedShopBinding: BusinessDataScopeBinding? = null
+        var verifiedShopDevice: SyncEventDeviceState? = null
+        var verifiedShopWatermark: SyncEventWatermark? = null
 
         while (iterations < SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
             var shopPageHasMore: Boolean? = null
@@ -4190,14 +4255,19 @@ class DefaultInventoryRepository(
                     ?.takeIf { it.isConfigured }
                     ?: throw ShopSyncContractException("shop_sync_reader_unavailable")
                 if (resolvedShopReadScope == null) {
+                    val capturedBaseline = syncRecoveryBaselineDao.get()
+                    val capturedBinding = businessDataScopeBindingDao.get()
+                    val capturedDevice = syncEventDeviceStateDao.get()
                     val baseline = shopSyncBaselineForEventDrain(
                         ownerUserId = ownerUserId,
                         storeScope = storeScope,
                         shopId = shopId,
                         deviceId = deviceId,
-                        watermark = watermark
+                        watermark = watermark,
+                        capturedBaseline = capturedBaseline,
+                        capturedWatermark = capturedWatermark
                     )
-                    if (watermark > 0L && baseline == null) {
+                    if ((watermark > 0L || capturedBaseline != null) && baseline == null) {
                         recordShopSyncRecoveryRequiredWithoutEvent(
                             ownerUserId = ownerUserId,
                             storeScope = storeScope,
@@ -4261,6 +4331,14 @@ class DefaultInventoryRepository(
                             manualFullSyncRequired = true
                         )
                     }
+                    if (baseline != null && capturedBaseline != null &&
+                        parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) > watermark) {
+                        return drainVerifiedShopSyncWindow(
+                            reader, ownerUserId, storeScope, shopId, deviceId, watermark,
+                            capturedBaseline, capturedBinding, capturedDevice, requireNotNull(capturedWatermark),
+                            baseline, checkpoint
+                        )
+                    }
                     resolvedShopReadScope = checkpoint.scope
                     // The checkpoint is the only authoritative bootstrap for
                     // a non-zero watermark. Keep its opaque snapshot fence on
@@ -4271,6 +4349,10 @@ class DefaultInventoryRepository(
                     capturedShopDomainEventMaxIds = checkpoint.syncEvents.domainMaxIds
                     verifiedBaselineScopeKey = checkpoint.scope.key
                     verifiedShopBaseline = baseline
+                    verifiedShopBaselineEntity = capturedBaseline
+                    verifiedShopBinding = capturedBinding
+                    verifiedShopDevice = capturedDevice
+                    verifiedShopWatermark = capturedWatermark
                 }
                 val page = businessScopedRemoteCall {
                     reader.eventPage(
@@ -4692,50 +4774,18 @@ class DefaultInventoryRepository(
             capturedShopEventMaxId != null &&
             watermark == parseShopSyncMaxEventId(requireNotNull(capturedShopEventMaxId))
         ) {
-            val journalPending = syncRecoveryJournalDao.getForScope(
-                ownerHash = task126OwnerHash(ownerUserId),
-                storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
-            ) != null
-            val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope) > 0
-            if (journalPending || outboxPending) {
-                gapDetected = true
-                manualFullSyncRequired = true
-                recordShopSyncRecoveryRequiredWithoutEvent(
-                    ownerUserId = ownerUserId,
-                    storeScope = storeScope,
-                    shopId = shopId,
-                    deviceId = deviceId,
-                    reason = SyncEventApplyStatusReasons.SCOPE_MISMATCH
-                )
+            val localPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+            if (localPending > 0) {
+                skippedDirty += localPending
             } else {
-                val reader = checkNotNull(shopSyncReadRemoteDataSource) {
-                    "shop_sync_reader_unavailable"
-                }
-                val marker = try {
-                    businessScopedRemoteCall {
-                        reader.convergenceMarker(
-                            ShopSyncRpcContext(
-                                accountId = ownerUserId,
-                                shopId = shopId,
-                                deviceIdentifier = deviceId,
-                                expectedScope = requireNotNull(resolvedShopReadScope),
-                                verifiedBaselineId = watermark.toString(),
-                                expectedBaselineScopeKey = requireNotNull(verifiedBaselineScopeKey)
-                            )
-                        )
-                    }.getOrThrow()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    null
-                }
-                // An event drain can prove that every targeted RPC stayed inside
-                // its server fence, but it cannot mutate the immutable recovery
-                // manifest into a new strong local digest. Therefore it must not
-                // publish noWork merely because the server marker is ready. Only
-                // the previously activated baseline at the same watermark is a
-                // local proof; every other case retains a durable recovery latch.
-                if (!markerProvesNoWorkAgainstBaseline(marker, verifiedShopBaseline, watermark)) {
+                val journalPending = syncRecoveryJournalDao.getForScope(
+                    ownerHash = task126OwnerHash(ownerUserId),
+                    storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
+                ) != null
+                val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+                if (outboxPending > 0) {
+                    skippedDirty += outboxPending
+                } else if (journalPending) {
                     gapDetected = true
                     manualFullSyncRequired = true
                     recordShopSyncRecoveryRequiredWithoutEvent(
@@ -4743,8 +4793,86 @@ class DefaultInventoryRepository(
                         storeScope = storeScope,
                         shopId = shopId,
                         deviceId = deviceId,
-                        reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+                        reason = SyncEventApplyStatusReasons.SCOPE_MISMATCH
                     )
+                } else {
+                    val reader = checkNotNull(shopSyncReadRemoteDataSource) {
+                        "shop_sync_reader_unavailable"
+                    }
+                    val marker = try {
+                        businessScopedRemoteCall {
+                            reader.convergenceMarker(
+                                ShopSyncRpcContext(
+                                    accountId = ownerUserId,
+                                    shopId = shopId,
+                                    deviceIdentifier = deviceId,
+                                    expectedScope = requireNotNull(resolvedShopReadScope),
+                                    verifiedBaselineId = watermark.toString(),
+                                    expectedBaselineScopeKey = requireNotNull(verifiedBaselineScopeKey)
+                                )
+                            )
+                        }.getOrThrow()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    // With no new captured window, the existing A receipt must still
+                    // prove the complete physical store. A ready server marker alone
+                    // cannot conceal local corruption or publish no-work.
+                    var localReceiptProved = false
+                    val captured = verifiedShopBaselineEntity
+                    val baseline = verifiedShopBaseline
+                    if (captured != null && baseline != null) {
+                        try {
+                            db.withTransaction {
+                                requireCurrentBusinessDataScope()
+                                if (syncRecoveryBaselineDao.get() != captured ||
+                                    businessDataScopeBindingDao.get() != verifiedShopBinding ||
+                                    syncEventDeviceStateDao.get() != verifiedShopDevice ||
+                                    syncEventWatermarkDao.get(ownerUserId, storeScope) != verifiedShopWatermark ||
+                                    syncRecoveryJournalDao.get() != null) {
+                                    throw ShopSyncContractException("ordinary_captured_publication_changed")
+                                }
+                                val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+                                if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
+                                validateShopSyncActiveReceipt(db, captured.generationId, baseline)
+                                coroutineContext.ensureActive()
+                                requireCurrentBusinessDataScope()
+                            }
+                            localReceiptProved = true
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (deferred: OrdinaryShopSyncDeferred) {
+                            skippedDirty += deferred.pendingCount
+                        } catch (failure: ShopSyncContractException) {
+                            if (failure.code == "ordinary_captured_publication_changed") throw failure
+                        }
+                    }
+                    if (skippedDirty == 0 && (!localReceiptProved ||
+                        !markerProvesNoWorkAgainstBaseline(marker, verifiedShopBaseline, watermark))) {
+                        try {
+                            db.withTransaction {
+                                requireCurrentBusinessDataScope()
+                                if (captured != null && (syncRecoveryBaselineDao.get() != captured ||
+                                    businessDataScopeBindingDao.get() != verifiedShopBinding ||
+                                    syncEventDeviceStateDao.get() != verifiedShopDevice ||
+                                    syncEventWatermarkDao.get(ownerUserId, storeScope) != verifiedShopWatermark)) {
+                                    throw ShopSyncContractException("ordinary_captured_publication_changed")
+                                }
+                                val pending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+                                if (pending > 0) throw OrdinaryShopSyncDeferred(pending)
+                                recordShopSyncRecoveryRequiredWithoutEvent(
+                                    ownerUserId = ownerUserId, storeScope = storeScope, shopId = shopId,
+                                    deviceId = deviceId, reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+                                )
+                            }
+                            gapDetected = true
+                            manualFullSyncRequired = true
+                        } catch (deferred: OrdinaryShopSyncDeferred) {
+                            skippedDirty += deferred.pendingCount
+                        }
+                    }
                 }
             }
         }
@@ -4766,6 +4894,257 @@ class DefaultInventoryRepository(
             skippedProtectedLocalCommit = skippedProtectedLocalCommit,
             remoteAppliedProductIds = remoteAppliedProductIds
         )
+    }
+
+    private class OrdinaryShopSyncDeferred(val pendingCount: Int) : IllegalStateException()
+
+    /** Count known local work without loading every candidate UID or body. Synced orphans remain proof failures. */
+    private suspend fun ordinaryShopSyncPendingCount(ownerUserId: String, storeScope: String): Int {
+        val scopedOutbox = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+        if (syncEventOutboxDao.countAll() != scopedOutbox) {
+            throw ShopSyncContractException("ordinary_outbox_scope_mismatch")
+        }
+        val local = db.openHelper.readableDatabase.query(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM pending_catalog_tombstones) +
+                (SELECT COUNT(*) FROM suppliers p LEFT JOIN supplier_remote_refs r ON r.supplierId=p.id
+                 WHERE r.id IS NULL OR r.lastRemoteAppliedAt IS NULL OR r.localChangeRevision<>r.lastSyncedLocalRevision) +
+                (SELECT COUNT(*) FROM categories p LEFT JOIN category_remote_refs r ON r.categoryId=p.id
+                 WHERE r.id IS NULL OR r.lastRemoteAppliedAt IS NULL OR r.localChangeRevision<>r.lastSyncedLocalRevision) +
+                (SELECT COUNT(*) FROM products p LEFT JOIN product_remote_refs r ON r.productId=p.id
+                 WHERE r.id IS NULL OR r.lastRemoteAppliedAt IS NULL OR r.localChangeRevision<>r.lastSyncedLocalRevision) +
+                (SELECT COUNT(*) FROM product_prices p LEFT JOIN product_price_remote_refs r ON r.productPriceId=p.id
+                 WHERE r.id IS NULL) +
+                (SELECT COUNT(*) FROM history_entries h LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid=h.uid
+                 WHERE r.localChangeRevision<>r.lastSyncedLocalRevision OR h.syncStatus<>'SYNCED_SUCCESSFULLY')
+            """.trimIndent()
+        ).use { cursor ->
+            check(cursor.moveToFirst())
+            cursor.getInt(0)
+        }
+        return Math.addExact(local, scopedOutbox)
+    }
+
+    /** Prepare a complete captured window, then publish physical data, full ledger, original C and watermark together. */
+    private suspend fun drainVerifiedShopSyncWindow(
+        reader: ShopSyncReadRemoteDataSource,
+        ownerUserId: String,
+        storeScope: String,
+        shopId: String,
+        deviceId: String,
+        watermark: Long,
+        capturedBaseline: SyncRecoveryBaseline,
+        capturedBinding: BusinessDataScopeBinding?,
+        capturedDevice: SyncEventDeviceState?,
+        capturedWatermark: SyncEventWatermark,
+        baseline: ShopSyncRecoveryCheckpoint,
+        checkpoint: ShopSyncRecoveryCheckpoint
+    ): SyncEventDrainResult {
+        val events = ArrayList<SyncEventRemoteRow>(SHOP_SYNC_ORDINARY_MAX_EVENTS)
+        var prepared: PreparedShopSyncOrdinaryWindow? = null
+        var initialProofComplete = false
+        fun result(
+            processed: Int = 0,
+            skippedSelf: Int = 0,
+            dirty: Int = 0,
+            after: Long = watermark,
+            applied: Int = 0,
+            historyApplied: Int = 0,
+            manual: Boolean = false,
+            tooLarge: Boolean = false,
+            productIds: Set<Long> = emptySet()
+        ) = SyncEventDrainResult(
+            fetched = events.size, processed = processed, skippedSelf = skippedSelf,
+            skippedDirtyLocal = dirty, watermarkBefore = watermark, watermarkAfter = after,
+            targetedProductsFetched = prepared?.rows?.get(ShopSyncRowDomain.PRODUCTS)?.size ?: 0,
+            targetedPricesFetched = prepared?.rows?.get(ShopSyncRowDomain.PRICES)?.size ?: 0,
+            targetedHistoryFetched = prepared?.rows?.get(ShopSyncRowDomain.HISTORY)?.size ?: 0,
+            remoteUpdatesApplied = applied, remoteHistoryUpdatesApplied = historyApplied,
+            tooLarge = tooLarge, gapDetected = manual, manualFullSyncRequired = manual,
+            remoteAppliedProductIds = productIds
+        )
+        suspend fun requireCapturedPublication() {
+            requireCurrentBusinessDataScope()
+            if (syncRecoveryBaselineDao.get() != capturedBaseline ||
+                businessDataScopeBindingDao.get() != capturedBinding ||
+                syncEventDeviceStateDao.get() != capturedDevice ||
+                syncEventWatermarkDao.get(ownerUserId, storeScope) != capturedWatermark ||
+                syncRecoveryJournalDao.get() != null) {
+                // Retry from the new receipt; never overwrite it with stale preparation or a stale latch.
+                throw ShopSyncContractException("ordinary_captured_publication_changed")
+            }
+        }
+        try {
+            requireCapturedPublication()
+            val pending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+            if (pending > 0) return result(dirty = pending)
+            validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
+            if (checkpoint.status != "ready" || checkpoint.scope != baseline.scope ||
+                checkpoint.shopId.lowercase() != shopId.lowercase() ||
+                checkpoint.syncEvents.verifiedBaselineId != watermark.toString() ||
+                checkpoint.integrity.totalViolationCount != 0L) {
+                throw ShopSyncContractException("ordinary_checkpoint_scope_mismatch")
+            }
+            val maximum = parseShopSyncMaxEventId(checkpoint.syncEvents.maxId)
+            if (checkpoint.syncEvents.domainMaxIds.keys != setOf(SyncEventDomains.CATALOG, SyncEventDomains.PRICES, SyncEventDomains.HISTORY)) {
+                throw ShopSyncContractException("ordinary_domain_fence_missing")
+            }
+            checkpoint.syncEvents.domainMaxIds.forEach { (domain, fence) ->
+                val previous = baseline.syncEvents.domainMaxIds[domain]
+                    ?: throw ShopSyncContractException("ordinary_domain_fence_missing")
+                val current = parseShopSyncMaxEventId(fence)
+                if (current < parseShopSyncMaxEventId(previous) || current > maximum) {
+                    throw ShopSyncContractException("ordinary_domain_fence_invalid")
+                }
+            }
+            var cursor = watermark
+            var responseBytes = 0L
+            do {
+                coroutineContext.ensureActive()
+                val page = businessScopedRemoteCall {
+                    reader.eventPage(
+                        ShopSyncRpcContext(ownerUserId, shopId, deviceId,
+                            expectedScope = checkpoint.scope, expectedEventMaxId = checkpoint.syncEvents.maxId),
+                        cursor, SYNC_EVENT_FETCH_LIMIT.toInt()
+                    )
+                }.getOrThrow()
+                if (!initialProofComplete) {
+                    // Fetch under the captured fence, then prove canonical G0 before trusting or preparing any rows.
+                    validateShopSyncCanonicalReceipt(db, capturedBaseline.generationId, baseline)
+                    validateRecoveryScopeIdentity(checkpoint.scope, ownerUserId, deviceId)
+                    if (capturedBinding == null || capturedBinding.ownerHash != capturedBaseline.ownerHash ||
+                        capturedBinding.storeId != capturedBaseline.storeScope || capturedDevice?.deviceId != deviceId) {
+                        throw ShopSyncContractException("ordinary_checkpoint_scope_mismatch")
+                    }
+                    initialProofComplete = true
+                }
+                validateTailPage(page, checkpoint, shopId, cursor, SYNC_EVENT_FETCH_LIMIT.toInt())
+                if (page.scopeEventMaxId != checkpoint.syncEvents.maxId || page.responseBytes < 0L) {
+                    throw ShopSyncContractException("ordinary_event_fence_changed")
+                }
+                responseBytes = Math.addExact(responseBytes, page.responseBytes)
+                if (responseBytes > DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS.defaultPageResponseBytes ||
+                    events.size + page.rows.size > SHOP_SYNC_ORDINARY_MAX_EVENTS) {
+                    throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+                }
+                if (page.rows.isEmpty()) throw ShopSyncContractException("ordinary_event_window_incomplete")
+                page.rows.forEach { event ->
+                    if (event.id <= cursor || event.id > maximum) {
+                        throw ShopSyncContractException("ordinary_event_order_invalid")
+                    }
+                    validateTailEvent(event, checkpoint, shopId)
+                    events += event
+                    cursor = event.id
+                }
+                if (page.hasMore && page.nextAfterId != cursor) {
+                    throw ShopSyncContractException("ordinary_event_cursor_invalid")
+                }
+                if (!page.hasMore && cursor != maximum) {
+                    throw ShopSyncContractException("ordinary_event_window_incomplete")
+                }
+            } while (page.hasMore)
+            prepared = prepareShopSyncOrdinaryWindow(db, capturedBaseline.generationId, checkpoint, events) { domain, ids ->
+                businessScopedRemoteCall {
+                    reader.rowsByIds(
+                        shopSyncTargetedContext(ownerUserId, shopId, deviceId, checkpoint.scope,
+                            checkpoint.syncEvents.maxId, checkpoint.syncEvents.domainMaxIds, domain.syncEventDomain()),
+                        domain, ids
+                    )
+                }.getOrThrow()
+            }
+            val marker = businessScopedRemoteCall {
+                reader.convergenceMarker(
+                    ShopSyncRpcContext(ownerUserId, shopId, deviceId,
+                        expectedScope = checkpoint.scope, verifiedBaselineId = checkpoint.syncEvents.maxId,
+                        expectedBaselineScopeKey = checkpoint.scope.key)
+                )
+            }.getOrThrow()
+            // Material equality is strict. C's opaque digest is deliberately not compared with A's digest.
+            val published = publishedBaselineFromMarker(checkpoint, marker)
+            val window = requireNotNull(prepared)
+            var applied = 0
+            var historyApplied = 0
+            val appliedProductIds = linkedSetOf<Long>()
+            db.withTransaction {
+                requireCapturedPublication()
+                val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+                if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
+                validateShopSyncCanonicalReceipt(db, capturedBaseline.generationId, baseline)
+                coroutineContext.ensureActive()
+                // Update the full ledger first, so the same-generation parent proof sees the new product state.
+                for ((domain, rows) in window.rows) {
+                    syncRecoveryManifestDao.upsertAll(rows.toManifestRows(capturedBaseline.generationId, domain))
+                }
+                window.removedImageProductIds.chunked(500).forEach { ids ->
+                    syncRecoveryManifestDao.deleteByRemoteIds(capturedBaseline.generationId,
+                        ShopSyncRowDomain.IMAGES.wireValue, ids)
+                }
+                for (domain in ShopSyncRowDomain.entries) {
+                    val rows = window.rows[domain] ?: continue
+                    val eligible = materializableRecoveryRows(db, capturedBaseline.generationId, rows)
+                    val counts = applyShopSyncRecoveryRows(eligible)
+                    if (counts.failedRows != 0 || counts.unsupportedRows != 0 || counts.skippedParentRows != 0) {
+                        throw ShopSyncContractException("ordinary_mapper_apply_failed")
+                    }
+                    when (domain) {
+                        ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS ->
+                            applied += counts.businessRowsApplied
+                        ShopSyncRowDomain.HISTORY -> historyApplied += counts.businessRowsApplied
+                        else -> Unit
+                    }
+                }
+                validateShopSyncActiveReceipt(db, capturedBaseline.generationId, published)
+                DefaultInventoryRepositoryTestHooks.afterOrdinaryShopSyncWrites?.invoke()
+                coroutineContext.ensureActive()
+                requireCapturedPublication()
+                // No RPC occurs in this writer transaction. The C receipt came from the completed prepared window.
+                syncRecoveryBaselineDao.upsert(capturedBaseline.copy(
+                    checkpointJson = encodeRecoveryCheckpointJson(published), activatedAtMs = System.currentTimeMillis()
+                ))
+                for (event in events) {
+                    val self = event.sourceDeviceId == deviceId || event.sourceDeviceKey == syncEventDeviceKey(deviceId)
+                    recordSyncEventApplyStatus(ownerUserId, storeScope, event, event.entityIds,
+                        if (self) SyncEventApplyStatusValues.SKIPPED else SyncEventApplyStatusValues.APPLIED,
+                        if (self) SyncEventApplyStatusReasons.SELF_ORIGIN else SyncEventApplyStatusReasons.APPLIED)
+                }
+                advanceSyncEventWatermark(ownerUserId, storeScope, maximum)
+                (window.rows[ShopSyncRowDomain.PRODUCTS] as? ShopSyncRows.Products)?.values
+                    .orEmpty().filter { it.deletedAt == null }.forEach { row ->
+                        productRemoteRefDao.getByRemoteId(row.id)?.productId?.let(appliedProductIds::add)
+                    }
+                requireCurrentBusinessDataScope()
+                coroutineContext.ensureActive()
+            }
+            val selfCount = events.count { it.sourceDeviceId == deviceId || it.sourceDeviceKey == syncEventDeviceKey(deviceId) }
+            return result(processed = events.size - selfCount, skippedSelf = selfCount, after = maximum,
+                applied = applied, historyApplied = historyApplied, productIds = appliedProductIds)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (deferred: OrdinaryShopSyncDeferred) {
+            return result(dirty = deferred.pendingCount)
+        } catch (failure: ShopSyncContractException) {
+            if (failure.code == "ordinary_captured_publication_changed") throw failure
+            val bound = failure.code == "ordinary_prepared_window_bound_exceeded"
+            val reason = when {
+                initialProofComplete && failure.code == "ordinary_targeted_missing_remote" -> SyncEventApplyStatusReasons.MISSING_REMOTE
+                failure.code.contains("scope_mismatch") -> SyncEventApplyStatusReasons.SCOPE_MISMATCH
+                bound -> SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED
+                else -> SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+            }
+            try {
+                db.withTransaction {
+                    requireCapturedPublication()
+                    val pending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+                    if (pending > 0) throw OrdinaryShopSyncDeferred(pending)
+                    recordShopSyncRecoveryRequiredWithoutEvent(ownerUserId, storeScope, shopId, deviceId, reason,
+                        events.firstOrNull()?.id)
+                }
+            } catch (deferred: OrdinaryShopSyncDeferred) {
+                return result(dirty = deferred.pendingCount)
+            }
+            return result(manual = true, tooLarge = bound)
+        }
     }
 
     private fun SyncEventEntityIds.withoutProtected(protected: SyncEventEntityIds): SyncEventEntityIds {
@@ -5506,10 +5885,14 @@ class DefaultInventoryRepository(
         storeScope: String,
         shopId: String,
         deviceId: String,
-        watermark: Long
+        watermark: Long,
+        capturedBaseline: SyncRecoveryBaseline?,
+        capturedWatermark: SyncEventWatermark?
     ): ShopSyncRecoveryCheckpoint? {
-        if (watermark == 0L) return null
-        val baseline = syncRecoveryBaselineDao.get() ?: return null
+        // Zero is a valid activated fence only when its scoped row really exists.
+        if (capturedWatermark == null || capturedWatermark.ownerUserId != ownerUserId ||
+            capturedWatermark.storeScope != storeScope || capturedWatermark.lastSyncEventId != watermark) return null
+        val baseline = capturedBaseline ?: return null
         if (
             baseline.ownerHash != task126OwnerHash(ownerUserId) ||
             baseline.storeScope != Task126OwnerStoreScope.normalizedStoreId(storeScope) ||
@@ -5522,6 +5905,8 @@ class DefaultInventoryRepository(
             .getOrNull() ?: return null
         if (
             checkpoint.scope.key != baseline.scopeKey ||
+            checkpoint.scope.kind != baseline.scopeKind ||
+            checkpoint.shopId.lowercase() != shopId.lowercase() ||
             checkpoint.syncEvents.maxId != watermark.toString() ||
             // A persisted recovery baseline must be the C receipt obtained
             // after marker(B): it is self-verifying at the activated
@@ -5531,6 +5916,7 @@ class DefaultInventoryRepository(
         ) {
             return null
         }
+        if (runCatching { validateRecoveryScopeIdentity(checkpoint.scope, ownerUserId, deviceId) }.isFailure) return null
         return checkpoint
     }
 

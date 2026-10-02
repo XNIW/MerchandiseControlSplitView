@@ -342,8 +342,8 @@ internal class ShopSyncRecoveryCoordinator(
             ShopSyncRecoveryTestHooks.beforeStagingValidation?.invoke(requireNotNull(stagingDb))
             validateRelationalManifest(stagingDb, generationId)
             validateManifest(stagingDb, generationId, checkpointForActivation)
-            validateStagingDatabase(stagingDb, checkpointForActivation)
-            validatePhysicalSnapshot(stagingDb, generationId)
+            validateStagingDatabase(stagingDb, generationId, checkpointForActivation)
+            validatePhysicalSnapshot(stagingDb, generationId, resourceLimits.historyPageRows)
             val markerBeforeActivation = fetchConvergenceMarker(
                 accountId = accountId,
                 shopId = shopId,
@@ -442,7 +442,7 @@ internal class ShopSyncRecoveryCoordinator(
                 )
             }
             validateManifest(activeDb, generationId, publishedCheckpoint)
-            validatePhysicalSnapshot(activeDb, generationId)
+            validatePhysicalSnapshot(activeDb, generationId, resourceLimits.historyPageRows)
             if (!leaseStillValid(accountId, shopId, currentDevice)) {
                 throw ShopSyncContractException("recovery_lease_invalid_before_cleanup")
             }
@@ -589,7 +589,7 @@ internal class ShopSyncRecoveryCoordinator(
         }
         validateRecoveryScopeIdentity(persisted.scope, accountId, journal.deviceId)
         validateManifest(activeDb, baseline.generationId, persisted)
-        validatePhysicalSnapshot(activeDb, baseline.generationId)
+        validatePhysicalSnapshot(activeDb, baseline.generationId, resourceLimits.historyPageRows)
         val marker = fetchConvergenceMarker(
             accountId = accountId,
             shopId = shopId,
@@ -707,39 +707,6 @@ internal class ShopSyncRecoveryCoordinator(
      * but validated B has all of them at zero and marker C independently
      * proves a zero total, so the two representations are equivalent.
      */
-    private fun publishedBaselineFromMarker(
-        checkpointB: ShopSyncRecoveryCheckpoint,
-        markerC: ShopSyncConvergenceMarker
-    ): ShopSyncRecoveryCheckpoint {
-        if (!markerMatchesCheckpoint(markerC, checkpointB)) {
-            throw ShopSyncContractException("recovery_convergence_marker_mismatch")
-        }
-        if (!SHA256_PATTERN.matches(markerC.checkpointDigest)) {
-            throw ShopSyncContractException("recovery_marker_checkpoint_digest_invalid")
-        }
-        return checkpointB.copy(
-            syncEvents = markerC.syncEvents,
-            catalog = markerC.catalog,
-            prices = markerC.prices,
-            history = markerC.history,
-            images = markerC.images,
-            checkpointDigest = markerC.checkpointDigest
-        )
-    }
-
-    private fun validateRecoveryScopeIdentity(
-        scope: ShopSyncScope,
-        accountId: String,
-        deviceId: String
-    ) {
-        if (
-            scope.accountKey != sha256(accountId.trim().lowercase()) ||
-            scope.deviceKey != sha256(deviceId.trim())
-        ) {
-            throw ShopSyncContractException("recovery_scope_identity_key_mismatch")
-        }
-    }
-
     /**
      * The recovery pages are live keyset reads. A row changed after checkpoint
      * A may therefore already be visible in staging, while another row of the
@@ -903,70 +870,6 @@ internal class ShopSyncRecoveryCoordinator(
                 throw ShopSyncContractException("recovery_tail_event_gap")
             }
             pages++
-        }
-    }
-
-    private fun validateTailPage(
-        page: ShopSyncEventPage,
-        checkpoint: ShopSyncRecoveryCheckpoint,
-        shopId: String,
-        cursorBeforePage: Long
-    ) {
-        if (
-            page.schemaVersion != RECOVERY_TAIL_EVENT_PAGE_SCHEMA ||
-            page.shopId.lowercase() != shopId.lowercase() ||
-            page.scope != checkpoint.scope ||
-            page.asOfEventMaxId != checkpoint.syncEvents.maxId ||
-            parseShopSyncMaxEventId(page.scopeEventMaxId) <
-                parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) ||
-            page.asOfDomainEventMaxIds != checkpoint.syncEvents.domainMaxIds ||
-            page.pageLimit != RECOVERY_TAIL_EVENT_PAGE_LIMIT ||
-            page.rows.size > RECOVERY_TAIL_EVENT_PAGE_LIMIT ||
-            (page.hasMore && page.nextAfterId == null) ||
-            (!page.hasMore && page.nextAfterId != null)
-        ) {
-            throw ShopSyncContractException("recovery_tail_page_contract_mismatch")
-        }
-        if (page.rows.firstOrNull()?.id?.let { it <= cursorBeforePage } == true) {
-            throw ShopSyncContractException("recovery_tail_event_order_invalid")
-        }
-    }
-
-    private fun validateTailEvent(
-        event: SyncEventRemoteRow,
-        checkpoint: ShopSyncRecoveryCheckpoint,
-        shopId: String
-    ) {
-        val ids = event.entityIds ?: SyncEventEntityIds()
-        val scopeKind = if (event.domain == SyncEventDomains.HISTORY) {
-            checkpoint.scope.historyKind ?: checkpoint.scope.kind
-        } else {
-            checkpoint.scope.kind
-        }
-        val scopeMatches = when (scopeKind) {
-            ShopSyncScopeKinds.SHOP_SCOPED ->
-                event.shopId?.lowercase() == shopId.lowercase()
-            ShopSyncScopeKinds.LEGACY_OWNER_BRIDGE ->
-                event.shopId == null &&
-                    checkpoint.scope.legacyOwnerKey ==
-                    task126OwnerHash(event.ownerUserId.lowercase())
-            ShopSyncScopeKinds.AUTHORIZED_SHOP_PLUS_LEGACY ->
-                event.shopId?.lowercase() == shopId.lowercase() ||
-                    (
-                        event.shopId == null &&
-                            checkpoint.scope.legacyOwnerKey ==
-                            task126OwnerHash(event.ownerUserId.lowercase())
-                        )
-            else -> false
-        }
-        if (
-            !scopeMatches ||
-            !event.timestampValid ||
-            event.requiresFullRecovery ||
-            !SyncEventContract.hasSupportedEventType(event.domain, event.eventType) ||
-            !SyncEventContract.hasCompletePrimaryIds(event.domain, event.changedCount, ids)
-        ) {
-            throw ShopSyncContractException("recovery_tail_event_unsafe")
         }
     }
 
@@ -1257,78 +1160,6 @@ internal class ShopSyncRecoveryCoordinator(
         }
     }
 
-    private fun validateTailTargetedRows(
-        result: ShopSyncTargetedRows,
-        checkpoint: ShopSyncRecoveryCheckpoint,
-        domain: ShopSyncRowDomain,
-        shopId: String,
-        requestedIds: List<String>
-    ) {
-        val expectedDomainFence = checkpoint.syncEvents.domainMaxIds[domain.syncEventDomain()]
-            ?: throw ShopSyncContractException("recovery_tail_domain_fence_missing")
-        val expectedScopeKind = if (domain == ShopSyncRowDomain.HISTORY) {
-            checkpoint.scope.historyKind ?: checkpoint.scope.kind
-        } else {
-            checkpoint.scope.kind
-        }
-        val returned = result.rows.ids().map(::canonicalRecoveryEntityUuid)
-        val expected = requestedIds.map(::canonicalRecoveryEntityUuid).toSet()
-        if (
-            result.schemaVersion != RECOVERY_TAIL_TARGETED_ROWS_SCHEMA ||
-            result.shopId.lowercase() != shopId.lowercase() ||
-            result.scope != checkpoint.scope ||
-            result.domain != domain ||
-            result.asOfEventMaxId != checkpoint.syncEvents.maxId ||
-            parseShopSyncMaxEventId(result.currentScopeEventMaxId) <
-                parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) ||
-            result.minimumDomainEventMaxId != expectedDomainFence ||
-            parseShopSyncMaxEventId(result.materializedDomainEventMaxId) <
-                parseShopSyncMaxEventId(expectedDomainFence) ||
-            result.domainScope != expectedScopeKind ||
-            result.requestedCount != requestedIds.size ||
-            result.missingIds.isNotEmpty() ||
-            returned.size != requestedIds.size ||
-            returned.toSet() != expected
-        ) {
-            throw ShopSyncContractException("recovery_tail_targeted_contract_mismatch")
-        }
-        if (!tailRowsMatchScope(result.rows, expectedScopeKind, checkpoint.scope, shopId)) {
-            throw ShopSyncContractException("recovery_tail_targeted_row_scope_mismatch")
-        }
-    }
-
-    private fun tailRowsMatchScope(
-        rows: ShopSyncRows,
-        scopeKind: String,
-        scope: ShopSyncScope,
-        shopId: String
-    ): Boolean {
-        fun rowMatches(ownerUserId: String?, rowShopId: String?): Boolean = when (scopeKind) {
-            ShopSyncScopeKinds.SHOP_SCOPED ->
-                rowShopId?.lowercase() == shopId.lowercase()
-            ShopSyncScopeKinds.LEGACY_OWNER_BRIDGE ->
-                ownerUserId != null &&
-                    rowShopId == null &&
-                    scope.legacyOwnerKey == task126OwnerHash(ownerUserId.lowercase())
-            ShopSyncScopeKinds.AUTHORIZED_SHOP_PLUS_LEGACY ->
-                rowShopId?.lowercase() == shopId.lowercase() ||
-                    (
-                        ownerUserId != null &&
-                            rowShopId == null &&
-                            scope.legacyOwnerKey == task126OwnerHash(ownerUserId.lowercase())
-                        )
-            else -> false
-        }
-        return when (rows) {
-            is ShopSyncRows.Suppliers -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-            is ShopSyncRows.Categories -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-            is ShopSyncRows.Products -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-            is ShopSyncRows.Prices -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-            is ShopSyncRows.History -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-            is ShopSyncRows.Images -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
-        }
-    }
-
     private suspend fun stageTailRows(
         stagingDb: AppDatabase,
         stagingRepository: DefaultInventoryRepository,
@@ -1336,7 +1167,8 @@ internal class ShopSyncRecoveryCoordinator(
         rows: ShopSyncRows
     ) {
         if (rows.size == 0) return
-        val applied = stagingRepository.applyShopSyncRecoveryRows(rows)
+        val materializableRows = materializableRecoveryRows(stagingDb, generationId, rows)
+        val applied = stagingRepository.applyShopSyncRecoveryRows(materializableRows)
         if (applied.skippedParentRows != 0 || applied.failedRows != 0 || applied.unsupportedRows != 0) {
             throw ShopSyncContractException("recovery_tail_stage_apply_incomplete")
         }
@@ -1461,8 +1293,13 @@ internal class ShopSyncRecoveryCoordinator(
             if (manifestRows.isNotEmpty()) {
                 stagingDb.syncRecoveryManifestDao().insertAll(manifestRows)
             }
-            val apply = stagingRepository.applyShopSyncRecoveryRows(page.rows)
-            val activeRows = manifestRows.count { it.active }
+            val materializableRows = materializableRecoveryRows(stagingDb, generationId, page.rows)
+            val apply = stagingRepository.applyShopSyncRecoveryRows(materializableRows)
+            val activeRows = if (materializableRows is ShopSyncRows.Prices) {
+                materializableRows.size
+            } else {
+                manifestRows.count { it.active }
+            }
             if (
                 apply.businessRowsApplied != activeRows &&
                 domain != ShopSyncRowDomain.IMAGES
@@ -1526,372 +1363,6 @@ internal class ShopSyncRecoveryCoordinator(
             !tailRowsMatchScope(page.rows, expectedScopeKind, checkpoint.scope, shopId)
         ) {
             throw ShopSyncContractException("recovery_page_contract_mismatch")
-        }
-    }
-
-    private suspend fun validateManifest(
-        db: AppDatabase,
-        generationId: String,
-        checkpoint: ShopSyncRecoveryCheckpoint
-    ) {
-        val calculated = linkedMapOf<ShopSyncRowDomain, ShopSyncDomainCheckpoint>()
-        for (domain in ShopSyncRowDomain.entries) {
-            var afterId: String? = null
-            var active = 0L
-            var tombstones = 0L
-            val idDigest = CanonicalLineDigest()
-            val versionDigest = CanonicalLineDigest()
-            val identityDigest = CanonicalLineDigest()
-            var identityPresent = false
-            do {
-                val rows = db.syncRecoveryManifestDao().page(
-                    generationId = generationId,
-                    domain = domain.wireValue,
-                    afterId = afterId,
-                    limit = MANIFEST_VERIFY_PAGE_SIZE
-                )
-                for (row in rows) {
-                    if (row.active) active++ else tombstones++
-                    // Every V6 domain, including images, publishes its id set
-                    // ordered by the manifest remote id. For images that id is
-                    // the scoped product id, never the image-version id.
-                    idDigest.add(row.idLine)
-                    versionDigest.add(row.versionLine)
-                    row.identityLine?.let {
-                        identityDigest.add(it)
-                        identityPresent = true
-                    }
-                }
-                afterId = rows.lastOrNull()?.remoteId
-            } while (rows.size == MANIFEST_VERIFY_PAGE_SIZE)
-            calculated[domain] = ShopSyncDomainCheckpoint(
-                activeCount = active,
-                tombstoneCount = tombstones,
-                idSetDigest = idDigest.finish(),
-                versionDigest = versionDigest.finish(),
-                identityDigest = identityDigest.finish().takeIf {
-                    identityPresent || domain == ShopSyncRowDomain.PRODUCTS
-                }
-            )
-            if (calculated.getValue(domain) != checkpoint.domain(domain)) {
-                throw ShopSyncContractException("recovery_manifest_digest_mismatch_${domain.wireValue}")
-            }
-        }
-        val catalogDigest = sha256(
-            calculated.getValue(ShopSyncRowDomain.SUPPLIERS).versionDigest + "\n" +
-                calculated.getValue(ShopSyncRowDomain.CATEGORIES).versionDigest + "\n" +
-                calculated.getValue(ShopSyncRowDomain.PRODUCTS).versionDigest
-        )
-        if (catalogDigest != checkpoint.catalog.digest) {
-            throw ShopSyncContractException("recovery_catalog_digest_mismatch")
-        }
-    }
-
-    /**
-     * Merge-join paginato tra manifest prodotti e immagini. Le relazioni
-     * catalogo/prezzi attive sono inoltre provate dal readback Room e dalle FK;
-     * qui copriamo anche tombstone e riferimenti immagine non materializzati.
-     */
-    private suspend fun validateRelationalManifest(db: AppDatabase, generationId: String) {
-        val products = RecoveryManifestReader(
-            dao = db.syncRecoveryManifestDao(),
-            generationId = generationId,
-            domain = ShopSyncRowDomain.PRODUCTS
-        )
-        val images = RecoveryManifestReader(
-            dao = db.syncRecoveryManifestDao(),
-            generationId = generationId,
-            domain = ShopSyncRowDomain.IMAGES
-        )
-        var image = images.next()
-        while (true) {
-            val product = products.next() ?: break
-            if (image != null && image.remoteId < product.remoteId) {
-                throw ShopSyncContractException("recovery_image_product_invalid")
-            }
-            val primaryImage = productPrimaryImageVersion(product)
-            if (primaryImage == null) {
-                if (image?.remoteId == product.remoteId) {
-                    // V6 deliberately keeps an image-domain tombstone when a
-                    // deleted product used to have a primary image. It is
-                    // evidence for the image digest, never a live relation.
-                    if (
-                        !product.active &&
-                        !image.active &&
-                        productDeletedAt(product) == imageProductDeletedAt(image)
-                    ) {
-                        image = images.next()
-                    } else {
-                        throw ShopSyncContractException("recovery_image_set_incomplete")
-                    }
-                }
-                continue
-            }
-            if (image?.remoteId != product.remoteId || imageVersionId(image) != primaryImage) {
-                throw ShopSyncContractException("recovery_primary_image_invalid")
-            }
-            if (image.active != product.active) {
-                throw ShopSyncContractException("recovery_image_product_state_mismatch")
-            }
-            image = images.next()
-        }
-        if (image != null) {
-            throw ShopSyncContractException("recovery_image_product_invalid")
-        }
-    }
-
-    /**
-     * Rilegge le righe realmente materializzate in Room e le confronta con gli
-     * hash del manifest remoto. Il manifest da solo non e' una prova di apply:
-     * un mapper errato potrebbe infatti conservare digest perfetti ma pubblicare
-     * colonne business diverse.
-     */
-    private suspend fun validatePhysicalSnapshot(db: AppDatabase, generationId: String) {
-        listOf(
-            ShopSyncRowDomain.SUPPLIERS,
-            ShopSyncRowDomain.CATEGORIES,
-            ShopSyncRowDomain.PRODUCTS,
-            ShopSyncRowDomain.PRICES,
-            ShopSyncRowDomain.HISTORY
-        ).forEach { domain ->
-            var afterId: String? = null
-            val pageSize = if (domain == ShopSyncRowDomain.HISTORY) {
-                resourceLimits.historyPageRows
-            } else {
-                PHYSICAL_VERIFY_PAGE_SIZE
-            }
-            do {
-                val expected = db.syncRecoveryManifestDao().pageActive(
-                    generationId = generationId,
-                    domain = domain.wireValue,
-                    afterId = afterId,
-                    limit = pageSize
-                )
-                val physical = readPhysicalPage(db, domain, afterId, pageSize)
-                if (physical.size != expected.size) {
-                    throw ShopSyncContractException(
-                        "recovery_physical_count_mismatch_${domain.wireValue}"
-                    )
-                }
-                expected.zip(physical).forEach { (manifest, materialized) ->
-                    if (
-                        manifest.remoteId != materialized.remoteId ||
-                        manifest.payloadDigest == null ||
-                        manifest.payloadDigest != materialized.payloadDigest ||
-                        (materialized.versionLine != null &&
-                            manifest.versionLine != materialized.versionLine)
-                    ) {
-                        throw ShopSyncContractException(
-                            "recovery_physical_digest_mismatch_${domain.wireValue}"
-                        )
-                    }
-                    if (domain == ShopSyncRowDomain.HISTORY) {
-                        validateHistoryPhysicalMaterialization(manifest, materialized)
-                    }
-                }
-                afterId = expected.lastOrNull()?.remoteId
-            } while (expected.size == pageSize)
-        }
-    }
-
-    private suspend fun readPhysicalPage(
-        db: AppDatabase,
-        domain: ShopSyncRowDomain,
-        afterId: String?,
-        limit: Int
-    ): List<PhysicalRecoveryRow> {
-        if (domain == ShopSyncRowDomain.HISTORY) {
-            return db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit).map { row ->
-                if (
-                    row.localRevision != row.syncedRevision ||
-                    row.payloadFingerprint == null
-                ) {
-                    throw ShopSyncContractException("recovery_physical_history_dirty")
-                }
-                PhysicalRecoveryRow(
-                    remoteId = canonicalRecoveryEntityUuid(row.remoteId),
-                    payloadDigest = recoveryHistoryPayloadDigest(
-                        physicalFingerprint = recoveryHistoryPhysicalFingerprint(row.entry),
-                        sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
-                    ),
-                    history = HistoryPhysicalRecoveryState(
-                        entry = row.entry,
-                        sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
-                    )
-                )
-            }
-        }
-        val sql = when (domain) {
-            ShopSyncRowDomain.SUPPLIERS ->
-                """
-                SELECT r.remoteId, s.name, r.remoteUpdatedAt,
-                       r.localChangeRevision, r.lastSyncedLocalRevision
-                FROM supplier_remote_refs r
-                INNER JOIN suppliers s ON s.id = r.supplierId
-                """.trimIndent()
-            ShopSyncRowDomain.CATEGORIES ->
-                """
-                SELECT r.remoteId, c.name, r.remoteUpdatedAt,
-                       r.localChangeRevision, r.lastSyncedLocalRevision
-                FROM category_remote_refs r
-                INNER JOIN categories c ON c.id = r.categoryId
-                """.trimIndent()
-            ShopSyncRowDomain.PRODUCTS ->
-                """
-                SELECT r.remoteId, p.barcode, p.itemNumber, p.productName,
-                       p.secondProductName, p.purchasePrice, p.retailPrice,
-                       p.stockQuantity, p.primaryImageVersionId, p.primaryImageUpdatedAt,
-                       sr.remoteId, cr.remoteId, r.remoteUpdatedAt,
-                       r.localChangeRevision, r.lastSyncedLocalRevision
-                FROM product_remote_refs r
-                INNER JOIN products p ON p.id = r.productId
-                LEFT JOIN supplier_remote_refs sr ON sr.supplierId = p.supplierId
-                LEFT JOIN category_remote_refs cr ON cr.categoryId = p.categoryId
-                """.trimIndent()
-            ShopSyncRowDomain.PRICES ->
-                """
-                SELECT pr.remoteId, rr.remoteId, p.type, p.price, p.effectiveAt,
-                       p.source, p.note, p.createdAt
-                FROM product_price_remote_refs pr
-                INNER JOIN product_prices p ON p.id = pr.productPriceId
-                INNER JOIN product_remote_refs rr ON rr.productId = p.productId
-                """.trimIndent()
-            ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
-                throw ShopSyncContractException("recovery_physical_domain_invalid")
-        }
-        val args: Array<out Any> = if (afterId == null) {
-            arrayOf<Any>(limit)
-        } else {
-            arrayOf<Any>(afterId, limit)
-        }
-        val remoteAlias = if (domain == ShopSyncRowDomain.PRICES) "pr" else "r"
-        val scopedSql = buildString {
-            append(sql)
-            if (afterId != null) append(" WHERE $remoteAlias.remoteId > ?")
-            append(" ORDER BY $remoteAlias.remoteId LIMIT ?")
-        }
-        return db.openHelper.readableDatabase.query(scopedSql, args).use { cursor ->
-            buildList {
-                while (cursor.moveToNext()) {
-                    add(physicalRow(domain, cursor))
-                }
-            }
-        }
-    }
-
-    private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalRecoveryRow =
-        when (domain) {
-            ShopSyncRowDomain.SUPPLIERS -> {
-                requireCleanPhysicalRef(cursor, 3, 4)
-                val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
-                val updatedAt = canonicalTimestamp(cursor.nullableString(2))
-                PhysicalRecoveryRow(
-                    remoteId = remoteId,
-                    payloadDigest = sha256(recoverySupplierPayloadFingerprint(cursor.getString(1))),
-                    versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
-                )
-            }
-            ShopSyncRowDomain.CATEGORIES -> {
-                requireCleanPhysicalRef(cursor, 3, 4)
-                val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
-                val updatedAt = canonicalTimestamp(cursor.nullableString(2))
-                PhysicalRecoveryRow(
-                    remoteId = remoteId,
-                    payloadDigest = sha256(recoveryCategoryPayloadFingerprint(cursor.getString(1))),
-                    versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
-                )
-            }
-            ShopSyncRowDomain.PRODUCTS -> {
-                requireCleanPhysicalRef(cursor, 13, 14)
-                val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
-                val supplierId = cursor.nullableString(10)?.let(::canonicalRecoveryEntityUuid)
-                val categoryId = cursor.nullableString(11)?.let(::canonicalRecoveryEntityUuid)
-                val imageId = cursor.nullableString(8)?.let(::canonicalUuid)
-                val imageUpdatedAt = cursor.nullableString(9)
-                val updatedAt = canonicalTimestamp(cursor.nullableString(12))
-                PhysicalRecoveryRow(
-                    remoteId = remoteId,
-                    payloadDigest = sha256(
-                        recoveryProductPayloadFingerprint(
-                            barcode = cursor.getString(1).trim(),
-                            itemNumber = cursor.nullableString(2),
-                            productName = cursor.nullableString(3),
-                            secondProductName = cursor.nullableString(4),
-                            purchasePrice = cursor.nullableDouble(5),
-                            retailPrice = cursor.nullableDouble(6),
-                            supplierRemoteId = supplierId,
-                            categoryRemoteId = categoryId,
-                            stockQuantity = cursor.nullableDouble(7),
-                            primaryImageVersionId = imageId,
-                            primaryImageUpdatedAt = imageUpdatedAt
-                        )
-                    ),
-                    versionLine = listOf(
-                        remoteId,
-                        updatedAt,
-                        "-",
-                        categoryId ?: "-",
-                        supplierId ?: "-",
-                        imageId ?: "-",
-                        canonicalTimestamp(imageUpdatedAt)
-                    ).joinToString("\u001f")
-                )
-            }
-            ShopSyncRowDomain.PRICES -> {
-                val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
-                PhysicalRecoveryRow(
-                    remoteId = remoteId,
-                    payloadDigest = sha256(
-                        recoveryPricePayloadFingerprint(
-                            id = remoteId,
-                            productId = canonicalRecoveryEntityUuid(cursor.getString(1)),
-                            type = cursor.getString(2),
-                            price = cursor.getDouble(3),
-                            effectiveAt = cursor.getString(4),
-                            source = cursor.nullableString(5),
-                            note = cursor.nullableString(6),
-                            createdAt = cursor.getString(7)
-                        )
-                    )
-                )
-            }
-            ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
-                throw ShopSyncContractException("recovery_physical_domain_invalid")
-        }
-
-    private fun requireCleanPhysicalRef(cursor: Cursor, localIndex: Int, syncedIndex: Int) {
-        if (cursor.getInt(localIndex) != cursor.getInt(syncedIndex)) {
-            throw ShopSyncContractException("recovery_physical_ref_dirty")
-        }
-    }
-
-    private fun validateStagingDatabase(
-        stagingDb: AppDatabase,
-        checkpoint: ShopSyncRecoveryCheckpoint
-    ) {
-        val sql = stagingDb.openHelper.readableDatabase
-        requirePragmaOk(sql, "PRAGMA integrity_check")
-        sql.query("PRAGMA foreign_key_check").use { cursor ->
-            if (cursor.moveToFirst()) {
-                throw ShopSyncContractException("recovery_staging_foreign_key_violation")
-            }
-        }
-        val expectedCounts = mapOf(
-            "suppliers" to checkpoint.catalog.suppliers.activeCount,
-            "categories" to checkpoint.catalog.categories.activeCount,
-            "products" to checkpoint.catalog.products.activeCount,
-            "product_prices" to checkpoint.prices.activeCount,
-            "history_entries" to checkpoint.history.activeCount,
-            "supplier_remote_refs" to checkpoint.catalog.suppliers.activeCount,
-            "category_remote_refs" to checkpoint.catalog.categories.activeCount,
-            "product_remote_refs" to checkpoint.catalog.products.activeCount,
-            "product_price_remote_refs" to checkpoint.prices.activeCount,
-            "history_entry_remote_refs" to checkpoint.history.activeCount
-        )
-        expectedCounts.forEach { (table, expected) ->
-            if (queryCount(sql, table) != expected) {
-                throw ShopSyncContractException("recovery_staging_table_count_mismatch_$table")
-            }
         }
     }
 
@@ -2225,6 +1696,920 @@ internal class ShopSyncRecoveryCoordinator(
 
     private fun isValidStagingName(name: String): Boolean =
         STAGING_NAME_PATTERN.matches(name)
+}
+
+/** The immutable full canonical A ledger remains mandatory even when acknowledged local bodies already reflect C. */
+internal suspend fun validateShopSyncCanonicalReceipt(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
+        checkpoint.integrity.totalViolationCount != 0L || checkpoint.syncEvents.requiresFullRecovery) {
+        throw ShopSyncContractException("ordinary_canonical_receipt_invalid")
+    }
+    validateRelationalManifest(db, generationId)
+    validateManifest(db, generationId, checkpoint)
+    // Also prove every retained/active price parent in the same generation, without reading physical A bodies.
+    materializablePriceCount(db, generationId)
+}
+
+/** Shared complete local proof; the active store deliberately retains History tombstone bodies. */
+internal suspend fun validateShopSyncActiveReceipt(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    validateHistoryTombstoneShadows(db, generationId)
+    validateShopSyncCanonicalReceipt(db, generationId, checkpoint)
+    validateStagingDatabase(db, generationId, checkpoint, activeStoreHistory = true)
+    validatePhysicalSnapshot(db, generationId, activeStoreHistory = true)
+}
+
+private data class HistoryTombstoneShadow(val uid: Long, val remoteId: String, val deletedAt: String)
+
+/** Scan every deleted physical row, including orphan bridges; never load its retained old body. */
+private suspend fun validateHistoryTombstoneShadows(db: AppDatabase, generationId: String) {
+    var afterUid: Long? = null
+    do {
+        coroutineContext.ensureActive()
+        val rows = db.openHelper.readableDatabase.query(
+            """
+            SELECT h.uid, h.deletedAt, r.remoteId, r.localChangeRevision,
+                   r.lastSyncedLocalRevision, r.lastRemoteAppliedAt, r.lastRemotePayloadFingerprint
+            FROM history_entries h
+            LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+            WHERE h.deletedAt IS NOT NULL AND (? IS NULL OR h.uid > ?)
+            ORDER BY h.uid LIMIT ?
+            """.trimIndent(), arrayOf<Any?>(afterUid, afterUid, PHYSICAL_VERIFY_PAGE_SIZE)
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    if (cursor.isNull(2) || cursor.isNull(3) || cursor.isNull(4) ||
+                        cursor.isNull(5) || cursor.isNull(6) || cursor.getInt(3) != cursor.getInt(4)) {
+                        throw ShopSyncContractException("ordinary_history_shadow_ref_invalid")
+                    }
+                    val remoteId = cursor.getString(2)
+                    if (canonicalRecoveryEntityUuid(remoteId) != remoteId) {
+                        throw ShopSyncContractException("ordinary_history_shadow_ref_invalid")
+                    }
+                    val deletedAt = cursor.getString(1)
+                    if (!isCanonicalHistoryShadowUtc(deletedAt)) {
+                        throw ShopSyncContractException("ordinary_history_shadow_tombstone_invalid")
+                    }
+                    add(HistoryTombstoneShadow(cursor.getLong(0), remoteId, deletedAt))
+                }
+            }
+        }
+        val manifests = db.syncRecoveryManifestDao().getByRemoteIds(
+            generationId, ShopSyncRowDomain.HISTORY.wireValue, rows.map { it.remoteId }
+        ).associateBy { it.remoteId }
+        rows.forEach { shadow ->
+            val manifest = manifests[shadow.remoteId]
+                ?: throw ShopSyncContractException("ordinary_history_shadow_manifest_missing")
+            val fields = manifest.versionLine.split('\u001f')
+            if (manifest.active || manifest.payloadDigest != null || fields.size != 5 ||
+                fields[0] != shadow.remoteId || fields[2] != shadow.deletedAt || fields[4] != "-" ||
+                !isCanonicalHistoryShadowUtc(fields[1])) {
+                throw ShopSyncContractException("ordinary_history_shadow_manifest_invalid")
+            }
+            historyManifestPayloadVersion(manifest)
+        }
+        afterUid = rows.lastOrNull()?.uid ?: afterUid
+    } while (rows.size == PHYSICAL_VERIFY_PAGE_SIZE)
+}
+
+private fun isCanonicalHistoryShadowUtc(value: String): Boolean =
+    CANONICAL_TIMESTAMP_PATTERN.matches(value) && !value.startsWith("0000-") &&
+        runCatching { LocalDateTime.parse(value.removeSuffix("Z")) }.isSuccess
+
+internal suspend fun validateManifest(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    val calculated = linkedMapOf<ShopSyncRowDomain, ShopSyncDomainCheckpoint>()
+    for (domain in ShopSyncRowDomain.entries) {
+        var afterId: String? = null
+        var active = 0L
+        var tombstones = 0L
+        val idDigest = CanonicalLineDigest()
+        val versionDigest = CanonicalLineDigest()
+        val identityDigest = CanonicalLineDigest()
+        var identityPresent = false
+        do {
+            val rows = db.syncRecoveryManifestDao().page(
+                generationId = generationId,
+                domain = domain.wireValue,
+                afterId = afterId,
+                limit = MANIFEST_VERIFY_PAGE_SIZE
+            )
+            for (row in rows) {
+                if (row.active) active++ else tombstones++
+                // Every V6 domain, including images, publishes its id set
+                // ordered by the manifest remote id. For images that id is
+                // the scoped product id, never the image-version id.
+                idDigest.add(row.idLine)
+                versionDigest.add(row.versionLine)
+                row.identityLine?.let {
+                    identityDigest.add(it)
+                    identityPresent = true
+                }
+            }
+            afterId = rows.lastOrNull()?.remoteId
+        } while (rows.size == MANIFEST_VERIFY_PAGE_SIZE)
+        calculated[domain] = ShopSyncDomainCheckpoint(
+            activeCount = active,
+            tombstoneCount = tombstones,
+            idSetDigest = idDigest.finish(),
+            versionDigest = versionDigest.finish(),
+            identityDigest = identityDigest.finish().takeIf {
+                identityPresent || domain == ShopSyncRowDomain.PRODUCTS
+            }
+        )
+        if (calculated.getValue(domain) != checkpoint.domain(domain)) {
+            throw ShopSyncContractException("recovery_manifest_digest_mismatch_${domain.wireValue}")
+        }
+    }
+    val catalogDigest = sha256(
+        calculated.getValue(ShopSyncRowDomain.SUPPLIERS).versionDigest + "\n" +
+            calculated.getValue(ShopSyncRowDomain.CATEGORIES).versionDigest + "\n" +
+            calculated.getValue(ShopSyncRowDomain.PRODUCTS).versionDigest
+    )
+    if (catalogDigest != checkpoint.catalog.digest) {
+        throw ShopSyncContractException("recovery_catalog_digest_mismatch")
+    }
+}
+
+/**
+ * Merge-join paginato tra manifest prodotti e immagini. Le relazioni
+ * catalogo/prezzi attive sono inoltre provate dal readback Room e dalle FK;
+ * qui copriamo anche tombstone e riferimenti immagine non materializzati.
+ */
+internal suspend fun validateRelationalManifest(db: AppDatabase, generationId: String) {
+    val products = RecoveryManifestReader(
+        dao = db.syncRecoveryManifestDao(),
+        generationId = generationId,
+        domain = ShopSyncRowDomain.PRODUCTS
+    )
+    val images = RecoveryManifestReader(
+        dao = db.syncRecoveryManifestDao(),
+        generationId = generationId,
+        domain = ShopSyncRowDomain.IMAGES
+    )
+    var image = images.next()
+    while (true) {
+        val product = products.next() ?: break
+        if (image != null && image.remoteId < product.remoteId) {
+            throw ShopSyncContractException("recovery_image_product_invalid")
+        }
+        val primaryImage = productPrimaryImageVersion(product)
+        if (primaryImage == null) {
+            if (image?.remoteId == product.remoteId) {
+                // V6 deliberately keeps an image-domain tombstone when a
+                // deleted product used to have a primary image. It is
+                // evidence for the image digest, never a live relation.
+                if (
+                    !product.active &&
+                    !image.active &&
+                    productDeletedAt(product) == imageProductDeletedAt(image)
+                ) {
+                    image = images.next()
+                } else {
+                    throw ShopSyncContractException("recovery_image_set_incomplete")
+                }
+            }
+            continue
+        }
+        if (image?.remoteId != product.remoteId || imageVersionId(image) != primaryImage) {
+            throw ShopSyncContractException("recovery_primary_image_invalid")
+        }
+        if (image.active != product.active) {
+            throw ShopSyncContractException("recovery_image_product_state_mismatch")
+        }
+        image = images.next()
+    }
+    if (image != null) {
+        throw ShopSyncContractException("recovery_image_product_invalid")
+    }
+}
+
+/**
+ * Rilegge le righe realmente materializzate in Room e le confronta con gli
+ * hash del manifest remoto. Il manifest da solo non e' una prova di apply:
+ * un mapper errato potrebbe infatti conservare digest perfetti ma pubblicare
+ * colonne business diverse.
+ */
+internal suspend fun validatePhysicalSnapshot(
+    db: AppDatabase,
+    generationId: String,
+    historyPageRows: Int = DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS.historyPageRows,
+    activeStoreHistory: Boolean = false
+) {
+    listOf(
+        ShopSyncRowDomain.SUPPLIERS,
+        ShopSyncRowDomain.CATEGORIES,
+        ShopSyncRowDomain.PRODUCTS,
+        ShopSyncRowDomain.PRICES,
+        ShopSyncRowDomain.HISTORY
+    ).forEach { domain ->
+        var afterId: String? = null
+        val pageSize = if (domain == ShopSyncRowDomain.HISTORY) {
+            historyPageRows
+        } else {
+            PHYSICAL_VERIFY_PAGE_SIZE
+        }
+        do {
+            val expected = if (domain == ShopSyncRowDomain.PRICES) {
+                materializablePriceManifestPage(db, generationId, afterId, pageSize)
+            } else {
+                db.syncRecoveryManifestDao().pageActive(
+                    generationId = generationId,
+                    domain = domain.wireValue,
+                    afterId = afterId,
+                    limit = pageSize
+                )
+            }
+            val physical = readPhysicalPage(db, domain, afterId, pageSize, activeStoreHistory)
+            if (physical.size != expected.size) {
+                throw ShopSyncContractException(
+                    "recovery_physical_count_mismatch_${domain.wireValue}"
+                )
+            }
+            expected.zip(physical).forEach { (manifest, materialized) ->
+                if (
+                    manifest.remoteId != materialized.remoteId ||
+                    manifest.payloadDigest == null ||
+                    manifest.payloadDigest != materialized.payloadDigest ||
+                    (materialized.versionLine != null &&
+                        manifest.versionLine != materialized.versionLine)
+                ) {
+                    throw ShopSyncContractException(
+                        "recovery_physical_digest_mismatch_${domain.wireValue}"
+                    )
+                }
+                if (domain == ShopSyncRowDomain.HISTORY) {
+                    validateHistoryPhysicalMaterialization(manifest, materialized)
+                }
+            }
+            afterId = expected.lastOrNull()?.remoteId
+        } while (expected.size == pageSize)
+    }
+}
+
+/**
+ * Append-only prices remain in the complete receipt even after their
+ * product is deleted. Only a product tombstone in this generation can
+ * exempt a price from Room's required active-product relationship.
+ */
+internal suspend fun materializableRecoveryRows(
+    db: AppDatabase,
+    generationId: String,
+    rows: ShopSyncRows
+): ShopSyncRows {
+    if (rows !is ShopSyncRows.Prices) return rows
+    val materializable = ArrayList<InventoryProductPriceRow>(rows.size)
+    for (batch in rows.values.chunked(PHYSICAL_VERIFY_PAGE_SIZE)) {
+        val activeParents = activePriceParentIds(
+            db,
+            generationId,
+            batch.map { canonicalRecoveryEntityUuid(it.productId) }.distinct()
+        )
+        materializable += batch.filter {
+            canonicalRecoveryEntityUuid(it.productId) in activeParents
+        }
+    }
+    return ShopSyncRows.Prices(materializable)
+}
+
+private suspend fun activePriceParentIds(
+    db: AppDatabase,
+    generationId: String,
+    parentIds: List<String>
+): Set<String> {
+    if (parentIds.isEmpty()) return emptySet()
+    if (parentIds.size > PHYSICAL_VERIFY_PAGE_SIZE) {
+        throw ShopSyncContractException("recovery_price_parent_lookup_bound_exceeded")
+    }
+    val parents = db.syncRecoveryManifestDao()
+        .getProductsByRemoteIds(generationId, parentIds)
+        .associateBy { it.remoteId }
+    return parentIds.filterTo(hashSetOf()) { parentId ->
+        val parent = parents[parentId]
+            ?: throw ShopSyncContractException("recovery_price_parent_manifest_missing")
+        if (parent.active != (productDeletedAt(parent) == null)) {
+            throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+        }
+        parent.active
+    }
+}
+
+private fun priceManifestParentId(row: SyncRecoveryManifestRow): String {
+    val fields = row.versionLine.split('\u001f')
+    if (fields.size != 9 || fields[0] != row.remoteId) {
+        throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+    }
+    val parentId = canonicalRecoveryEntityUuid(fields[2])
+    if (parentId != fields[2]) {
+        throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+    }
+    return parentId
+}
+
+/** Bounded keyset scan; neither the full price ledger nor all parents are loaded. */
+private suspend fun materializablePriceManifestPage(
+    db: AppDatabase,
+    generationId: String,
+    afterId: String?,
+    limit: Int
+): List<SyncRecoveryManifestRow> {
+    val materializable = ArrayList<SyncRecoveryManifestRow>(limit)
+    var cursor = afterId
+    while (materializable.size < limit) {
+        coroutineContext.ensureActive()
+        val batchLimit = limit - materializable.size
+        val rows = db.syncRecoveryManifestDao().pageActive(
+            generationId,
+            ShopSyncRowDomain.PRICES.wireValue,
+            cursor,
+            batchLimit
+        )
+        if (rows.isEmpty()) break
+        val parentIds = rows.map(::priceManifestParentId)
+        val activeParents = activePriceParentIds(db, generationId, parentIds.distinct())
+        materializable += rows.filterIndexed { index, _ -> parentIds[index] in activeParents }
+        cursor = rows.last().remoteId
+        if (rows.size < batchLimit) break
+    }
+    return materializable
+}
+
+private suspend fun materializablePriceCount(db: AppDatabase, generationId: String): Long {
+    var count = 0L
+    var afterId: String? = null
+    do {
+        val rows = materializablePriceManifestPage(
+            db,
+            generationId,
+            afterId,
+            PHYSICAL_VERIFY_PAGE_SIZE
+        )
+        count = Math.addExact(count, rows.size.toLong())
+        afterId = rows.lastOrNull()?.remoteId
+    } while (rows.size == PHYSICAL_VERIFY_PAGE_SIZE)
+    return count
+}
+
+private suspend fun readPhysicalPage(
+    db: AppDatabase,
+    domain: ShopSyncRowDomain,
+    afterId: String?,
+    limit: Int,
+    activeStoreHistory: Boolean
+): List<PhysicalRecoveryRow> {
+    if (domain == ShopSyncRowDomain.HISTORY) {
+        val rows = if (activeStoreHistory) {
+            db.historyEntryDao().getRecoveryActivePhysicalPage(afterId, limit)
+        } else {
+            db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit)
+        }
+        return rows.map { row ->
+            if (
+                row.localRevision != row.syncedRevision ||
+                row.payloadFingerprint == null
+            ) {
+                throw ShopSyncContractException("recovery_physical_history_dirty")
+            }
+            PhysicalRecoveryRow(
+                remoteId = canonicalRecoveryEntityUuid(row.remoteId),
+                payloadDigest = recoveryHistoryPayloadDigest(
+                    physicalFingerprint = recoveryHistoryPhysicalFingerprint(row.entry),
+                    sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
+                ),
+                history = HistoryPhysicalRecoveryState(
+                    entry = row.entry,
+                    sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
+                )
+            )
+        }
+    }
+    val sql = when (domain) {
+        ShopSyncRowDomain.SUPPLIERS ->
+            """
+            SELECT r.remoteId, s.name, r.remoteUpdatedAt,
+                   r.localChangeRevision, r.lastSyncedLocalRevision
+            FROM supplier_remote_refs r
+            INNER JOIN suppliers s ON s.id = r.supplierId
+            """.trimIndent()
+        ShopSyncRowDomain.CATEGORIES ->
+            """
+            SELECT r.remoteId, c.name, r.remoteUpdatedAt,
+                   r.localChangeRevision, r.lastSyncedLocalRevision
+            FROM category_remote_refs r
+            INNER JOIN categories c ON c.id = r.categoryId
+            """.trimIndent()
+        ShopSyncRowDomain.PRODUCTS ->
+            """
+            SELECT r.remoteId, p.barcode, p.itemNumber, p.productName,
+                   p.secondProductName, p.purchasePrice, p.retailPrice,
+                   p.stockQuantity, p.primaryImageVersionId, p.primaryImageUpdatedAt,
+                   sr.remoteId, cr.remoteId, r.remoteUpdatedAt,
+                   r.localChangeRevision, r.lastSyncedLocalRevision
+            FROM product_remote_refs r
+            INNER JOIN products p ON p.id = r.productId
+            LEFT JOIN supplier_remote_refs sr ON sr.supplierId = p.supplierId
+            LEFT JOIN category_remote_refs cr ON cr.categoryId = p.categoryId
+            """.trimIndent()
+        ShopSyncRowDomain.PRICES ->
+            """
+            SELECT pr.remoteId, rr.remoteId, p.type, p.price, p.effectiveAt,
+                   p.source, p.note, p.createdAt
+            FROM product_price_remote_refs pr
+            INNER JOIN product_prices p ON p.id = pr.productPriceId
+            INNER JOIN product_remote_refs rr ON rr.productId = p.productId
+            """.trimIndent()
+        ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
+            throw ShopSyncContractException("recovery_physical_domain_invalid")
+    }
+    val args: Array<out Any> = if (afterId == null) {
+        arrayOf<Any>(limit)
+    } else {
+        arrayOf<Any>(afterId, limit)
+    }
+    val remoteAlias = if (domain == ShopSyncRowDomain.PRICES) "pr" else "r"
+    val scopedSql = buildString {
+        append(sql)
+        if (afterId != null) append(" WHERE $remoteAlias.remoteId > ?")
+        append(" ORDER BY $remoteAlias.remoteId LIMIT ?")
+    }
+    return db.openHelper.readableDatabase.query(scopedSql, args).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(physicalRow(domain, cursor))
+            }
+        }
+    }
+}
+
+private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalRecoveryRow =
+    when (domain) {
+        ShopSyncRowDomain.SUPPLIERS -> {
+            requireCleanPhysicalRef(cursor, 3, 4)
+            val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
+            val updatedAt = canonicalTimestamp(cursor.nullableString(2))
+            PhysicalRecoveryRow(
+                remoteId = remoteId,
+                payloadDigest = sha256(recoverySupplierPayloadFingerprint(cursor.getString(1))),
+                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
+            )
+        }
+        ShopSyncRowDomain.CATEGORIES -> {
+            requireCleanPhysicalRef(cursor, 3, 4)
+            val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
+            val updatedAt = canonicalTimestamp(cursor.nullableString(2))
+            PhysicalRecoveryRow(
+                remoteId = remoteId,
+                payloadDigest = sha256(recoveryCategoryPayloadFingerprint(cursor.getString(1))),
+                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
+            )
+        }
+        ShopSyncRowDomain.PRODUCTS -> {
+            requireCleanPhysicalRef(cursor, 13, 14)
+            val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
+            val supplierId = cursor.nullableString(10)?.let(::canonicalRecoveryEntityUuid)
+            val categoryId = cursor.nullableString(11)?.let(::canonicalRecoveryEntityUuid)
+            val imageId = cursor.nullableString(8)?.let(::canonicalUuid)
+            val imageUpdatedAt = cursor.nullableString(9)
+            val updatedAt = canonicalTimestamp(cursor.nullableString(12))
+            PhysicalRecoveryRow(
+                remoteId = remoteId,
+                payloadDigest = sha256(
+                    recoveryProductPayloadFingerprint(
+                        barcode = cursor.getString(1).trim(),
+                        itemNumber = cursor.nullableString(2),
+                        productName = cursor.nullableString(3),
+                        secondProductName = cursor.nullableString(4),
+                        purchasePrice = cursor.nullableDouble(5),
+                        retailPrice = cursor.nullableDouble(6),
+                        supplierRemoteId = supplierId,
+                        categoryRemoteId = categoryId,
+                        stockQuantity = cursor.nullableDouble(7),
+                        primaryImageVersionId = imageId,
+                        primaryImageUpdatedAt = imageUpdatedAt
+                    )
+                ),
+                versionLine = listOf(
+                    remoteId,
+                    updatedAt,
+                    "-",
+                    categoryId ?: "-",
+                    supplierId ?: "-",
+                    imageId ?: "-",
+                    canonicalTimestamp(imageUpdatedAt)
+                ).joinToString("\u001f")
+            )
+        }
+        ShopSyncRowDomain.PRICES -> {
+            val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
+            PhysicalRecoveryRow(
+                remoteId = remoteId,
+                payloadDigest = sha256(
+                    recoveryPricePayloadFingerprint(
+                        id = remoteId,
+                        productId = canonicalRecoveryEntityUuid(cursor.getString(1)),
+                        type = cursor.getString(2),
+                        price = cursor.getDouble(3),
+                        effectiveAt = cursor.getString(4),
+                        source = cursor.nullableString(5),
+                        note = cursor.nullableString(6),
+                        createdAt = cursor.getString(7)
+                    )
+                )
+            )
+        }
+        ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
+            throw ShopSyncContractException("recovery_physical_domain_invalid")
+    }
+
+private fun requireCleanPhysicalRef(cursor: Cursor, localIndex: Int, syncedIndex: Int) {
+    if (cursor.getInt(localIndex) != cursor.getInt(syncedIndex)) {
+        throw ShopSyncContractException("recovery_physical_ref_dirty")
+    }
+}
+
+internal suspend fun validateStagingDatabase(
+    stagingDb: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    activeStoreHistory: Boolean = false
+) {
+    val sql = stagingDb.openHelper.readableDatabase
+    requirePragmaOk(sql, "PRAGMA integrity_check")
+    sql.query("PRAGMA foreign_key_check").use { cursor ->
+        if (cursor.moveToFirst()) {
+            throw ShopSyncContractException("recovery_staging_foreign_key_violation")
+        }
+    }
+    val materializedPriceCount = materializablePriceCount(stagingDb, generationId)
+    val historyShadowCount = if (activeStoreHistory) {
+        sql.query("SELECT COUNT(*) FROM history_entries WHERE deletedAt IS NOT NULL").use {
+            check(it.moveToFirst())
+            it.getLong(0)
+        }
+    } else 0L
+    val expectedCounts = mapOf(
+        "suppliers" to checkpoint.catalog.suppliers.activeCount,
+        "categories" to checkpoint.catalog.categories.activeCount,
+        "products" to checkpoint.catalog.products.activeCount,
+        "product_prices" to materializedPriceCount,
+        "history_entries" to Math.addExact(checkpoint.history.activeCount, historyShadowCount),
+        "supplier_remote_refs" to checkpoint.catalog.suppliers.activeCount,
+        "category_remote_refs" to checkpoint.catalog.categories.activeCount,
+        "product_remote_refs" to checkpoint.catalog.products.activeCount,
+        "product_price_remote_refs" to materializedPriceCount,
+        "history_entry_remote_refs" to Math.addExact(checkpoint.history.activeCount, historyShadowCount)
+    )
+    expectedCounts.forEach { (table, expected) ->
+        if (queryCount(sql, table) != expected) {
+            throw ShopSyncContractException("recovery_staging_table_count_mismatch_$table")
+        }
+    }
+}
+
+
+internal fun publishedBaselineFromMarker(
+    checkpointB: ShopSyncRecoveryCheckpoint,
+    markerC: ShopSyncConvergenceMarker
+): ShopSyncRecoveryCheckpoint {
+    if (!markerMatchesCheckpoint(markerC, checkpointB)) {
+        throw ShopSyncContractException("recovery_convergence_marker_mismatch")
+    }
+    if (!SHA256_PATTERN.matches(markerC.checkpointDigest)) {
+        throw ShopSyncContractException("recovery_marker_checkpoint_digest_invalid")
+    }
+    return checkpointB.copy(
+        syncEvents = markerC.syncEvents,
+        catalog = markerC.catalog,
+        prices = markerC.prices,
+        history = markerC.history,
+        images = markerC.images,
+        checkpointDigest = markerC.checkpointDigest
+    )
+}
+
+internal fun validateRecoveryScopeIdentity(
+    scope: ShopSyncScope,
+    accountId: String,
+    deviceId: String
+) {
+    if (
+        scope.accountKey != sha256(accountId.trim().lowercase()) ||
+        scope.deviceKey != sha256(deviceId.trim())
+    ) {
+        throw ShopSyncContractException("recovery_scope_identity_key_mismatch")
+    }
+}
+
+private fun validateTailTargetedRows(
+    result: ShopSyncTargetedRows,
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    domain: ShopSyncRowDomain,
+    shopId: String,
+    requestedIds: List<String>
+) {
+    val expectedDomainFence = checkpoint.syncEvents.domainMaxIds[domain.syncEventDomain()]
+        ?: throw ShopSyncContractException("recovery_tail_domain_fence_missing")
+    val expectedScopeKind = if (domain == ShopSyncRowDomain.HISTORY) {
+        checkpoint.scope.historyKind ?: checkpoint.scope.kind
+    } else {
+        checkpoint.scope.kind
+    }
+    val returned = result.rows.ids().map(::canonicalRecoveryEntityUuid)
+    val expected = requestedIds.map(::canonicalRecoveryEntityUuid).toSet()
+    if (
+        result.schemaVersion != RECOVERY_TAIL_TARGETED_ROWS_SCHEMA ||
+        result.shopId.lowercase() != shopId.lowercase() ||
+        result.scope != checkpoint.scope ||
+        result.domain != domain ||
+        result.asOfEventMaxId != checkpoint.syncEvents.maxId ||
+        parseShopSyncMaxEventId(result.currentScopeEventMaxId) <
+            parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) ||
+        result.minimumDomainEventMaxId != expectedDomainFence ||
+        parseShopSyncMaxEventId(result.materializedDomainEventMaxId) <
+            parseShopSyncMaxEventId(expectedDomainFence) ||
+        result.domainScope != expectedScopeKind ||
+        result.requestedCount != requestedIds.size ||
+        result.missingIds.isNotEmpty() ||
+        returned.size != requestedIds.size ||
+        returned.toSet() != expected
+    ) {
+        throw ShopSyncContractException("recovery_tail_targeted_contract_mismatch")
+    }
+    if (!tailRowsMatchScope(result.rows, expectedScopeKind, checkpoint.scope, shopId)) {
+        throw ShopSyncContractException("recovery_tail_targeted_row_scope_mismatch")
+    }
+}
+
+private fun tailRowsMatchScope(
+    rows: ShopSyncRows,
+    scopeKind: String,
+    scope: ShopSyncScope,
+    shopId: String
+): Boolean {
+    fun rowMatches(ownerUserId: String?, rowShopId: String?): Boolean = when (scopeKind) {
+        ShopSyncScopeKinds.SHOP_SCOPED ->
+            rowShopId?.lowercase() == shopId.lowercase()
+        ShopSyncScopeKinds.LEGACY_OWNER_BRIDGE ->
+            ownerUserId != null &&
+                rowShopId == null &&
+                scope.legacyOwnerKey == task126OwnerHash(ownerUserId.lowercase())
+        ShopSyncScopeKinds.AUTHORIZED_SHOP_PLUS_LEGACY ->
+            rowShopId?.lowercase() == shopId.lowercase() ||
+                (
+                    ownerUserId != null &&
+                        rowShopId == null &&
+                        scope.legacyOwnerKey == task126OwnerHash(ownerUserId.lowercase())
+                    )
+        else -> false
+    }
+    return when (rows) {
+        is ShopSyncRows.Suppliers -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+        is ShopSyncRows.Categories -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+        is ShopSyncRows.Products -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+        is ShopSyncRows.Prices -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+        is ShopSyncRows.History -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+        is ShopSyncRows.Images -> rows.values.all { rowMatches(it.ownerUserId, it.shopId) }
+    }
+}
+
+internal fun validateTailPage(
+    page: ShopSyncEventPage,
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    shopId: String,
+    cursorBeforePage: Long,
+    pageLimit: Int = RECOVERY_TAIL_EVENT_PAGE_LIMIT
+) {
+    if (
+        page.schemaVersion != RECOVERY_TAIL_EVENT_PAGE_SCHEMA ||
+        page.shopId.lowercase() != shopId.lowercase() ||
+        page.scope != checkpoint.scope ||
+        page.asOfEventMaxId != checkpoint.syncEvents.maxId ||
+        parseShopSyncMaxEventId(page.scopeEventMaxId) <
+            parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) ||
+        page.asOfDomainEventMaxIds != checkpoint.syncEvents.domainMaxIds ||
+        page.pageLimit != pageLimit ||
+        page.rows.size > pageLimit ||
+        (page.hasMore && page.nextAfterId == null) ||
+        (!page.hasMore && page.nextAfterId != null)
+    ) {
+        throw ShopSyncContractException("recovery_tail_page_contract_mismatch")
+    }
+    if (page.rows.firstOrNull()?.id?.let { it <= cursorBeforePage } == true) {
+        throw ShopSyncContractException("recovery_tail_event_order_invalid")
+    }
+}
+
+internal fun validateTailEvent(
+    event: SyncEventRemoteRow,
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    shopId: String
+) {
+    val ids = event.entityIds ?: SyncEventEntityIds()
+    val scopeKind = if (event.domain == SyncEventDomains.HISTORY) {
+        checkpoint.scope.historyKind ?: checkpoint.scope.kind
+    } else {
+        checkpoint.scope.kind
+    }
+    val scopeMatches = when (scopeKind) {
+        ShopSyncScopeKinds.SHOP_SCOPED ->
+            event.shopId?.lowercase() == shopId.lowercase()
+        ShopSyncScopeKinds.LEGACY_OWNER_BRIDGE ->
+            event.shopId == null &&
+                checkpoint.scope.legacyOwnerKey ==
+                task126OwnerHash(event.ownerUserId.lowercase())
+        ShopSyncScopeKinds.AUTHORIZED_SHOP_PLUS_LEGACY ->
+            event.shopId?.lowercase() == shopId.lowercase() ||
+                (
+                    event.shopId == null &&
+                        checkpoint.scope.legacyOwnerKey ==
+                        task126OwnerHash(event.ownerUserId.lowercase())
+                    )
+        else -> false
+    }
+    if (
+        !scopeMatches ||
+        !event.timestampValid ||
+        event.requiresFullRecovery ||
+        !SyncEventContract.hasSupportedEventType(event.domain, event.eventType) ||
+        !SyncEventContract.hasCompletePrimaryIds(event.domain, event.changedCount, ids)
+    ) {
+        throw ShopSyncContractException("recovery_tail_event_unsafe")
+    }
+}
+
+internal const val SHOP_SYNC_ORDINARY_MAX_EVENTS = 100
+private const val SHOP_SYNC_ORDINARY_MAX_ROWS = 2_000
+private const val SHOP_SYNC_ORDINARY_MAX_CALLS = 64
+private const val SHOP_SYNC_ORDINARY_MAX_BYTES = 16L * 1024L * 1024L
+
+internal data class PreparedShopSyncOrdinaryWindow(
+    val rows: Map<ShopSyncRowDomain, ShopSyncRows>,
+    val removedImageProductIds: List<String>
+)
+
+/** Same canonical inputs as recovery, prepared completely outside the Room writer transaction. */
+internal suspend fun prepareShopSyncOrdinaryWindow(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    events: List<SyncEventRemoteRow>,
+    read: suspend (ShopSyncRowDomain, List<String>) -> ShopSyncTargetedRows
+): PreparedShopSyncOrdinaryWindow {
+    val prepared = linkedMapOf<ShopSyncRowDomain, ShopSyncRows>()
+    var calls = 0
+    var bytes = 0L
+    suspend fun fetch(domain: ShopSyncRowDomain, ids: Collection<String>) {
+        val existing = prepared[domain]?.ids()?.toSet().orEmpty()
+        val missing = ids.map(::canonicalRecoveryEntityUuid).distinct().filterNot { it in existing }.sorted()
+        if (missing.size > SHOP_SYNC_ORDINARY_MAX_ROWS) {
+            throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+        }
+        for (chunk in missing.chunked(DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS.targetedRows(domain))) {
+            coroutineContext.ensureActive()
+            if (prepared.values.sumOf { it.size } + chunk.size > SHOP_SYNC_ORDINARY_MAX_ROWS ||
+                ++calls > SHOP_SYNC_ORDINARY_MAX_CALLS) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+            val result = read(domain, chunk)
+            if (result.rows.recoveryDomain() != domain) {
+                throw ShopSyncContractException("ordinary_targeted_domain_mismatch")
+            }
+            if (result.missingIds.isNotEmpty()) {
+                throw ShopSyncContractException("ordinary_targeted_missing_remote")
+            }
+            validateTailTargetedRows(result, checkpoint, domain, checkpoint.shopId, chunk)
+            // The RPC is a lower-bound live read. Refuse material from a later
+            // captured window before combining it with the server C receipt.
+            if (result.currentScopeEventMaxId != checkpoint.syncEvents.maxId ||
+                result.materializedDomainEventMaxId != checkpoint.syncEvents.domainMaxIds[domain.syncEventDomain()]) {
+                throw ShopSyncContractException("ordinary_targeted_fence_changed")
+            }
+            if (result.responseBytes < 0L || result.largestRowBytes < 0L) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+            if (domain == ShopSyncRowDomain.HISTORY) {
+                requireHistoryRowResponseWithinBudget(result.largestRowBytes)
+            }
+            bytes = Math.addExact(bytes, result.responseBytes)
+            if (bytes > SHOP_SYNC_ORDINARY_MAX_BYTES) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+            result.rows.toManifestRows(generationId, domain)
+            prepared[domain] = mergePreparedRecoveryRows(prepared[domain], result.rows)
+            if (prepared.values.sumOf { it.size } > SHOP_SYNC_ORDINARY_MAX_ROWS) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+        }
+    }
+    val suppliers = events.flatMap { it.entityIds?.supplierIds.orEmpty() }.map(::canonicalRecoveryEntityUuid).toSet()
+    val categories = events.flatMap { it.entityIds?.categoryIds.orEmpty() }.map(::canonicalRecoveryEntityUuid).toSet()
+    val productIds = events.flatMap { it.entityIds?.productIds.orEmpty() }.map(::canonicalRecoveryEntityUuid).toMutableSet()
+    fetch(ShopSyncRowDomain.SUPPLIERS, suppliers)
+    fetch(ShopSyncRowDomain.CATEGORIES, categories)
+    fetch(ShopSyncRowDomain.PRICES, events.flatMap { it.entityIds?.priceIds.orEmpty() })
+    fetch(ShopSyncRowDomain.HISTORY, events.flatMap { it.entityIds?.sessionIds.orEmpty() })
+    (prepared[ShopSyncRowDomain.PRICES] as? ShopSyncRows.Prices)?.values?.forEach {
+        productIds += canonicalRecoveryEntityUuid(it.productId)
+    }
+    // Supplier/category cascades may change product material although those
+    // product IDs are not primary IDs of the triggering catalog event.
+    if (suppliers.isNotEmpty() || categories.isNotEmpty()) {
+        var cursor: String? = null
+        do {
+            coroutineContext.ensureActive()
+            val page = db.syncRecoveryManifestDao().page(generationId, ShopSyncRowDomain.PRODUCTS.wireValue,
+                cursor, MANIFEST_VERIFY_PAGE_SIZE)
+            page.filter { it.active }.forEach { row ->
+                val fields = productManifestParts(row)
+                if (fields[3] in categories || fields[4] in suppliers) productIds += row.remoteId
+            }
+            if (productIds.size > SHOP_SYNC_ORDINARY_MAX_ROWS) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+            cursor = page.lastOrNull()?.remoteId
+        } while (page.size == MANIFEST_VERIFY_PAGE_SIZE)
+    }
+    fetch(ShopSyncRowDomain.PRODUCTS, productIds)
+    val products = (prepared[ShopSyncRowDomain.PRODUCTS] as? ShopSyncRows.Products)?.values.orEmpty()
+    fetch(ShopSyncRowDomain.SUPPLIERS, products.filter { it.deletedAt == null }.mapNotNull { it.supplierId })
+    fetch(ShopSyncRowDomain.CATEGORIES, products.filter { it.deletedAt == null }.mapNotNull { it.categoryId })
+    val removedImages = products.filter { it.deletedAt == null && it.primaryImageVersionId == null }
+        .map { canonicalRecoveryEntityUuid(it.id) }
+    val imageIds = products.filter { it.deletedAt == null && it.primaryImageVersionId != null }
+        .map { canonicalRecoveryEntityUuid(it.id) }.toMutableSet()
+    val restoredParents = hashSetOf<String>()
+    for (batch in products.chunked(PHYSICAL_VERIFY_PAGE_SIZE)) {
+        val ids = batch.map { canonicalRecoveryEntityUuid(it.id) }
+        val previous = db.syncRecoveryManifestDao().getProductsByRemoteIds(generationId, ids).associateBy { it.remoteId }
+        val imagePrevious = db.syncRecoveryManifestDao().getByRemoteIds(
+            generationId, ShopSyncRowDomain.IMAGES.wireValue, ids
+        ).associateBy { it.remoteId }
+        batch.forEach { product ->
+            val id = canonicalRecoveryEntityUuid(product.id)
+            if (product.deletedAt != null && imagePrevious[id] != null) imageIds += id
+            if (product.deletedAt == null && previous[id]?.active == false) restoredParents += id
+        }
+    }
+    fetch(ShopSyncRowDomain.IMAGES, imageIds)
+    val byProduct = products.associateBy { canonicalRecoveryEntityUuid(it.id) }
+    (prepared[ShopSyncRowDomain.IMAGES] as? ShopSyncRows.Images)?.values.orEmpty().forEach { image ->
+        val product = byProduct[canonicalRecoveryEntityUuid(image.productId)]
+            ?: throw ShopSyncContractException("ordinary_image_product_missing")
+        if (if (product.deletedAt != null) image.productDeletedAt != product.deletedAt
+            else image.productDeletedAt != null || product.primaryImageVersionId?.lowercase() != image.versionId.lowercase()) {
+            throw ShopSyncContractException("ordinary_image_product_mismatch")
+        }
+    }
+    // A restored parent needs the original retained price bodies. Hashes in
+    // the manifest alone cannot recreate them or prove physical application.
+    if (restoredParents.isNotEmpty()) {
+        var cursor: String? = null
+        val retainedIds = linkedSetOf<String>()
+        do {
+            coroutineContext.ensureActive()
+            val page = db.syncRecoveryManifestDao().page(generationId, ShopSyncRowDomain.PRICES.wireValue,
+                cursor, MANIFEST_VERIFY_PAGE_SIZE)
+            page.forEach { row -> if (priceManifestParentId(row) in restoredParents) retainedIds += row.remoteId }
+            if (retainedIds.size > SHOP_SYNC_ORDINARY_MAX_ROWS) {
+                throw ShopSyncContractException("ordinary_prepared_window_bound_exceeded")
+            }
+            cursor = page.lastOrNull()?.remoteId
+        } while (page.size == MANIFEST_VERIFY_PAGE_SIZE)
+        fetch(ShopSyncRowDomain.PRICES, retainedIds)
+    }
+    return PreparedShopSyncOrdinaryWindow(prepared, removedImages)
+}
+
+private fun mergePreparedRecoveryRows(old: ShopSyncRows?, next: ShopSyncRows): ShopSyncRows {
+    fun <T> merge(previous: List<T>, incoming: List<T>, id: (T) -> String): List<T> {
+        val rows = previous.associateByTo(linkedMapOf(), id)
+        incoming.forEach { value ->
+            val key = id(value)
+            if (rows[key]?.let { it != value } == true) {
+                throw ShopSyncContractException("ordinary_targeted_material_changed")
+            }
+            rows[key] = value
+        }
+        return rows.toSortedMap().values.toList()
+    }
+    return when (next) {
+        is ShopSyncRows.Suppliers -> ShopSyncRows.Suppliers(merge((old as? ShopSyncRows.Suppliers)?.values.orEmpty(), next.values) { it.id })
+        is ShopSyncRows.Categories -> ShopSyncRows.Categories(merge((old as? ShopSyncRows.Categories)?.values.orEmpty(), next.values) { it.id })
+        is ShopSyncRows.Products -> ShopSyncRows.Products(merge((old as? ShopSyncRows.Products)?.values.orEmpty(), next.values) { it.id })
+        is ShopSyncRows.Prices -> ShopSyncRows.Prices(merge((old as? ShopSyncRows.Prices)?.values.orEmpty(), next.values) { it.id })
+        is ShopSyncRows.History -> ShopSyncRows.History(merge((old as? ShopSyncRows.History)?.values.orEmpty(), next.values) { it.remoteId })
+        is ShopSyncRows.Images -> ShopSyncRows.Images(merge((old as? ShopSyncRows.Images)?.values.orEmpty(), next.values) { it.productId })
+    }
 }
 
 private class RecoveryTransferBudget(
@@ -2616,7 +3001,7 @@ private fun requirePragmaOk(db: SupportSQLiteDatabase, pragma: String) {
     }
 }
 
-private fun ShopSyncRows.toManifestRows(
+internal fun ShopSyncRows.toManifestRows(
     generationId: String,
     domain: ShopSyncRowDomain
 ): List<SyncRecoveryManifestRow> {
@@ -2833,7 +3218,7 @@ private fun ShopSyncRecoveryCheckpoint.domain(domain: ShopSyncRowDomain): ShopSy
         ShopSyncRowDomain.IMAGES -> images
     }
 
-private fun ShopSyncRowDomain.syncEventDomain(): String = when (this) {
+internal fun ShopSyncRowDomain.syncEventDomain(): String = when (this) {
     ShopSyncRowDomain.SUPPLIERS,
     ShopSyncRowDomain.CATEGORIES,
     ShopSyncRowDomain.PRODUCTS,
@@ -2962,6 +3347,9 @@ private fun requiredRecoveryDigest(value: String?, code: String): String {
 
 internal fun decodeRecoveryCheckpointJson(value: String): ShopSyncRecoveryCheckpoint =
     RECOVERY_JSON.decodeFromString(value)
+
+internal fun encodeRecoveryCheckpointJson(value: ShopSyncRecoveryCheckpoint): String =
+    RECOVERY_JSON.encodeToString(value)
 
 private fun canonicalUuid(value: String): String = canonicalUuidOrNull(value)
     ?: throw ShopSyncContractException("recovery_uuid_invalid")

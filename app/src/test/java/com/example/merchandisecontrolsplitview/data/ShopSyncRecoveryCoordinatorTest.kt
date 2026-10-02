@@ -2,9 +2,11 @@ package com.example.merchandisecontrolsplitview.data
 
 import android.app.Application
 import androidx.room.Room
+import androidx.room.withTransaction
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
@@ -49,11 +51,13 @@ class ShopSyncRecoveryCoordinatorTest {
             shopSyncReadRemoteDataSource = remote
         )
         ShopSyncRecoveryTestHooks.reset()
+        DefaultInventoryRepositoryTestHooks.afterOrdinaryShopSyncWrites = null
     }
 
     @After
     fun teardown() {
         ShopSyncRecoveryTestHooks.reset()
+        DefaultInventoryRepositoryTestHooks.afterOrdinaryShopSyncWrites = null
         if (::db.isInitialized && db.isOpen) db.close()
         databaseNames.forEach(app::deleteDatabase)
         app.getDatabasePath(".").canonicalFile.listFiles()
@@ -1908,6 +1912,509 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun retainedAppendOnlyPriceForTombstonedProductRecoversCompleteLedger() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        val activeFixture = targetFixture()
+        val deletedFixture = deletedProductImageFixture()
+        val retainedPriceRows = activeFixture.rows.getValue(ShopSyncRowDomain.PRICES)
+        val retainedPrice = (retainedPriceRows as ShopSyncRows.Prices).values.single()
+        remote = RecoveryRemoteFixture(
+            deletedFixture.copy(
+                checkpoint = deletedFixture.checkpoint.copy(prices = activeFixture.checkpoint.prices),
+                rows = deletedFixture.rows + (ShopSyncRowDomain.PRICES to retainedPriceRows)
+            )
+        )
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        assertEquals(
+            activeFixture.checkpoint.prices,
+            decodeRecoveryCheckpointJson(baseline.checkpointJson).prices
+        )
+        val priceManifest = db.syncRecoveryManifestDao()
+            .page(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue, null, 10)
+            .single()
+        assertTrue(priceManifest.active)
+        assertEquals(retainedPrice.id, priceManifest.remoteId)
+        assertEquals(testPriceVersion(retainedPrice), priceManifest.versionLine)
+        assertNotNull(priceManifest.payloadDigest)
+        val productManifest = requireNotNull(
+            db.syncRecoveryManifestDao().get(
+                baseline.generationId,
+                ShopSyncRowDomain.PRODUCTS.wireValue,
+                retainedPrice.productId
+            )
+        )
+        assertFalse(productManifest.active)
+        assertEquals(0, db.productDao().getAll().size)
+        assertEquals(0, db.productPriceDao().countAll())
+        assertNull(db.productRemoteRefDao().getByRemoteId(retainedPrice.productId))
+        assertNull(db.productPriceRemoteRefDao().getByRemoteId(retainedPrice.id))
+        assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(
+            priceManifest,
+            db.syncRecoveryManifestDao().get(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue, retainedPrice.id)
+        )
+        assertEquals(0, db.productDao().getAll().size)
+        assertEquals(0, db.productPriceDao().countAll())
+        assertNull(db.productRemoteRefDao().getByRemoteId(retainedPrice.productId))
+        assertNull(db.productPriceRemoteRefDao().getByRemoteId(retainedPrice.id))
+        assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+        assertEquals(42L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+        assertFalse(stageFiles().any())
+    }
+
+    @Test
+    fun priceParentFromAnotherGenerationRemainsUnproven() = runTest {
+        seedOldMismatchGeneration()
+        val fixture = retainedPriceForDeletedProductFixture()
+        val price = (fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices)
+            .values.single().copy(productId = OLD_MANIFEST_PRODUCT)
+        remote = RecoveryRemoteFixture(
+            fixture.copy(
+                checkpoint = fixture.checkpoint.copy(
+                    prices = checkpointDomain(listOf(price.id), listOf(testPriceVersion(price)))
+                ),
+                rows = fixture.rows + (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(listOf(price)))
+            )
+        )
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.RetryRequired)
+        assertEquals("recovery_price_parent_manifest_missing", (result as ShopSyncRecoveryResult.RetryRequired).code)
+        assertOldGenerationAndManifestIntact()
+        assertNull(db.syncRecoveryBaselineDao().get())
+        assertNotNull(db.syncRecoveryJournalDao().get())
+        assertFalse(stageFiles().any())
+    }
+
+    @Test
+    fun checkpointBTombstonedParentRetainsExistingAndTailPricesOnlyInLedger() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        val fixture = remote.fixture
+        val deletedFixture = deletedProductImageFixture()
+        val deletedProducts = deletedFixture.rows.getValue(ShopSyncRowDomain.PRODUCTS)
+        val deletedProduct = (deletedProducts as ShopSyncRows.Products).values.single()
+        val priceA = (fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values.single()
+        val priceB = priceA.copy(
+            id = "20000000-0000-4000-8000-000000000007",
+            effectiveAt = "2026-07-21 10:00:01",
+            createdAt = "2026-07-21 10:00:01",
+            updatedAt = "2026-07-21T10:00:03.000000Z"
+        )
+        val pricesB = checkpointDomain(
+            listOf(priceA.id, priceB.id),
+            listOf(testPriceVersion(priceA), testPriceVersion(priceB))
+        )
+        val catalogB = fixture.checkpoint.catalog.copy(
+            products = deletedFixture.checkpoint.catalog.products,
+            digest = testSha256(
+                fixture.checkpoint.catalog.suppliers.versionDigest + "\n" +
+                    fixture.checkpoint.catalog.categories.versionDigest + "\n" +
+                    deletedFixture.checkpoint.catalog.products.versionDigest
+            )
+        )
+        val checkpointB = fixture.checkpoint.copy(
+            syncEvents = fixture.checkpoint.syncEvents.copy(
+                maxId = "44",
+                domainMaxIds = fixture.checkpoint.syncEvents.domainMaxIds +
+                    (SyncEventDomains.CATALOG to "43") + (SyncEventDomains.PRICES to "44")
+            ),
+            catalog = catalogB,
+            prices = pricesB,
+            images = deletedFixture.checkpoint.images,
+            checkpointDigest = "5".repeat(64)
+        )
+        remote.checkpoints = mutableListOf(fixture.checkpoint, checkpointB)
+        remote.tailEvents = listOf(
+            SyncEventRemoteRow(
+                id = 43L,
+                ownerUserId = ACCOUNT,
+                shopId = SHOP,
+                domain = SyncEventDomains.CATALOG,
+                eventType = SyncEventTypes.CATALOG_TOMBSTONE,
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(productIds = listOf(deletedProduct.id)),
+                createdAt = requireNotNull(deletedProduct.updatedAt)
+            ),
+            SyncEventRemoteRow(
+                id = 44L,
+                ownerUserId = ACCOUNT,
+                shopId = SHOP,
+                domain = SyncEventDomains.PRICES,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(priceIds = listOf(priceB.id), productIds = listOf(deletedProduct.id)),
+                createdAt = requireNotNull(priceB.updatedAt)
+            )
+        )
+        remote.tailRows = fixture.rows + (ShopSyncRowDomain.PRODUCTS to deletedProducts) +
+            (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(listOf(priceA, priceB))) +
+            (ShopSyncRowDomain.IMAGES to deletedFixture.rows.getValue(ShopSyncRowDomain.IMAGES))
+
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        assertEquals(pricesB, decodeRecoveryCheckpointJson(baseline.checkpointJson).prices)
+        val prices = db.syncRecoveryManifestDao().page(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue, null, 10)
+        assertEquals(listOf(priceA.id, priceB.id), prices.map { it.remoteId })
+        assertTrue(prices.all { it.active && it.payloadDigest != null })
+        assertEquals(listOf(testPriceVersion(priceA), testPriceVersion(priceB)), prices.map { it.versionLine })
+        assertEquals(0, db.productDao().getAll().size)
+        assertEquals(0, db.productPriceDao().countAll())
+        assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+        assertEquals(44L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(prices, db.syncRecoveryManifestDao().page(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue, null, 10))
+        assertEquals(0, db.productPriceDao().countAll())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun retainedPriceCleanupResumeVerifiesFreshStoreWithoutRedownloading() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        remote = RecoveryRemoteFixture(retainedPriceForDeletedProductFixture())
+        val first = coordinator(onActivated = { error("fixture_cleanup_failure") })
+            .recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(first.toString(), first is ShopSyncRecoveryResult.RetryRequired)
+        assertEquals(SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING, db.syncRecoveryJournalDao().get()?.phase)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val pagesAfterActivation = remote.pageCalls
+        val checkpointsAfterActivation = remote.checkpointCalls
+
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        val resumed = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(resumed.toString(), resumed is ShopSyncRecoveryResult.Activated)
+        assertEquals(pagesAfterActivation, remote.pageCalls)
+        assertEquals(checkpointsAfterActivation, remote.checkpointCalls)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(remote.fixture.checkpoint.prices, decodeRecoveryCheckpointJson(baseline.checkpointJson).prices)
+        assertEquals(1, db.syncRecoveryManifestDao().count(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue))
+        assertEquals(0, db.productPriceDao().countAll())
+        assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+        assertFalse(stageFiles().any())
+    }
+
+    @Test
+    fun retainedPriceRecoveryReachesOrdinaryNoWorkWithoutRelatching() = runTest {
+        seedOldMismatchGeneration()
+        remote = RecoveryRemoteFixture(retainedPriceForDeletedProductFixture())
+        val price = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values.single()
+        // The ordinary event page contains no events newer than the published baseline.
+        remote.tailEvents = listOf(
+            SyncEventRemoteRow(
+                id = 42L,
+                ownerUserId = ACCOUNT,
+                shopId = SHOP,
+                domain = SyncEventDomains.PRICES,
+                eventType = SyncEventTypes.PRICES_CHANGED,
+                changedCount = 1,
+                entityIds = SyncEventEntityIds(priceIds = listOf(price.id), productIds = listOf(price.productId)),
+                createdAt = requireNotNull(price.updatedAt)
+            )
+        )
+        val recovered = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(recovered.toString(), recovered is ShopSyncRecoveryResult.Activated)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        repository = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource = remote)
+
+        val summary = repository.drainSyncEventsFromRemote(
+            remote = NoOpCatalogRemoteForRecoveryTest,
+            priceRemote = NoOpPriceRemoteForRecoveryTest,
+            syncEventRemote = NoOpSyncEventRemoteForRecoveryTest,
+            ownerUserId = ACCOUNT,
+            progressReporter = CatalogSyncProgressReporter { },
+            selectedShop = selectedShop()
+        ).getOrThrow()
+
+        assertEquals(0, summary.syncEventsFetched)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(remote.fixture.checkpoint.prices, decodeRecoveryCheckpointJson(baseline.checkpointJson).prices)
+        assertEquals(1, db.syncRecoveryManifestDao().count(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue))
+        assertEquals(0, db.productPriceDao().countAll())
+    }
+
+    @Test
+    fun mixedRetainedPriceLedgerCrossesRawAndPhysicalPageBoundaries() = runTest {
+        seedOldMismatchGeneration()
+        val fixture = mixedRetainedPriceFixture()
+        remote = RecoveryRemoteFixture(fixture)
+        val pagedRemote = PagedRecoveryRemoteFixture(remote)
+
+        val result = coordinator(recoveryRemote = pagedRemote).recover(ACCOUNT, selectedShop(), activeScope())
+
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        assertEquals(6, remote.requestedPageLimits[ShopSyncRowDomain.PRICES]?.size)
+        assertTrue(remote.requestedPageLimits[ShopSyncRowDomain.PRICES].orEmpty().all { it == 120 })
+        assertEquals(560, db.productPriceDao().countAll())
+        assertEquals(1, db.productDao().getAll().size)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        assertEquals(fixture.checkpoint.prices, decodeRecoveryCheckpointJson(baseline.checkpointJson).prices)
+        assertEquals(655, db.syncRecoveryManifestDao().count(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue))
+        val allPrices = (fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+        assertNull(db.productPriceRemoteRefDao().getByRemoteId(allPrices.first().id))
+        assertNotNull(db.productPriceRemoteRefDao().getByRemoteId(allPrices[95].id))
+        assertNotNull(db.productPriceRemoteRefDao().getByRemoteId(allPrices.last().id))
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(560, db.productPriceDao().countAll())
+        assertEquals(655, db.syncRecoveryManifestDao().count(baseline.generationId, ShopSyncRowDomain.PRICES.wireValue))
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun ordinaryCatalogDeltaAfterActualRecoveryKeepsReadyAndSecondTriggerNoWork() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baselineBefore = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val bindingBefore = db.businessDataScopeBindingDao().get()
+        val fullPagesBefore = remote.pageCalls
+        val original = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values.single()
+        val updated = original.copy(
+            productName = "Ordinary updated product",
+            stockQuantity = 9.0,
+            updatedAt = "2026-07-21T11:00:00.000000Z"
+        )
+        val delta = ordinaryDeltaFixture(
+            remote.fixture,
+            products = listOf(updated),
+            maxId = 43L,
+            domainMaxIds = mapOf(SyncEventDomains.CATALOG to "43")
+        )
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(
+            ordinaryEvent(43L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+                SyncEventEntityIds(productIds = listOf(updated.id)))
+        )
+        val reader = OrdinaryFencedReadFixture(remote)
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val deviceRemote = ActiveShopDeviceRemoteForOrdinaryTest(SHOP)
+        val recoveryTriggers = mutableListOf<String>()
+        val auto = ordinaryAutoSync(reader, tracker, auth, deviceRemote, backgroundScope, recoveryTriggers)
+        try {
+            auto.runSyncEventDrainCycle("ordinary_catalog_delta")
+
+            val summary = requireNotNull(tracker.lastOutcome.value).summary
+            assertEquals(1, summary.syncEventsFetched)
+            assertEquals(1, summary.syncEventsProcessed)
+            assertEquals(1, summary.targetedProductsFetched)
+            assertEquals(43L, summary.syncEventsWatermarkAfter)
+            val physical = db.productDao().getAll().single()
+            assertEquals(updated.productName, physical.productName)
+            assertEquals(requireNotNull(updated.stockQuantity), requireNotNull(physical.stockQuantity), 0.0)
+            assertTrue(reader.targetedContexts.any { it.expectedDomainEventMaxId == "43" })
+            assertTrue(
+                "ordinary delta incorrectly required recovery: reason=${db.syncRecoveryJournalDao().get()?.reason}, summary=$summary",
+                !summary.manualFullSyncRequired
+            )
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertTrue(recoveryTriggers.isEmpty())
+            assertOrdinaryPublishedReceipt(baselineBefore.generationId, delta.checkpoint, 43L)
+            val productManifest = requireNotNull(db.syncRecoveryManifestDao().get(
+                baselineBefore.generationId, ShopSyncRowDomain.PRODUCTS.wireValue, updated.id
+            ))
+            assertEquals(testProductVersion(updated), productManifest.versionLine)
+            assertNotNull(productManifest.payloadDigest)
+            assertEquals(bindingBefore, db.businessDataScopeBindingDao().get())
+            assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            assertEquals(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"), auth.value)
+            assertEquals(fullPagesBefore, remote.pageCalls)
+            assertEquals(1, deviceRemote.statusCalls)
+            assertForeignKeysClean(db)
+
+            val targetedBefore = reader.targetedContexts.size
+            auto.runSyncEventDrainCycle("ordinary_catalog_second_trigger")
+
+            val noWork = requireNotNull(tracker.lastOutcome.value).summary
+            assertEquals(0, noWork.syncEventsFetched)
+            assertEquals(0, noWork.syncEventsProcessed)
+            assertEquals(43L, noWork.syncEventsWatermarkAfter)
+            assertFalse(noWork.manualFullSyncRequired)
+            assertFalse(noWork.syncEventsGapDetected)
+            assertEquals(targetedBefore, reader.targetedContexts.size)
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertTrue(recoveryTriggers.isEmpty())
+            assertEquals(fullPagesBefore, remote.pageCalls)
+            assertOrdinaryPublishedReceipt(baselineBefore.generationId, delta.checkpoint, 43L)
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryRetainedPriceForProvenTombstoneKeepsCompleteLedgerAndReady() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(smallMixedRetainedPriceFixture())
+        val baselineBefore = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val bindingBefore = db.businessDataScopeBindingDao().get()
+        val fullPagesBefore = remote.pageCalls
+        val delta = ordinaryRetainedPriceDeltaFixture(remote.fixture)
+        val newPrice = (delta.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values.last()
+        val tombstone = (delta.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products)
+            .values.single { it.deletedAt != null }
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = ordinaryRetainedPriceEvents(newPrice, tombstone)
+        val reader = OrdinaryFencedReadFixture(remote)
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val deviceRemote = ActiveShopDeviceRemoteForOrdinaryTest(SHOP)
+        val recoveryTriggers = mutableListOf<String>()
+        val auto = ordinaryAutoSync(reader, tracker, auth, deviceRemote, backgroundScope, recoveryTriggers)
+        try {
+            auto.runSyncEventDrainCycle("ordinary_retained_price")
+
+            val summary = requireNotNull(tracker.lastOutcome.value).summary
+            assertEquals(1, summary.targetedPricesFetched)
+            assertTrue(reader.targetedContexts.any { it.expectedDomainEventMaxId == "43" })
+            assertTrue(reader.materializedFences.any { it.first == ShopSyncRowDomain.PRODUCTS && it.second == "44" })
+            assertNull(db.productRemoteRefDao().getByRemoteId(newPrice.productId))
+            assertNull(db.productPriceRemoteRefDao().getByRemoteId(newPrice.id))
+            assertEquals(1, db.productPriceDao().countAll())
+            assertTrue(
+                "known tombstone price incorrectly required recovery: reason=${db.syncRecoveryJournalDao().get()?.reason}, summary=$summary",
+                !summary.manualFullSyncRequired
+            )
+            assertEquals(2, summary.syncEventsProcessed)
+            assertEquals(44L, summary.syncEventsWatermarkAfter)
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertTrue(recoveryTriggers.isEmpty())
+            assertOrdinaryPublishedReceipt(baselineBefore.generationId, delta.checkpoint, 44L)
+            val manifests = db.syncRecoveryManifestDao().page(
+                baselineBefore.generationId, ShopSyncRowDomain.PRICES.wireValue, null, 10
+            )
+            assertEquals(3, manifests.size)
+            assertTrue(manifests.all { it.active && it.payloadDigest != null })
+            assertEquals(testPriceVersion(newPrice), manifests.single { it.remoteId == newPrice.id }.versionLine)
+            assertEquals(bindingBefore, db.businessDataScopeBindingDao().get())
+            assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            assertEquals(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"), auth.value)
+            assertEquals(fullPagesBefore, remote.pageCalls)
+            assertForeignKeysClean(db)
+
+            auto.runSyncEventDrainCycle("ordinary_retained_price_second_trigger")
+
+            val noWork = requireNotNull(tracker.lastOutcome.value).summary
+            assertEquals(0, noWork.syncEventsFetched)
+            assertFalse(noWork.manualFullSyncRequired)
+            assertEquals(44L, noWork.syncEventsWatermarkAfter)
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertTrue(recoveryTriggers.isEmpty())
+            assertEquals(fullPagesBefore, remote.pageCalls)
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryPriceWithUnprovenTargetedParentRejectsAndPreservesPublishedBaseline() = runTest {
+        val deviceBefore = seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(smallMixedRetainedPriceFixture())
+        val baselineBefore = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val bindingBefore = db.businessDataScopeBindingDao().get()
+        val fullPagesBefore = remote.pageCalls
+        val delta = ordinaryRetainedPriceDeltaFixture(remote.fixture)
+        val prices = (delta.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+        val canonicalPrice = prices.last()
+        val tombstone = (delta.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products)
+            .values.single { it.deletedAt != null }
+        val unproven = canonicalPrice.copy(productId = "20000000-0000-4000-8000-000000000019")
+        remote.checkpoints += delta.checkpoint
+        // Negative fault injection: the checkpoint declares the known parent,
+        // but targeted material corrupts that relation and its parent is absent.
+        remote.tailRows = delta.rows + (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(prices.dropLast(1) + unproven))
+        remote.tailEvents = ordinaryRetainedPriceEvents(canonicalPrice, tombstone)
+        val reader = OrdinaryFencedReadFixture(remote)
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val deviceRemote = ActiveShopDeviceRemoteForOrdinaryTest(SHOP)
+        val recoveryTriggers = mutableListOf<String>()
+        val auto = ordinaryAutoSync(reader, tracker, auth, deviceRemote, backgroundScope, recoveryTriggers)
+        try {
+            auto.runSyncEventDrainCycle("ordinary_unknown_price_parent")
+
+            val summary = requireNotNull(tracker.lastOutcome.value).summary
+            assertTrue(summary.manualFullSyncRequired)
+            assertTrue(summary.syncEventsGapDetected)
+            assertEquals(42L, summary.syncEventsWatermarkAfter)
+            assertEquals(SyncEventApplyStatusReasons.MISSING_REMOTE, db.syncRecoveryJournalDao().get()?.reason)
+            assertEquals(SyncRecoveryJournalPhases.REQUIRED, db.syncRecoveryJournalDao().get()?.phase)
+            assertEquals(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, tracker.businessDataScopeState.value.status)
+            assertEquals(listOf("sync_events_drain"), recoveryTriggers)
+            assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
+            assertNull(db.syncRecoveryManifestDao().get(
+                baselineBefore.generationId, ShopSyncRowDomain.PRICES.wireValue, canonicalPrice.id
+            ))
+            assertNull(db.productPriceRemoteRefDao().getByRemoteId(canonicalPrice.id))
+            assertEquals(1, db.productPriceDao().countAll())
+            assertEquals(bindingBefore, db.businessDataScopeBindingDao().get())
+            assertEquals(deviceBefore, db.syncEventDeviceStateDao().get())
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            assertEquals(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"), auth.value)
+            assertEquals(fullPagesBefore, remote.pageCalls)
+            assertTrue(remote.tailTargetedRequests.any { it.first == ShopSyncRowDomain.PRODUCTS && unproven.productId in it.second })
+            assertForeignKeysClean(db)
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
     fun `incomplete event inside frozen B tail leaves active generation and durable recovery intact`() = runTest {
         seedOldMismatchGeneration()
         val checkpointA = remote.fixture.checkpoint
@@ -2506,12 +3013,13 @@ class ShopSyncRecoveryCoordinatorTest {
         checkpointDecoder: (String) -> ShopSyncRecoveryCheckpoint =
             ::decodeRecoveryCheckpointJson,
         deleteStagingDatabase: (android.content.Context, String) -> Boolean =
-            { context, name -> context.deleteDatabase(name) }
+            { context, name -> context.deleteDatabase(name) },
+        recoveryRemote: ShopSyncReadRemoteDataSource = remote
     ): ShopSyncRecoveryCoordinator = ShopSyncRecoveryCoordinator(
         context = app,
         activeDb = db,
         activeRepository = repository,
-        remote = remote,
+        remote = recoveryRemote,
         registerDeviceForRecovery = registerDeviceForRecovery,
         logger = logger,
         scopeStillValid = scopeStillValid,
@@ -2527,6 +3035,1039 @@ class ShopSyncRecoveryCoordinatorTest {
         checkpointDecoder = checkpointDecoder,
         deleteStagingDatabase = deleteStagingDatabase
     )
+
+    @Test
+    fun ordinaryCommitCancellationRollsBackPhysicalLedgerReceiptAndWatermark() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        val delta = prepareOrdinaryCatalogDelta()
+        var observedWrites = false
+        DefaultInventoryRepositoryTestHooks.afterOrdinaryShopSyncWrites = {
+            assertEquals("R-A10 adjacent product", db.productDao().getAll().single().productName)
+            assertEquals(testProductVersion((delta.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values.single()),
+                db.syncRecoveryManifestDao().page(baseline.generationId, ShopSyncRowDomain.PRODUCTS.wireValue, null, 10).single().versionLine)
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertEquals(42L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+            observedWrites = true
+            throw CancellationException("ordinary_sql_cancel")
+        }
+        try {
+            val failure = runCatching { drainOrdinary(OrdinaryFencedReadFixture(remote)) }.exceptionOrNull()
+            assertTrue(failure.toString(), failure is CancellationException)
+            assertTrue(observedWrites)
+        } finally {
+            DefaultInventoryRepositoryTestHooks.afterOrdinaryShopSyncWrites = null
+        }
+        reopenOrdinaryDatabase()
+        assertEquals(original, db.productDao().getAll().single())
+        assertOrdinaryUnchangedPublication(baseline)
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        assertNull(db.syncEventApplyStatusDao().get(ACCOUNT, activeScope().storeId, 43L))
+    }
+
+    @Test
+    fun ordinarySqlPublicationAbortRollsBackEarlierPhysicalAndLedgerWrites() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        prepareOrdinaryCatalogDelta()
+        db.openHelper.writableDatabase.execSQL("""
+            CREATE TEMP TRIGGER ra10_abort_publication BEFORE INSERT ON sync_recovery_baseline
+            BEGIN SELECT RAISE(ABORT, 'ra10_sql_publish_abort'); END
+        """.trimIndent())
+        val failed = drainOrdinary(OrdinaryFencedReadFixture(remote))
+        assertTrue(failed.toString(), failed.isFailure)
+        reopenOrdinaryDatabase()
+        assertEquals(original, db.productDao().getAll().single())
+        assertOrdinaryUnchangedPublication(baseline)
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        assertNull(db.syncEventApplyStatusDao().get(ACCOUNT, activeScope().storeId, 43L))
+    }
+
+    @Test
+    fun ordinaryCapturedEntireBaselineEntityRacePreservesNewerPublication() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val original = db.productDao().getAll().single()
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val newer = baseline.copy(activatedAtMs = baseline.activatedAtMs + 1L)
+        prepareOrdinaryCatalogDelta()
+        val source = OrdinaryFencedReadFixture(remote)
+        val racing = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                db.syncRecoveryBaselineDao().upsert(newer)
+                return source.convergenceMarker(context)
+            }
+        }
+        val failed = drainOrdinary(racing)
+        assertEquals("ordinary_captured_publication_changed", (failed.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(newer, db.syncRecoveryBaselineDao().get())
+        assertEquals(original, db.productDao().getAll().single())
+        assertOrdinaryUnchangedPublication(newer)
+        validateShopSyncActiveReceipt(db, newer.generationId, decodeRecoveryCheckpointJson(newer.checkpointJson))
+    }
+
+    @Test
+    fun ordinaryGenerationRacePreservesNewGenerationAndRejectsPreparedOldRows() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val original = db.productDao().getAll().single()
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val newer = baseline.copy(generationId = "70000000-0000-4000-8000-000000000001")
+        prepareOrdinaryCatalogDelta()
+        val source = OrdinaryFencedReadFixture(remote)
+        val racing = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                db.withTransaction {
+                    for (domain in ShopSyncRowDomain.entries) {
+                        val rows = db.syncRecoveryManifestDao().page(baseline.generationId, domain.wireValue, null, 10)
+                        db.syncRecoveryManifestDao().upsertAll(rows.map { it.copy(generationId = newer.generationId) })
+                    }
+                    db.syncRecoveryBaselineDao().upsert(newer)
+                }
+                return source.convergenceMarker(context)
+            }
+        }
+        val failed = drainOrdinary(racing)
+        assertEquals("ordinary_captured_publication_changed", (failed.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(original, db.productDao().getAll().single())
+        assertOrdinaryUnchangedPublication(newer)
+        validateShopSyncActiveReceipt(db, newer.generationId, decodeRecoveryCheckpointJson(newer.checkpointJson))
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+    }
+
+    @Test
+    fun ordinaryPendingHistoryDefersWithoutJournalAndAllowsRealPush() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(v2HistoryFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        repository.deleteHistoryEntry(history)
+        val dirtyRef = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(history.uid))
+        assertTrue(dirtyRef.localChangeRevision > dirtyRef.lastSyncedLocalRevision)
+        prepareOrdinaryCatalogDelta()
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val triggers = mutableListOf<String>()
+        val auto = ordinaryAutoSync(OrdinaryFencedReadFixture(remote), tracker, auth,
+            ActiveShopDeviceRemoteForOrdinaryTest(SHOP), backgroundScope, triggers)
+        try {
+            auto.runSyncEventDrainCycle("ordinary_local_history_pending")
+            val summary = requireNotNull(tracker.lastOutcome.value).summary
+            assertTrue(summary.syncEventsSkippedDirtyLocal > 0)
+            assertEquals(0, summary.syncEventsProcessed)
+            assertFalse(summary.manualFullSyncRequired)
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertTrue(triggers.isEmpty())
+            assertOrdinaryUnchangedPublication(baseline)
+            assertEquals(dirtyRef, db.historyEntryRemoteRefDao().getByHistoryEntryUid(history.uid))
+            val pushed = mutableListOf<SharedSheetSessionUpsertRow>()
+            val pushRemote = object : SessionBackupRemoteDataSource {
+                override val isConfigured = true
+                override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> = error("no pull")
+                override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> = error("no pull")
+                override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> {
+                    pushed += rows
+                    return Result.success(Unit)
+                }
+            }
+            val pushedSummary = tracker.withBusinessDataScopeFlight(ACCOUNT, selectedShop()) {
+                repository.pushHistorySessionsToRemote(pushRemote, ACCOUNT, setOf(history.uid), selectedShop()).getOrThrow()
+            }
+            assertEquals(1, pushedSummary.uploaded)
+            assertEquals(1, pushed.size)
+            assertNotNull(pushed.single().deletedAt)
+            val cleanRef = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(history.uid))
+            assertEquals(cleanRef.localChangeRevision, cleanRef.lastSyncedLocalRevision)
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertNull(db.syncRecoveryJournalDao().get())
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryPendingInsertedAfterLastRpcDefersBeforeAnyPublication() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(v2HistoryFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        prepareOrdinaryCatalogDelta()
+        val source = OrdinaryFencedReadFixture(remote)
+        val racing = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                val marker = source.convergenceMarker(context)
+                repository.deleteHistoryEntry(history)
+                return marker
+            }
+        }
+        val summary = drainOrdinary(racing).getOrThrow()
+        assertTrue(summary.syncEventsSkippedDirtyLocal > 0)
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(original, db.productDao().getAll().single())
+        assertOrdinaryUnchangedPublication(baseline)
+        assertNotNull(db.historyEntryDao().getByUid(history.uid)?.deletedAt)
+        val dirty = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(history.uid))
+        assertTrue(dirty.localChangeRevision > dirty.lastSyncedLocalRevision)
+    }
+
+    @Test
+    fun ordinaryHistoryTombstoneRetainsOldBodyAndProvesShadowAcrossReopenAndNextDelta() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(v2HistoryFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        val wire = (remote.fixture.rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History).values.single()
+        val tomb = wire.copy(deletedAt = "2026-07-21T11:00:00.000000Z", updatedAt = "2026-07-21T11:00:00.000000Z",
+            data = listOf(listOf("remote tombstone old body deliberately differs")), sessionOverlay = null)
+        val delta = ordinaryHistoryDeltaFixture(remote.fixture, tomb)
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(43L, SyncEventDomains.HISTORY, SyncEventTypes.HISTORY_TOMBSTONE,
+            SyncEventEntityIds(sessionIds = listOf(tomb.remoteId))))
+        assertFalse(drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow().manualFullSyncRequired)
+        val retained = requireNotNull(db.historyEntryDao().getByUid(original.uid))
+        assertEquals(original.data, retained.data)
+        assertEquals(original.editable, retained.editable)
+        assertEquals(tomb.deletedAt, retained.deletedAt)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 43L)
+        val manifest = requireNotNull(db.syncRecoveryManifestDao().get(baseline.generationId, ShopSyncRowDomain.HISTORY.wireValue, tomb.remoteId))
+        assertFalse(manifest.active)
+        assertNull(manifest.payloadDigest)
+        assertEquals(5, manifest.versionLine.split('\u001f').size)
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        val products = (delta.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values
+        val next = ordinaryDeltaFixture(delta, products.map { it.copy(productName = "after shadow", updatedAt = "2026-07-21T12:00:00.000000Z") },
+            44L, mapOf(SyncEventDomains.CATALOG to "44"))
+        remote.checkpoints += next.checkpoint
+        remote.tailRows = next.rows
+        remote.tailEvents = listOf(ordinaryEvent(44L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+            SyncEventEntityIds(productIds = products.map { it.id })))
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(44L, summary.syncEventsWatermarkAfter)
+        assertEquals(original.data, db.historyEntryDao().getByUid(original.uid)?.data)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinarySyncedHistoryOrphanShadowRejectsInsteadOfHidingOrDeferring() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        val template = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        val orphanUid = db.historyEntryDao().insert(template.copy(uid = 0L, id = "APPLY_IMPORT_R_A10_ORPHAN_SHADOW",
+            deletedAt = "2026-07-21T11:00:00.000000Z", syncStatus = SyncStatus.SYNCED_SUCCESSFULLY))
+        assertNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(orphanUid))
+        prepareOrdinaryCatalogDelta()
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(0, summary.syncEventsSkippedDirtyLocal)
+        assertEquals(original, db.productDao().getAll().single())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+    }
+
+    @Test
+    fun ordinaryParentRestoreFetchesRetainedPriceBodiesAtActualPriceFence() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(smallMixedRetainedPriceFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val delta = prepareOrdinaryRestoreDelta()
+        val reader = OrdinaryFencedReadFixture(remote)
+        val summary = drainOrdinary(reader).getOrThrow()
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(43L, summary.syncEventsWatermarkAfter)
+        assertEquals(2, db.productDao().count())
+        assertEquals(2, db.productPriceDao().countAll())
+        assertTrue(reader.materializedFences.any { it.first == ShopSyncRowDomain.PRICES && it.second == "42" })
+        assertTrue(reader.targetedContexts.any { it.expectedDomainEventMaxId == "42" })
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 43L)
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        assertFalse(drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow().manualFullSyncRequired)
+    }
+
+    @Test
+    fun ordinaryParentRestoreWithCorruptRetainedPriceBodyRollsBack() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(smallMixedRetainedPriceFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        prepareOrdinaryRestoreDelta()
+        val prices = (requireNotNull(remote.tailRows)[ShopSyncRowDomain.PRICES] as ShopSyncRows.Prices).values
+        remote.tailRows = requireNotNull(remote.tailRows) + (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(
+            prices.map { if (it.productId == "20000000-0000-4000-8000-000000000009") it.copy(price = it.price + 1.0, priceCanonical = java.math.BigDecimal(requireNotNull(it.priceCanonical))
+                    .add(java.math.BigDecimal.ONE).stripTrailingZeros().toPlainString()) else it }))
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(1, db.productDao().count())
+        assertEquals(1, db.productPriceDao().countAll())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+    }
+
+    @Test
+    fun ordinaryPersistsOriginalOpaqueServerCDigestAfterFullMaterialProof() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val delta = prepareOrdinaryCatalogDelta()
+        remote.markerTransform = { it.copy(checkpointDigest = "6".repeat(64)) }
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(summary.manualFullSyncRequired)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint.copy(checkpointDigest = "6".repeat(64)), 43L)
+        assertEquals(delta.checkpoint.catalog, decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson).catalog)
+    }
+
+    @Test
+    fun ordinaryHistoryShadowScanIncludesNegativeUidOrphans() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        db.historyEntryDao().insert(history.copy(uid = -1L, id = "APPLY_IMPORT_NEGATIVE_UID_SHADOW",
+            deletedAt = "2026-07-21T11:00:00.000000Z", syncStatus = SyncStatus.SYNCED_SUCCESSFULLY))
+        val failure = runCatching {
+            validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        }.exceptionOrNull()
+        assertEquals("ordinary_history_shadow_ref_invalid", (failure as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+    }
+
+    @Test
+    fun ordinaryHistoryShadowScanCoversUnknownBridgeBeyondFiveHundredAndRejectsInvalidUtc() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(v2HistoryFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        val activeWire = (remote.fixture.rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History).values.single()
+        val tombstones = (1..501).map { index -> activeWire.copy(
+            remoteId = "60000000-0000-4000-8000-" + index.toString().padStart(12, '0'),
+            deletedAt = "2026-07-21T11:00:00.000000Z", updatedAt = "2026-07-21T11:00:00.000000Z") }
+        db.withTransaction {
+            db.syncRecoveryManifestDao().upsertAll(ShopSyncRows.History(tombstones).toManifestRows(baseline.generationId, ShopSyncRowDomain.HISTORY))
+            tombstones.forEach { wire ->
+                val uid = db.historyEntryDao().insert(history.copy(uid = 0L, id = "retained old file " + wire.remoteId,
+                    deletedAt = wire.deletedAt, data = listOf(listOf("body is intentionally unproved"))))
+                db.historyEntryRemoteRefDao().insert(HistoryEntryRemoteRef(historyEntryUid = uid, remoteId = wire.remoteId,
+                    lastRemoteAppliedAt = 1L, lastRemotePayloadFingerprint = "old-body-fingerprint"))
+            }
+        }
+        val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson).copy(history = checkpointDomain(
+            (listOf(activeWire) + tombstones).map { it.remoteId }, (listOf(activeWire) + tombstones).map(::testHistoryVersion),
+            activeCount = 1L, tombstoneCount = 501L))
+        validateShopSyncActiveReceipt(db, baseline.generationId, checkpoint)
+        val lastRef = requireNotNull(db.historyEntryRemoteRefDao().getByRemoteId(tombstones.last().remoteId))
+        val last = requireNotNull(db.historyEntryDao().getByUid(lastRef.historyEntryUid))
+        db.historyEntryRemoteRefDao().insert(lastRef.copy(id = 0L, historyEntryUid = db.historyEntryDao().insert(
+            last.copy(uid = 0L, id = "unknown final shadow")), remoteId = "60000000-0000-4000-8000-000000000999"))
+        val unknown = runCatching { validateShopSyncActiveReceipt(db, baseline.generationId, checkpoint) }.exceptionOrNull()
+        assertEquals("ordinary_history_shadow_manifest_missing", (unknown as? ShopSyncContractException)?.code)
+        val firstRef = requireNotNull(db.historyEntryRemoteRefDao().getByRemoteId(tombstones.first().remoteId))
+        val first = requireNotNull(db.historyEntryDao().getByUid(firstRef.historyEntryUid))
+        db.historyEntryDao().update(first.copy(deletedAt = "2026-02-30T11:00:00.000000Z"))
+        val invalid = runCatching { validateShopSyncActiveReceipt(db, baseline.generationId, checkpoint) }.exceptionOrNull()
+        assertEquals("ordinary_history_shadow_tombstone_invalid", (invalid as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+    }
+
+    @Test
+    fun ordinaryValidEmptyCanonicalBaselineAcceptsCapturedHistoryDelta() = runTest {
+        seedOldMismatchGeneration()
+        remote = RecoveryRemoteFixture(emptyTargetFixture())
+        assertTrue(coordinator().recover(ACCOUNT, selectedShop(), activeScope()) is ShopSyncRecoveryResult.Activated)
+        reopenOrdinaryDatabase()
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val history = (targetFixture().rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History).values.single()
+        val delta = ordinaryHistoryDeltaFixture(remote.fixture, history)
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(43L, SyncEventDomains.HISTORY, SyncEventTypes.HISTORY_CHANGED,
+            SyncEventEntityIds(sessionIds = listOf(history.remoteId))))
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(43L, summary.syncEventsWatermarkAfter)
+        assertEquals(0, db.productDao().count())
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 43L)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinaryUncoveredPhysicalCorruptionRejectsAndRollsBackCoveredProductDelta() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        db.historyEntryDao().update(history.copy(supplier = "Uncovered corrupted History"))
+        prepareOrdinaryCatalogDelta()
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(original, db.productDao().getAll().single())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals("Uncovered corrupted History", db.historyEntryDao().getByUid(history.uid)?.supplier)
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+    }
+
+    @Test
+    fun ordinaryPendingProductRealPushAckThenSelfReceiptPublishesCWithoutRecovery() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        repository.updateProductFromEditor(original, original.copy(productName = "Pending product pushed and acknowledged"))
+        val local = requireNotNull(db.productDao().getById(original.id))
+        val dirty = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        assertTrue(dirty.localChangeRevision > dirty.lastSyncedLocalRevision)
+        val oldProducts = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values
+        val external = ordinaryDeltaFixture(remote.fixture, oldProducts, 43L, mapOf(SyncEventDomains.CATALOG to "43"))
+        val harmless = ordinaryEvent(43L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+            SyncEventEntityIds()).copy(changedCount = 0)
+        remote.checkpoints += external.checkpoint
+        remote.tailRows = external.rows
+        remote.tailEvents = listOf(harmless)
+        val deferred = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(deferred.syncEventsSkippedDirtyLocal > 0)
+        assertFalse(deferred.manualFullSyncRequired)
+        assertOrdinaryUnchangedPublication(baseline)
+        val pushed = mutableListOf<InventoryProductRow>()
+        val patches = mutableListOf<InventoryProductPatch>()
+        val pushRemote = object : CatalogRemoteDataSource by NoOpCatalogRemoteForRecoveryTest {
+            override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+                pushed += rows
+                return Result.success(Unit)
+            }
+            override suspend fun patchProduct(id: String, ownerUserId: String, patch: InventoryProductPatch): Result<Unit> {
+                assertEquals(dirty.remoteId, id)
+                assertEquals(ACCOUNT, ownerUserId)
+                patches += patch
+                return Result.success(Unit)
+            }
+            override suspend fun patchProduct(
+                id: String, ownerUserId: String, shopId: String?, patch: InventoryProductPatch
+            ): Result<Unit> {
+                assertEquals(SHOP, shopId)
+                return patchProduct(id, ownerUserId, patch)
+            }
+        }
+        val pushedSummary = repository.pushDirtyCatalogDeltaToRemote(pushRemote, NoOpPriceRemoteForRecoveryTest, ACCOUNT,
+            CatalogSyncProgressReporter { }, selectedShop()).getOrThrow()
+        assertEquals(1, pushedSummary.pushedProducts)
+        assertEquals(1, pushed.size + patches.size)
+        val acknowledged = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        assertEquals(acknowledged.localChangeRevision, acknowledged.lastSyncedLocalRevision)
+        assertEquals(local.productName, db.productDao().getById(original.id)?.productName)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        val received = oldProducts.map { it.copy(productName = local.productName, updatedAt = "2026-07-21T12:00:00.000000Z") }
+        val delta = ordinaryDeltaFixture(external, received, 44L, mapOf(SyncEventDomains.CATALOG to "44"))
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(harmless, ordinaryEvent(44L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+            SyncEventEntityIds(productIds = listOf(dirty.remoteId))).copy(sourceDeviceId = DEVICE))
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(1, summary.syncEventsSkippedSelf)
+        assertEquals(44L, summary.syncEventsWatermarkAfter)
+        assertEquals(local.productName, db.productDao().getById(original.id)?.productName)
+        assertEquals(received.single().updatedAt, db.productRemoteRefDao().getByProductId(original.id)?.remoteUpdatedAt)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 44L)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        assertFalse(drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow().manualFullSyncRequired)
+    }
+
+    @Test
+    fun ordinaryNoEventCannotPublishNoWorkOverCleanPhysicalPriceTamper() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        db.openHelper.writableDatabase.execSQL("UPDATE product_prices SET price = price + 0.5")
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsFetched)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+    }
+
+    @Test
+    fun ordinaryNoEventLocalUnbridgedPriceDefersWithoutFalseNoWorkOrJournal() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val product = db.productDao().getAll().single()
+        db.productPriceDao().insert(ProductPrice(productId = product.id, type = "PURCHASE", price = 5.0,
+            effectiveAt = "2026-07-21 12:00:00", createdAt = "2026-07-21 12:00:00"))
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(summary.syncEventsSkippedDirtyLocal > 0)
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertOrdinaryUnchangedPublication(baseline)
+        assertEquals(2, db.productPriceDao().countAll())
+    }
+
+    @Test
+    fun ordinaryActivatedZeroBaselinePublishesFirstEventAtomicallyWithoutRecovery() = runTest {
+        val device = seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val fullPages = remote.pageCalls
+        val delta = prepareFirstZeroHistoryDelta()
+        val reader = OrdinaryFencedReadFixture(remote)
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertTrue("activated C0 must publish event1 without recovery: reason=${db.syncRecoveryJournalDao().get()?.reason}, summary=$summary",
+            !summary.manualFullSyncRequired)
+        assertEquals(1, summary.syncEventsFetched)
+        assertEquals(1, summary.syncEventsProcessed)
+        assertEquals(1L, summary.syncEventsWatermarkAfter)
+        assertEquals(0, db.productDao().count())
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 1L)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertEquals(fullPages, remote.pageCalls)
+        assertTrue(reader.targetedContexts.any { it.expectedDomainEventMaxId == "1" })
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId,
+            decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        val noWork = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(noWork.manualFullSyncRequired)
+        assertEquals(0, noWork.syncEventsFetched)
+        assertEquals(1L, noWork.syncEventsWatermarkAfter)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinaryAutoSyncActivatedZeroBaselineDrainsFirstEventWithoutBootstrapSkip() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val delta = prepareFirstZeroHistoryDelta()
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val triggers = mutableListOf<String>()
+        val logs = mutableListOf<String>()
+        val device = ActiveShopDeviceRemoteForOrdinaryTest(SHOP)
+        val fullPages = remote.pageCalls
+        val auto = ordinaryAutoSync(OrdinaryFencedReadFixture(remote), tracker, auth, device,
+            backgroundScope, triggers, logger = { logs += it })
+        try {
+            auto.runSyncEventDrainCycle("ordinary_first_event_after_activated_zero")
+
+            assertFalse("verified Activated C0 must not schedule catalog bootstrap: $logs",
+                logs.any { it.contains("cycle=sync_events_drain outcome=skip reason=bootstrap_required") })
+            val summary = requireNotNull(tracker.lastOutcome.value).summary
+            assertFalse(summary.manualFullSyncRequired)
+            assertEquals(1, summary.syncEventsFetched)
+            assertEquals(1L, summary.syncEventsWatermarkAfter)
+            assertEquals(1, db.historyEntryDao().countUserVisible())
+            assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+            assertTrue(triggers.isEmpty())
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 1L)
+            assertEquals(1, device.statusCalls)
+            assertEquals(fullPages, remote.pageCalls)
+            auto.runSyncEventDrainCycle("ordinary_second_trigger_after_first_zero_event")
+            val noWork = requireNotNull(tracker.lastOutcome.value).summary
+            assertEquals(0, noWork.syncEventsFetched)
+            assertEquals(1L, noWork.syncEventsWatermarkAfter)
+            assertFalse(noWork.manualFullSyncRequired)
+            assertTrue(triggers.isEmpty())
+            assertNull(db.syncRecoveryJournalDao().get())
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryDefaultZeroWithoutActivatedBaselineStillRequiresBootstrap() = runTest {
+        val device = SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 139L)
+        db.syncEventDeviceStateDao().insert(device)
+        db.businessDataScopeBindingDao().upsert(BusinessDataScopeBinding.from(activeScope(), 100L))
+        db.syncEventWatermarkDao().upsert(SyncEventWatermark(ACCOUNT, activeScope().storeId, 0L))
+        assertNull(db.syncRecoveryBaselineDao().get())
+        assertEquals(0, db.syncRecoveryManifestDao().count("absent-generation", ShopSyncRowDomain.PRODUCTS.wireValue))
+        assertTrue(repository.shouldRunCatalogBootstrap(ACCOUNT))
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(ACCOUNT, "ordinary@example.test"))
+        val triggers = mutableListOf<String>()
+        val logs = mutableListOf<String>()
+        val deviceRemote = ActiveShopDeviceRemoteForOrdinaryTest(SHOP)
+        val auto = ordinaryAutoSync(OrdinaryFencedReadFixture(remote), tracker, auth, deviceRemote,
+            backgroundScope, triggers, logger = { logs += it })
+        try {
+            auto.runSyncEventDrainCycle("ordinary_default_zero_without_receipt")
+            assertTrue(logs.any { it.contains("cycle=sync_events_drain outcome=skip reason=bootstrap_required") })
+            assertNull(tracker.lastOutcome.value)
+            assertEquals(0, remote.checkpointCalls)
+            assertEquals(0, deviceRemote.statusCalls)
+            assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+            assertNull(db.syncRecoveryBaselineDao().get())
+            assertNull(db.syncRecoveryJournalDao().get())
+        } finally {
+            auto.shutdown()
+        }
+    }
+
+    @Test
+    fun ordinaryCoveredPhysicalCorruptionWithFingerprintAlreadyCRejectsAndRollsBack() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.productDao().getAll().single()
+        val delta = prepareOrdinaryCatalogDelta()
+        val received = (delta.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values.single()
+        val oldManifest = db.syncRecoveryManifestDao().get(baseline.generationId,
+            ShopSyncRowDomain.PRODUCTS.wireValue, received.id)
+        val ref = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        val corrupted = original.copy(productName = "Covered corruption despite fingerprint already C")
+        db.productDao().update(corrupted)
+        db.productRemoteRefDao().updateRemoteApplyState(original.id, ref.localChangeRevision, 1_000L,
+            fingerprintProductInbound(received), received.updatedAt)
+        val apparentC = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        assertEquals(apparentC.localChangeRevision, apparentC.lastSyncedLocalRevision)
+        assertEquals(fingerprintProductInbound(received), apparentC.lastRemotePayloadFingerprint)
+
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(oldManifest, db.syncRecoveryManifestDao().get(baseline.generationId,
+            ShopSyncRowDomain.PRODUCTS.wireValue, received.id))
+        assertEquals(corrupted, db.productDao().getById(original.id))
+        assertEquals(apparentC, db.productRemoteRefDao().getByProductId(original.id))
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+        reopenOrdinaryDatabase()
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(corrupted, db.productDao().getById(original.id))
+        assertEquals(42L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun ordinaryPendingHistoryRealTombstonePushAckThenSelfReceiptPublishesC() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(v2HistoryFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        val wire = (remote.fixture.rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History).values.single()
+        repository.deleteHistoryEntry(original)
+        val dirty = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(original.uid))
+        assertTrue(dirty.localChangeRevision > dirty.lastSyncedLocalRevision)
+        val received = wire.copy(deletedAt = "2026-07-21T12:00:00.000000Z",
+            updatedAt = "2026-07-21T12:00:00.000000Z")
+        val delta = ordinaryHistoryDeltaFixture(remote.fixture, received)
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(43L, SyncEventDomains.HISTORY, SyncEventTypes.HISTORY_TOMBSTONE,
+            SyncEventEntityIds(sessionIds = listOf(received.remoteId))).copy(sourceDeviceId = DEVICE))
+        val deferred = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertTrue(deferred.syncEventsSkippedDirtyLocal > 0)
+        assertFalse(deferred.manualFullSyncRequired)
+        assertOrdinaryUnchangedPublication(baseline)
+        val pushed = mutableListOf<SharedSheetSessionUpsertRow>()
+        val pushRemote = object : SessionBackupRemoteDataSource {
+            override val isConfigured = true
+            override suspend fun fetchAllSessionsForOwner(): Result<List<SharedSheetSessionRecord>> = error("no pull")
+            override suspend fun fetchSessionsByRemoteIds(remoteIds: Set<String>): Result<List<SharedSheetSessionRecord>> = error("no pull")
+            override suspend fun upsertSessions(rows: List<SharedSheetSessionUpsertRow>): Result<Unit> {
+                pushed += rows
+                return Result.success(Unit)
+            }
+        }
+        val ack = repository.pushHistorySessionsToRemote(pushRemote, ACCOUNT, setOf(original.uid), selectedShop()).getOrThrow()
+        assertEquals(1, ack.uploaded)
+        assertNotNull(pushed.single().deletedAt)
+        val clean = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(original.uid))
+        assertEquals(clean.localChangeRevision, clean.lastSyncedLocalRevision)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+
+        val summary = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+
+        assertFalse(summary.manualFullSyncRequired)
+        assertEquals(1, summary.syncEventsSkippedSelf)
+        assertEquals(43L, summary.syncEventsWatermarkAfter)
+        val retained = requireNotNull(db.historyEntryDao().getByUid(original.uid))
+        assertEquals(received.deletedAt, retained.deletedAt)
+        assertEquals(original.data, retained.data)
+        assertEquals(original.editable, retained.editable)
+        val tombstone = requireNotNull(db.syncRecoveryManifestDao().get(baseline.generationId,
+            ShopSyncRowDomain.HISTORY.wireValue, received.remoteId))
+        assertFalse(tombstone.active)
+        assertNull(tombstone.payloadDigest)
+        assertEquals(5, tombstone.versionLine.split('\u001f').size)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 43L)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId,
+            decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        val noWork = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(noWork.manualFullSyncRequired)
+        assertEquals(0, noWork.syncEventsFetched)
+        assertEquals(43L, noWork.syncEventsWatermarkAfter)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinaryActivatedEmptyZeroBaselineImmediatelyProvesNoEventNoWork() = runTest {
+        val device = seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val fullPages = remote.pageCalls
+        val reader = OrdinaryFencedReadFixture(remote)
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertTrue("Activated empty C0 with fenced noEvents must stay READY: reason=${db.syncRecoveryJournalDao().get()?.reason}, summary=$summary",
+            !summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsFetched)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(0L, summary.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertEquals(fullPages, remote.pageCalls)
+        assertTrue(reader.targetedContexts.isEmpty())
+        reopenOrdinaryDatabase()
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        val second = drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow()
+        assertFalse(second.manualFullSyncRequired)
+        assertEquals(0, second.syncEventsFetched)
+        assertEquals(0L, second.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinaryEmptyZeroBootstrapExemptionRequiresCurrentManagedMatchingScope() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val device = db.syncEventDeviceStateDao().get()
+        val watermark = db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)
+        val calls = remote.pageCalls
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        val managed = DefaultInventoryRepository(db, businessDataScopeRuntimeGuard = tracker,
+            shopSyncReadRemoteDataSource = remote)
+
+        assertFalse(managed.shouldRunCatalogBootstrap(ACCOUNT))
+        assertTrue(repository.shouldRunCatalogBootstrap(ACCOUNT))
+        assertTrue(managed.shouldRunCatalogBootstrap(OLD_ACCOUNT))
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(oldScope()))
+        assertTrue(managed.shouldRunCatalogBootstrap(OLD_ACCOUNT))
+        val foreignStore = Task126OwnerStoreScope(activeScope().ownerHash,
+            "shop:10000000-0000-4000-8000-000000000099", null)
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(foreignStore))
+        assertTrue(managed.shouldRunCatalogBootstrap(ACCOUNT))
+        val foreignLocalStore = Task126OwnerStoreScope(activeScope().ownerHash,
+            activeScope().storeId, "foreign-local-store")
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(foreignLocalStore))
+        assertTrue(managed.shouldRunCatalogBootstrap(ACCOUNT))
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(activeScope()))
+        assertFalse(managed.shouldRunCatalogBootstrap(ACCOUNT))
+
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertEquals(watermark, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(calls, remote.pageCalls)
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        assertNull(db.syncRecoveryJournalDao().get())
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+    }
+
+    @Test
+    fun ordinaryEmptyZeroMissingWatermarkOrMalformedReceiptStillRequiresBootstrap() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val device = db.syncEventDeviceStateDao().get()
+        val watermark = requireNotNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        val managed = DefaultInventoryRepository(db, businessDataScopeRuntimeGuard = tracker,
+            shopSyncReadRemoteDataSource = remote)
+        assertFalse(managed.shouldRunCatalogBootstrap(ACCOUNT))
+
+        db.syncEventWatermarkDao().deleteAll()
+        assertTrue(managed.shouldRunCatalogBootstrap(ACCOUNT))
+        assertNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        db.syncEventWatermarkDao().upsert(watermark)
+        val malformed = baseline.copy(checkpointJson = "{malformed-canonical-receipt")
+        db.syncRecoveryBaselineDao().upsert(malformed)
+        assertTrue(managed.shouldRunCatalogBootstrap(ACCOUNT))
+        assertEquals(malformed, db.syncRecoveryBaselineDao().get())
+        assertEquals(watermark, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertEquals(0, db.productDao().count())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        assertNull(db.syncRecoveryJournalDao().get())
+        db.syncRecoveryBaselineDao().upsert(baseline)
+        assertFalse(managed.shouldRunCatalogBootstrap(ACCOUNT))
+    }
+
+    @Test
+    fun ordinaryChangedZeroWatermarkRowLossRejectsAtomicPublication() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val device = db.syncEventDeviceStateDao().get()
+        val manifests = ShopSyncRowDomain.entries.associateWith {
+            db.syncRecoveryManifestDao().page(baseline.generationId, it.wireValue, null, 500)
+        }
+        prepareFirstZeroHistoryDelta()
+        val source = OrdinaryFencedReadFixture(remote)
+        var removedDuringRemote = false
+        val racing = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                val marker = source.convergenceMarker(context)
+                assertTrue(marker.isSuccess)
+                assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+                db.syncEventWatermarkDao().deleteAll()
+                removedDuringRemote = true
+                return marker
+            }
+        }
+
+        val failed = drainOrdinary(racing)
+
+        assertTrue(removedDuringRemote)
+        assertEquals("ordinary_captured_publication_changed", (failed.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        assertNull(db.syncEventApplyStatusDao().get(ACCOUNT, activeScope().storeId, 1L))
+        assertNull(db.syncRecoveryJournalDao().get())
+        reopenOrdinaryDatabase()
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        manifests.forEach { (domain, rows) ->
+            assertEquals(rows, db.syncRecoveryManifestDao().page(baseline.generationId, domain.wireValue, null, 500))
+        }
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+    }
+
+    @Test
+    fun ordinaryNoEventZeroWatermarkRowLossCannotPublishNoWork() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val binding = db.businessDataScopeBindingDao().get()
+        val device = db.syncEventDeviceStateDao().get()
+        val manifests = ShopSyncRowDomain.entries.associateWith {
+            db.syncRecoveryManifestDao().page(baseline.generationId, it.wireValue, null, 500)
+        }
+        val source = OrdinaryFencedReadFixture(remote)
+        var removedDuringRemote = false
+        val racing = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                val marker = source.convergenceMarker(context)
+                assertTrue(marker.isSuccess)
+                assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+                db.syncEventWatermarkDao().deleteAll()
+                removedDuringRemote = true
+                return marker
+            }
+        }
+
+        val failed = drainOrdinary(racing)
+
+        assertTrue(removedDuringRemote)
+        assertTrue(failed.isFailure)
+        assertEquals("ordinary_captured_publication_changed", (failed.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(binding, db.businessDataScopeBindingDao().get())
+        assertEquals(device, db.syncEventDeviceStateDao().get())
+        assertNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        assertNull(db.syncRecoveryJournalDao().get())
+        reopenOrdinaryDatabase()
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        manifests.forEach { (domain, rows) ->
+            assertEquals(rows, db.syncRecoveryManifestDao().page(baseline.generationId, domain.wireValue, null, 500))
+        }
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+    }
+
+    private suspend fun recoverAndReopenZeroOrdinaryFixture(): SyncRecoveryBaseline {
+        val empty = emptyTargetFixture()
+        val zero = empty.copy(checkpoint = empty.checkpoint.copy(syncEvents = empty.checkpoint.syncEvents.copy(
+            maxId = "0", verifiedBaselineId = "0",
+            domainMaxIds = empty.checkpoint.syncEvents.domainMaxIds.mapValues { "0" })))
+        remote = RecoveryRemoteFixture(zero)
+        remote.emptyTailConfigured = true
+        val journal = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals(activeScope().ownerHash, journal.ownerHash)
+        assertEquals(activeScope().storeId, journal.storeScope)
+        assertEquals(SHOP, journal.shopId)
+        assertEquals(DEVICE, journal.deviceId)
+        assertEquals(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED, journal.authorizationMode)
+        assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
+        assertEquals(SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED, journal.reason)
+        val emptyTargetJournal = journal.copy(blockingEventId = null)
+        db.syncRecoveryJournalDao().upsert(emptyTargetJournal)
+        assertEquals(emptyTargetJournal, db.syncRecoveryJournalDao().get())
+        val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(result.toString(), result is ShopSyncRecoveryResult.Activated)
+        reopenOrdinaryDatabase()
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        assertEquals("0", decodeRecoveryCheckpointJson(baseline.checkpointJson).syncEvents.maxId)
+        assertEquals("0", decodeRecoveryCheckpointJson(baseline.checkpointJson).syncEvents.verifiedBaselineId)
+        assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertEquals(0, db.productDao().count())
+        assertEquals(0, db.historyEntryDao().countUserVisible())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertNotNull(db.businessDataScopeBindingDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        return baseline
+    }
+
+    private fun prepareFirstZeroHistoryDelta(): RecoveryFixture {
+        val history = (targetFixture().rows.getValue(ShopSyncRowDomain.HISTORY) as ShopSyncRows.History).values.single()
+        val draft = ordinaryHistoryDeltaFixture(remote.fixture, history)
+        val delta = draft.copy(checkpoint = draft.checkpoint.copy(syncEvents = draft.checkpoint.syncEvents.copy(
+            maxId = "1", verifiedBaselineId = "0",
+            domainMaxIds = remote.fixture.checkpoint.syncEvents.domainMaxIds + (SyncEventDomains.HISTORY to "1"))))
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(1L, SyncEventDomains.HISTORY, SyncEventTypes.HISTORY_CHANGED,
+            SyncEventEntityIds(sessionIds = listOf(history.remoteId))))
+        return delta
+    }
+
+    private suspend fun drainOrdinary(reader: ShopSyncReadRemoteDataSource): Result<CatalogSyncSummary> {
+        repository = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource = reader)
+        return repository.drainSyncEventsFromRemote(NoOpCatalogRemoteForRecoveryTest, NoOpPriceRemoteForRecoveryTest,
+            NoOpSyncEventRemoteForRecoveryTest, ACCOUNT, CatalogSyncProgressReporter { }, selectedShop = selectedShop())
+    }
+
+    private fun prepareOrdinaryCatalogDelta(): RecoveryFixture {
+        val products = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values
+        val delta = ordinaryDeltaFixture(remote.fixture, products.map { it.copy(productName = "R-A10 adjacent product",
+            updatedAt = "2026-07-21T11:00:00.000000Z") }, 43L, mapOf(SyncEventDomains.CATALOG to "43"))
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(43L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+            SyncEventEntityIds(productIds = products.map { it.id })))
+        return delta
+    }
+
+    private fun prepareOrdinaryRestoreDelta(): RecoveryFixture {
+        val base = remote.fixture
+        val products = (base.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values
+        val tomb = products.single { it.deletedAt != null }
+        val updated = products.map { if (it.id == tomb.id) it.copy(deletedAt = null, productName = "Restored parent",
+            updatedAt = "2026-07-21T11:00:00.000000Z") else it }
+        val images = (base.rows.getValue(ShopSyncRowDomain.IMAGES) as ShopSyncRows.Images).values.filter { it.productId != tomb.id }
+        val draft = ordinaryDeltaFixture(base, updated, 43L, mapOf(SyncEventDomains.CATALOG to "43"))
+        val delta = draft.copy(checkpoint = draft.checkpoint.copy(images = checkpointDomain(images.map { it.productId }, images.map(::testImageVersion))),
+            rows = draft.rows + (ShopSyncRowDomain.IMAGES to ShopSyncRows.Images(images)))
+        remote.checkpoints += delta.checkpoint
+        remote.tailRows = delta.rows
+        remote.tailEvents = listOf(ordinaryEvent(43L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED,
+            SyncEventEntityIds(productIds = listOf(tomb.id))))
+        return delta
+    }
+
+    private suspend fun assertOrdinaryUnchangedPublication(baseline: SyncRecoveryBaseline) {
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(42L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertForeignKeysClean(db)
+    }
+
+    private fun reopenOrdinaryDatabase() {
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource = remote)
+    }
+
+    private suspend fun recoverAndReopenOrdinaryFixture(fixture: RecoveryFixture) {
+        remote = RecoveryRemoteFixture(fixture)
+        val recovered = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(recovered.toString(), recovered is ShopSyncRecoveryResult.Activated)
+        assertNull(db.syncRecoveryJournalDao().get())
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource = remote)
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(42L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertEquals("42", decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson).syncEvents.verifiedBaselineId)
+        assertFalse(repository.shouldRunCatalogBootstrap(ACCOUNT))
+    }
+
+    private fun ordinaryAutoSync(
+        reader: ShopSyncReadRemoteDataSource,
+        tracker: CatalogSyncStateTracker,
+        auth: MutableStateFlow<AuthState>,
+        deviceRemote: ActiveShopDeviceRemoteForOrdinaryTest,
+        scope: kotlinx.coroutines.CoroutineScope,
+        recoveryTriggers: MutableList<String>,
+        logger: (String) -> Unit = {}
+    ): CatalogAutoSyncCoordinator {
+        repository = DefaultInventoryRepository(db, tracker, reader)
+        return CatalogAutoSyncCoordinator(
+            repository = repository,
+            remote = NoOpCatalogRemoteForRecoveryTest,
+            priceRemote = NoOpPriceRemoteForRecoveryTest,
+            syncEventRemote = NoOpSyncEventRemoteForRecoveryTest,
+            deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote, businessDataScopeRuntimeGuard = tracker),
+            authFlow = auth,
+            selectedShopProvider = { selectedShop() },
+            syncStateTracker = tracker,
+            scope = scope,
+            debounceMs = Long.MAX_VALUE,
+            onRecoveryRequired = { recoveryTriggers += it },
+            logger = logger
+        )
+    }
+
+    private suspend fun assertOrdinaryPublishedReceipt(generationId: String, expected: ShopSyncRecoveryCheckpoint, watermark: Long) {
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        assertEquals(generationId, baseline.generationId)
+        val receipt = decodeRecoveryCheckpointJson(baseline.checkpointJson)
+        assertEquals(watermark.toString(), receipt.syncEvents.maxId)
+        assertEquals(watermark.toString(), receipt.syncEvents.verifiedBaselineId)
+        assertEquals(expected.syncEvents.domainMaxIds, receipt.syncEvents.domainMaxIds)
+        assertEquals(expected.checkpointDigest, receipt.checkpointDigest)
+        assertEquals(expected.catalog, receipt.catalog)
+        assertEquals(expected.prices, receipt.prices)
+        assertEquals(expected.history, receipt.history)
+        assertEquals(expected.images, receipt.images)
+    }
 
     private suspend fun seedOldMismatchGeneration(): SyncEventDeviceState {
         val device = SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 139L)
@@ -2688,6 +4229,7 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
     val responseBytes = mutableMapOf<ShopSyncRowDomain, Long>()
     val largestRowBytes = mutableMapOf<ShopSyncRowDomain, Long>()
     var tailEvents: List<SyncEventRemoteRow> = emptyList()
+    var emptyTailConfigured = false
     var tailRows: Map<ShopSyncRowDomain, ShopSyncRows>? = null
     var recoveryRows: Map<ShopSyncRowDomain, ShopSyncRows>? = null
     var recoveryCurrentScopeEventMaxId: String? = null
@@ -2791,7 +4333,7 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
         limit: Int
     ): Result<ShopSyncEventPage> {
         if (cancelAtTailEventPage) throw CancellationException("fixture_tail_cancel")
-        if (tailEvents.isEmpty()) {
+        if (tailEvents.isEmpty() && !emptyTailConfigured) {
             return Result.failure(IllegalStateException("fixture_event_page_not_configured"))
         }
         val frozenMax = requireNotNull(context.expectedEventMaxId)
@@ -2854,6 +4396,181 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
                 requestedCount = ids.size,
                 rows = values,
                 missingIds = ids.filterNot { it.lowercase() in found }
+            )
+        )
+    }
+}
+
+/** Ordinary RPC material carries each domain's actual captured fence. */
+private class OrdinaryFencedReadFixture(
+    private val source: RecoveryRemoteFixture
+) : ShopSyncReadRemoteDataSource by source {
+    val targetedContexts = mutableListOf<ShopSyncRpcContext>()
+    val materializedFences = mutableListOf<Pair<ShopSyncRowDomain, String>>()
+
+    override suspend fun rowsByIds(
+        context: ShopSyncRpcContext,
+        domain: ShopSyncRowDomain,
+        ids: List<String>
+    ): Result<ShopSyncTargetedRows> {
+        val response = source.rowsByIds(context, domain, ids).getOrThrow()
+        val materialized = source.checkpoints.last().syncEvents.domainMaxIds
+            .getValue(domain.fixtureSyncEventDomain())
+        check(materialized.toLong() >= requireNotNull(context.expectedDomainEventMaxId).toLong())
+        targetedContexts += context
+        materializedFences += domain to materialized
+        return Result.success(response.copy(materializedDomainEventMaxId = materialized))
+    }
+}
+
+private class ActiveShopDeviceRemoteForOrdinaryTest(private val shopId: String) : ShopDeviceRegistrationRemote {
+    override val isConfigured = true
+    var statusCalls = 0
+
+    override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
+        error("ordinary drain must use the already registered scoped device")
+
+    override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
+        error("ordinary drain must check the selected shop device")
+
+    override suspend fun shopDeviceStatusForShop(
+        shopId: String,
+        reason: String
+    ): Result<ShopDeviceAuthorizationSnapshot> {
+        check(shopId == this.shopId)
+        statusCalls++
+        return Result.success(ShopDeviceAuthorizationSnapshot(
+            status = "active", code = "success", canWrite = true,
+            serverTime = "2026-07-21T11:00:00Z", lastSeenAt = "2026-07-21T11:00:00Z",
+            reasonCode = "active", recommendedAction = "allow", checkedAtMs = 1_000_000L
+        ))
+    }
+}
+
+private fun ordinaryEvent(
+    id: Long,
+    domain: String,
+    type: String,
+    ids: SyncEventEntityIds
+) = SyncEventRemoteRow(
+    id = id,
+    ownerUserId = "10000000-0000-4000-8000-000000000001",
+    shopId = "10000000-0000-4000-8000-000000000003",
+    domain = domain,
+    eventType = type,
+    changedCount = 1,
+    entityIds = ids,
+    sourceDeviceId = "00000000-0000-4000-8000-000000000099",
+    createdAt = "2026-07-21T11:00:00.000000Z"
+)
+
+private fun ordinaryDeltaFixture(
+    base: RecoveryFixture,
+    products: List<InventoryProductRow>,
+    maxId: Long,
+    domainMaxIds: Map<String, String>,
+    prices: List<InventoryProductPriceRow> = (base.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+): RecoveryFixture {
+    val productsCheckpoint = checkpointDomain(
+        products.map { it.id }, products.map(::testProductVersion), products.map(::testProductIdentity),
+        activeCount = products.count { it.deletedAt == null }.toLong(),
+        tombstoneCount = products.count { it.deletedAt != null }.toLong()
+    )
+    val catalog = base.checkpoint.catalog.copy(
+        products = productsCheckpoint,
+        digest = testSha256(base.checkpoint.catalog.suppliers.versionDigest + "\n" +
+            base.checkpoint.catalog.categories.versionDigest + "\n" + productsCheckpoint.versionDigest)
+    )
+    return base.copy(
+        checkpoint = base.checkpoint.copy(
+            syncEvents = base.checkpoint.syncEvents.copy(
+                maxId = maxId.toString(),
+                domainMaxIds = base.checkpoint.syncEvents.domainMaxIds + domainMaxIds
+            ),
+            catalog = catalog,
+            prices = checkpointDomain(prices.map { it.id }, prices.map(::testPriceVersion)),
+            checkpointDigest = if (maxId == 43L) "8".repeat(64) else "9".repeat(64)
+        ),
+        rows = base.rows + (ShopSyncRowDomain.PRODUCTS to ShopSyncRows.Products(products)) +
+            (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(prices))
+    )
+}
+
+private fun ordinaryHistoryDeltaFixture(base: RecoveryFixture, history: SharedSheetSessionRecord): RecoveryFixture = base.copy(
+    checkpoint = base.checkpoint.copy(
+        syncEvents = base.checkpoint.syncEvents.copy(maxId = "43",
+            domainMaxIds = base.checkpoint.syncEvents.domainMaxIds + (SyncEventDomains.HISTORY to "43")),
+        history = checkpointDomain(listOf(history.remoteId), listOf(testHistoryVersion(history)),
+            activeCount = if (history.deletedAt == null) 1L else 0L,
+            tombstoneCount = if (history.deletedAt == null) 0L else 1L),
+        checkpointDigest = "8".repeat(64)),
+    rows = base.rows + (ShopSyncRowDomain.HISTORY to ShopSyncRows.History(listOf(history)))
+)
+
+private fun smallMixedRetainedPriceFixture(): RecoveryFixture {
+    val base = mixedRetainedPriceFixture()
+    val prices = (base.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+    val small = listOf(prices.first(), prices[95])
+    return base.copy(
+        checkpoint = base.checkpoint.copy(prices = checkpointDomain(small.map { it.id }, small.map(::testPriceVersion))),
+        rows = base.rows + (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(small))
+    )
+}
+
+private fun ordinaryRetainedPriceDeltaFixture(base: RecoveryFixture): RecoveryFixture {
+    val existing = (base.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+    val retained = existing.first()
+    val newPrice = retained.copy(
+        id = "40000000-0000-4000-8000-000000000019",
+        effectiveAt = "2026-07-21 11:00:00",
+        createdAt = "2026-07-21 11:00:00",
+        updatedAt = "2026-07-21T11:00:00.000000Z"
+    )
+    val products = (base.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values.map {
+        if (it.deletedAt != null) it.copy(updatedAt = "2026-07-21T11:00:01.000000Z") else it
+    }
+    // The following catalog event provides a real catalog fence >= the price
+    // parent lookup's minimum, rather than echoing an impossible domain fence.
+    return ordinaryDeltaFixture(
+        base, products, 44L,
+        mapOf(SyncEventDomains.PRICES to "43", SyncEventDomains.CATALOG to "44"),
+        existing + newPrice
+    )
+}
+
+private fun ordinaryRetainedPriceEvents(price: InventoryProductPriceRow, tombstone: InventoryProductRow) = listOf(
+    ordinaryEvent(43L, SyncEventDomains.PRICES, SyncEventTypes.PRICES_CHANGED,
+        SyncEventEntityIds(priceIds = listOf(price.id), productIds = listOf(price.productId))),
+    ordinaryEvent(44L, SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_TOMBSTONE,
+        SyncEventEntityIds(productIds = listOf(tombstone.id))).copy(createdAt = requireNotNull(tombstone.updatedAt))
+)
+
+/** A separate faithful keyset adapter leaves the original single-page fake unchanged. */
+private class PagedRecoveryRemoteFixture(
+    private val source: RecoveryRemoteFixture
+) : ShopSyncReadRemoteDataSource by source {
+    override suspend fun recoveryPage(
+        context: ShopSyncRpcContext,
+        domain: ShopSyncRowDomain,
+        afterId: String?,
+        limit: Int
+    ): Result<ShopSyncRecoveryPage> {
+        val template = source.recoveryPage(context, domain, null, limit).getOrThrow()
+        val ids = template.rows.ids()
+        val offset = if (afterId == null) {
+            0
+        } else {
+            val previous = ids.indexOf(afterId)
+            check(previous >= 0)
+            previous + 1
+        }
+        val pageIds = ids.drop(offset).take(limit)
+        val hasMore = offset + pageIds.size < ids.size
+        return Result.success(
+            template.copy(
+                rows = template.rows.filterRowsByIds(pageIds.toSet()),
+                nextAfterId = pageIds.lastOrNull().takeIf { hasMore },
+                hasMore = hasMore
             )
         )
     }
@@ -3109,6 +4826,74 @@ private fun deletedProductImageFixture(): RecoveryFixture {
             ShopSyncRowDomain.HISTORY to ShopSyncRows.History(emptyList()),
             ShopSyncRowDomain.IMAGES to ShopSyncRows.Images(listOf(image))
         )
+    )
+}
+
+private fun retainedPriceForDeletedProductFixture(): RecoveryFixture {
+    val active = targetFixture()
+    val deleted = deletedProductImageFixture()
+    return deleted.copy(
+        checkpoint = deleted.checkpoint.copy(prices = active.checkpoint.prices),
+        rows = deleted.rows + (ShopSyncRowDomain.PRICES to active.rows.getValue(ShopSyncRowDomain.PRICES))
+    )
+}
+
+private fun mixedRetainedPriceFixture(): RecoveryFixture {
+    val active = targetFixture()
+    val deleted = deletedProductImageFixture()
+    val activeProduct = (active.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products).values.single()
+    val deletedProduct = (deleted.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products)
+        .values.single().copy(
+            id = "20000000-0000-4000-8000-000000000009",
+            barcode = "deleted-parent-barcode"
+        )
+    val originalPrice = (active.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values.single()
+    val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    val start = java.time.LocalDateTime.of(2026, 7, 21, 10, 0)
+    val prices = (1..655).map { index ->
+        val timestamp = start.plusSeconds(index.toLong()).format(formatter)
+        originalPrice.copy(
+            id = "30000000-0000-4000-8000-" + index.toString().padStart(12, '0'),
+            productId = if (index <= 95) deletedProduct.id else activeProduct.id,
+            effectiveAt = timestamp,
+            createdAt = timestamp
+        )
+    }
+    val activeImage = (active.rows.getValue(ShopSyncRowDomain.IMAGES) as ShopSyncRows.Images).values.single()
+    val deletedImage = (deleted.rows.getValue(ShopSyncRowDomain.IMAGES) as ShopSyncRows.Images)
+        .values.single().copy(
+            productId = deletedProduct.id,
+            versionId = "20000000-0000-4000-8000-000000000010"
+        )
+    val productsCheckpoint = checkpointDomain(
+        listOf(activeProduct.id, deletedProduct.id),
+        listOf(testProductVersion(activeProduct), testProductVersion(deletedProduct)),
+        listOf(testProductIdentity(activeProduct), testProductIdentity(deletedProduct)),
+        activeCount = 1,
+        tombstoneCount = 1
+    )
+    val catalog = active.checkpoint.catalog.copy(
+        products = productsCheckpoint,
+        digest = testSha256(
+            active.checkpoint.catalog.suppliers.versionDigest + "\n" +
+                active.checkpoint.catalog.categories.versionDigest + "\n" + productsCheckpoint.versionDigest
+        )
+    )
+    return active.copy(
+        checkpoint = active.checkpoint.copy(
+            catalog = catalog,
+            prices = checkpointDomain(prices.map { it.id }, prices.map(::testPriceVersion)),
+            images = checkpointDomain(
+                listOf(activeImage.productId, deletedImage.productId),
+                listOf(testImageVersion(activeImage), testImageVersion(deletedImage)),
+                activeCount = 1,
+                tombstoneCount = 1
+            )
+        ),
+        rows = active.rows +
+            (ShopSyncRowDomain.PRODUCTS to ShopSyncRows.Products(listOf(activeProduct, deletedProduct))) +
+            (ShopSyncRowDomain.PRICES to ShopSyncRows.Prices(prices)) +
+            (ShopSyncRowDomain.IMAGES to ShopSyncRows.Images(listOf(activeImage, deletedImage)))
     )
 }
 

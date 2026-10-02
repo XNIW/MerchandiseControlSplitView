@@ -1,0 +1,987 @@
+{
+  "schemaVersion": 1,
+  "subject": "TASK-143 R-A09/R-A10 actual local gates, 2026-10-02 UTC",
+  "taskState": "FIX",
+  "qualification": "Saved-evidence documentation only. No new native command, device access, protected configuration read, source edit or Git operation performed by this documentation step.",
+  "source": {
+    "headAtExecution": "9306e8a7ab3f96b95d9b844e03f624c785df5c96",
+    "freezeSHA256": "7fa000b8972bec43bef49c0ed3f36956a1f966fad10f019ae587b6bea669c6de",
+    "planningPrefixSHA256": "8b53c975c9c6a50ab4fc58d0427c2cf1af8d475e5c3cef73c4e91f6226bb1231",
+    "publicInputs": 263,
+    "additionalPublicMetadata": 4,
+    "all267MatchSavedFreezeAtDocumentation": true,
+    "sourceTestBuildChangedByDocumentation": false
+  },
+  "jvm": {
+    "variant": "debug",
+    "freshXMLFiles": 72,
+    "tests": 1077,
+    "passed": 1070,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 7,
+    "oldCaseIdsAndStatusesPreserved": 1040,
+    "newRecoveryCasesAllPass": 37,
+    "releaseVariantExecuted": false,
+    "classPackagePrefix": "com.example.merchandisecontrolsplitview.",
+    "classRowsColumns": [
+      "classSuffix",
+      "tests",
+      "passed",
+      "failures",
+      "errors",
+      "skipped",
+      "xmlSHA256"
+    ],
+    "classRows": [
+      [
+        "MerchandiseControlApplicationTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "d265d49219e5f13aca5340e2e9a4919abcb07f7809d02c971ce4c94f8b4ea08c"
+      ],
+      [
+        "data.AppDatabaseMigrationTest",
+        22,
+        22,
+        0,
+        0,
+        0,
+        "0d50a809f95d5333a3ba1e74181e7eba6b1b2166001933f8836efb95e028f355"
+      ],
+      [
+        "data.CatalogAutoSyncCoordinatorTest",
+        31,
+        31,
+        0,
+        0,
+        0,
+        "25a6eebaf84883adb7479c207bbeead06253287fa0dcc90962e44bdd6f41ec4d"
+      ],
+      [
+        "data.CheckedAuthSettingsTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "7444f21d745cad86d39d39d7601c9839d5c8c44f7d638a4aeccffe9406320dc2"
+      ],
+      [
+        "data.DefaultInventoryRepositoryTest",
+        218,
+        217,
+        0,
+        0,
+        1,
+        "62d4527ed40bb6d1591fdfbe5a476528e6420d9de40a28d8053f72139dc42341"
+      ],
+      [
+        "data.HistorySessionPushCoordinatorTest",
+        19,
+        19,
+        0,
+        0,
+        0,
+        "fa6fa217453f171bd7d50f140a59d4af6c9276f4a36b4f14b0f49a5a83398edd"
+      ],
+      [
+        "data.InventoryRemoteFetchSupportTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "090c8eb77467a7881a2d37c01cc1379437c884d030d02f53c7e44d27b1a7f96e"
+      ],
+      [
+        "data.MobileParityLargeDatasetBenchmarkTest",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "ca7dedfbb81895bb9730a952dc1ad5f2a69fc17552ddfac9bc74306b40f78deb"
+      ],
+      [
+        "data.OperationalMutationIntegrityTest",
+        15,
+        15,
+        0,
+        0,
+        0,
+        "54bc4cbf60501aaf26d3c7104bfc3feda3d08f20bd80a2efd3311d69c475b10d"
+      ],
+      [
+        "data.PriceBackfillWorkerTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "a5495f2c8116e177a803fc23b300fb0c401d80e244d1497942018ec06d334cb8"
+      ],
+      [
+        "data.ProductImageCatalogContractTest",
+        8,
+        8,
+        0,
+        0,
+        0,
+        "0cf1d9333f8f1b4688cf7f58efdf2220bfe6c39033281c36a6075af6f3945d84"
+      ],
+      [
+        "data.ProjectSessionPersistenceTest",
+        5,
+        5,
+        0,
+        0,
+        0,
+        "a140ea5bba7b709401e3c519c14796c04afc63e734b4971a7e68265f98d2a0ab"
+      ],
+      [
+        "data.RealtimeRefreshCoordinatorTest",
+        13,
+        13,
+        0,
+        0,
+        0,
+        "895ba0721a853cdc933ca550d3794dd5b74f7af8d3bc5c0921efa3d9ccfb7a35"
+      ],
+      [
+        "data.ShopContextTest",
+        15,
+        15,
+        0,
+        0,
+        0,
+        "f83b16063d173406b0aacc5e9b6ce7f5fdc678d0909adf73b693275187aed7bc"
+      ],
+      [
+        "data.ShopDeviceAuthorizationRepositoryTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "9e36b0127a2ed80ace0fe31fa497cb125a00622d22af90bb5c354de4514d1145"
+      ],
+      [
+        "data.ShopSyncRecoveryCoordinatorTest",
+        111,
+        111,
+        0,
+        0,
+        0,
+        "435243a606173addbefad958bf17378f257ba757ae0d97fd21ce5708fcf41655"
+      ],
+      [
+        "data.StorefrontAuthoringContractTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "40b63a4885a11c9bf2fe837ca9934857ae3eb1d94bfa3c2cb135cbc54c9e428b"
+      ],
+      [
+        "data.StorefrontPendingMutationStoreTest",
+        5,
+        5,
+        0,
+        0,
+        0,
+        "66ea0e802de17f8a60504290f60cfc97aecdf7e0297450455a25ae291015367e"
+      ],
+      [
+        "data.StorefrontProductPagingProjectionTest",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "d0c6c87fea57405570a05c4c07e72f7e608e133ae777f3c0690866c2605eff3e"
+      ],
+      [
+        "data.StorefrontProductPagingSourceTest",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "753b2e9ecd2ae3ad42dfaae498b63ec011d5f01709525c0bccab156f7b1d9513"
+      ],
+      [
+        "data.SupabaseAuthLifecycleTest",
+        26,
+        26,
+        0,
+        0,
+        0,
+        "20f5f3b7153bb7bea765f036a0a5c0a4e6715826620d193537fbec29b30205b8"
+      ],
+      [
+        "data.SupabaseAuthManagerTest",
+        25,
+        25,
+        0,
+        0,
+        0,
+        "932bb81b3516178ed53214ffeadc65e88f4cfcee03942f71758354fd8ceb4b50"
+      ],
+      [
+        "data.SupabaseRealtimeSessionSubscriberLiveTest",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "baa3782bafa7c0bf29a3d875a5704108ad56f52b3e33684a90dbdca72f52b363"
+      ],
+      [
+        "data.SupabaseShopSyncReadRemoteDataSourceTest",
+        19,
+        19,
+        0,
+        0,
+        0,
+        "12682cc05ba8a9029b67a74f1e0181708377792ce4627b148efd46a0188ad916"
+      ],
+      [
+        "data.SyncErrorClassifierTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "06d4fb19d4dbc615fccc22701409c8581071f6b09eaa874a80310c933b74edfc"
+      ],
+      [
+        "data.SyncEventContractTest",
+        4,
+        4,
+        0,
+        0,
+        0,
+        "950d87ba02526023718487f38ef6ae977dbe6d87de20dc8b29b08ddc128bfa6c"
+      ],
+      [
+        "data.SyncEventReadBoundaryTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "72d82c3f4b2b789b922b02eb989a904b3eca128e7f96544b9c98f2504720ba3a"
+      ],
+      [
+        "data.Task113AndroidOfflineHarnessJvmTest",
+        2,
+        2,
+        0,
+        0,
+        0,
+        "3d0ca61dd966a684aa92448083ecba4b69a04e4521e68f5f616703afca363e02"
+      ],
+      [
+        "data.Task126AccountStoreBoundaryTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "3e4f1a5e3dc36e5ffcacdde159f010dfdacbe75a212fe3052db83662463c93fd"
+      ],
+      [
+        "data.Task126AccountSwitchReviewUiTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "a19b1694d41f9a8040d3e4d7455b8cb6fa14551e1fc196ac571d5120a08f7612"
+      ],
+      [
+        "data.Task126BusinessDataScopeRuntimeGuardTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "ae66b60cfd77e3739e9fcdc6bd97205a1c42cd8a857b4ad088c8281f6a6e56df"
+      ],
+      [
+        "data.Task126CacheMemoryTest",
+        4,
+        4,
+        0,
+        0,
+        0,
+        "587b29d5834ec7877a3b76f17ef0daf5b1ae653c9502cfb9c56360b2bbe2b6c7"
+      ],
+      [
+        "data.Task126ConflictReviewTest",
+        4,
+        4,
+        0,
+        0,
+        0,
+        "240c48e1088271e66a80baceb3488816dbb79eea95c12444636ab522f2c5b0e4"
+      ],
+      [
+        "data.Task126ConflictReviewUiTest",
+        5,
+        5,
+        0,
+        0,
+        0,
+        "ee8fd27465bd4d6ea1890d40a755d42c33ae79c6c4023b6b13d18c392524ae24"
+      ],
+      [
+        "data.Task126SyncPolicyTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "3fc48267c5e5bb9e594784aad43d233633d9c062ff16d698a91941a53e516fbc"
+      ],
+      [
+        "data.Task130PriceContractTest",
+        4,
+        4,
+        0,
+        0,
+        0,
+        "01a12239ced0e67b5102a0b0f646e5d08c755189b1aafb5e78c434de510f0dea"
+      ],
+      [
+        "data.Task139BusinessDataScopeBindingTest",
+        20,
+        20,
+        0,
+        0,
+        0,
+        "eab707223b411a9df901c4cfcd8583b15fc5375b867b31cf2c2eda161413fb44"
+      ],
+      [
+        "data.WeChatAuthContractTest",
+        8,
+        8,
+        0,
+        0,
+        0,
+        "56f32864be84045592dba916063dcd004954f574bed97d8bc1f193b6c80440e5"
+      ],
+      [
+        "productimage.ProductImageCacheTest",
+        16,
+        16,
+        0,
+        0,
+        0,
+        "c72fb2004fcb2b369d3274c68e449f44a1048cf4535939ed2f2ee9c9fd73a244"
+      ],
+      [
+        "productimage.ProductImageProcessorTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "9e378fc51f325d388577110d2bcb406877d88aabffa142806437dd1652f9eef6"
+      ],
+      [
+        "productimage.ProductImageServiceTest",
+        31,
+        31,
+        0,
+        0,
+        0,
+        "df3fd546d0930f909cf1f2fdde0795c2fcef98e42dfe15dd01fcffac075d75c0"
+      ],
+      [
+        "productimage.ProductImageSharedContractTest",
+        8,
+        8,
+        0,
+        0,
+        0,
+        "9d2fb9d469a7e8d35150a60777df3fbef2572827878871306464da390fa7dc56"
+      ],
+      [
+        "ui.navigation.BusinessContentGateTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "c397b8ab3395db89cb12aa3799502d8ce8fd0c1215d00e7119db76ef70cb1f85"
+      ],
+      [
+        "ui.navigation.GeneratedExitDestinationMatrixTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "7aed8e5406e8046ad35c44a53ab0656dfc240e82e94bf63889e2ff05228960a2"
+      ],
+      [
+        "ui.navigation.GeneratedExitDestinationResolverTest",
+        16,
+        16,
+        0,
+        0,
+        0,
+        "ece37b407b551f5e6d01b9de991c9a820b9e4f7175a0d61e03f01f8a6d865ff8"
+      ],
+      [
+        "ui.navigation.ImportNavOriginTest",
+        4,
+        4,
+        0,
+        0,
+        0,
+        "d2aa123d23759d3a3b1067453eb9775b59de012d05669634da8f656a98539d1d"
+      ],
+      [
+        "ui.screens.BusinessScopeMismatchDialogTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "9b20231e30d8710215a89658bd39b4a045442cebf4f5e705d11c48dbc877e8cd"
+      ],
+      [
+        "ui.screens.CrossPlatformReliabilityPresentationTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "a1963178e1341c38c656dbcb92b98d60710da491464bd0168184c1790bbbfa22"
+      ],
+      [
+        "ui.screens.FilePickerScreenTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "df82103b9a3479d14362da2454772e4a063b78901510b4288534c41f283a84a6"
+      ],
+      [
+        "ui.screens.OptionsScreenPublicUxTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "6715b7475ad3d08657709b117420d91e89a9f829911d91d253ff485061f5b0bc"
+      ],
+      [
+        "ui.screens.PreGenerateEntityResolutionTest",
+        3,
+        3,
+        0,
+        0,
+        0,
+        "9694b6e7be2ce69c99fd16c8c4cbc39893a24c81acd871916e7e8ec6e549ecf8"
+      ],
+      [
+        "ui.screens.StorefrontLocalizationTest",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "0aaf42422ce30343806cb5d419d21e81e16c6703831f537930cdaded5472db32"
+      ],
+      [
+        "ui.screens.Task141ImportPolicyLocalizationTest",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "386f8724c3362258747a631d0342a9ddb86c2b37913ad87cdaab1816ab883ec0"
+      ],
+      [
+        "util.CatalogTextPolicyTest",
+        7,
+        7,
+        0,
+        0,
+        0,
+        "fd17e5cd85220e02776eab097c84f1060a149e2a3ab7b697fedb837bc7eaff1b"
+      ],
+      [
+        "util.ClNumberFormattersTest",
+        16,
+        16,
+        0,
+        0,
+        0,
+        "8e839b89849b672de2b5ef81c5eab92c18c0f4257d55115316ade3acfa39116a"
+      ],
+      [
+        "util.DatabaseExportWriterTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "24a60ed613b695919d13b97bbbfbaa78587ca725be82329d4444d20b7813ca82"
+      ],
+      [
+        "util.ErrorExporterCatalogTextTest",
+        2,
+        2,
+        0,
+        0,
+        0,
+        "25eb8b689c205390ad7a9514cb67ab012fc695110ada79e6b2ef97da5d31da00"
+      ],
+      [
+        "util.ExcelRecognitionAuditOracleLoopTest",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "cd34b6200cfbf4d836a48d046924aed823ed362c2a0fbda78c3795cb212da8e6"
+      ],
+      [
+        "util.ExcelRecognitionAuditTest",
+        1,
+        1,
+        0,
+        0,
+        0,
+        "ea12280b4a0ef7da4a665adf08fa901f121dd4237f05935bfc3ca542edee5467"
+      ],
+      [
+        "util.ExcelRecognitionDriveBatchAuditTest",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "f84017306c5142188bb13cb4d33215e199363fca892a85d11db1120c1779837e"
+      ],
+      [
+        "util.ExcelRecognitionOracleV2Test",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "377fefe5c7f0640996e67ef1ef823d1e4f38c853da6014698bea987cb3058200"
+      ],
+      [
+        "util.ExcelUtilsTest",
+        48,
+        48,
+        0,
+        0,
+        0,
+        "9738b28acce07d181c1c59e11b0abedc4a55fe6e4579f70f6b6fccda39dce441"
+      ],
+      [
+        "util.FullDbCatalogTextDiagnosticsTest",
+        5,
+        5,
+        0,
+        0,
+        0,
+        "fae3797a809b76d11b49f796188d49cd4ae22f296818ec1556c583953d69e9dd"
+      ],
+      [
+        "util.FullDbExportImportRoundTripTest",
+        8,
+        8,
+        0,
+        0,
+        0,
+        "9d60283c7537c8d3dc08532f2c7a5df99e79d280014da657333e3af79ba39e66"
+      ],
+      [
+        "util.ImportAnalyzerTest",
+        34,
+        34,
+        0,
+        0,
+        0,
+        "e1407ac1dd1dff6038422117851035f0d5f80ae0db08edade60751f6aac16093"
+      ],
+      [
+        "util.ImportResourcePolicyTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "98ce17f6c14d4035a215b9ec118f4571cc4dac7ba32add79f75fb5f7a24e2513"
+      ],
+      [
+        "util.OrderQuantitySummaryTest",
+        6,
+        6,
+        0,
+        0,
+        0,
+        "ed43386486e5f1cf21e397ca8c42527fc8d030cd048c2d63a10cbbd0cee12f3b"
+      ],
+      [
+        "util.ShoppingHogarLocalDebugTest",
+        1,
+        0,
+        0,
+        0,
+        1,
+        "8d2b1b5c4b4a61ad5c8466724c590d92c688a6acd56000964ea183ab50d05d87"
+      ],
+      [
+        "viewmodel.CatalogSyncViewModelTest",
+        31,
+        31,
+        0,
+        0,
+        0,
+        "8b46f68b04bce1febd87402323687a6d90fcb082aa2c1c7bd89bf0f2820c7ae4"
+      ],
+      [
+        "viewmodel.DatabaseViewModelTest",
+        61,
+        61,
+        0,
+        0,
+        0,
+        "edfe0bc3c4560e2d7315086214d5e5e726bbd9b1b8aec4e846d5530101cc02f8"
+      ],
+      [
+        "viewmodel.ExcelViewModelTest",
+        52,
+        52,
+        0,
+        0,
+        0,
+        "1d29f18d004f519c9de28759ada96b2d7b6e6dfa87c520dd779b78e6f90a8305"
+      ],
+      [
+        "viewmodel.StorefrontDatabaseViewModelTest",
+        25,
+        25,
+        0,
+        0,
+        0,
+        "0004132019c752015333927416d0038415b74133c085705249cd798c6107cab4"
+      ]
+    ],
+    "newRecoveryCaseNames": [
+      "ordinaryChangedZeroWatermarkRowLossRejectsAtomicPublication",
+      "ordinaryParentRestoreFetchesRetainedPriceBodiesAtActualPriceFence",
+      "ordinaryHistoryShadowScanIncludesNegativeUidOrphans",
+      "ordinaryCapturedEntireBaselineEntityRacePreservesNewerPublication",
+      "retainedAppendOnlyPriceForTombstonedProductRecoversCompleteLedger",
+      "mixedRetainedPriceLedgerCrossesRawAndPhysicalPageBoundaries",
+      "ordinaryHistoryShadowScanCoversUnknownBridgeBeyondFiveHundredAndRejectsInvalidUtc",
+      "ordinaryGenerationRacePreservesNewGenerationAndRejectsPreparedOldRows",
+      "ordinaryNoEventZeroWatermarkRowLossCannotPublishNoWork",
+      "ordinarySyncedHistoryOrphanShadowRejectsInsteadOfHidingOrDeferring",
+      "ordinaryParentRestoreWithCorruptRetainedPriceBodyRollsBack",
+      "ordinaryUncoveredPhysicalCorruptionRejectsAndRollsBackCoveredProductDelta",
+      "ordinaryValidEmptyCanonicalBaselineAcceptsCapturedHistoryDelta",
+      "ordinaryActivatedZeroBaselinePublishesFirstEventAtomicallyWithoutRecovery",
+      "ordinaryEmptyZeroBootstrapExemptionRequiresCurrentManagedMatchingScope",
+      "ordinaryPendingInsertedAfterLastRpcDefersBeforeAnyPublication",
+      "ordinaryPendingHistoryRealTombstonePushAckThenSelfReceiptPublishesC",
+      "ordinaryCommitCancellationRollsBackPhysicalLedgerReceiptAndWatermark",
+      "ordinaryPendingProductRealPushAckThenSelfReceiptPublishesCWithoutRecovery",
+      "ordinaryNoEventLocalUnbridgedPriceDefersWithoutFalseNoWorkOrJournal",
+      "ordinaryPriceWithUnprovenTargetedParentRejectsAndPreservesPublishedBaseline",
+      "ordinaryActivatedEmptyZeroBaselineImmediatelyProvesNoEventNoWork",
+      "ordinaryEmptyZeroMissingWatermarkOrMalformedReceiptStillRequiresBootstrap",
+      "ordinaryPendingHistoryDefersWithoutJournalAndAllowsRealPush",
+      "ordinaryCatalogDeltaAfterActualRecoveryKeepsReadyAndSecondTriggerNoWork",
+      "ordinaryAutoSyncActivatedZeroBaselineDrainsFirstEventWithoutBootstrapSkip",
+      "ordinarySqlPublicationAbortRollsBackEarlierPhysicalAndLedgerWrites",
+      "priceParentFromAnotherGenerationRemainsUnproven",
+      "ordinaryHistoryTombstoneRetainsOldBodyAndProvesShadowAcrossReopenAndNextDelta",
+      "ordinaryPersistsOriginalOpaqueServerCDigestAfterFullMaterialProof",
+      "checkpointBTombstonedParentRetainsExistingAndTailPricesOnlyInLedger",
+      "retainedPriceCleanupResumeVerifiesFreshStoreWithoutRedownloading",
+      "ordinaryDefaultZeroWithoutActivatedBaselineStillRequiresBootstrap",
+      "ordinaryNoEventCannotPublishNoWorkOverCleanPhysicalPriceTamper",
+      "retainedPriceRecoveryReachesOrdinaryNoWorkWithoutRelatching",
+      "ordinaryRetainedPriceForProvenTombstoneKeepsCompleteLedgerAndReady",
+      "ordinaryCoveredPhysicalCorruptionWithFingerprintAlreadyCRejectsAndRollsBack"
+    ],
+    "knownSkippedCases": [
+      {
+        "class": "DefaultInventoryRepositoryTest",
+        "case": "wechat 004 real local Supabase fixture converges through production incremental apply",
+        "category": "conditional_live_fixture",
+        "reason": "Requires WECHAT_004_LOCAL_E2E_FIXTURE; fixture contents not read.",
+        "status": "SKIP"
+      },
+      {
+        "class": "MobileParityLargeDatasetBenchmarkTest",
+        "case": "measure real repository queries and local editor writes at large scale",
+        "category": "opt_in_benchmark",
+        "reason": "Dedicated large-dataset benchmark opt-in not enabled.",
+        "status": "SKIP"
+      },
+      {
+        "class": "SupabaseRealtimeSessionSubscriberLiveTest",
+        "case": "live realtime insert is materialized into Room",
+        "category": "conditional_live_realtime",
+        "reason": "Live realtime configuration unavailable in this canonical run.",
+        "status": "SKIP"
+      },
+      {
+        "class": "ExcelRecognitionAuditOracleLoopTest",
+        "case": "runOrchestratedOracleLoopAndroidFirst",
+        "category": "dedicated_oracle_loop",
+        "reason": "Runs only through its dedicated OracleLoop command.",
+        "status": "SKIP"
+      },
+      {
+        "class": "ExcelRecognitionDriveBatchAuditTest",
+        "case": "auditDriveSupplierCorpusReadOnly",
+        "category": "dedicated_drive_batch",
+        "reason": "Runs only through its dedicated DriveBatch command.",
+        "status": "SKIP"
+      },
+      {
+        "class": "ExcelRecognitionOracleV2Test",
+        "case": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+        "category": "dedicated_oracle_v2",
+        "reason": "Runs only through its dedicated OracleV2 command.",
+        "status": "SKIP"
+      },
+      {
+        "class": "ShoppingHogarLocalDebugTest",
+        "case": "dumpShoppingHogarCurrentMapping",
+        "category": "optional_local_workbook",
+        "reason": "Optional local debug workbook absent; user file path omitted.",
+        "status": "SKIP"
+      }
+    ]
+  },
+  "warnings": {
+    "lint": {
+      "warnings": 39,
+      "errors": 0,
+      "baselineWarnings": 54,
+      "baselineSHA256": "b6f2f3aa75220530aa9d4f8ad3ba21174e043187144467c7192f3bbb5e05e5cf",
+      "currentSHA256": "5ed01f4cca041b62942482c65690aacd684659b4231d18989e82526b3e568098",
+      "newNormalizedFullSignatures": 0,
+      "all39SubsetOfBaseline54": true,
+      "removedUpdateNoticeSignatures": 15,
+      "normalization": "Only exact checkout and Gradle-home prefixes normalized; all issue attributes, messages, severity, children, line and column retained. No whitelist or exclusions.",
+      "notE4Baseline": true,
+      "whitelistUsed": false
+    },
+    "retainedById": {
+      "AndroidGradlePluginVersion": 1,
+      "ApplySharedPref": 2,
+      "ModifierParameter": 2,
+      "NewerVersionAvailable": 9,
+      "OldTargetApi": 1,
+      "PluralsCandidate": 4,
+      "TrustAllX509TrustManager": 2,
+      "UnusedResources": 7,
+      "UsableSpace": 2,
+      "UseKtx": 9
+    },
+    "removedById": {
+      "AndroidGradlePluginVersion": 1,
+      "GradleDependency": 14
+    },
+    "qualification": "All 39 full normalized signatures are a subset of the correct chronological local baseline of 54. The 15 missing dependency update notices in the offline run do not prove upgrades or warning fixes. Earlier E4 comparison is not the chronological baseline.",
+    "newKotlinOrDeprecationWarnings": 0,
+    "jvmCDSNotKotlinWarnings": 2
+  },
+  "canonicalBuild": {
+    "argv": [
+      "./gradlew",
+      "--offline",
+      "--no-daemon",
+      "--max-workers=1",
+      "-Pkotlin.compiler.execution.strategy=in-process",
+      "assembleDebug",
+      "test",
+      "lint",
+      "--console=plain"
+    ],
+    "exitCode": 0,
+    "releasedUTC": "2026-10-02T22:42:29.044619+00:00",
+    "ownGroupAbsentAtCleanup": true,
+    "signals": [],
+    "appSHA256": "d24f8c5ad4aaf52721156c139207e4ae2110713c83c6987b0546b63c5075ed7e"
+  },
+  "androidTestBuild": {
+    "argv": [
+      "./gradlew",
+      "--offline",
+      "--no-daemon",
+      "--max-workers=1",
+      "-Pkotlin.compiler.execution.strategy=in-process",
+      "assembleDebugAndroidTest",
+      "--console=plain"
+    ],
+    "exitCode": 0,
+    "executedTasks": [
+      "kspDebugAndroidTestKotlin",
+      "compileDebugAndroidTestKotlin"
+    ],
+    "packagingAndAssembleUpToDate": true,
+    "testAPKReusedHistoricalBytes": true,
+    "newDeviceExecutionInThisStep": false,
+    "releasedUTC": "2026-10-02T22:42:49.511004+00:00",
+    "ownGroupAbsentAtCleanup": true,
+    "testAPKSHA256": "847aee447925205bca30c2e17a6ab1031e6307ab6f01b7c9caebbda471ee4a41"
+  },
+  "composeDeviceActual": {
+    "tests": 5,
+    "passed": 5,
+    "failures": 0,
+    "skipped": 0,
+    "newActualExecution": true,
+    "methods": [
+      "zeroResultFilterRowKeepsAllAvailable",
+      "expiredRequestShowsExplicitDiscardAction",
+      "rapidFilterChangesKeepCurrentSelectionAndAllAvailable",
+      "collapsedSummaryExpandsToSeparateOperationalAndPublicationActions",
+      "publicCardNeverPresentsOperationalImageAsThePublicVariant"
+    ],
+    "officialMethodResultCode": 0,
+    "instrumentationResultCode": -1,
+    "officialInstrumentationSHA256": "40367cb0c4dc470a2f24526058cfdd30aa4f6210976a4d5565eff1557d35c426",
+    "sourceTestSHA256": "fff473c2da7a49899739da590d69d03f093ccaf499f01f93a6889de18fc58c61",
+    "ownedSyntheticAVD": "Codex_WECHAT010_Compose_API35_20261002",
+    "serial": "emulator-5580",
+    "authenticatedDevice5556Accessed": false,
+    "sameHistoricalTestAPKBytes": true,
+    "rawImmediateSerialAbsentAfter": false,
+    "rawOwnCleanupSignals": [
+      "SIGTERM"
+    ],
+    "ownedGroupAbsentAtRelease": true,
+    "releasedUTC": "2026-10-02T23:00:25.019428+00:00",
+    "laterSavedOwnerTerminalObservationUTC": "2026-10-02T23:01:54.785484+00:00",
+    "laterSerialAbsent": true,
+    "noAdditionalKillWipeRestartOrRetry": true,
+    "terminalProjectionSHA256": "43858a3d449da0a87e98dc9c8fea98fb401fd6e0da92cc729aba8e924c1480e0",
+    "qualification": "Immediate false preserved; only the later bounded saved observation confirms terminal serial absence."
+  },
+  "testProfileBuild": {
+    "artifact": "test-builds/android/ra09-ra10-zero-final-attempt02/app-debug-test-complete-profile-ra09-ra10-zero-final-attempt02.apk",
+    "sha256": "bd0a32bd030d653862791df3454060492f4dc94d358f1ec6f2724cb085b998fa",
+    "buildExitCode": 0,
+    "metadataProcessCount": 4,
+    "allFiveOwnedGroupsReleased": true,
+    "signals": [],
+    "finishedUTC": "2026-10-02T23:16:17.207456+00:00",
+    "deadlineRespected": true,
+    "builderSHA256": "346ba660140104da6890be7384337cc284cd862c901698cc6e5b4220ea5309e0",
+    "ownedHelperSHA256": "0b420d7bf33ae7114a67c88c4ffe8ad499b3605977d2f1189aa77fcc3ab10ef3",
+    "cardSHA256": "c1243797fa3978b21562b3488c5b694f1a2a31adc0e5551d639266f8bcef199b",
+    "goSHA256": "3f07822b6685492118faccf47d981eb2296a32db198a828d5fa865f6bbcbd041",
+    "applicationId": "com.example.merchandisecontrolsplitview",
+    "versionCode": 1,
+    "debuggable": true,
+    "profileAndEmbeddedConfigurationBooleanChecksPass": true,
+    "metadataAndSignerMatchPreserved96bAPK": true,
+    "worktreeLocalPropertiesExistenceBytesModeRestoredPerBoundVerifier": true,
+    "primaryConfigAndPrivateProfileUnchangedPerBoundVerifier": true,
+    "canonicalPairPreservedBeforeOverride": true,
+    "historicalAPKSHA256": "96b3d6134ea50b61e226a14105f8de014ebefa1d8f86c66e3ee740cccac6be70",
+    "privateCheckQualification": "Private configuration checks are attestations from the hash-bound authorized builder. Documentation/review did not reread protected values. Device-installed signature and runtime target not verified here."
+  },
+  "acceptanceLimits": {
+    "exactCommitCI": false,
+    "testAPKInstalled": false,
+    "authVerified": false,
+    "READYVerified": false,
+    "businessConvergenceVerified": false,
+    "authenticatedE2E": false,
+    "newPerformanceMeasurement": false,
+    "futureDebugDiagnosticHookIncluded": false,
+    "taskDone": false,
+    "note": "Synthetic Compose install/execution concerns canonical app/test pair only. Separate TEST artifact has no installation or authenticated acceptance claim. Root owns subsequent commit, PR, exact-SHA CI and coordinated live validation."
+  },
+  "evidenceArtifactRoot": "mobile-parity-root-cause (external archive; root-relative identifiers below with content hashes and extracted results above)",
+  "evidence": {
+    "canonicalActual": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-canonical-final-attempt02/result-receipt.json",
+      "sha256": "cc9fb1fca028e5071449ba53ed17cfaafab2a82bb49adeeb894453d8e19d7707"
+    },
+    "androidTestCompileActual": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-compose-final-attempt02/result-receipt.json",
+      "sha256": "0b06637bb3fe79aea82e152c7080295f56a4267047a3c6294e9142971f091a4f"
+    },
+    "canonicalIndependentReview": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-canonical-and-compose-build-adjudication/receipt.json",
+      "sha256": "c6c5d25e23207f30add45bb180dc10db3c3e827970c0982f2c09f0fc96bfaec4"
+    },
+    "jvmManifest": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-canonical-and-compose-build-adjudication/test-manifest.json",
+      "sha256": "4757bf731df46b92ea8ec4ed2c7b40ecb7a4049f9c3df04fcc5154ca3a6943cc"
+    },
+    "caseComparison": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-canonical-and-compose-build-adjudication/case-comparison.json",
+      "sha256": "e8826b3cb877a087910a27816a02664d78bc94176fad4230671006e837d38550"
+    },
+    "lintSignatureComparison": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-canonical-and-compose-build-adjudication/warning-signatures.json",
+      "sha256": "d4cb876d40a7ead8190bafe7bc3db6346c2264b3e1db6c11b345010e3c547a04"
+    },
+    "sourceVerification": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-canonical-and-compose-build-adjudication/source-verification.json",
+      "sha256": "80d269d34c3ee801ff79a4f1e3ac1e7c6a01160d6865c124120dea327747b6cd"
+    },
+    "composeActual": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-compose-device-final-attempt02/result-receipt.json",
+      "sha256": "e3ecce13179a92144cbfd402d24474c158747e304ae6dbce8fa5ad9fc9367271"
+    },
+    "composeInitialReview": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-compose5-current-canonical-adjudication/receipt.json",
+      "sha256": "6ca31dc0db82b21c98864c16cc31bc5748e8ec8573682ad37d04f331cf690f08"
+    },
+    "composeCleanupSupplement": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-compose5-current-canonical-adjudication/terminal-cleanup-supplement/receipt.json",
+      "sha256": "236bed2d58bafe1e60f742babace933506aee34c5552b4028708e71ac9cee1b3"
+    },
+    "testBuildActual": {
+      "artifact": "test-builds/android/ra09-ra10-zero-final-attempt02/build-receipt.json",
+      "sha256": "68a17cea0ac6565d8066bb9cc853384168beeafe8ad19bd0d0e7980652b69f79"
+    },
+    "testBuildIndependentReview": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-current7fa-test-build-actual-adjudication/receipt.json",
+      "sha256": "36bf7e04ce09f25d93b7491e743ac3628b54e5d22512c546252a39c41242ef30"
+    },
+    "testBuildVerification": {
+      "artifact": "evidence/independent-review-resumed/android-ra10-current7fa-test-build-actual-adjudication/verification.json",
+      "sha256": "b607a26746812017909bea7dcb15d8d9d10149aa28d670ea9e978d7c1aff6f01"
+    },
+    "sourceFreeze": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-green-preparation-attempt02/source-freeze.json",
+      "sha256": "7fa000b8972bec43bef49c0ed3f36956a1f966fad10f019ae587b6bea669c6de"
+    },
+    "publicBuildInputs": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-green-preparation-attempt02/root-public-build-inputs.json",
+      "sha256": "890bd41a7ae59c3be6ee1f7fb44e75c52be6334e66ecce53707b88c8249927c6"
+    },
+    "publicCanonicalInputs": {
+      "artifact": "evidence/android-ordinary-delta-proof/zero-test-artifact-preparation-attempt02/public-canonical-inputs.json",
+      "sha256": "ce34bad454a653ffbda227dddce61d9e88844148a61b9354db5eab05fb4876a2"
+    }
+  }
+}
