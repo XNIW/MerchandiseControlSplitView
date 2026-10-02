@@ -185,6 +185,31 @@ interface SyncRecoveryManifestDao {
     @Query(
         """
         SELECT * FROM sync_recovery_manifest
+        WHERE generationId = :generationId AND domain = 'products'
+          AND remoteId IN (:remoteIds)
+        """
+    )
+    suspend fun getProductsByRemoteIds(
+        generationId: String,
+        remoteIds: List<String>
+    ): List<SyncRecoveryManifestRow>
+
+    @Query(
+        """
+        SELECT * FROM sync_recovery_manifest
+        WHERE generationId = :generationId AND domain = :domain
+          AND remoteId IN (:remoteIds)
+        """
+    )
+    suspend fun getByRemoteIds(
+        generationId: String,
+        domain: String,
+        remoteIds: List<String>
+    ): List<SyncRecoveryManifestRow>
+
+    @Query(
+        """
+        SELECT * FROM sync_recovery_manifest
         WHERE generationId = :generationId AND domain = :domain
           AND (:afterId IS NULL OR remoteId > :afterId)
         ORDER BY remoteId

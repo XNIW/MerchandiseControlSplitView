@@ -8,7 +8,7 @@
 - Responsabile: `CODEX_EXECUTOR_ANDROID`; orchestratore parent, reviewer indipendente separato.
 - Data: 2026-09-28
 - Baseline: `d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac`
-- Branch corrente: `codex/mobile-parity-validation-ledger` (documentazione dal main integrato `0613339f`; follow-up sorgente `codex/mobile-auth-session-restore` integrato con PR11, primo batch con PR10)
+- Branch corrente: `codex/android-recovery-retained-prices` dal main integrato `9306e8a7`; R-A09 in diagnosi/regressione. PR10/11 e registri PR12 preservati come integrazioni precedenti.
 - Coordination key: `MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE`
 
 ## Scopo / Obiettivo
@@ -111,7 +111,370 @@ Copiare la fixture condivisa senza trasformazioni e verificare i 45 vettori attr
 
 Il mandato richiede CI sullo SHA esatto. Il checkout predefinito della PR usa il merge temporaneo: metadata headSha non prova la revisione Git testata. Modifica minima autorizzata al solo input ref di actions/checkout: head.sha per pull_request, github.sha per push/workflow_dispatch. Versioni/pin, permessi, trigger e tutti i gate invariati; app/test/fixture invariati. Verificare indipendentemente il diff, quindi la revisione effettiva nel log e CI sul nuovo head prima del merge normale; conservare run precedenti con il loro tested SHA/tree. Nessun nuovo gate locale sull'app dedotto da questa modifica.
 
+### Addendum planning autorizzato — R-A09 prezzi append-only di parent tombstoned, 2026-10-02 UTC
+
+La singola apertura ordinaria dell'app Android finale su TEST registry154 ha prodotto tre fallimenti automatici: count mismatch alle16:14:59 e16:28:53 UTC, HTTP500 alle16:20:08; il quarto tentativo è stato interrotto con normale stop, non accettato. Il coordinatore conserva userdata/sessione/binding/consenso precedente e zero dati business attivi; staging del quarto tentativo parziale. L'HTTP500/SQL57014 del checkpoint è una causa backend separata. L'episodio count mismatch non è ancora attribuito a un dominio dai dati runtime disponibili.
+
+Il codice Android contiene un candidato concreto: prices append-only di un product provatamente tombstoned fanno parte del checkpoint/ledger, ma non hanno parent fisico attivo; applyProductPriceRows li salta mentre il count check richiede tutte le righe. Anche counts e readback fisici finali richiedono allineamento. Il parent autorizza nello stesso CA-07/10 una regressione Room reale su fixture esistente deletedProductImageFixture, ripristinando il price canonico nei due campi prima esclusi, senza modificare produzione prima del RED. Controlli: parent attivo conservato, parent sconosciuto rifiutato, ledger/count/digest completi, staging/activation/reopen e tail con parent divenuto tombstoned. Nessuna prova live dedotta dal solo fixture.
+
+Solo dopo RED, applicare il minimo cambiamento idiomatico Android per distinguere il ledger canonico completo dal sottoinsieme fisicamente materializzabile, escludendo esclusivamente il parent provato tombstoned nel medesimo manifest owner/shop/generation. Conservare tutte le righe/ID/versioni/digest remoti; mantenere fail-closed per parent sconosciuti, duplicati, relazioni invalide, payload incoerenti, scope e limiti. Vietati indebolimento del count/digest, skip generici, schema/reset/queue/consent bypass, full array e N+1 per prezzo: lookup e verifica bounded. Coerenza anche dopo checkpointB/tail, count di staging, activation e recovery/relaunch. Nessun cambio delle business key Android o import/export salvo necessità provata separatamente. Reviewer indipendente, regressioni TASK004 pertinenti, build/lint/test canonici e nuovo TEST/exact-head CI precedono ritest coordinato. Runtime/build richiedono uno slot host esplicito; sole letture e preparazione test possono procedere ora.
+
+### Addendum planning autorizzato — R-A10 continuazione incrementale ordinaria, 2026-10-02 UTC
+
+Dopo R-A09 RED→80GREEN/review408a92ba, il controllo sorgenti distingue un P1 ulteriore nel CA-07/09: ogni drain valido che avanza al capturedMax mantiene il checkpoint locale precedente; markerProvesNoWorkAgainstBaseline richiede watermark/digest vecchi e crea CONVERGENCE_PROOF_REQUIRED/journal REQUIRED. CatalogAutoSync passa a ERROR_RECOVERABLE e Application esegue una nuova full recovery, bloccando il percorso business. PRICES con parent provato tombstoned può analogamente essere trattato come MISSING_REMOTE. Non è causato da hasPriceCountDrift, che modifica soltanto il testo Options. Fonte bounded parent ordinary-delta-proof-followup-design.md SHA eb55edb645ffb08517948e2cd292850e8e1959e49652fcf99459b7ea311fd8d9; fatti statici, non runtime né acceptance.
+
+Autorizzata prima soltanto preparazione di regressioni reali Room→recovery completa→repository drain/AutoSync: evento ordinario valido con target remoto/captured fence coerenti deve applicarsi e permettere il successivo trigger senza full refresh o journal; PRICES con parent tombstoned provato nello stesso scope deve mantenere ledger completo senza falsa mancanza. Preservare unknown parent/cross-scope/gap/digest/dirty/pending e limiti fail-closed. Produzione R-A09 freeze39dffac3 rimane la baseline distinta; non cancellare o indebolire i74 test originali o i6 aggiunti. Ogni runner richiede nuovo GO host e deve conservare RED ufficiale prima di productionfix.
+
+Dopo RED e review del design, un eventuale fix deve riusare lo stesso motore/RPC/manifest/DAO e pubblicare in modo atomico dati fisici, ledger canonico, baseline verificata e watermark con fence/CAS/owner/shop/generation correnti. Non trasformare un marker remoto o un flag UI in prova locale; vietati disattivazione latch/count/digest, skip generici, nuova engine/schema/dependency e bypass auth. Considerare cascade, parent restore, immagini, History tombstone e dirty/pending; la prova forte deve confrontare conteggi/digest canonici e readback del subset fisico ammesso, con paging bounded. Una scansione O(domain) non è una promessa3s: misurare. Se il design non ha una prova sufficiente, documentare la precisa dipendenza, senza claim successo. Reviewer indipendente e gate finali/TASK004/TEST/exactCI/live sul nuovo codice dopo il fix.
+
+**Decisione bounded R-A10 — rappresentazione History nello store attivo (root, 2026-10-02 UTC):** dopo RED/design approvato, il verifier dello store attivo può usare un pager dedicato History `deletedAt IS NULL`, preservando il verifier staging esistente. Un secondo scan bounded deve verificare tutti gli shadow History deleted, inclusi quelli orphan/missing-ref: ref/ID canonico, manifest HISTORY inactive della stessa generazione/scope e tombstone UTC canonico concordante. Nessun INNER JOIN deve nascondere shadow sconosciuti; unknown/cross-scope/active-deleted mismatch fail closed, pending tombstone locale DEFER prima del proof. Non cancellare fisicamente History e non verificarne il vecchio body con il contratto active V2: il tombstone manifest ha cinque campi/payloadDigest null e prova la tombstone/assenza attiva, non il vecchio payload conservato. Non fabbricare una prova del body dalla hash. La baseline catturata deve includere identità record/entity e generation per CAS; A e C hanno digest legittimamente diversi dopo eventi validi, e si persiste il C originale solo dopo prova completa e commit atomico. Questa decisione precisa il confine, senza autorizzare production edit prima del RED.
+
+
+### Decisione planning R-A10 — rollback del test negativo139, 2026-10-02 UTC
+
+Dopo RED reale3 (due assertion FAIL previste, controllo parent sconosciuto PASS), la nuova prova iniziale deve rifiutare anche una baseline sintetica con manifest assente e digest artificiosi. Il test `139 post recovery nonzero watermark carries checkpoint fence and retains recovery latch after a changed fence` resta un controllo negativo: marker remoto non sufficiente, manualFullSyncRequired/gap/journal di recovery obbligatori. Il precedente watermark8 dopo il rifiuto descriveva un avanzamento prima della prova forte; è intenzionalmente obsoleto. Autorizzato il solo expected watermark8→7 e assertion aggiuntive di baseline/dati invariati, preservando scope/fence e gli altri rifiuti. Non trasformare il caso in noWork o indebolire la prova per mantenere un avanzamento parziale. Ogni altra modifica ad assert originali richiede evidenza distinta; gli80 casi recovery restano invariati. Executor traccia motivazione e diff separato in Execution; reviewer verifica contratto e rollback.
+
+
+### Decisione planning R-A10 — ACK locale e prova finale completa, 2026-10-02 UTC
+
+L'analisi indipendente dopo il RED ufficiale ha identificato un caso necessario: pending→push confermato→body locale clean già nuovo→evento self dentro la finestra C. La vecchia baseline G0/A conserva ancora il body precedente; imporre la sua proiezione fisica prima del nuovo apply rifiuterebbe un ACK legittimo. Soltanto nel percorso con finestra changed completa, la prova iniziale resta il ledger canonico A integrale con relazioni/material; la pubblicazione richiede preparazione bounded completa C (anche self), checkpoint C originale/material/fence autorevoli, e transazione con CAS intera baseline/entity/generation/owner/shop/binding/device/watermark/journal e pending0. Dopo apply, verificare ledger C canonico integrale e readback fisico C di TUTTO lo store ammesso (conteggi tabelle, integrità/FK, campi/versioni, parent eligibility R-A09 e ogni shadow History). Baseline C/watermark solo dopo prova finale, rollback su qualsiasi errore/cancel/mismatch. Questo sostituisce il solo requisito physical A iniziale nel changed-path. Nel percorso noEvents la prova fisica A integrale è obbligatoria: il precedente markerProvesNoWorkAgainstBaseline da solo non la eseguiva e non basta. Non dedurre ACK o convergenza da cleanflag, marker, vuoto o conteggi uguali.
+
+Test obbligatori aggiuntivi: pending→DEFER senza journal→push reale ACK→self C completo→READY/fresh-open/noWork; tamper clean di riga non coperta o extra/orphan/shadow sconosciuto→nessun GREEN e rollback (DEFER ammesso se davvero pending); covered body corrotto con fingerprint già C→repair esatta o FAIL+rollback, mai falso PASS; noEvents rifiuta tamper fisico; CAS/scope/device/generation/binding/watermark race/cancel impediscono commit. I mapper esistenti conservano i fast-skip: i fingerprint catalogo includono updatedAt e il normale DTO C già differisce dall'ACK push privo di timestamp. Nessun force mode/refactor senza un RED distinto che ne provi la necessità. History V1 mantiene la compatibilità esistente; tombstone shadow prova stamp/assenza attiva, immagini qui metadata/pointer e non pixel della cache. Source/finaltest review e gate restano da eseguire.
+
+
+### Decisione planning R-A10 — fixture positiva noEvents139, 2026-10-02 UTC
+
+Il caso `139 self verifying recovery baseline reaches marker noWork without relatching` costruisce manifest vuoto con digest a/b/c/d artificiosi. Il comportamento positivo resta valido solo per una baseline vuota canonica. Autorizzata la sola correzione della fixture con i reali hash canonici empty/domain/catalog/identity e scope/fence coerenti tramite i factory/helper esistenti, mantenendo tutti gli assert noWork, watermark7, scope, assenza gap/journal e nessun recovery. Non aggirare la nuova prova fisica A noEvents per mantenere valori artificiali. Separare questo diff dalla modifica intenzionale wm8→7 del test negativo139 e dagli83+ guard nuovi; motivare entrambi in Execution. Nessuna modifica degli80 recovery precedenti.
+
+### Decisione planning R-A10 — receipt attivata vuota e watermark zero, 2026-10-02 UTC
+
+La review statica indipendente `d800bde75003d17ce40915ebc9269c4dfb864fcbf55ec9980d3a1ad6505a6134` ha individuato un candidato P1 non ancora riprodotto: `shouldRunCatalogBootstrap` valuta soltanto il numero di prodotti, mentre `shopSyncBaselineForEventDrain` scarta watermark0 anche quando la recovery reale ha attivato una baseline canonica vuota. Catalogo vuoto e cursor0 non sono di per sé una richiesta di bootstrap né una prova di recovery. Il contratto ordinario deve ammettere una receipt corrente realmente attivata, con scope/device/binding/generation/manifest/fence coerenti e nessun journal/pending, indipendentemente dal numero di prodotti; baseline assente, malformata o non corrente resta nel percorso di bootstrap/rifiuto esistente.
+
+Prima di qualsiasi correzione specifica di produzione, preparare test desiderati sul freeze produttivo `b55b6015400c86b9b7a4f6789702fba7693ed001e464cdf50424cdaa03df2317`: recovery Room effettiva del checkpoint canonico empty0, riapertura e primo evento1 attraverso repository e vero AutoSync. Verificare pubblicazione atomica C, READY, assenza del ramo `bootstrap_required`, binding/device invariati, nessuna full-page recovery aggiuntiva e successivo noEvents; coprire anche noEvents immediatamente dopo empty0. Il caso senza baseline attivata conserva watermark0 e richiede bootstrap. Il RED a due selettori rimane distinto dalle regressioni adiacenti; solo una failure funzionale ufficiale consente la proposta minima di fix, che richiederà nuovo freeze/review e gate. Gli101 casi già congelati, gli83 originali/RED e le due decisioni Default139 restano preservati.
+
+Completare nello stesso batch i guardrail già richiesti: corruzione di body coperto con fingerprint apparentemente C deve fallire e rollback senza force mapper; History pending→DEFER→vero push tombstone ACK→evento self C deve convergere, preservare lo shadow e reggere riapertura/noEvents. Test sintetici JVM/Robolectric e transport controllato, senza rete o credenziali reali; non provano acceptance autenticata.
+
+### Decisione planning R-A10 — correzione del simbolo di compilazione, 2026-10-02 UTC
+
+Il primo ONE ZERO107, source157/test107 congelati e invariati, termina il20:09:49 UTC prima di JUnit: compileDebugKotlin rifiuta `encodeRecoveryCheckpointJson` usato nel nuovo repository alla riga5042 perché la funzione non è definita. Non è un problema di visibilità né un RED funzionale di ZERO; officialXML assente, gruppo posseduto15061 assente e rilascio verificato20:09:49.105285. Ricevute/result/log e `not-red-adjudication.json`5f83229b conservati nel namespace zero-red-targeted; nessun retry sotto lo stesso GO.
+
+Autorizzato soltanto un helper encoder interno accanto al decoder condiviso di ShopSyncRecoveryCoordinator, delegando all'esatto `RECOVERY_JSON.encodeToString(value)` già usato dalla vera activation per il checkpoint. Codec/flag, C originale, wire/storage/schema, mapper e comportamento funzionale ZERO restano invariati; nessuna dipendenza o API esterna nuova. Questo ripara il simbolo della patch R-A10 già successiva al RED ufficiale originale, senza autorizzare il fix del candidato ZERO non ancora riprodotto. Test107 byte-identici, nuovo freeze/request/launcher in namespace distinto, review statica del solo delta e nuovo GO precedono il prossimo ONE RED a due selettori; gate successivi restano aperti.
+
+### Decisione planning R-A10 — fixture ZERO senza evento bloccante incompatibile, 2026-10-02 UTC
+
+Il secondo ONE a due selettori compila e produce due FAIL ufficiali, ma entrambe si fermano nell'assert Activated del helper di setup, prima di reopen/delta/drain. Il seed storico del mismatch inserisce blockingEventId40, mentre il checkpoint canonico ZERO ha maxId0; il guard reale recovery rifiuta correttamente0<40 con recovery_checkpoint_before_blocking_event. Result571bbdad/XMLc05c81b9 e rilascio20:33:21.634676 del gruppo22456 assente restano immutabili. Non è RED funzionale del candidato ZERO, nessuna correzione funzionale di produzione autorizzata.
+
+Autorizzata la sola correzione del nuovo helper recoverAndReopenZeroOrdinaryFixture: prima del recovery sintetico, leggere e verificare il journal mismatch-confirmed creato dal seed e rimuovere soltanto il suo blockingEventId artificiale mediante copy(blockingEventId=null). Il mondo empty0 rappresenta mismatch/consenso senza precedente evento bloccante: preservare owner/store/shop/device/authorizationMode/phase/reason e ogni altro campo. Il seed generale/default40, tutti107 corpi e assert dei test e tutti157 file produttivi de909 restano invariati. Non toccare il guard reale del coordinator né cancellare journal/dati reali. Nuovo namespace attempt03, freeze/request/launcher e review statica/test-invarianza precedono nuovo GO ONE sugli stessi due selettori. Solo la failure nel successivo percorso ordinario dopo activation/reopen effettivi è il RED desiderato; gli altri quattro guard restano per la futura suite completa.
+
+### Decisione planning R-A10 — fix del RED funzionale ActivatedC0, 2026-10-02 UTC
+
+Il ONE attempt03 reale compila e termina2FAIL/0ERROR/0SKIP dopo recovery ActivatedC0, riapertura Room, typed watermark0 realmente presente, binding/READY/assenza journal e verifica canonica/fisica A completa. La prima asserzione3526 fallisce nel drain ordinario evento1: convergence_proof_required/manualFullSync; la seconda3567 nel vero AutoSync: skip bootstrap_required. Result24ee5d5b/XMLb6dd29ee, release20:58:58.070751 e PG35439 assente/signals[]; adjudication indipendente257b9b38 conferma il RED desiderato su157production de909/test107a183 invariati. Gli105 non selezionati e la successiva fisica C1 restano NON ESEGUITI, non dedotti dalla summary. Attempt01/02 compile/fixturefailure restano distinti.
+
+Autorizzata la correzione minima in InventoryRepository, senza API pubblica/schema/mapper/deps nuove: shopSyncBaselineForEventDrain può ammettere0 soltanto con baseline canonica realmente attivata e riga watermark scoped realmente presente/coerente, non il default0 di una riga assente. Conservare canonical/fullphysical A/C, identity/device/binding/generation/journal/pending e CAS esistenti. Per la pubblicazione ordinaria e noEvents, catturare e ricontrollare anche l'entità watermark con presenza/identità esatte: eliminazione della riga0 durante la rete non equivale a invariata scalar0 e non può autorizzare C/noWork. Un receipt attivato con watermark mancante va nel percorso di recovery/rifiuto, senza falsa READY o falsa receipt C. Preservare i percorsi legacy senza receipt attivata e i loro fallimenti dichiarati; non usare normalizzazione di un default come prova.
+
+shouldRunCatalogBootstrap conserva count>0=false e bootstrap per count0 senza prova. L'esenzione count0 deve usare la lease corrente managed di Task126, già disponibile tramite withCurrentBusinessDataScopeFlight e relativo coroutineContext, verificando owner dell'argomento e store/shop/localStore/generation correnti. La baseline non sceglie lo shop a nome del caller. Con binding corrente validato dal gate, device esistente senza getOrCreate, baseline/checkpoint/watermark reali, nessun journal/pending e fullcanonical/fullphysical receipt, eseguire una transazione locale read-only e riletture finali di entità e lease/cancel. Nessuna RPC, scrittura di dato/queue/flag o full recovery nella predicate. Default unmanaged privo di boundScope rimane bootstrap; non fabbricare una lease o assumere il selectedShop dal receipt. Errori di prova consentono bootstrap/rifiuto conservativo, cancellation/scope-changed si propagano senza conversione in successo.
+
+Nello stesso batch aggiungere quattro regressioni significative ai107corpi/assert preservati: (1) genuineActivated0 richiede scope managed corrente per l'esenzione, con unmanaged/owner-shop errato conservativi; (2) typed watermark assente o baseline malformata non autorizzano bootstrap exemption; (3) perdita/modifica watermark0 durante remote reads del changed path non pubblica C e rollback; (4) stesso caso noEvents non pubblica noWork valido. Nuovi helper/hook opzionali mantengono i default dei107 precedenti. Source111Recovery dichiarati e nuova card pertinente442 (111+218Default+61DatabaseVM+52ExcelVM), da verificare sul freeze reale; nessun conteggio è un PASS. Tutti i guard covered fingerprintC, History push-tombstone ACK/self, empty0 noEvents e vecchi rossi restano attivi. Nuovo freeze/review del delta prima dei gate pertinenti/full, build/lint/warning/TEST/CI/integrazione/live; nessun runner sotto il vecchio GO. Task resta FIX.
+
+### Decisione planning R-A10 — fixture mancanti dopo primo442 reale, 2026-10-02 UTC
+
+Il ONE pertinente reale21:41:50.100120→21:42:44.083152/release21:42:44.148504 compila il freeze78bb e produce442unici:436PASS/5FAIL/0ERROR/1SKIP storico condizionale. I due RED ActivatedC0 ora sono PASS, così come empty0/noEvents, default0 negativo e i quattro nuovi guard scope/rowloss. Recovery111=107PASS/4FAIL; Default218=216PASS/1FAIL/1SKIP; Database61 ed Excel52PASS. Result9a867e55/logf6ef4721 conservati, PG54838 assente/signals[]/nessun timeout e157+4test+7build/HEAD invariati. Nessun442GREEN, ritest autentico o attribution live dedotto.
+
+La lettura indipendente producer/reviewer identifica quattro setup incompleti delle nuove regressioni Recovery: Kotlin delegation a NoOp inoltra patchProduct shop-aware4arg alla fixture NoOp, mentre l'override locale copre solo3arg; due casi noEvents non attivano l'opzione esplicita emptyTailConfigured e sollevano fixture_event_page_not_configured; il vero push History è invocato fuori dalla lease managed che il coordinatore produzione normalmente installa. Non cambiare repository/gate/API reale per adattarlo a questi errori fixture.
+
+Autorizzate solo correzioni locali di setup in quei quattro nuovi metodi/helper: override4arg nella fake ACK prodotto, assert sullo shop esatto e delega al proprio override3arg già esistente; emptyTailConfigured=true solo nei due casi noEvents nominati, mai un default globale che nasconda reader non configurati; pushHistory dentro tracker.withBusinessDataScopeFlight corrente managed, senza unmanaged fallback o lease artificiale. Se il helper è annidato nel corpo nuovo, il suo delta di setup è un'eccezione esplicita alla precedente invarianza letterale dei107corpi; conservare tutti gli111ID e ogni assert/valore atteso/spy/rollback, gli altri107corpi invariati e tutti gli83originali/RED non coinvolti. Inversa esatta di questi delta deve ricostruire il freeze78bb; nessuna rimozione/skip/timeout né weakening.
+
+Il quinto caso Default139 nonzero-watermark/fence ha un'A fabbricata: accountKey/deviceKey placeholder, digest canonici count0 placeholder e binding assente. Il nuovo loader identity/fullcanonical rifiuta prima dell'event reader, quindi eventContexts.single non raggiunge lo scenario dichiarato. Autorizzata soltanto A realmente canonica empty7 usando hash owner/device e binding corretti, digest individuali/composito ottenuti dagli helper reali esistenti, stesso owner/shop/device/generation/watermark7 ed evento catalogo8. Preservare tutti gli assert e il controllo negativo C: il reader corrente dichiara catalogdomainMax7 ma la pagina evento8 attesta asOfDomain8, un captured-fence inconsistente che deve essere rifiutato e conservare A/wm7/dati/journal con convergence_proof_required. Il commento deve descrivere questo mismatch esplicito; un avanzamento ordinario valido non è intrinsecamente non verificabile dopo R-A10. Non rendere incoerente A per produrre un rifiuto precoce, non trasformare il caso in positivo, non estendere i default fake ad altri casi.
+
+Solo test/fixture/commento e Execution nello stesso task; tutti157file produttivi freeze78bb, quattro nuovi guard ZERO e due desiredZERO restano byte-identici. Nuovo freeze/patch/inversa/111ID/assert e card442/launcher nel namespace distinto, review indipendente statica prima di nuovo GO owner DIRECT ONE. Se emergono vere regressioni di produzione o le correzioni non conservano la semantica contrattuale, fermare le edit e riportare il finding prima di un fix differente. Gate canonici/full/TEST/CI/live rimangono aperti. Task FIX.
+
 ## Execution
+
+### Esecuzione R-A09/R-A10 — gate locali canonici, Compose e candidato TEST, 2026-10-02 UTC
+
+**File modificati:**
+- Questo task: soltanto Execution, Fix e Handoff, per registrare verifiche già eseguite dal root/owner e adjudicate indipendentemente.
+- [Ledger locale portabile](evidence/TASK-143/android-ra09-ra10-local-gates-ledger.json) — conteggi per 72 classi/XML, hash di ricevute e manifest, skip, warning, artefatti e limiti; SHA256 `b942f44cad2a4b60ccc43c6e3be522d97b7261526b3e5a6415a4aba722fc19dc`. Nessun APK, framework runtime o contenuto protetto copiato nella documentazione.
+
+**Azioni eseguite:**
+1. Riletti MASTER → TASK-143 → ricevute salvate. Stato `FIX` e Planning invariati: SHA256 del prefisso prima di Execution `8b53c975c9c6a50ab4fc58d0427c2cf1af8d475e5c3cef73c4e91f6226bb1231`. Freeze sorgente `7fa000b8972bec43bef49c0ed3f36956a1f966fad10f019ae587b6bea669c6de`, HEAD `9306e8a7ab3f96b95d9b844e03f624c785df5c96`; verificati **263 input pubblici più 4 metadati pubblici**, senza variazioni. Nessun nuovo runtime, ADB, operazione Git o modifica a sorgenti/test/build in questo aggiornamento.
+2. Canonico `assembleDebug test lint` offline, exit 0: **72 XML nuovi, 1.077 ID unici = 1.070 PASS / 0 FAIL / 0 ERROR / 7 SKIP**. Tutti i 1.040 ID/status precedenti sono preservati; le 37 aggiunte Recovery sono PASS. Gruppo owner rilasciato e assente alle `22:42:29.044619 UTC`, nessun segnale. Eseguita la variante JVM debug, nessun claim di test release. Receipt actual `cc9fb1fca028e5071449ba53ed17cfaafab2a82bb49adeeb894453d8e19d7707`; review indipendente `c6c5d25e23207f30add45bb180dc10db3c3e827970c0982f2c09f0fc96bfaec4`.
+3. Lint **39 Warning / 0 Error / 0 nuove firme**, confrontando tutte le firme normalizzate con la corretta baseline locale di 54, senza whitelist. Le 15 assenze sono notifiche di aggiornamento dipendenze (14 GradleDependency, 1 AndroidGradlePluginVersion) nel run offline: non sono upgrade o fix di warning. I due UseKtx già accettati restano nella baseline. Nessun nuovo warning Kotlin/deprecation; due messaggi JVM CDS sono censiti separatamente. Il confronto storico E4 non è la baseline cronologica pertinente.
+4. `assembleDebugAndroidTest` exit 0, rilascio `22:42:49.511004 UTC`: eseguiti realmente **kspDebugAndroidTestKotlin e compileDebugAndroidTestKotlin**; packaging/assemble UP-TO-DATE. APK androidTest `847aee447925205bca30c2e17a6ab1031e6307ab6f01b7c9caebbda471ee4a41` riutilizzato con byte storici identici: questo step prova compilazione, non nuovo packaging né esecuzione Compose. App canonica `d24f8c5ad4aaf52721156c139207e4ae2110713c83c6987b0546b63c5075ed7e` e APK test copiati prima di qualsiasi override TEST.
+5. Successivo collaudo **Compose effettivo: 5/5 PASS**. Cinque metodi ufficiali corrispondenti al sorgente, ciascuno code 0, `OK (5 tests)` e instrumentation code -1; pair canonica d24f/847a sul nuovo AVD sintetico owner `Codex_WECHAT010_Compose_API35_20261002`, solo `emulator-5580`, nessun accesso al device autenticato 5556. Il raw mantiene `ownedSerialAbsentAfter=false` alla lettura immediata e cleanup `SIGTERM` del proprio gruppo, già assente al rilascio `23:00:25.019428 UTC`. La proiezione terminale salvata alle **23:01:54.785484 UTC** conferma successivamente il seriale assente, senza ulteriori kill/wipe/restart/retry. Receipt actual `e3ecce13179a92144cbfd402d24474c158747e304ae6dbce8fa5ad9fc9367271`; supplemento immutabile `236bed2d58bafe1e60f742babace933506aee34c5552b4028708e71ac9cee1b3` risolve la riserva della review iniziale senza riscrivere il false storico.
+6. Candidato TEST separato **`bd0a32bd030d653862791df3454060492f4dc94d358f1ec6f2724cb085b998fa`**, build exit 0 e quattro helper metadati exit 0; tutti e cinque i gruppi owner rilasciati, nessun segnale/timeout, fine `23:16:17.207456 UTC` entro deadline. Receipt actual `68a17cea0ac6565d8066bb9cc853384168beeafe8ad19bd0d0e7980652b69f79`, review `36bf7e04ce09f25d93b7491e743ac3628b54e5d22512c546252a39c41242ef30`. Metadati/firma coincidono con il precedente 96b preservato; pair canonica invariata. Il verifier autorizzato attesta profilo corretto, configurazioni primaria/privata invariate e ripristino esatto di esistenza/byte/mode di local.properties; questa lane ha letto solo ricevute e booleani, non valori protetti. Nessuna installazione del nuovo TEST, auth, READY, convergenza o E2E provati; nessun futuro hook DEBUG incluso.
+
+**Check obbligatori:**
+
+| Check | Stato | Evidenza / limite |
+|---|---|---|
+| Build Gradle | ✅ ESEGUITO nel gate sorgente salvato | Canonico e compilazione androidTest exit 0; nuovo run N/A per questo aggiornamento solo documentale |
+| Lint / static | ✅ ESEGUITO nel gate sorgente salvato | 39 warning, 0 errori, 0 nuove firme rispetto alla baseline locale54; nuovo run documentale N/A |
+| Warning nuovi | ✅ ESEGUITO nel gate sorgente salvato | Kotlin/deprecation 0; CDS JVM2 separati; nuovo run documentale N/A |
+| Coerenza Planning | ✅ ESEGUITO | Stato FIX/prefisso8b53 invariati, sole sezioni consentite e ledger; 263+4 input pubblici invariati |
+| Criteri di accettazione | ✅ ESEGUITO per queste verifiche locali; ❌ NON ESEGUITO per i gate successivi | Evidenza locale CA-10 aggiornata; CI exact-SHA e accettazione autenticata/convergenza restano al root/coordinator, nessun DONE |
+
+**Baseline regressione TASK-004:**
+- JVM/Robolectric: DefaultInventoryRepositoryTest 218 = 217 PASS + 1 SKIP; DatabaseViewModelTest 61 PASS; ExcelViewModelTest 52 PASS; Recovery 111 PASS. Sono parte dei 1.077 totali, distinti dai 5 test UI Compose.
+- Nessun test aggiunto o modificato in questo aggiornamento documentale. I 7 skip storici restano invariati: fixture live WECHAT-004, benchmark opt-in, realtime live, tre audit Excel dedicati e workbook debug opzionale assente. Casi/categorie e motivazioni sanificate sono nel ledger; nessuna fixture protetta letta.
+
+**Incertezze / Handoff notes:**
+- Nessuna incertezza sui conteggi locali; autenticazione, READY e convergenza sul candidato non sono valutate da questi gate. Root resta owner di commit/PR/CI esatta e del coordinamento live.
+- Questa registrazione aggiorna i gate locali lasciati futuri negli snapshot storici seguenti, che restano preservati; non cambia Planning né dichiara chiusura globale.
+
+### Esecuzione R-A10 — GREEN442 attempt02 effettivo e review indipendente, 2026-10-02 UTC
+
+**File modificati:**
+- Solo questo log Execution; produzione, test, build e Planning restano congelati. Nessun nuovo fix o runtime avviato dall'esecutore sorgente.
+
+**Azioni eseguite:**
+1. Registrato il singolo comando mirato eseguito dal root/owner nel namespace `evidence/android-ordinary-delta-proof/zero-green-targeted-attempt02`: actual start `22:18:50.214201 UTC`, command end `22:19:41.962951 UTC`, rilascio `22:19:42.022888 UTC`, exit `0`. PID/PGID `74902`, segnali cleanup `[]`, processi del gruppo residui `[]`, gruppo assente al rilascio. Nessun retry o comando aggiuntivo.
+2. XML ufficiali: **442 ID unici immutati, 441 PASS, 0 FAIL, 0 ERROR, 1 SKIP condizionale storico**. `ShopSyncRecoveryCoordinatorTest`: 111 PASS; `DefaultInventoryRepositoryTest`: 217 PASS e 1 SKIP; `DatabaseViewModelTest`: 61 PASS; `ExcelViewModelTest`: 52 PASS. Le cinque failure del primo442 sono ora PASS; gli altri 436 PASS e lo stesso skip restano invariati. Gli 8 guard ZERO/default0/absent/rowloss restano PASS.
+3. Lo skip riguarda soltanto `wechat 004 real local Supabase fixture converges through production incremental apply`, condizionato alla disponibilità di `WECHAT_004_LOCAL_E2E_FIXTURE`. Non sono stati introdotti nuovi skip né letti contenuti della fixture protetta.
+4. Verificata la review formale indipendente `evidence/independent-review-resumed/android-ra10-zero111-green442-attempt02-adjudication/receipt.json`, SHA256 `30584650e1a54be41a54cb4e8eda4c79ede9448e48e0b28767cf24b0d09539fc`, verdict `BOUNDED_442_GREEN_WITH_ONE_KNOWN_CONDITIONAL_SKIP`, nessun finding bloccante. Receipt del runner `ad82a50f9d1d8f7c08cf8584e2b5763d7c1982e1fe2dda8022a6ba870c653e01` e source review precedente `e04afc2ab5c077f7c2090145d551a2814258cbb87b25c46ab973631e43f5236d` preservati.
+5. Confermati i 168 pin prima/dopo il comando: 157 file di produzione, 4 test e 7 input build pubblici; HEAD `9306e8a7ab3f96b95d9b844e03f624c785df5c96` invariato. Nuova verifica locale documentale: i 157 sorgenti e i 4 test corrispondono ancora al freeze `7fa000b8972bec43bef49c0ed3f36956a1f966fad10f019ae587b6bea669c6de`; request `21cf832ebb89014e4ba9b0cd958ebb2efaca94c159567504793f0680206f8091`. Planning prefix `8b53c975c9c6a50ab4fc58d0427c2cf1af8d475e5c3cef73c4e91f6226bb1231` invariato.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | ❌ NON ESEGUITO | `assembleDebug` finale ancora da eseguire; compilazione del comando unitario non sostituisce questo gate. |
+| Lint | ❌ NON ESEGUITO | Gate finale separato ancora da eseguire. |
+| Warning nuovi | ❌ NON ESEGUITO | Verifica completa dei warning finali ancora da eseguire. |
+| Coerenza con planning | ✅ ESEGUITO | Cinque riparazioni fixture autorizzate, invarianti e review formale confermati; questo aggiornamento modifica solo Execution. |
+| Criteri di accettazione | ❌ NON ESEGUITO complessivo | Il solo gate mirato442 è verificato; full suite/build/lint/CI/nuovo APK TEST/E2E e collaudo autentico restano separati e aperti. |
+
+**Baseline regressione TASK-004 (se applicabile):**
+- Test eseguiti: quattro classi JVM/Robolectric pertinenti sopra indicate, 441 PASS e un solo skip condizionale storico. Sono test dati/repository/ViewModel, non test UI Compose/Espresso.
+- Test aggiunti/aggiornati: nessuno in questo aggiornamento; le cinque riparazioni setup già autorizzate sono documentate nell'entry precedente e ora verificate dal ritest effettivo.
+- Limiti residui: nessuna attestazione di full suite, assemble/lint, CI, nuovo artefatto TEST, E2E, prestazioni o causa del precedente fallimento live.
+
+**Incertezze:**
+- Nessuna failure nel perimetro442. I gate e il collaudo esterni al perimetro non sono stati eseguiti da questo comando.
+
+**Handoff notes:**
+- Stato task resta FIX, nessuna dichiarazione DONE. HOLD su tutti i sorgenti/test/build; root mantiene Git, Planning e i successivi gate/runtime. Il primo442 fallito e la relativa adjudication restano evidenze storiche immutabili.
+
+
+### Esecuzione R-A10 — primo442 reale e cinque setup repair circoscritti, 2026-10-02 UTC
+
+**File modificati:**
+- `data/ShopSyncRecoveryCoordinatorTest.kt` — quattro nuovi metodi soltanto: fake ACK prodotto aggiunge overload shop-aware4arg/assertSHOP e inoltra al proprio3arg; due noEvents abilitano esplicitamente emptyTailConfigured solo localmente, default globalefalse preservato; push History reale entra nella managed tracker.withBusinessDataScopeFlight. Tutti111ID/asserts precedenti e valori attesi invariati, solo nuovo assertSHOP; altri107corpi e tutti83originali byte-identici.
+- `data/DefaultInventoryRepositoryTest.kt` — solo setup A del negativo139: hash account/device reali sintetici, emptydomain/id/version/identity/catalog canonici e binding attuale; stessoA7/typedwm7/event8 e serverC deliberatamente incoerente domain7 vs paginaasOf8. Commento descrive questo fault di fence invece di affermare impossibilità generale del delta ordinario. Tutti assert originari/wm7/latch/rollback/fence/spies invariati; altri217corpi byte-identici.
+
+**Azioni eseguite:**
+1. Il primo comando442 è stato lanciato direttamente dal ROOT sotto GO, non da questa lane: actualstart21:41:50.100120→commandend21:42:44.083152→release21:42:44.148504, exit1/ownPG54838 assente/signals[] senza timeout. OfficialXML4class442unici verificati:436PASS5FAIL0ERROR1SKIP condizionale storico. Recovery111=107PASS4FAIL; Default218=216PASS1FAIL1SKIP; Database61/Excel52PASS. DesiredZERO2 e quattro guard scoped/rowloss sono PASS ufficiali, non basta per442GREEN. Result9a867e55/logf6ef4721 e namespacezero-green-targeted restano immutabili;157+4test/build7/HEAD pre/post invarianti verificati dal ROOT.
+2. Triage read-only indipendente producer4aa90aab/NOTEe3a9ec5c e reviewer91ed8294: i cinque fail si fermano nei confini setup descritti sopra, prima dei relativi assert funzionali. Product transport4arg non intercettato dalla Kotlin delegation; due paginevuote non dichiarate; History call fuori lease; Default139 fake identity e manifest prima della richiesta evento. Nessuna productionpatch dedotta; downstreamasserts ancora da ritestare.
+3. Dopo MASTER→Planning8b53/decisione3e7afb→sorgenti, applicate solo le cinque setup repair autorizzate. Eccezioni letterali limitate ai quattro nuovi corpi Recovery e al setup/commento Default139; nessuna weakening/protocol/schema/API/queue/UNMANAGED/globalfakepage fallback. Produzione157 e Inventory39dc restano esattamente78bb.
+4. Verifiche statiche: confronto dei111ID/order, allassertcalls/expectedvalues preservati (+soloSHOP), altri107corpi Recovery/original83/217Default invarianti. La sostituzione inversa dei cinque metodi modificati ricostruisce esattamente entrambi i file precedenti78bb, senza cambi fuori metodo. git diff --check PASS statico; nessun nuovo runner.
+5. Freeze separato `evidence/android-ordinary-delta-proof/zero-green-preparation-attempt02/`: source7fa000b8, request21cf832e, fullpatch1bb06597, fixture-only39ef1a18, invariance/inverse6482f41c, card6e829c51; Recovery111c5166c7d/Default218e4bd6f98, DB/Excel invarianti. Sourcehold, staticreview e nuovo GO richiesti. Stessi442 dichiarati; launcher02 rootdirect/nativehelper, ONEoffline/no-daemon/worker1/in-process/600s/reserve90/min270 a spawn. Canonicalcardretarget source-only distinto, nessuna esecuzione di questa lane.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Compile della precedente4class completata; assembleDebug finale distinto pending, nuovo testsetup non compilato |
+| Lint | NON ESEGUITO | Gate finale pending |
+| Warning nuovi | NON ESEGUITO | Audit finale warning/Kotlin/deprecation pending |
+| Coerenza Planning | ESEGUITO staticamente | Prefix8b53 preservato, produzione invariata e sole eccezioni setup autorizzate |
+| Criteri / TASK004 | NON ESEGUITO completo | Prima pertinente442 effettiva436PASS5FAIL1SKIP; nuovo ritest442/canonico/TEST/CI/live pending |
+
+**Incertezze/Handoff:** nessun nuovo442GREEN o acceptance autentica; sourceprod invariato e ZEROguardPASS non provano i cinque flussi downstream bloccati dal vecchio setup. Se gli assert dopo la repair trovano un difetto funzionale, conservarlo e riportarlo senza adattare assert o productionfuoriscope. Namespace/source/review/GO nuovi obbligatori; oldreceipt/failures preservati. Task FIX, nessun Git/Planning/device/config/dati reali modificati.
+
+
+### Fix statico ZERO v2 — contesto effettivo della lease, 2026-10-02 UTC
+
+Advisory indipendente source-only identifica il receiver CoroutineScope esterno di withContext(IO): il nome coroutineContext nella predicate annidata può riferirsi al contesto antecedente alla lease managed del child flight. Il positivo managed EMPTY0 deve leggere la lease corrente effettiva. Root conferma il delta come applicazione del requisito Planning4ea6, senza scope nuovo.
+
+**File:** solo InventoryRepository nella nuova predicate: lookup lease1 e tre ensureActive usano esplicitamente kotlinx.coroutines.currentCoroutineContext(). Nessun altro contesto/metodo o111testbody/assert modificato. Inverse delle quattro espressioni ricostruisce esattamente la leaf f155;156 altre leaf produttive e quattro file test invarianti. Packet f155 storico conservato e vietato al runtime.
+
+**Freeze corrente:** zero-green-preparation-v2/source-freeze.json78bb2d85; request60daa1a5, fullpatchb2e5c865, ZEROpatchceeeaaa7, context-only989c0ca9, inverseproofe95b2d97, card994abd93. Runtimefalse; conteggio richiesto442 dichiarati (111/218/61/52), non eseguiti. Sourcehold; review statica formale e nuovo GO richiesti. Root/runtimehelper preparano launcher separatemente, nessun processo reale avviato da questa lane. Canonical card e7b7 resta campo HISTORICAL con retarget pending.
+
+**Check:** coerenza Planning/diff-check ESEGUITI staticamente; build/lint/warning/GREEN/TASK004/TEST/CI/live NON ESEGUITI sul nuovo source. Nessuna attribuzione live da advisory o fixture.
+
+
+### Esecuzione R-A10 ZERO — fix post RED funzionale e freeze111, 2026-10-02 UTC
+
+**File modificati:**
+- `data/InventoryRepository.kt` — ammissione baseline canonica wm0 soltanto con entità watermark scoped realmente presente; CAS dell'esatta entità/presenza nei writer changed e noEvents. Receipt presente con wm mancante/invalidato rifiutato. Bootstrap catalogcount0 esentato soltanto dalla lease corrente managed Task126, owner/store/shop/localStore validati dal binding gate, device esistente, receipt/fence/journal/pending/fullcanonical+fullphysical provati in transazione locale read-only e riletture finali; cancellation/scope-changed propagati. Nessuna RPC o writer dalla predicate, selectedshop non derivato dalla baseline.
+- `data/ShopSyncRecoveryCoordinatorTest.kt` — quattro guard actualRoom aggiunti: managed matching/unmanaged/foreign owner-store-localstore; typedwm mancante e checkpoint malformato; perdita row0 durante il vero marker C1; stessa race noEvents C0. Corpi/assert/ID107 precedenti e helper default invariati; classe111.
+
+**Azioni eseguite:**
+1. Letti MASTER→Planning→sorgenti/gate/DAO watermark. Actual ZERO03 già eseguito e confermato root: recovery Activated0/reopen/fullproof effettivi; XMLb6dd29ee due FAIL funzionali al requisito manualfalse/CONVERGENCE e bootstrap_required nel vero AutoSync, non setup/compile. Result24ee5d5b, independent257b9b38, release20:58:58.070751/ownPG35439 assente restano storici. Solo dopo Planning4ea6b878/decisione731e1c43 applicato il nuovo delta autorizzato.
+2. Catturata nullable SyncEventWatermark prima di scalar default0; verified paths ricevono entità nonnull e confrontano DAO.get==capturedEntity. Baseline senza receipt conserva i percorsi legacy dichiarati; una receipt attivata non può adottare il default di riga mancante. Full A/C e le prove PRICES retained/samegeneration/History/shadow restano quelle R-A09/R-A10; no mapperforce/schema/deps/key/API/queue reset.
+3. Verifiche statiche:156 leaf produzione vsde909 invarianti, unico delta produttivo InventoryRepo;107 bodyhash immutati e DefaultRepositorybb05 (sole due decisioni139) immutato. Nuovi4 dichiarati producono111Recovery +218Default +61DatabaseVM +52ExcelVM =442 casi dichiarati; NON eseguiti/PASS. git diff --check eseguito senza errori.
+4. Freeze separato fuoriGit `evidence/android-ordinary-delta-proof/zero-green-preparation/`: sourcef155b018, request1fccb2c8, fullpatchcf9281ef, ZERO-onlyeeb9d05f, R10-vsR09277cb4a1, invariancef29b0297, card052de142. Snapshot prima/dopo congelati, sourcehold. Unico comando GREEN richiesto:4class offline/no-daemon/max-workers1/in-process, slot600s include90cleanup, stima60–180s non garanzia. ROOT possiede avvio futuro, review indipendente e nuovo GO ancora richiesti. Card canonical/TEST retarget source-only in corso fuoriGit; e7b7/96b/18 restano storici.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Nessun runner dopo nuova patch ZERO; assemble finale pending |
+| Lint | NON ESEGUITO | Gate finale pending |
+| Warning nuovi | NON ESEGUITO | Nuovi byte non compilati, nessun claim assenza warning |
+| Coerenza Planning | ESEGUITO staticamente | Prefix4ea6 preservato, delta autorizzato731e e source/testinvariance |
+| Criteri / TASK004 | NON ESEGUITO | 442 dichiarati soltanto; GREEN/canonici/TEST/CI/live ancora pending |
+
+**Incertezze/Handoff:** compile e guard nuovi ancora da verificare; nessuna acceptance live o attribuzione registry154. Costo della proof completa resta da misurare dopo gate. Source immutable in attesa review/GO; nessun runtime/build/device/DB reale/retry/Planning/Git eseguito dall'executor in questo pass.
+
+
+### Esecuzione ZERO attempt02 e preparazione fixture-only attempt03 — 2026-10-02 UTC
+
+**File modificati:**
+- `data/ShopSyncRecoveryCoordinatorTest.kt` — soltanto il nuovo helper ZERO: legge il journal reale creato dal seed, verifica owner/store/shop/device/mode mismatch-confirmed/phase REQUIRED/reason mismatch, copia il solo blockingEventId a null e verifica rilettura esatta prima della recovery EMPTY0. Il seed generale resta blocking40; tutti107 corpi/assert dei test, DefaultRepository fixture e tutti157 file produttivi de909 invariati.
+
+**Azioni eseguite:**
+1. Attempt02 con launcher12fe/b5626fc9, source/card reviewafa13f3d e GOabb1e94c: unico comando offline2selectors; actualstart20:32:29.536123UTC, commandend20:33:21.577189, actualrelease20:33:21.634676 prima deadline20:35:56.082763. OwnPID/PGID22456 remaining0/groupExistsfalse e terminale concluso, freeze de909/test2997 invariati. Nessun retry.
+2. **NON RED desiderato**: XMLc05c81b9 ufficiale2unici/0PASS2FAIL0ERROR0SKIP, entrambe java.lang.AssertionError nel setup helper3765, prima dell'effettiva Activated/reopen e degli assert ordinari. Il journal sintetico del seed ha blockingEvent40 mentre targetmax0; il guard reale273 rifiuta correttamente recovery_checkpoint_before_blocking_event. Receipt571bbdad e adjudication81dc323b distinguono SETUP_FIXTURE_FAILURE_NOT_DESIRED_ZERO_RED; log/source/XML originali preservati in namespaceattempt02. Nessuna correzione funzionale ZERO autorizzata da questo esito.
+3. Dopo Planning rootfed687bb/decisione1aa631fb, applicata soltanto correzione helper fixture descritta sopra. Inverse removal dell'esatto nuovo block ricostruisce tutto il precedente file2997;107 nomi/bodyhash immutati,157productionde909 immutati. Nuovo packet separato attempt03: source82b12221, request22867c6e, test107a1833ef7, fixturepatchcd693183, invariancec8a93681, cardb34a59aa. Stessi due selector, nuovo outputattempt03.
+4. Richiesta nuova review statica fixture/card e poi derivato launcher12fe con soli literal binding nuovi e15modelli puri; ancora nessun runner attempt03. **Root possiede il prossimo avvio diretto**: questa lane prepara/hold e non lancerà autonomamente il job neppure ricevuto un GO owner.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | assembleDebug non lanciato; compilazione del comando mirato riuscita, non equivale al build gate |
+| Lint | NON ESEGUITO | Gate finale pending |
+| Warning nuovi | NON ESEGUITO | Audit finale warning pending; non dedotto dal setup assertion failure |
+| Coerenza con planning | ESEGUITO staticamente | Prefixfed687bb preservato, solo helper fixture; guard recovery produzione invariato |
+| Criteri di accettazione | NON ESEGUITO | Activated0/desired ZERO assertions non raggiunte; nuovo RED e GREEN/canonical/TEST/CI/live pending |
+
+**Baseline TASK-004:** soltanto due JVM/Robolectric selezionati effettivamente eseguiti, falliscono entrambi nel setup. Nessun successo candidato attribuito. Tutti107 body/assert originali di questo packet e le sole due fixture139 preservati; future438 dichiarati devono ancora essere eseguiti sul source finale.
+
+**Incertezze/Handoff:** il candidato wm0/bootstrap resta statico, finché una fixture coerente arriva a recoveryActivated e al drain. Non indebolire il guard checkpoint-before-blocking, consenso, scope, parent/digest/physicalproof. Namespace/GO nuovi obbligatori; ROOT launch ownership confermata, nessuna attività device/DB/config/reale.
+
+
+### Esecuzione ZERO attempt01 e preparazione compile-only attempt02 — 2026-10-02 UTC
+
+**File modificati:**
+- `data/ShopSyncRecoveryCoordinator.kt` — solo helper interno di due righe `encodeRecoveryCheckpointJson`, accanto al decoder, delega allo stesso `RECOVERY_JSON.encodeToString(value)` già usato da activation. Riparazione compile-only autorizzata root6ddfe319; condizioni wm0/bootstrap/proof/mapper e tutti107 test invariati.
+
+**Azioni eseguite:**
+1. Review statica test107 c1cf5e26 APPROVED, launcher finale ad81a3ef/a496dd83 APPROVED; guard min180 e deadline esattamente legata al GO (interval≤600), cleanup ownedPG in finally. Quindici check di modello puro con OS/process fittizi PASS; nessun processo reale avviato dai modelli. Launcher precedenti preservati.
+2. Unico comando ZERO2 autorizzato GO9c2801c9: actualstart20:09:27.657419UTC, Gradle exit1/commandend20:09:49.029917; actualrelease20:09:49.105285 prima harddeadline20:18:19.746733, ownPID/PGID15061 remaining0/groupExistsfalse, terminale concluso. Preflight namedheavy0 e157/two testfiles esatti; niente retry/device/DB/network e sorgente/test postrun identici.
+3. **COMPILE_FAILURE, NON RED funzionale**: `app:compileDebugKotlin`, InventoryRepository5042 unresolved `encodeRecoveryCheckpointJson`, definizione assente. Nessun XML nuovo/test eseguito; XML storico non riciclato. Receipt9f747e8d, adjudication5f83229b, log9982396c fuori Git in `evidence/android-ordinary-delta-proof/zero-red-targeted/`. Questo esito non autorizza alcuna correzione funzionale ZERO.
+4. Dopo autorizzazione compile-only, verificato che156 leaf produttive restano byte-identiche al b55/a7a e la rimozione dell'esatto helper ricostruisce la vecchia leaf coordinator; test107 SHA2997c893 e DefaultRepositorybb05bb7a invariati. Nuovo packet separato `zero-red-preparation-attempt02`: freeze de909a5e, request1d8ca2d0, compile-only patchb4d6bd01; stessi due selector e nuovo outputattempt02. Review/literal-binding del launcher e nuovo GO ancora richiesti; nessun secondo comando avviato.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | assembleDebug non lanciato; comando mirato effettivo fallisce compilazione pre-test |
+| Lint | NON ESEGUITO | Gate finale dopo source finale |
+| Warning nuovi | NON ESEGUITO | Compilazione fallita; nessuna conclusione di assenza warning |
+| Coerenza con planning | ESEGUITO staticamente | Prefix9a3676a5 preservato, helper stesso codec soltanto; ZERO produzione vietata prima RED |
+| Criteri di accettazione | NON ESEGUITO | Tentativo compile failure non prova due casi funzionali; GREEN/canonical/TEST/CI/live aperti |
+
+**Baseline TASK-004:** nessun test nuovo eseguito nel tentativo pre-test. Request futura438 dichiarati resta da ritargettare dopo vero RED/fix/source finale. I107 recovery e le sole due fixture139 restano intatti.
+
+**Incertezze/Handoff:** il test ZERO deve ancora raggiungere le proprie assertion funzionali. Nuovo freeze/review/GO per attempt02; nessun riuso GO scaduti né retries impliciti. Nessuna acceptance o attribuzione live dedotta dal comando.
+
+
+### Preparazione R-A10 ZERO e guard finali — 2026-10-02 UTC, test-only / nessun runner
+
+**File modificati:**
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt` — sei regressioni aggiunte ai101 congelati: recovery reale EMPTY/max0 e primo evento1 tramite repository; stessa recovery tramite AutoSync senza bootstrap skip; controllo default0 senza receipt mantiene bootstrap; covered product body corrotto con clean fingerprint già C richiede FAIL/rollback; History pending→DEFER→push tombstone ACK reale→SELF C/riapertura; noEvents immediato dopo Activated EMPTY C0 resta READY/noWork. Helper zero dedicati, logger opt-in e fake empty-event-page opt-in (defaultfalse); nessun corpo dei106 precedenti modificato.
+
+**Azioni eseguite:**
+1. Letti MASTER/Planning/sorgenti. Planning root5b76de04 e decisione8a538bd6 autorizzano preparazione; produzione b55 immutata fino al nuovo RED effettivo.
+2. Preservati separatamente test101 SHA9167cc4d, packet b55/31e5 e successivo packet106 bf077980/d919cbea/test8efd3b45. Verificati157 file produzione byte-identici a b55, due fixture DefaultRepository139 immutate dal freeze,101 e106 test bodies/hash immutati.
+3. Fixture nuova usa recovery realmente Activated/reopen, baseline canonica C0, watermark0, binding/device correnti, journal assente e FULL active proof. Primo HISTORY_CHANGED1 ha fence global1/history1/catalog0/prices0; i due assert desiderati discriminano rispettivamente falso latch e bootstrap_required. NoEvents0 restituisce esplicitamente pagina vuota fenced coerente, senza inventare eventi/summary/marker PASS.
+4. Packet107 immutabile fuori Git: `evidence/android-ordinary-delta-proof/zero-red-preparation/source-freeze.json` SHAa7a12cc4; request136134e3, test2997c893, test-only patch86dcdb22, invariance499f2b66. Il solo comando RED richiesto seleziona esattamente i due casi primo-evento ZERO, offline/no-daemon/max-workers1/in-process; richiesta600s, stima60s e cleanup90s inclusi. Nessun runner avviato; nuovo review/GO host obbligatorio dopo rilascio lane iOS.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Preparazione test-only; runner non autorizzato in questa lane |
+| Lint | NON ESEGUITO | Gate finale dopo freeze production finale |
+| Warning nuovi | NON ESEGUITO | Compilazione non ancora eseguita |
+| Coerenza con planning | ESEGUITO staticamente | Prefix5b76de04 preservato, produzione157 b55 byte-identica e test precedenti immutati |
+| Criteri di accettazione | NON ESEGUITO | RED/GREEN nuovi e successivi canonical/TEST/CI/live ancora aperti |
+
+**Baseline regressione TASK-004:** nessun nuovo test eseguito in questa preparazione. Future GREEN4class retarget obbligatorio: Recovery107 + DefaultRepository218 + DatabaseViewModel61 + ExcelViewModel52 =438 test dichiarati in sorgente; non conteggio XML né risultato. Conditional fixture skip storico resta distinto.
+
+**Incertezze:** nessuna attribuzione live al caso count mismatch154; proof O(whole generation) richiede misura dopo gate. Eventuale productionfix ZERO resta vietato prima di RED ufficiale e conferma root; gli altri quattro guard sono esclusi dall'unico comando RED.
+
+**Handoff notes:** review indipendente dei nuovi byte/fixture e nuovo GO host; catturare XML unici2, log, exit/tempi/source invariance, ownPG terminal0 e actualrelease entro deadline. Nessun secondo comando o retry implicito; nessuna modifica Planning/Git/device/config/sessione/dati reali.
+
+
+### Preparazione implementation R-A10 — 2026-10-02 UTC, nessun runner dopo RED
+
+**File modificati:**
+- `data/InventoryRepository.kt` — window ordinaria completa bounded prima del writer; CAS dell'intera baseline/generation, binding, device, watermark e journal; DEFER da conteggi reali pending; apply/ledger/prova completa C/baseline originale C/status/watermark atomici. NoEvent richiede ora anche prova fisica A, oltre al marker, e ricontrolla pending prima di un latch.
+- `data/ShopSyncRecoveryCoordinator.kt` — estrazione interna nello stesso file della prova canonica/fisica preesistente; riuso parent proof R-A09; closure bounded per cascade/restore/prezzi retained/immagini. Active History ha proiezione attiva più scan di tutti gli shadow deleted con LEFT JOIN, primo cursor nullable anche per UID negativi/zero, UTC6/calendario/versione/ref rigorosi; nessuna prova inventata del vecchio body.
+- `data/HistoryEntryDao.kt`, `data/SyncRecoveryModels.kt` — pager active History e lookup manifest same-generation/domain IN massimo500 ID; nessuna entity/schema/migration/dependency.
+- `data/ShopSyncRecoveryCoordinatorTest.kt` — 18 guard aggiunti dopo83: CAS entity/generation, cancellazione dopo scritture/abort SQL e rollback, pending e push reali/SELF C, restore e prezzo corrotto, History tomb/reopen/delta, orphan/UID negativo/oltre500/UTC invalido, baseline davvero vuota valida, C opaque distinto, fisico scoperto corrotto e noEvent tamper/pending. Gli80 test e i3 RED originali restano identici negli ID/body.
+- `data/DefaultInventoryRepositoryTest.kt` — sole due decisioni root139: negativo watermark8→7 più invariance assertions (df2d70bd); positivo fixture canonical empty/domain/catalog/identity/scope e binding con factory opt-in, stessi assert noWork/wm7/noJournal/noGap (ac7e89fe). Gli altri test non cambiano.
+
+**Azioni:** actual RED confermato dal parent d2892d0d prima delle patch. Applicate clausole designcc6cb419 e decisioni History/ACK9cb6ec91/noEventac7e89fe. Nel changedpath A richiede FULL canonical ledger/relazioni/parent proof, mentre C richiede FULL canonical + FULL physical eligible dell'intero store prima del commit; questo consente ACK locale giàC senza fidarsi del flag clean. I mapper esistenti restano invariati. Stage/recovery mantiene il comportamento originale e i limiti History configurabili. Budget window100 eventi/2000 righe/64 targeted call/16MiB, History row512KiB, keyset/IN500. Nessuna RPC dentro il writer, reset/scope/key/queue cleanup o nuovo endpoint.
+
+**Check obbligatori:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Nuovo GO richiesto; nessun runner dopo RED |
+| Lint / warning | NON ESEGUITO | Compile/lint ancora da verificare |
+| Coerenza Planning | ESEGUITO staticamente | Design e decisioni root citate; source freeze/card esterno |
+| Criteri / TASK004 | NON ESEGUITO | GREEN/review/canonico/TEST/CI/live ancora necessari |
+
+**INCERTEZZE:** la compilazione e i101 guard sono soltanto preparati; nessun PASS inferito. La prova completa A/C può costare O(whole generation), soprattutto noEvent; misure successive necessarie, nessuna promessa3s. Causa live registry154 non attribuita da questi test. Pacchetto fuori Git `evidence/android-ordinary-delta-proof/green-preparation/`; root possiede review/Planning/Git/canonico/TEST/CI/live. Task resta FIX.
+
+### Preparazione R-A10 — 2026-10-02 UTC, nessun runner
+
+**File modificati:** solo `app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt`, aggiunta di3 regressioni e helper isolati; produzione157 foglie invariata rispetto al freeze R-A09 SHA39dffac3.80 corpi/ID test precedenti conservati, nuova classe83.
+
+**Azioni preparate, non eseguite:**
+1. Actual recovery→reopen Room→repository reale sotto tracker/lease READY→CatalogAutoSync reale/device attivo: CATALOG_CHANGED43 con vero product body aggiornato, checkpoint/target/marker canonici coerenti. Desiderato apply, receipt C43, READY/no journal/no callback e secondo trigger no-work senza full page; atteso RED funzionale `CONVERGENCE_PROOF_REQUIRED` dopo business apply.
+2. PRICES_CHANGED43 per parent tombstoned già provato da recovery mista piccola (1 prodotto attivo non correlato evita il bootstrap), seguito da CATALOG_TOMBSTONE44 ridondante del medesimo parent: catalogmax44/pricesmax43/capturedMax44. Nuovo adapter bounded restituisce il fence materializzato effettivo del dominio, anziché echo di un minimo impossibile. Desiderato full ledger3prezzi/1 fisico, receipt C44/READY/no journal/no callback; atteso RED funzionale `MISSING_REMOTE` dal generico skipped-parent.
+3. Controllo negativo sul medesimo checkpoint canonico: targeted price body corrotto con parent sconosciuto e targeted parent assente. Desiderato rifiuto MISSING_REMOTE, vecchia baseline/watermark42 preservati, journal durevole e nessuna nuova price row/bridge/receipt. L'incoerenza della relazione è fault injection esplicita, non un marker inventato come proof.
+
+Auth sintetica scoped, device authorization reale con transport controllato attivo, network verificata true, guard reale del tracker e no-op transport configurati; nessun fake SyncSummary o wrapper della readiness. AutoSync diretto su backgroundScope con debounce massimo e shutdown in finally; nessun polling/clock advancement/runtime app.
+
+**Check:** coerenza Planning ESEGUITO staticamente; diff-check ESEGUITO. RED/GREEN/build/lint/warning/criteri/runtime NON ESEGUITI in questa preparazione; nuovo GO host richiesto. Card canonico/TEST esterna preparata in `evidence/android-ordinary-delta-proof/canonical-preparation/command-card.json` SHAe7b7a24c: runtimefalse e retarget obbligatorio sul freeze finale R-A10; gate18/APK96b storici preservati, profili protetti non letti.
+
+**INCERTEZZA:** la fixture dimostra soltanto comportamento applicativo deterministico quando le letture rispettano i fence dichiarati; nessuna fattibilità live, tempo3s o causa registry154 dedotta. Productionfix solo dopo RED ufficiale e contratto/design approvato del parent. Root owner di Planning/Git/review/canonico/TEST/CI/live; task resta FIX.
+
+### Esecuzione R-A10 — RED effettivo, 2026-10-02 UTC
+
+Sul request201b5dd3/source975afb9f/test66050804 e produzione R-A09 byte-identica, lo slot root GO SHAb935f366 ha autorizzato soltanto3selector in un comando offline/no-daemon/worker1/in-process, deadline18:24:50.968420UTC con90s riserva. Review preparazione indipendente07015b3f e hash/prefight freschi verificati prima del runner; named-heavy0, nessuna qualifica performance globale.
+
+**XML ufficiale: 3 test unici, 1 PASS / 2 FAIL / 0 ERROR / 0 SKIP.** Il controllo negativo unknown-targeted-parent passa e preserva il blocker/baseline. CATALOG fallisce sul requisito desiderato di non richiedere recovery, con `reason=convergence_proof_required`, dopo product apply/counters1 e watermark43. PRICES provatamente retained fallisce sul medesimo requisito con `reason=missing_remote`, dopo targeted price1/parent domain fence44 e physical-count/no-new-ref. Entrambi sono java.lang.AssertionError funzionali, non errori setup/compilazione o timeout; produzioneR10 non modificata prima/durante il RED.
+
+Start18:18:20.075250, fine18:18:46.473974, release effettiva18:18:46.545584UTC (26,40s), exit1. Gruppo proprio78075 terminale/remaining0 senza segnali e senza terminazioni foreign;157 foglie produzione e test6605 invariati al termine,80 test precedenti immutati. Evidence fuori Git `evidence/android-ordinary-delta-proof/red-targeted/result-receipt.json` SHAaa34639924c1e53209bddc34a67cc51c5879525378618f51f88791675babb156, XML SHA1383a1ea788f7e62b11a52d7d69d83e2254e0202edc005eb39683b41f2d1a9b7, log SHA f555ca5c1d1d330402163ee7419f618d94cfa10b9594cca17bdfa4839d413895 e adjudication separata `red-adjudication.json`.
+
+**Gate residui:** patch dopo conferma parent/contratto designcc6cb419 e nuova Planning DecisioneHistory, GREEN e regressioni di proof/dirty/fence/CAS/cancel/reopen, review implementazione, gate canonici/TASK004/TEST/CI/live ancora non completati. Nessun ulteriore runner o GREEN autorizzato da questo RED. Nessun claim causa live/3s/convergenza dal solo fake transport. Task resta FIX.
+
+### Esecuzione R-A09 — 2026-10-02 UTC, preparazione dopo RED
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt` — separazione del ledger prezzi completo dal sottoinsieme fisico, con proof del parent nel medesimo manifest di generazione; applicazione pagine/tail, count di staging e readback fisico/relaunch coerenti.
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/SyncRecoveryModels.kt` — solo query DAO bounded dei parent product per generationId e lista remoteId; nessuna modifica entity/schema.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt` — regressione RED preservata e cinque controlli adiacenti; 80 test preparati, 74 test precedenti con ID e corpi byte-identici.
+
+**Azioni eseguite:**
+1. RED reale JVM/Robolectric della sola regressione retained-price: 0 PASS / 1 FAIL / 0 SKIP, `recovery_stage_apply_count_mismatch`, senza patch produzione. Start16:55:04.983558, fine16:55:27.352822, release16:55:27.462541 UTC; exit1, gruppo proprio46685 terminato, 157 sorgenti produzione invariati. Ricevute fuori Git `evidence/android-registry154-count-mismatch/red-targeted/`: result SHA9eb7a432 e adjudication SHA121ae5e4. Nessun difetto live attribuito dalla sola fixture.
+2. Dopo autorizzazione del parent, il filtro esenta esclusivamente un parent noto nella stessa generazione e provatamente tombstoned; flag active deve concordare con deletedAt canonico. Parent sconosciuto/incoerente resta rifiutato. Manifest/count/digest di checkpoint e prezzi append-only restano completi. Nessuna modifica a repository ordinario, binding, device, scope, watermark, queue, consent, business key o API wire.
+3. Lookup parent IN massimo500 UUID per batch, più binding di generazione (limite conservativo502, sotto999). Pager atteso riempie fino500 prezzi materializzabili attraversando raw page senza perdere ID eleggibili; scansione keyset bounded anche per count e readback, senza array globale né query per prezzo. Pagine RPC prezzi restano120.
+4. Preparati controlli per parent attivo/95 retained+560 attivi su655 prezzi, parent esistente solo in altra generazione rifiutato, parent diventato tombstoned nel tail B con prezzo precedente e nuovo, cleanup/recovery dopo reopen e ordinary drain no-event senza relatch. Adapter paginato separato; fake single-page originale invariato e default del helper coordinator preservato.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Slot host GREEN/canonico del nuovo delta non ancora autorizzato; nessun build avviato in preparazione. |
+| Lint | NON ESEGUITO | Da eseguire sul freeze finale nello slot coordinato. |
+| Warning nuovi | NON ESEGUITO | Da verificare con compilazione/lint del nuovo delta. |
+| Coerenza con planning | ESEGUITO | Perimetro minimo R-A09, RED precedente alla patch, lookup bounded e guard fail-closed preservati; diff-check statico PASS. |
+| Criteri di accettazione | NON ESEGUITO | CA-07/10/11 richiedono GREEN, regressioni pertinenti, review indipendente, gate finali e ritest autenticato coordinato. |
+
+**Baseline regressione TASK-004:** regressione mirata RED eseguita; classe recovery80 e baseline repository/ViewModel pertinenti ancora da eseguire sul delta. Sono test JVM/Robolectric, non UI Compose/Espresso.
+
+**Incertezze:** count mismatch di registry154 non ancora attribuito al dominio da metadata runtime. I conteggi read-only41347 totale/41252 active-parent/95 retained supportano la semantica del contratto, non provano la causa live. Se un parent prima tombstoned torna attivo nel tail B, la sola hash del manifest non ricostruisce payload prezzo: senza targeted event che lo recuperi, il readback fisico resta fail-closed. Nessun aggiramento introdotto.
+
+**Handoff:** source freeze e richiesta GREEN fuori Git da consegnare al parent. Nessun runtime avviato dopo RED; root owner di Git/Planning/review/canonico/CI/TEST e coordinator5556. Task resta FIX, non DONE.
+
+### Esecuzione R-A09 — GREEN80 effettivo, 2026-10-02 UTC
+
+Sul freeze `green-preparation/source-freeze.json` SHA39dffac33e7a02916835f63e088febfe54badc6a8e1eb25351eef643c9ee6be6, patch SHA9d5f0f7e e richiesta SHA6debef09, il parent ha autorizzato un solo comando offline/no-daemon/max-workers1/in-process nello slot con deadline17:36UTC e90s riserva cleanup. GO SHA602de655, preflight fresco named-heavy0; nessuna qualifica di quiet/performance globale dedotta.
+
+Comando `testDebugUnitTest --tests com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest`: **80 PASS / 0 FAIL / 0 ERROR / 0 SKIP**, exit0. Start17:28:19.891739, fine17:28:54.447137, release effettiva17:28:54.510209 UTC; 34,56s. PID/PGID proprio55539, remaining0, nessun segnale cleanup richiesto e nessuna terminazione foreign.157 sorgenti produzione e test SHAcd07ac63 invariati rispetto al freeze;74 test preesistenti preservati e6 nuovi verdi. File evidence fuori Git `green-targeted/result-receipt.json` SHAcd20fe6677cc4d85b7124747092db67a69f18492872fa42edd331f21abcae8e4, XML SHA3c380384af99d726a4770b788655962ccb5162db1405ffaed38854f4cff11cba, log SHAece6637bc25dd15bd99edfba3c73945db3a2346cf102f78e3b6435fb1c2e79bd.
+
+Preparazione statica bounded del test-mapper: nessun blocker individuato; fake/fixture originali byte-identici e helper con parametro opzionale default invariato. Non sostituisce review formale. Copertura655 usa95 retained consecutivi all'inizio; interleaving e oltre500 retained consecutivi non hanno fixture separata, pur essendo gestiti dalla scansione cursor statica.
+
+**Gate residui:** `assembleDebug`, lint/warning finale, baseline TASK004 repository/ViewModel pertinenti, review indipendente, TEST ed exact-head CI, ritest autenticato e attribuzione dominio live ancora NON ESEGUITI sul nuovo delta. Il solo comando80 non autorizza ulteriori runtime o retry. Task resta FIX.
 
 ### Esecuzione — integrazione e CI finali, 2026-10-02 UTC (root)
 
@@ -320,6 +683,10 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### R-A09/R-A10 — consolidamento documentale dei gate finali locali, 2026-10-02 UTC
+
+Nessun ulteriore fix di produzione o test in questa fase. Il freeze7fa resta identico attraverso il mirato442, il canonico1.077, i 5 Compose effettivi e il candidato TEST bd0; i dettagli verificabili sono nel [ledger locale](evidence/TASK-143/android-ra09-ra10-local-gates-ledger.json) e nella nuova Execution. Review c6c5, supplemento cleanup236bed e review candidato36bf approvano soltanto i rispettivi risultati locali. Il false immediato della serial absence e SIGTERM owner restano storici; la successiva osservazione salvata risolve la sola cleanup. Stato FIX, CI exact-SHA e accettazione autenticata/convergenza ancora da completare sotto il coordinamento root.
+
 ### Batch review R-A07 — 2026-10-01 — persistenza durevole e cleanup non dismissibile
 
 Freeze-v1 **FIX REQUIRED**, report indipendente persistente `evidence/independent-review-resumed/android-ra07-freeze-v1-review.md`. Due P1 dello stesso contratto CA-06/07/10, planning addendum registrato dal parent prima delle correzioni.
@@ -453,7 +820,15 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 
 ## Handoff
 
-**CURRENT — INTEGRATED / CI_VERIFIED, task FIX, non DONE.** PR11/main `0613339f` e CI esatte head/main PASS; iOS PR11/main `2322c5e1` con CI 1.403 PASS/36 SKIP verificata separatamente. Auth nativa PASS nel relativo snapshot; recovery business ancora HTTP500/SQL57014 nella verifica finale anche dopo registry151, convergenza e misure ancora aperte. Il ledger e la nuova Execution prevalgono sui riferimenti futuri degli snapshot sotto. Nessuna distribuzione produzione o chiusura globale inferita.
+### Handoff corrente R-A09/R-A10 — gate locali verificati, integrazione e live pendenti
+
+**CURRENT — LOCAL_GATES_VERIFIED, task FIX, non DONE.** Freeze7fa: canonico debug **1.070 PASS / 7 SKIP / 0 FAIL / 0 ERROR**, 72 XML; vecchi1.040 ID/status preservati più37 Recovery PASS; lint39/0error/0nuove firme rispetto alla baseline54. KSP e compilazione androidTest effettivi con APK storico847a riutilizzato; successiva esecuzione nuova **Compose5 PASS** sulla pair canonica d24f/847a, cleanup terminale confermata solo dalla lettura salvata23:01:54 (rawfalse/SIGTERM preservati).
+
+Candidato TEST bd0, receipt68a/review36bf: firma/metadati e profilo autorizzato verificati tramite i risultati salvati del builder, local.properties ripristinato e263 input pubblici invariati. Il [ledger portabile](evidence/TASK-143/android-ra09-ra10-local-gates-ledger.json) contiene SHA completi, conteggi per classe, warning e limiti. Nessuna installazione del nuovo TEST, login/auth, READY, convergenza o E2E provati; nessun hook diagnostico futuro incluso.
+
+Il root può preparare commit/PR e CI sullo SHA esatto; mantiene ownership esclusiva di Git e del coordinamento dispositivo autenticato. Questo handoff prevale sulle indicazioni future dei gate locali negli snapshot seguenti; i loro risultati CI/live restano riferiti ai rispettivi sorgenti storici, non al candidato7fa.
+
+**Snapshot precedente — INTEGRATED / CI_VERIFIED, task FIX, non DONE.** PR11/main `0613339f` e CI esatte head/main PASS; iOS PR11/main `2322c5e1` con CI 1.403 PASS/36 SKIP verificata separatamente. Auth nativa PASS nel relativo snapshot; recovery business ancora HTTP500/SQL57014 nella verifica finale anche dopo registry151, convergenza e misure ancora aperte. Il ledger e la nuova Execution prevalgono sui riferimenti futuri degli snapshot sotto. Nessuna distribuzione produzione o chiusura globale inferita.
 
 ### Handoff finale R-A07/R-A08 — 2026-10-01
 
