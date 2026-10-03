@@ -102,6 +102,9 @@ object Task126UnmanagedBusinessDataScopeRuntimeGuard : Task126BusinessDataScopeR
     override suspend fun <T> withBusinessDataScopeTransition(block: suspend () -> T): T = block()
 }
 
+/** Observation only: does not grant a business or recovery lease. */
+internal data class Task126DiagnosticQuietStamp(val generation: Long)
+
 internal class Task126BusinessDataScopeFlightGate(
     initialState: Task126BusinessDataScopeState
 ) : Task126BusinessDataScopeRuntimeGuard {
@@ -112,10 +115,10 @@ internal class Task126BusinessDataScopeFlightGate(
     private var nextFlightId = 1L
     private var transitioning = false
     /**
-     * A cancelled [Deferred] can complete before a non-cooperative child has
-     * left its `finally`/`NonCancellable` work.  A scope transition must wait
-     * for that work as well, otherwise an old-scope writer can cross the
-     * replacement activation boundary.
+     * Cancellation can resume a Deferred awaiter before the flight and its
+     * children finish `finally`/`NonCancellable` work. A scope transition and
+     * quiet observation must wait for actual completion, including cancellation
+     * before a lazy flight starts.
      */
     private data class ActiveFlight(
         val deferred: Deferred<*>,
@@ -123,6 +126,17 @@ internal class Task126BusinessDataScopeFlightGate(
     )
 
     private val activeFlights = linkedMapOf<Long, ActiveFlight>()
+
+    internal fun captureDiagnosticQuietStamp(): Task126DiagnosticQuietStamp? =
+        synchronized(lock) {
+            if (transitioning || activeFlights.isNotEmpty()) null
+            else Task126DiagnosticQuietStamp(generation)
+        }
+
+    internal fun isDiagnosticQuietStampCurrent(stamp: Task126DiagnosticQuietStamp): Boolean =
+        synchronized(lock) {
+            !transitioning && activeFlights.isEmpty() && generation == stamp.generation
+        }
 
     fun updateState(next: Task126BusinessDataScopeState) {
         val toCancel = synchronized(lock) {
@@ -255,12 +269,9 @@ internal class Task126BusinessDataScopeFlightGate(
             context = Task126BusinessDataScopeLeaseContext(lease),
             start = CoroutineStart.LAZY
         ) {
-            try {
-                block()
-            } finally {
-                quiesced.complete(Unit)
-            }
+            block()
         }
+        flight.invokeOnCompletion { quiesced.complete(Unit) }
         val flightId = synchronized(lock) {
             requireLeaseCurrentLocked(lease)
             nextFlightId.also { id ->
@@ -282,8 +293,11 @@ internal class Task126BusinessDataScopeFlightGate(
             }
             throw cancelled
         } finally {
-            synchronized(lock) {
-                activeFlights.remove(flightId)
+            withContext(NonCancellable) {
+                flight.join()
+                synchronized(lock) {
+                    activeFlights.remove(flightId)
+                }
             }
         }
     }

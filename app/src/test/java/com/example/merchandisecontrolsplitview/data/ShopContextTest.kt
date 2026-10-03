@@ -11,6 +11,44 @@ import kotlinx.coroutines.test.runTest
 
 class ShopContextTest {
     @Test
+    fun diagnosticEpochDetectsAcceptedRawShopAbaAndSameShopReselection() = runTest {
+        val repository = ShopContextRepository(
+            remote = MutableLinkedShopRemoteDataSource {
+                Result.success(listOf(shop("shop-a", "A"), shop("shop-b", "B")))
+            },
+            selectedShopStore = InMemorySelectedShopStore(), currentOwnerUserId = { OWNER_A }
+        )
+        repository.refresh(OWNER_A)
+        val original = repository.state.value
+        val epoch = repository.diagnosticShopEpoch()
+        assertTrue(repository.selectShop("shop-b"))
+        assertTrue(repository.selectShop("shop-a"))
+        assertEquals(original, repository.state.value)
+        assertTrue(repository.diagnosticShopEpoch() > epoch)
+        val sameEpoch = repository.diagnosticShopEpoch()
+        assertTrue(repository.selectShop("shop-a"))
+        assertTrue(repository.diagnosticShopEpoch() > sameEpoch)
+    }
+
+    @Test
+    fun diagnosticEpochPreservesDeniedSelectionButChangesOnRefreshAndClear() = runTest {
+        val repository = ShopContextRepository(
+            remote = MutableLinkedShopRemoteDataSource { Result.success(listOf(shop("shop-a", "A"))) },
+            selectedShopStore = InMemorySelectedShopStore(), currentOwnerUserId = { OWNER_A }
+        )
+        repository.refresh(OWNER_A)
+        val initial = repository.diagnosticShopEpoch()
+        assertFalse(repository.selectShop("not-linked"))
+        assertEquals(initial, repository.diagnosticShopEpoch())
+        repository.refresh(OWNER_A)
+        assertTrue(repository.diagnosticShopEpoch() > initial)
+        val refreshed = repository.diagnosticShopEpoch()
+        repository.clear()
+        assertTrue(repository.diagnosticShopEpoch() > refreshed)
+        assertNull(repository.state.value.selectedShop)
+    }
+
+    @Test
     fun zeroShopsKeepsLegacyCleanState() {
         val resolution = ShopContextResolver.resolve(
             ownerUserId = OWNER_A,

@@ -1,6 +1,11 @@
 package com.example.merchandisecontrolsplitview.data
 
+import com.example.merchandisecontrolsplitview.BuildConfig
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.supabaseJson
+import io.ktor.http.content.OutgoingContent
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.withTimeout
 import io.github.jan.supabase.annotations.SupabaseInternal
 import io.github.jan.supabase.auth.api.authenticatedSupabaseApi
 import io.github.jan.supabase.postgrest.postgrest
@@ -47,9 +52,51 @@ internal fun interface ShopSyncRpcInvoker {
     ): ShopSyncRpcResponse
 }
 
+internal const val CHECKPOINT_TRACE_HEADER = "x-eco-recovery-trace"
+internal const val CHECKPOINT_TRACE_VALUE = "eco154-0210-c4b56c63943e4d39be18e4a92732fdb1"
+internal const val CHECKPOINT_TRACE_TIMEOUT_MS = 8_000L
+
+/** Only numeric observations are exported; the guard callback remains transient in memory. */
+internal class ShopSyncCheckpointTraceAttempt(
+    private val isCurrent: () -> Boolean
+) {
+    private val used = AtomicBoolean(false)
+    var logicalAttemptCount: Int = 0
+        private set
+    var httpStatus: Int? = null
+        private set
+
+    internal fun begin(client: SupabaseClient, function: String) {
+        if (!BuildConfig.DEBUG || client is GenerationOwnedSupabaseClient ||
+            function != SHOP_SYNC_RECOVERY_CHECKPOINT_RPC || !isCurrent() ||
+            !used.compareAndSet(false, true)) {
+            contractFailure("checkpoint_trace_rejected")
+        }
+        logicalAttemptCount = 1
+    }
+
+    internal fun requireCurrent() {
+        if (!isCurrent()) contractFailure("checkpoint_trace_stale")
+    }
+
+    internal fun recordStatus(value: Int) { httpStatus = value }
+}
+
+private class CheckpointTraceOneShotBody(bytes: ByteArray) : OutgoingContent.ReadChannelContent() {
+    private val channel = ByteReadChannel(bytes)
+    private val opened = AtomicBoolean(false)
+    override val contentType: ContentType = ContentType.Application.Json
+    override val contentLength: Long = bytes.size.toLong()
+    override fun readFrom(): ByteReadChannel {
+        if (!opened.compareAndSet(false, true)) contractFailure("checkpoint_trace_body_replay")
+        return channel
+    }
+}
+
 @OptIn(SupabaseInternal::class)
 private class SupabaseShopSyncRpcInvoker(
-    private val client: SupabaseClient
+    private val client: SupabaseClient,
+    private val checkpointTrace: ShopSyncCheckpointTraceAttempt? = null
 ) : ShopSyncRpcInvoker {
     override suspend fun call(
         function: String,
@@ -61,17 +108,29 @@ private class SupabaseShopSyncRpcInvoker(
             contractFailure("rpc_response_limit_invalid")
         }
         val operationClient = (client as? GenerationOwnedSupabaseClient)?.captureClient() ?: client
+        checkpointTrace?.begin(operationClient, function)
         val api = operationClient.authenticatedSupabaseApi(operationClient.postgrest)
         return api.prepareRequest("rpc/$function") {
             method = HttpMethod.Post
             contentType(ContentType.Application.Json)
             accept(ContentType.Application.Json)
             headers.append("Content-Profile", operationClient.postgrest.config.defaultSchema)
-            setBody(params)
+            checkpointTrace?.requireCurrent()
+            if (checkpointTrace == null) {
+                setBody(params)
+            } else {
+                headers.append(CHECKPOINT_TRACE_HEADER, CHECKPOINT_TRACE_VALUE)
+                setBody(CheckpointTraceOneShotBody(
+                    supabaseJson.encodeToString(JsonObject.serializer(), params).encodeToByteArray()
+                ))
+            }
             timeout {
-                requestTimeoutMillis = operationClient.postgrest.config.timeout.inWholeMilliseconds
+                requestTimeoutMillis = if (checkpointTrace == null) {
+                    operationClient.postgrest.config.timeout.inWholeMilliseconds
+                } else CHECKPOINT_TRACE_TIMEOUT_MS
             }
         }.execute { response ->
+            checkpointTrace?.recordStatus(response.status.value)
             if (!response.status.isSuccess()) {
                 throw ShopSyncContractException("shop_sync_rpc_http_${response.status.value}")
             }
@@ -110,6 +169,17 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
         client: SupabaseClient?,
         resourceLimits: ShopSyncRecoveryResourceLimits
     ) : this(client?.let(::SupabaseShopSyncRpcInvoker), resourceLimits)
+
+    internal constructor(
+        capturedClient: SupabaseClient,
+        checkpointTrace: ShopSyncCheckpointTraceAttempt
+    ) : this(ShopSyncRpcInvoker { function, params, maximumBytes, maximumRowBytes ->
+        withTimeout(CHECKPOINT_TRACE_TIMEOUT_MS) {
+            SupabaseShopSyncRpcInvoker(capturedClient, checkpointTrace).call(
+                function, params, maximumBytes, maximumRowBytes
+            )
+        }
+    }, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
 
     override val isConfigured: Boolean get() = invoker != null
 

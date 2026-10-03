@@ -6,6 +6,27 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.util.Log
+import android.os.SystemClock
+import androidx.room.withTransaction
+import com.example.merchandisecontrolsplitview.data.BusinessDataScopeBinding
+import com.example.merchandisecontrolsplitview.data.SyncEventDeviceState
+import com.example.merchandisecontrolsplitview.data.SyncEventWatermark
+import com.example.merchandisecontrolsplitview.data.SyncRecoveryBaseline
+import com.example.merchandisecontrolsplitview.data.SyncRecoveryJournal
+import com.example.merchandisecontrolsplitview.data.SyncRecoveryJournalPhases
+import com.example.merchandisecontrolsplitview.data.SyncRecoveryAuthorizationModes
+import com.example.merchandisecontrolsplitview.data.ShopSyncCheckpointTraceAttempt
+import com.example.merchandisecontrolsplitview.data.ShopSyncRpcContext
+import com.example.merchandisecontrolsplitview.data.CHECKPOINT_TRACE_VALUE
+import com.example.merchandisecontrolsplitview.data.CHECKPOINT_TRACE_TIMEOUT_MS
+import io.github.jan.supabase.auth.status.SessionStatus
+import java.security.MessageDigest
+import kotlin.time.Clock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeout
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -117,6 +138,8 @@ class MerchandiseControlApplication : Application() {
         private const val TAG = "MerchandiseApp"
         private const val SHOP_DATA_SCOPE_PREFS = "mobile_shop_context_data_scope"
         private const val KEY_LAST_BUSINESS_DATA_SCOPE = "last_business_data_scope"
+        // Exact UTF-8 TEST URL digest from the authorized target projection; no normalization.
+        private const val CHECKPOINT_TRACE_TEST_URL_SHA256 = "42a5d0119a30cb5f291bff1912a46e1092c77b483bbfed663785ef165260c842"
     }
 
     /** Scope applicativo per osservatori lifecycle (auth → componenti remoti). */
@@ -133,6 +156,8 @@ class MerchandiseControlApplication : Application() {
     private val businessRecoveryLock = Any()
     private val businessRecoveryExecutionMutex = Mutex()
     private var businessRecoveryJob: Job? = null
+    private var checkpointTraceConsumed = false
+    private var checkpointTraceReservation: Any? = null
 
     private val shopDataScopePreferences by lazy {
         getSharedPreferences(SHOP_DATA_SCOPE_PREFS, Context.MODE_PRIVATE)
@@ -940,6 +965,210 @@ class MerchandiseControlApplication : Application() {
         return true
     }
 
+    internal data class CheckpointTraceLocalSnapshot(
+        val device: SyncEventDeviceState?,
+        val binding: BusinessDataScopeBinding?,
+        val baseline: SyncRecoveryBaseline?,
+        val journal: SyncRecoveryJournal?,
+        val watermark: SyncEventWatermark?
+    ) {
+        internal fun allowsCheckpointScope(activeScope: Task126OwnerStoreScope, shopId: String): Boolean {
+            val currentJournal = journal ?: return false
+            val currentDevice = device ?: return false
+            if (currentJournal.ownerHash != activeScope.ownerHash ||
+                currentJournal.storeScope != activeScope.storeId ||
+                currentJournal.shopId?.lowercase() != shopId.lowercase() ||
+                currentDevice.deviceId.isBlank() || currentJournal.deviceId != currentDevice.deviceId ||
+                currentJournal.phase != SyncRecoveryJournalPhases.REQUIRED ||
+                currentJournal.authorizationMode !in setOf(
+                    SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                    SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED
+                )) return false
+            if (currentJournal.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE &&
+                (binding == null || Task126OwnerStoreGate.validate(
+                    binding.toOwnerStoreScope(), activeScope
+                ) != Task126OwnerStoreGateDecision.Allowed)) return false
+            return currentJournal.authorizationMode != SyncRecoveryAuthorizationModes.SAME_SCOPE ||
+                baseline?.let {
+                    it.ownerHash == activeScope.ownerHash && it.storeScope == activeScope.storeId &&
+                        it.shopId.lowercase() == shopId.lowercase() && it.deviceId == currentDevice.deviceId
+                } != false
+        }
+    }
+
+    internal suspend fun checkpointTraceSnapshot(owner: String, store: String) =
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                CheckpointTraceLocalSnapshot(
+                    database.syncEventDeviceStateDao().get(),
+                    database.businessDataScopeBindingDao().get(),
+                    database.syncRecoveryBaselineDao().get(),
+                    database.syncRecoveryJournalDao().get(),
+                    database.syncEventWatermarkDao().get(owner, store)
+                )
+            }
+        }
+
+    @OptIn(SupabaseInternal::class)
+    internal fun checkpointTraceAuthBudgetCurrent(client: SupabaseClient,
+        status: SessionStatus.Authenticated, safeEnd: kotlin.time.Instant): Boolean {
+        val session = status.session
+        if (session.expiresIn <= 0L) return false
+        val scheduled = client.auth.autoRefreshInformation()?.refreshingAt ?: return false
+        return client.auth.sessionStatus.value === status &&
+            checkpointTraceAuthWindowSafe(status, scheduled, safeEnd)
+    }
+
+    internal fun checkpointTraceOwnedAuthCurrent(
+        owner: GenerationOwnedSupabaseClient,
+        sdk: SupabaseClient,
+        expectedAppAuth: AuthState.SignedIn,
+        currentAppAuth: AuthState,
+        sdkStatus: SessionStatus.Authenticated,
+        safeEnd: kotlin.time.Instant
+    ): Boolean = owner.captureClientOrNull() === sdk && currentAppAuth === expectedAppAuth &&
+        sdk.auth.sessionStatus.value === sdkStatus && checkpointTraceAuthBudgetCurrent(sdk, sdkStatus, safeEnd)
+
+    /** Read-only preflight facts; this never grants a managed lease or changes readiness. */
+    internal fun checkpointTraceScopeIdle(scopeState: Task126BusinessDataScopeState): Boolean =
+        scopeState.status == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE &&
+            scopeState.errorCode == "sync_recovery_required" && !scopeState.allowsCloudSync &&
+            !catalogSyncStateTracker.isSyncing.value && !businessDataScopeMutex.isLocked &&
+            synchronized(shopContextRecoveryLock) { shopContextRecoveryJob?.isCompleted != false }
+
+    internal fun requestOneCheckpointTrace(warmForeground: Boolean) {
+        if (!BuildConfig.DEBUG) return
+        val startedAt = SystemClock.elapsedRealtime()
+        val token = Any()
+        var blocked: String? = null
+        synchronized(businessRecoveryLock) {
+            if (checkpointTraceConsumed) blocked = "BLOCKED_USED"
+            else {
+                checkpointTraceConsumed = true
+                if (!warmForeground) blocked = "BLOCKED_COLD"
+                else if (businessRecoveryJob?.isCompleted == false ||
+                    checkpointTraceReservation != null ||
+                    !businessRecoveryExecutionMutex.tryLock(token)) blocked = "BLOCKED_BUSY"
+                else checkpointTraceReservation = token
+            }
+        }
+        fun releaseOwnedReservation() {
+            synchronized(businessRecoveryLock) {
+                if (checkpointTraceReservation === token) {
+                    checkpointTraceReservation = null
+                    businessRecoveryExecutionMutex.unlock(token)
+                }
+            }
+        }
+        fun emit(outcome: String, attempt: ShopSyncCheckpointTraceAttempt?,
+            targetTest: Boolean?, beforeOk: Boolean?, afterOk: Boolean?, cancelled: Boolean) {
+            // All names and outcome strings are fixed in this runner. No Throwable or raw entity.
+            Log.i("Task143CheckpointTrace",
+                "trace=$CHECKPOINT_TRACE_VALUE target_TEST=$targetTest " +
+                "localRpcAttemptCount=${attempt?.logicalAttemptCount ?: 0} " +
+                "elapsed_ms=${SystemClock.elapsedRealtime() - startedAt} " +
+                "HTTP=${attempt?.httpStatus} SQLSTATE=null before_ok=$beforeOk " +
+                "after_ok=$afterOk cancelled=$cancelled outcome=$outcome")
+        }
+        blocked?.let { emit(it, null, null, null, null, false); return }
+        try {
+            val job = appScope.launch(start = CoroutineStart.LAZY) {
+                var outcome = "BLOCKED_PREFLIGHT"
+                var targetTest: Boolean? = null
+                var beforeOk: Boolean? = null
+                var afterOk: Boolean? = null
+                var cancelled = false
+                var attempt: ShopSyncCheckpointTraceAttempt? = null
+                try {
+                    val remaining = CHECKPOINT_TRACE_TIMEOUT_MS -
+                        (SystemClock.elapsedRealtime() - startedAt)
+                    if (remaining <= 0) return@launch
+                    withTimeout(remaining) {
+                        val configuredUrlDigest = MessageDigest.getInstance("SHA-256")
+                            .digest(BuildConfig.SUPABASE_URL.encodeToByteArray())
+                            .joinToString("") { "%02x".format(it) }
+                        targetTest = CHECKPOINT_TRACE_TEST_URL_SHA256.length == 64 &&
+                            configuredUrlDigest == CHECKPOINT_TRACE_TEST_URL_SHA256
+                        if (targetTest != true) { outcome = "BLOCKED_TEST_TARGET"; return@withTimeout }
+                        val owner = supabaseClient as? GenerationOwnedSupabaseClient
+                            ?: return@withTimeout
+                        val sdk = owner.captureClientOrNull() ?: return@withTimeout
+                        val appAuth = authManager.state.value as? AuthState.SignedIn
+                            ?: return@withTimeout
+                        val sdkStatus = sdk.auth.sessionStatus.value as? SessionStatus.Authenticated
+                            ?: return@withTimeout
+                        val authSafeEnd = Clock.System.now() + 10.seconds
+                        if (sdk.auth.currentUserOrNull()?.id != appAuth.userId ||
+                            !checkpointTraceAuthBudgetCurrent(sdk, sdkStatus, authSafeEnd)) return@withTimeout
+                        val shopEpoch = shopContextRepository.diagnosticShopEpoch()
+                        val shopContext = shopContextRepository.state.value
+                        if (shopContextRepository.diagnosticShopEpoch() != shopEpoch) return@withTimeout
+                        val selectedShop = shopContext.selectedShop ?: return@withTimeout
+                        val scopeState = catalogSyncStateTracker.businessDataScopeState.value
+                        if (!checkpointTraceScopeIdle(scopeState) ||
+                            !currentAuthAndShopMatch(appAuth.userId, selectedShop)) return@withTimeout
+                        val stamp = catalogSyncStateTracker.captureDiagnosticQuietStamp()
+                            ?: return@withTimeout
+                        val activeScope = task126ActiveOwnerStoreScope(appAuth.userId, selectedShop)
+                        val before = checkpointTraceSnapshot(appAuth.userId, activeScope.storeId)
+                        if (!before.allowsCheckpointScope(activeScope, selectedShop.shopId)) return@withTimeout
+                        val device = requireNotNull(before.device)
+                        fun current(): Boolean =
+                            checkpointTraceOwnedAuthCurrent(
+                                owner, sdk, appAuth, authManager.state.value, sdkStatus, authSafeEnd
+                            ) &&
+                            shopContextRepository.diagnosticShopEpoch() == shopEpoch &&
+                            shopContextRepository.state.value == shopContext &&
+                            shopContextRepository.diagnosticShopEpoch() == shopEpoch &&
+                            catalogSyncStateTracker.businessDataScopeState.value == scopeState &&
+                            !catalogSyncStateTracker.isSyncing.value && !businessDataScopeMutex.isLocked &&
+                            currentAuthAndShopMatch(appAuth.userId, selectedShop) &&
+                            catalogSyncStateTracker.isDiagnosticQuietStampCurrent(stamp)
+                        if (SystemClock.elapsedRealtime() - startedAt > 2_000 || !current()) {
+                            outcome = "BLOCKED_STALE"; return@withTimeout
+                        }
+                        currentCoroutineContext().ensureActive()
+                        beforeOk = true
+                        val trace = ShopSyncCheckpointTraceAttempt(::current)
+                        attempt = trace
+                        val result = SupabaseShopSyncReadRemoteDataSource(sdk, trace).checkpoint(
+                            ShopSyncRpcContext(appAuth.userId, selectedShop.shopId, device.deviceId,
+                                verifiedBaselineId = "0", expectedBaselineScopeKey = null)
+                        )
+                        currentCoroutineContext().ensureActive()
+                        val after = checkpointTraceSnapshot(appAuth.userId, activeScope.storeId)
+                        currentCoroutineContext().ensureActive()
+                        afterOk = current() && after == before
+                        outcome = when {
+                            afterOk != true -> "REJECTED_AFTER_CHANGED"
+                            result.isSuccess -> "CHECKPOINT_RETURNED"
+                            else -> "CHECKPOINT_FAILED"
+                        }
+                    }
+                } catch (_: TimeoutCancellationException) {
+                    outcome = "TIMEOUT_AFTER_UNKNOWN"
+                    cancelled = true
+                } catch (error: CancellationException) {
+                    outcome = "CANCELLED_AFTER_UNKNOWN"
+                    cancelled = true
+                    throw error
+                } catch (_: Exception) {
+                    outcome = "FAILED_AFTER_UNKNOWN"
+                } finally {
+                    emit(outcome, attempt, targetTest, beforeOk, afterOk, cancelled)
+                    releaseOwnedReservation()
+                }
+            }
+            // Also covers cancellation before the lazy body enters its try/finally.
+            job.invokeOnCompletion { releaseOwnedReservation() }
+            job.start()
+        } catch (error: Exception) {
+            releaseOwnedReservation()
+            emit("BLOCKED_LAUNCH", null, null, null, null, error is CancellationException)
+            if (error is CancellationException) throw error
+        }
+    }
+
     internal fun requestPendingBusinessRecovery(reason: String) {
         schedulePendingBusinessRecovery(reason)
     }
@@ -950,6 +1179,7 @@ class MerchandiseControlApplication : Application() {
             "sync_recovery_required"
         ) return false
         val scheduled = synchronized(businessRecoveryLock) {
+            if (checkpointTraceReservation != null) return true
             if (businessRecoveryJob?.isActive == true) return true
             lateinit var job: Job
             job = appScope.launch(start = CoroutineStart.LAZY) {
@@ -1244,3 +1474,15 @@ internal fun shouldRetryShopContext(
         networkAvailable == true &&
         !context.isLoading &&
         (context.ownerUserId != auth.userId || !context.syncAllowed)
+
+/** Same observable SDK budget used by the caller; no private HTTP-state inference. */
+internal fun checkpointTraceAuthWindowSafe(
+    status: SessionStatus.Authenticated,
+    scheduled: kotlin.time.Instant?,
+    safeEnd: kotlin.time.Instant
+): Boolean {
+    val session = status.session
+    if (session.expiresIn <= 0L || scheduled == null) return false
+    val threshold = session.expiresAt - session.expiresIn.seconds * 0.2
+    return session.expiresAt > safeEnd && threshold > safeEnd && scheduled > safeEnd
+}

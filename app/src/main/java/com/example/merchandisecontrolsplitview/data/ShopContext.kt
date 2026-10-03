@@ -151,6 +151,11 @@ class ShopContextRepository(
     private val mutableState = MutableStateFlow(ShopContext.legacy())
     val state: StateFlow<ShopContext> = mutableState.asStateFlow()
 
+    /** Observation only; does not prevent a selection or grant sync authority. */
+    internal fun diagnosticShopEpoch(): Long = synchronized(refreshLock) {
+        refreshGeneration
+    }
+
     suspend fun refresh(ownerUserId: String?) {
         val generation = synchronized(refreshLock) {
             if (currentOwnerUserId() != ownerUserId) return
