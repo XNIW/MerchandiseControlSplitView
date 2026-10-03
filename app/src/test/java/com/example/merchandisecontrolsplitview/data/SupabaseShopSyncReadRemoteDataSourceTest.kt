@@ -1,5 +1,34 @@
 package com.example.merchandisecontrolsplitview.data
 
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.SessionManager
+import io.github.jan.supabase.auth.MemoryCodeVerifierCache
+import io.github.jan.supabase.auth.user.UserInfo
+import io.github.jan.supabase.auth.user.UserSession
+import io.github.jan.supabase.logging.LogLevel
+import io.github.jan.supabase.postgrest.Postgrest
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.http.ContentType
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.io.ByteArrayOutputStream
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.CancellationException
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.seconds
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.test.runTest
@@ -20,6 +49,320 @@ import org.junit.Test
  * before it can turn a server divergence into a client noWork result.
  */
 class SupabaseShopSyncReadRemoteDataSourceTest {
+    private val WIRE_PRIVATE_MARKER = "synthetic-wire-private-response"
+
+    @Test
+    fun `checkpoint diagnostic one shot body stops replay after response is lost`() = runBlocking {
+        val diagnostic = checkpointWireRun(WireReply.LOST_RESPONSE, diagnostic = true)
+        val normal = checkpointWireRun(WireReply.LOST_RESPONSE, diagnostic = false)
+        assertTrue("Diagnostic response loss must fail", diagnostic.failed)
+        assertEquals(1, diagnostic.requests.size)
+        assertTrue("NOT_PROVEN: normal response-loss control did not demonstrate replay", normal.requests.size >= 2)
+    }
+
+    @Test
+    fun `checkpoint diagnostic 408 cannot retransmit body`() = runBlocking {
+        val diagnostic = checkpointWireRun(WireReply.HTTP_408, diagnostic = true)
+        val normal = checkpointWireRun(WireReply.HTTP_408, diagnostic = false)
+        assertTrue(diagnostic.failed)
+        assertEquals(408, diagnostic.status)
+        assertEquals(1, diagnostic.requests.size)
+        assertEquals("Normal real-engine 408 replay control", 2, normal.requests.size)
+    }
+
+    @Test
+    fun `checkpoint diagnostic 503 retry after zero cannot retransmit body`() = runBlocking {
+        val diagnostic = checkpointWireRun(WireReply.HTTP_503, diagnostic = true)
+        val normal = checkpointWireRun(WireReply.HTTP_503, diagnostic = false)
+        assertTrue(diagnostic.failed)
+        assertEquals(503, diagnostic.status)
+        assertEquals(1, diagnostic.requests.size)
+        assertEquals("Normal real-engine 503 replay control", 2, normal.requests.size)
+    }
+
+    @Test
+    fun `checkpoint diagnostic matches original serialized request and traces only checkpoint`() = runBlocking {
+        val normal = checkpointWireRun(WireReply.HTTP_500, diagnostic = false)
+        val diagnostic = checkpointWireRun(WireReply.HTTP_500, diagnostic = true)
+        val n = normal.requests.single()
+        val d = diagnostic.requests.single()
+        assertTrue("Original JSON bytes must match", n.body.contentEquals(d.body))
+        assertTrue("Content-Type including charset must match", ContentType.parse(n.contentType) == ContentType.parse(d.contentType))
+        assertEquals(n.declaredBytes, d.declaredBytes)
+        assertTrue("Both declared lengths match body bytes", n.declaredBytes == n.body.size && d.declaredBytes == d.body.size)
+        assertTrue("Original reader has no trace header", n.trace == null)
+        assertTrue("Fixed checkpoint header only", d.trace == CHECKPOINT_TRACE_VALUE)
+        assertTrue("Both requests use checkpoint POST", listOf(n, d).all { it.checkpointPost })
+        val other = withWireServer(WireReply.HTTP_500) { server, sdk ->
+            val reader = SupabaseShopSyncReadRemoteDataSource(sdk)
+            assertTrue(reader.convergenceMarker(context(baseline = "0", baselineScopeKey = null)).isFailure)
+            assertTrue(reader.checkpoint(context(baseline = "0", baselineScopeKey = null)).isFailure)
+            server.snapshots()
+        }
+        assertEquals(2, other.size)
+        assertTrue("Normal reader stays reusable and untraced", other.all { it.trace == null })
+        assertTrue("Existing marker function remains distinct", other.first().markerPost)
+    }
+
+    @Test
+    fun `checkpoint diagnostic rejects another function and second invocation before transmission`() = runBlocking {
+        withWireServer(WireReply.HTTP_500) { server, sdk ->
+            val attempt = ShopSyncCheckpointTraceAttempt { true }
+            val reader = SupabaseShopSyncReadRemoteDataSource(sdk, attempt)
+            val ctx = context(baseline = "0", baselineScopeKey = null)
+            assertTrue(reader.checkpoint(ctx).isFailure)
+            for (failure in listOf(reader.checkpoint(ctx), reader.convergenceMarker(ctx))) {
+                assertEquals("checkpoint_trace_rejected", (failure.exceptionOrNull() as? ShopSyncContractException)?.code)
+            }
+            assertEquals(1, attempt.logicalAttemptCount)
+            assertEquals(1, server.snapshots().size)
+        }
+        withWireServer(WireReply.HTTP_500) { server, sdk ->
+            val attempt = ShopSyncCheckpointTraceAttempt { true }
+            val failure = SupabaseShopSyncReadRemoteDataSource(sdk, attempt)
+                .convergenceMarker(context(baseline = "0", baselineScopeKey = null))
+            assertEquals("checkpoint_trace_rejected", (failure.exceptionOrNull() as? ShopSyncContractException)?.code)
+            assertEquals(0, attempt.logicalAttemptCount)
+            assertTrue(server.snapshots().isEmpty())
+        }
+    }
+
+    @Test
+    fun `checkpoint diagnostic errors do not export response body`() = runBlocking {
+        for (reply in listOf(WireReply.HTTP_401, WireReply.HTTP_500, WireReply.MALFORMED, WireReply.OVERSIZE)) {
+            val result = checkpointWireRun(reply, diagnostic = true)
+            assertTrue("Untrusted response never validates a checkpoint", result.failed)
+            assertEquals(1, result.requests.size)
+            assertTrue("Only fixed contract diagnostics escape the reader", result.fixedContractFailure)
+            assertEquals(if (reply == WireReply.HTTP_401) 401 else if (reply == WireReply.HTTP_500) 500 else 200, result.status)
+            if (reply == WireReply.OVERSIZE) assertEquals("rpc_response_budget_exceeded", result.code)
+        }
+    }
+
+    @Test
+    fun `checkpoint diagnostic cancellation after transmission propagates without retry`() = runBlocking {
+        withWireServer(WireReply.STALL) { server, sdk ->
+            val attempt = ShopSyncCheckpointTraceAttempt { true }
+            var propagated = false
+            val call = async {
+                try { SupabaseShopSyncReadRemoteDataSource(sdk, attempt).checkpoint(context(baseline = "0", baselineScopeKey = null)) }
+                catch (cancelled: CancellationException) { propagated = true; throw cancelled }
+            }
+            withTimeout(3_000) { server.firstBody.await() }
+            call.cancel()
+            call.join()
+            assertTrue("Cancellation must propagate", propagated)
+            assertEquals(1, server.snapshots().size)
+            assertTrue(attempt.httpStatus == null)
+        }
+    }
+
+    @Test
+    fun `checkpoint diagnostic caller deadline remains failure with unknown response`() = runBlocking {
+        withWireServer(WireReply.STALL) { server, sdk ->
+            val attempt = ShopSyncCheckpointTraceAttempt { true }
+            val call = async {
+                SupabaseShopSyncReadRemoteDataSource(sdk, attempt).checkpoint(context(baseline = "0", baselineScopeKey = null))
+            }
+            try {
+                withTimeout(3_000) { server.firstBody.await() }
+                val timed = runCatching { withTimeout(200) { call.await() } }
+                assertTrue("Bounded external deadline must not validate a response",
+                    timed.exceptionOrNull() is kotlinx.coroutines.TimeoutCancellationException)
+                assertTrue(attempt.httpStatus == null)
+                assertEquals(1, server.snapshots().size)
+            } finally { call.cancel(); call.join() }
+        }
+    }
+
+    @Test
+    fun `checkpoint diagnostic stale guard refuses before transmission`() = runBlocking {
+        withWireServer(WireReply.HTTP_500) { server, sdk ->
+            val attempt = ShopSyncCheckpointTraceAttempt { false }
+            val result = SupabaseShopSyncReadRemoteDataSource(sdk, attempt).checkpoint(context(baseline = "0", baselineScopeKey = null))
+            assertEquals("checkpoint_trace_rejected", (result.exceptionOrNull() as? ShopSyncContractException)?.code)
+            assertEquals(0, attempt.logicalAttemptCount)
+            assertTrue(server.snapshots().isEmpty())
+        }
+    }
+
+    private enum class WireReply { LOST_RESPONSE, HTTP_408, HTTP_503, HTTP_401, HTTP_500, MALFORMED, OVERSIZE, STALL }
+    private class WireRequest(val body: ByteArray, val declaredBytes: Int, val contentType: String,
+        val trace: String?, val checkpointPost: Boolean, val markerPost: Boolean,
+        val connectionId: Int)
+    private class WireResult(val requests: List<WireRequest>, val status: Int?, val failed: Boolean,
+        val fixedContractFailure: Boolean, val code: String?)
+
+    private suspend fun checkpointWireRun(reply: WireReply, diagnostic: Boolean): WireResult =
+        withWireServer(reply) { server, sdk ->
+            val trace = if (diagnostic) ShopSyncCheckpointTraceAttempt { true } else null
+            val reader = if (trace == null) SupabaseShopSyncReadRemoteDataSource(sdk)
+                else SupabaseShopSyncReadRemoteDataSource(sdk, trace)
+            val result = reader.checkpoint(context(baseline = "0", baselineScopeKey = null))
+            val error = result.exceptionOrNull()
+            if (reply == WireReply.LOST_RESPONSE) {
+                server.assertMeasuredFaultReusesWarmConnection()
+                assertTrue("Only measured diagnostic checkpoints carry the trace header",
+                    server.snapshots().all { it.trace == if (diagnostic) CHECKPOINT_TRACE_VALUE else null })
+            }
+            WireResult(server.snapshots(), trace?.httpStatus, result.isFailure,
+                error is ShopSyncContractException && !error.toString().contains(WIRE_PRIVATE_MARKER),
+                (error as? ShopSyncContractException)?.code)
+        }
+
+    @OptIn(io.github.jan.supabase.annotations.SupabaseInternal::class)
+    private suspend fun <T> withWireServer(reply: WireReply,
+        operation: suspend (WireServer, SupabaseClient) -> T): T {
+        val server = WireServer(reply, if (reply == WireReply.LOST_RESPONSE) {
+            markerJson(maxId = "0", baseline = "0").toString().toByteArray(Charsets.UTF_8)
+        } else null)
+        var stored: UserSession? = null
+        var ownedSdk: SupabaseClient? = null
+        try {
+            val sdk = createSupabaseClient("http://127.0.0.1:${server.port}", "synthetic-public-key") {
+                httpEngine = OkHttp.create()
+                coroutineDispatcher = Dispatchers.IO
+                defaultLogLevel = LogLevel.NONE
+                requestTimeout = 3.seconds
+                install(Auth) {
+                    autoLoadFromStorage = false
+                    autoSetupPlatform = false
+                    sessionManager = object : SessionManager {
+                        override suspend fun saveSession(session: UserSession) { stored = session }
+                        override suspend fun loadSession(): UserSession = stored ?: error("synthetic_session_absent")
+                        override suspend fun deleteSession() { stored = null }
+                    }
+                    codeVerifierCache = MemoryCodeVerifierCache()
+                }
+                install(Postgrest) { timeout = 3.seconds }
+            }
+            ownedSdk = sdk
+            sdk.auth.importSession(UserSession(accessToken = "synthetic-access", refreshToken = "synthetic-refresh",
+                expiresIn = 86_400, tokenType = "bearer", user = UserInfo(aud = "authenticated", id = ACCOUNT_ID),
+                expiresAt = Clock.System.now() + 1.days), autoRefresh = false)
+            return withTimeout(5_000) {
+                if (reply == WireReply.LOST_RESPONSE) {
+                    val warm = SupabaseShopSyncReadRemoteDataSource(sdk)
+                        .convergenceMarker(context(baseline = "0", baselineScopeKey = null))
+                    assertTrue("Ordinary warm-up RPC must fully decode successfully", warm.isSuccess)
+                }
+                operation(server, sdk)
+            }
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                try { withTimeout(1_000) { ownedSdk?.close() } } finally { server.close() }
+            }
+        }
+    }
+
+    /** Bounded owned loopback only. Request data never leaves RAM or an assertion message. */
+    private class WireServer(private val reply: WireReply,
+        private val warmResponseBody: ByteArray?) : AutoCloseable {
+        private val listener = ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1")).apply { soTimeout = 150 }
+        val port: Int get() = listener.localPort
+        private val closed = AtomicBoolean(false)
+        private val active = AtomicReference<Socket?>(null)
+        private val failure = AtomicReference<Throwable?>(null)
+        private val requests = Collections.synchronizedList(mutableListOf<WireRequest>())
+        private val warmRequest = AtomicReference<WireRequest?>(null)
+        private var acceptedConnections = 0
+        val firstBody = CompletableDeferred<Unit>()
+        private val thread = Thread({ serve() }, "checkpoint-owned-loopback").apply { isDaemon = true; start() }
+        fun snapshots(): List<WireRequest> = synchronized(requests) { requests.toList() }
+        fun assertMeasuredFaultReusesWarmConnection() {
+            val warm = requireNotNull(warmRequest.get()) { "wire_warmup_missing" }
+            val measured = snapshots()
+            assertTrue("Warm-up is an ordinary untraced marker", warm.markerPost && warm.trace == null)
+            assertTrue("Measured fault receives a complete checkpoint body", measured.isNotEmpty())
+            assertTrue("Warm-up is excluded from checkpoint counts", measured.all { it.checkpointPost })
+            assertEquals("Measured fault must reuse the successfully warmed accepted socket",
+                warm.connectionId, measured.first().connectionId)
+        }
+        private fun serve() {
+            try {
+                while (!closed.get()) {
+                    val socket = try { listener.accept() } catch (_: SocketTimeoutException) { continue }
+                    active.set(socket)
+                    val connectionId = ++acceptedConnections
+                    socket.use {
+                        socket.soTimeout = 1_000
+                        val input = socket.getInputStream()
+                        while (!closed.get()) {
+                            val header = ByteArrayOutputStream()
+                            var suffix = ""
+                            while (!suffix.endsWith("\r\n\r\n")) {
+                                check(header.size() < 8_192) { "wire_headers_limit" }
+                                val byte = input.read(); check(byte >= 0) { "wire_headers_incomplete" }
+                                header.write(byte); suffix = (suffix + byte.toChar()).takeLast(4)
+                            }
+                            val lines = header.toString(Charsets.ISO_8859_1.name()).split("\r\n")
+                            val fields = lines.drop(1).filter { ':' in it }.associate {
+                                it.substringBefore(':').lowercase() to it.substringAfter(':').trim()
+                            }
+                            val length = fields["content-length"]?.toIntOrNull()
+                            check(length != null && length in 1..16_384) { "wire_body_length" }
+                            val body = ByteArray(length)
+                            var count = 0
+                            while (count < length) {
+                                val n = input.read(body, count, length - count)
+                                check(n > 0) { "wire_body_incomplete" }; count += n
+                            }
+                            val requestLine = lines.first()
+                            val checkpoint = requestLine == "POST /rest/v1/rpc/shop_sync_recovery_checkpoint_v1 HTTP/1.1"
+                            val marker = requestLine == "POST /rest/v1/rpc/shop_sync_convergence_marker_v1 HTTP/1.1"
+                            check(checkpoint || marker) { "wire_unexpected_endpoint" }
+                            val request = WireRequest(body, length, fields["content-type"].orEmpty(),
+                                fields[CHECKPOINT_TRACE_HEADER], checkpoint, marker, connectionId)
+                            if (warmResponseBody != null && warmRequest.get() == null) {
+                                check(marker && request.trace == null) { "wire_warmup_must_be_ordinary_marker" }
+                                warmRequest.set(request)
+                                val response = "HTTP/1.1 200 Synthetic\r\nContent-Type: application/json\r\nContent-Length: ${warmResponseBody.size}\r\nConnection: keep-alive\r\n\r\n"
+                                socket.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
+                                socket.getOutputStream().write(warmResponseBody)
+                                socket.getOutputStream().flush()
+                                continue
+                            }
+                            requests += request
+                            firstBody.complete(Unit)
+                            if (reply == WireReply.STALL) {
+                                while (!closed.get() && input.read() >= 0) { /* await owned cancellation */ }
+                            } else if (reply == WireReply.LOST_RESPONSE && requests.size == 1) {
+                                socket.setSoLinger(true, 0)
+                            } else {
+                                val first = requests.size == 1
+                                val status = when {
+                                    reply == WireReply.HTTP_408 && first -> 408
+                                    reply == WireReply.HTTP_503 && first -> 503
+                                    reply == WireReply.HTTP_401 -> 401
+                                    reply == WireReply.MALFORMED || reply == WireReply.OVERSIZE -> 200
+                                    else -> 500
+                                }
+                                val responseBody = if (reply == WireReply.OVERSIZE) "x".repeat(4 * 1024 * 1024 + 1) else "synthetic-wire-private-response"
+                                val bytes = responseBody.toByteArray()
+                                val retry = if (status == 503) "Retry-After: 0\r\n" else ""
+                                val empty = status == 408 || status == 503
+                                val response = "HTTP/1.1 $status Synthetic\r\nContent-Type: application/json\r\nContent-Length: ${if (empty) 0 else bytes.size}\r\n${retry}Connection: close\r\n\r\n"
+                                socket.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
+                                if (!empty) socket.getOutputStream().write(bytes)
+                                socket.getOutputStream().flush()
+                            }
+                            break
+                        }
+                    }
+                    active.set(null)
+                }
+            } catch (error: Exception) {
+                if (!closed.get()) failure.set(error)
+            }
+        }
+        override fun close() {
+            closed.set(true)
+            listener.close(); active.getAndSet(null)?.close()
+            thread.join(1_000)
+            check(!thread.isAlive) { "wire_owned_thread_not_released" }
+            check(failure.get() == null) { "wire_server_failed" }
+        }
+    }
 
     @Test
     fun `short resource exceeded checkpoint returns explicit denial without success sections`() = runTest {

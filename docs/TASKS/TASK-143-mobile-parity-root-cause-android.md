@@ -8,7 +8,7 @@
 - Responsabile: `CODEX_EXECUTOR_ANDROID`; orchestratore parent, reviewer indipendente separato.
 - Data: 2026-09-28
 - Baseline: `d7c4953c4ed6bc2a33cc5dbfd009eb862f70feac`
-- Branch corrente: `codex/android-recovery-retained-prices` dal main integrato `9306e8a7`; R-A09 in diagnosi/regressione. PR10/11 e registri PR12 preservati come integrazioni precedenti.
+- Branch corrente di questo delta diagnostico: `codex/android-checkpoint-one-trace`, dal commit verificato814b137; consegna R-A09/R-A10 separata in PR13. PR10/11 e registri PR12 preservati; nessuna nuova acceptance live dedotta.
 - Coordination key: `MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE`
 
 ## Scopo / Obiettivo
@@ -188,7 +188,115 @@ Il quinto caso Default139 nonzero-watermark/fence ha un'A fabbricata: accountKey
 
 Solo test/fixture/commento e Execution nello stesso task; tutti157file produttivi freeze78bb, quattro nuovi guard ZERO e due desiredZERO restano byte-identici. Nuovo freeze/patch/inversa/111ID/assert e card442/launcher nel namespace distinto, review indipendente statica prima di nuovo GO owner DIRECT ONE. Se emergono vere regressioni di produzione o le correzioni non conservano la semantica contrattuale, fermare le edit e riportare il finding prima di un fix differente. Gate canonici/full/TEST/CI/live rimangono aperti. Task FIX.
 
+### Decisione planning — singola traccia checkpoint DEBUG, 2026-10-02 UTC
+
+Il caller originale richiesto dal coordinatore backend usa la sessione SDK già autenticata e verifica prima/dopo account/shop/device/binding/generation/lease. Non richiede un marker privato Auth HTTP-in-flight non esposto: quel requisito aggiuntivo del draft viene ritirato. Il timeout HTTP500/SQL57014 resta un episodio da diagnosticare, senza attribuzione a rete, auth o lock prima della prova. La proposta concreta esterna five-file94f10ffd e review f2d7425c sono preparazione, non implementazione o readiness live. Current7fa/TESTbd0 e PR13 restano separati e immutati nel checkout di consegna.
+
+Il parent autorizza nello stesso CA-07/10 un delta separato su branch `codex/android-checkpoint-one-trace`, dal commit814b137 nel worktree isolato dedicato. MASTER/backlog/task restano TASK143 FIX; nessun task nuovo o nuovo motore sync. File produttivi: MainActivity, MerchandiseControlApplication, SupabaseShopSyncReadRemoteDataSource, Task126BusinessDataScopeRuntimeGuard, CatalogSyncStateTracker e il solo accessor interno read-only `diagnosticShopEpoch` in ShopContext, usando il refreshGeneration già sincronizzato. Il sesto file è autorizzato per rilevare A→B→A raw anche quando StateFlow conflates; nessuna nuova business API/lease/readiness o mutazione shop. Test nelle classi esistenti di reader, Application, Task126guard e ShopContext; una regressione Activity/Robolectric pertinente può essere aggiunta usando le dipendenze già presenti.
+
+Adottare la proposta concreta dopo aver letto sorgenti e test. Intenzione fissa DEBUG/warm-only via una sola extra Boolean, traccia/header costanti già concordati, niente valore scope/URL/header dall'intent e un solo consumo per processo. Cold start non sospende o cambia startup ordinario e produce0RPC. La review ha identificato P1 nel candidato: Android pausa la Activity prima di onNewIntent, quindi il controllo RESUMED dentro quel callback rifiuterebbe l'intento warm. Prima riprodurre il candidato con un vero lifecycle pause→onNewIntent→resume e output scalare/0RPC, poi riparare con consegna una sola volta al successivo RESUMED della stessa Activity esistente (callback lifecycle cancellabile se distrutta, nessuna cold activation o doppio consumo). Verificare anche background/destroy/repeated intent e preservare share/smoke ordinari. Nessun test o assert indebolito per passare.
+
+Riservare solo il mutex recovery esistente quando idle, con quiet stamp reale Task126 senza active flight/transition; rifiutare job recovery/esecuzioni scope concorrenti. La prenotazione deve essere rilasciata dal proprio token anche quando il lazy job è cancellato prima del body; un trigger durante la prenotazione non accoda full recovery e il rilascio non ne avvia una. Contesto consentito solo ERROR_RECOVERABLE/sync_recovery_required e journal REQUIRED canonico SAME_SCOPE o MISMATCH_REPLACE_CONFIRMED, con device/binding/baseline/journal/nullable typed-watermark letto atomicamente e controllato prima/dopo. Non creare device/registration/heartbeat, non scrivere journal/counter/outbox/dati/flag, non fabbricare READY/UNMANAGED. Pin esatto SDK posseduto/status Authenticated/app SignedIn/gen e raw-shop epoch/state/epoch; scope cambiato/cancel/entità variate rifiutano o restano unknown. Non reflection SDK, refresh forzato, stop dell'auth, token export o nuovo client.
+
+Pin TEST interno fail-closed: SHA256 UTF8 esatta della SUPABASE_URL decodificata dal builder autorizzato, senza normalizzazione/newline, `42a5d0119a30cb5f291bff1912a46e1092c77b483bbfed663785ef165260c842`. Provenienza owner: sola whitelist SUPABASE_URL del profilo autorizzato, HTTPS/targetTEST qualificati, receipt940127fe; nessuna URL/key/profilo stampata. Getter SDK auto-refresh esistente e threshold reale80% della lifetime, expiry/status/client correnti devono superare safeEnd fisso; quiet window dell'owner esclude auth/shop manuali. Questo è controllo osservabile e qualificato, non prova assoluta di un flag privato HTTP assente.
+
+Solo una checkpoint RPC esistente, params/validator originali, baseline0/scope-key null secondo contratto, header x-eco-recovery-trace fisso eco154-0210-c4b56c63943e4d39be18e4a92732fdb1. Preflight massimo2s e deadline totale prenotazione→readback8s; no retry automatico, convergence/page/full recovery/nuovi endpoint o nuovi engine/deps. Body streaming one-shot del vero SDK/OkHttp limita a una trasmissione completa dopo send, non promette un solo tentativo TCP pre-send. Test reali loopback con client/session/storage sintetici già supportati: perdita risposta dopo body completo,408,503 Retry-After0, normal controls che mostrino davvero replay; body/Content-Type/charset/length esattamente equivalenti, header solo sulla checkpoint diagnostica, seconda invocazione/altre RPC rifiutate, error body non esportato. Se il motore normalcontrol non dimostra replay, conservare NOT_PROVEN invece di inventare riduzione; investigare prima readiness. Se l'equivalenza Content-Type fallisce, è autorizzato il solo adeguamento al charset realmente osservato, senza rilassare l'assert.
+
+Output soltanto trace sintetica, targetTEST bool/null, count, elapsed monotonic, HTTP int/null, SQLSTATE null, pre/post bool/null, cancel bool ed esito enum fisso. Nessun body/header/session/ID/digestbusiness/Throwable o stack raw. HTTP500 non prova SQL57014; successo checkpoint non è recovery/READY/convergenza. Timeout/cancel/postreadback incompleto non diventano PASS. Cleanup socket/thread/client propri bounded e failure preservata.
+
+Executor prima prepara source/test e congela; nessun compiler/socket/client/device/RPC/DDL/Git/protected read senza lo slot diretto primary. Review indipendente minima, suite engine/lifecycle/guard pertinenti actual RED→GREEN e regressioni TASK004, build/lint/full/warning, nuovo TEST artifact/profile/firma/install in-place precedono readiness. Source7fa della consegna precedente non viene modificato né accettato come prova di questo hook. RPC live soltanto con nuovo scope/session/quiet preflight, owner backend nella finestra SQL già autorizzata e rollback esatto della sua temporanea diagnostica; nessuna DDL o credenziale SQL da questa lane. Task resta FIX finché i criteri obbligatori non hanno esito verificato.
+
 ## Execution
+
+### Esecuzione — 2026-10-03 UTC — checkpoint one-trace, gate locali actual e port byte-exact
+
+**File modificati:** sei file produttivi (`MainActivity.kt`, `MerchandiseControlApplication.kt`, `data/CatalogSyncStateTracker.kt`, `data/ShopContext.kt`, `data/SupabaseShopSyncReadRemoteDataSource.kt`, `data/Task126BusinessDataScopeRuntimeGuard.kt`) e cinque classi test (`MerchandiseControlApplicationTest`, `CheckpointTraceActivityLifecycleTest`, `ShopContextTest`, `SupabaseShopSyncReadRemoteDataSourceTest`, `Task126BusinessDataScopeRuntimeGuardTest`). Il [ledger pubblico](evidence/TASK-143/android-checkpoint-current-local-gates-ledger.json) conserva percorsi/hash degli 11 leaf, classi/conteggi e SHA delle ricevute effettive. Sono aggiunti soltanto questo log Execution/Fix/Handoff e il ledger.
+
+**Azioni eseguite:**
+1. Il caller DEBUG warm-only usa header/trace fissi, guard correnti di scope/lease, consumo singolo per processo e zero RPC al cold start. Il fix lifecycle consegna dopo il reale RESUMED, mentre il guard Release preserva share/smoke ordinari. Il fix del `finally` Task126 mantiene il flight registrato fino alla completion effettiva e riguarda anche il normale flusso business.
+2. Il RED lifecycle ufficiale e il primo ONE76 (74 PASS/2 FAIL) restano storici. La completion reale e la fixture con connessione keep-alive precedentemente riuscita sono corrette senza indebolire i 76 ID/assert. Il secondo ONE76 è 76 PASS/0 FAIL/ERROR/SKIP, con 33 nuovi casi. Replay ordinario, mancata ripetizione diagnostica, riuso del socket, body/header equivalenti sono provati dagli assert passati; XML non contiene i body/socket raw. Il vecchio controllo su connessione nuova resta NOT_PROVEN nella sua ricevuta.
+3. Copiato dapprima il TASK approvato `57a13619…` dal checkout dedicato, poi gli 11 leaf byte per byte in CommonRoot (`codex/android-checkpoint-trace-guard`, base `7e538936…`). Nessuna decisione Planning nuova: prefix raw `780ded37c7d485b0d48baa4709dee888aed6c74a8010dace10c1cb87229f9e7f` e MASTER invariati. Il dedicated HEAD `814b137f…`, TASK, MASTER e tutti i 264 input pubblici restano invariati; CommonRoot264 coincide con freeze `189d3e27…`, fingerprint map `4c40e81b1b6f384de424241f89fcbd91a9c26d703a3b8d44998d5a2e625539b2`.
+
+**Evidenze actual:** review source `2dc871dd…`; ONE76 `dd4697b2…`; canonico `666dad53…`: 73 XML freschi, 1110 ID unici, 1103 PASS/7 SKIP/0 FAIL/ERROR; 1077 ID e stati precedenti preservati, 33 aggiunte PASS. I sette skip condizionali e le ragioni sono nel ledger; non è stato attivato alcun harness Excel/fixture protetta. Queste prove sono state eseguite dal primary sul checkout dedicato e trasferite per equivalenza byte; nessun gate è stato rieseguito nel port.
+
+**Check obbligatori:**
+
+| Check | Stato | Evidenza e limite |
+|---|---|---|
+| Build Gradle | ESEGUITO sul source264 | `assembleDebug` canonico PASS; main/unit KSP/Kotlin UP-TO-DATE in quel job. KSP/Kotlin/Java/package androidTest realmente eseguiti nel gate successivo. Il build TEST separato ricompila BuildConfig/KSP/Kotlin/Java/DEX/package. |
+| Lint | ESEGUITO | Proof `2302ea84221a43234453e0880161c70e386ce06c0d93100498b0ba6d3a754e18`: 29 warning/0 errori contro 39; 27 identici, 2 UseKtx con sole coordinate spostate. Raw delta 2 aggiunti/12 rimossi; 10 notice di disponibilità assenti non sono fix. |
+| Warning nuovi | ESEGUITO con qualifica | Nessun nuovo diagnostico sorgente nel proof; 2 CDS separati dai 29 lint e 0 Kotlin/deprecation emessi nel canonico, che non ricompila main/unit. Build TEST fresco: 0 Kotlin/deprecation osservati. |
+| Coerenza con Planning | ESEGUITO per questa slice | Sei production/cinque test autorizzati, 264 hash esatti; copia del Planning approvato, senza modificarlo. |
+| Criteri di accettazione interi | NON ESEGUITO per questa slice | Gate locali non completano automaticamente i dodici CA. Integrazione Git/CI, ritest autenticato, READY/convergenza e PSS sono separati e non dedotti. |
+
+**Baseline TASK-004:** canonico JVM/Robolectric include `DefaultInventoryRepositoryTest` 217 PASS/1 SKIP, `DatabaseViewModelTest` 61 PASS, `ExcelViewModelTest` 52 PASS. Non sono test UI Compose.
+
+**Compose actual:** review `4e29195cd399a5f6a2f092ce08b161530b1798f6f61e13c293dab00e8d2c8161`, cinque metodi PASS su coppia corrente app `f3a902ee…` / test `d762cd28…`, una invocation sul solo AVD posseduto emulator-5580. Receipt immediata conserva `ownedGroupExistsAfter=true` e SIGTERM/SIGKILL del PG35707; il rilascio registrato 02:05:14 non dimostra assenza immediata. Osservazione terminale separata 02:06:14.940885 UTC: gruppo assente, nessun nuovo segnale. Source/pair pre/post nel risultato sono un booleano salvato dall'owner, non righe hash indipendenti; la review mantiene questa qualifica.
+
+**TEST e otto metadata actual:** build receipt `160b222f…`, metadata receipt `f6d87b56…`, review `3eadaaae2652ccdb001c6fe0135963afed41b3a86f67b82322578eca59d0bf9c`. APK diagnostico corrente `3ccf651ecd94db92afc4129b1eea825eeebb2fb32270f577d58ffc514835f538`, distinto dai precedenti artifact. Build/metadata exit0, gruppi figli assenti, nessun segnale/timeout, supervisor rilasciato 02:08:16.127816 UTC. Saved source map264 coincide con authority/public map; post-restore source/canonical pair attestati da booleani owner. Profilo autorizzato embedded, applicationId/version/debuggable/firma compatibili e ripristino `local.properties` sono controlli owner salvati; nessun protected/APK reread durante review/port. Governance Task/MASTER/Planning è ereditata dalla card immutabile e dal precedente controllo owner, non una verifica whole-governance del builder. Gli otto check includono uguaglianza di tutti gli otto valori DEX, build files, signer, SDK min31/target36 e toolchain dichiarata17; il dato JDK è una lettura owner successiva del contesto JBR, non attestazione storica del binario compilatore.
+
+**Incertezze e handoff:** nessun nuovo finding o modifica semantica nel port. Nessuna installazione di questo APK diagnostico, autenticazione, RPC live, READY, recovery/convergenza o performance è provata dai gate riportati. Git e CI exact-head restano del parent; stato FIX.
+
+
+### Esecuzione — checkpoint DEBUG, guard Release dopo review P2, 2026-10-03 UTC
+
+**Finding statico e fix minimo:** la review ha rilevato che `consumeCheckpointTraceIntent` consumava l'extra diagnostica e restituiva true anche in Release; un normale ACTION_SEND con EXTRA_STREAM e quel flag avrebbe quindi saltato `handleShareIntent` nel ramo onNewIntent. Aggiunto soltanto `if (!BuildConfig.DEBUG) return false` all'ingresso del helper, prima di leggere o rimuovere l'extra. In Release il chiamante prosegue ora alla gestione share/smoke ordinaria, senza attivare diagnostica; il guard già esistente dello smoke continua a rifiutare l'esecuzione DEBUG in Release.
+
+**Invarianza:** observer lifecycle, Application, tutti gli altri263 input pubblici e cinque file test/76 ID/assert/tail invariati. L'inversa della singola riga ricostruisce esattamente MainActivity Green-v1. Packet precedente immutabile; nuovo `checkpoint-green-preparation-v2` aggiorna source/request/card/environment e mantiene cinque selector/76 casi, budget600/270/90 e namespace ancora inutilizzato `checkpoint-five-classes-targeted-attempt01`. Planning780ded, MASTER e stato FIX invariati.
+
+**Verifica e limiti:** prova statica del ramo Release ESEGUITA; nessun test duplicativo della sola condizione aggiunto, secondo decisione parent. Compilazione/lint e GREEN76 richiesti restano NON ESEGUITI. Nessun runtime/SDK/socket/device/Git/protected IO; sorgenti in HOLD per review mirata e fresh GO primary.
+
+### Esecuzione — checkpoint DEBUG, fix lifecycle dopo RED ufficiale, 2026-10-03 UTC
+
+**RED reale:** ONE attempt02 ha compilato e prodotto XML ufficiale `5e0ca0316d327bb520950f41e26377a019d95fb8efcc0cbe0c8060b852999159`: **1 FAIL / 0 ERROR / 0 SKIP**, assert47 «Warm delivery must wait for the real resume callback». La sequenza reale Robolectric è create/start/resume → pause → newIntent; il fallimento precede resume. Receipt `2764982442646aecf7d842e6e856e90066d3dd72a1e6fd25e56c756d933ef076`, adjudication `f399ca9ad41405f5cfb37d97d7ad34df8ea4837be37a8066296e8d5d7d5c69df`, sorgenti264 invariati e gruppo17871 assente senza segnali; host rilasciato00:33:34.869498 UTC. L'XML non contiene il payload raw della traccia: BLOCKED_COLD è inferenza dal ramo sorgente, non log osservato. Nota suppressed sul looper preservata nell'XML originale; nessuna modifica al test per rimuoverla. Attempt01 resta compile failure separata, altre75 prove ancora non eseguite.
+
+**File modificato:** soltanto `MainActivity.kt` rispetto al freeze v3. onNewIntent considera warm la stessa Activity almeno STARTED, consuma subito l'extra e registra un observer temporaneo. La richiesta effettiva arriva soltanto su evento lifecycle ON_RESUME; l'observer si rimuove prima di chiamare il runner, accorpa duplicate pendenti e cancella su ON_STOP/ON_DESTROY. Non si assume RESUMED dentro onResume. Cold onCreate e stopped/background non armano la consegna warm; one-shot di processo, runner/scalar/auth/lease e gestione ordinaria share/smoke invariati. Nessuna nuova dipendenza/API pubblica.
+
+**Invarianza e preparazione GREEN:** delta e inversa ricostruiscono MainActivity v3 esatta; tutti gli altri263 input pubblici e i cinque file test (33 nuovi/76 totali) sono byte-identici. Quattro tail originali e assert/ID invariati. Packet esterno `android-checkpoint-one-trace/evidence/checkpoint-green-preparation` con source map, patch e request/card ONE per le cinque classi Application19/Activity7/reader28/ShopContext17/Task126guard5. Engine futuri esclusivamente SDK/OkHttp reali sintetici e loopback locale, controlli replay/equivalenza originali non rilassati. Nuovo namespace `checkpoint-five-classes-targeted-attempt01`, comando unico, massimo600s/minimo residuo270s/cleanup90s, stima180s; review e fresh GO primary obbligatori.
+
+**Check obbligatori:** coerenza Planning/inversa ESEGUITA staticamente; compilazione del fix, GREEN76, lint/warning, baseline TASK004 e gate canonici NON ESEGUITI. Nessun runtime/compiler/socket/client/device/RPC/Git/protected IO dall'executor. Planning780ded, MASTER e stato FIX invariati; sorgenti in HOLD, nessuna readiness o acceptance live dedotta.
+
+### Esecuzione — checkpoint DEBUG, setup Robolectric dopo compile failure, 2026-10-03 UTC
+
+**Evidenza reale precedente:** il primary ha eseguito ONE v2 attempt01, terminato in 56,38 s con `compileDebugUnitTestKotlin FAILED`, nessun XML/test selezionato eseguito e nessun assert lifecycle raggiunto. Receipt `049fffc5a7481200ec8878e8652e19e1274b6e97f891f05312a9d9aad8dfd087` e root-adjudication sono preservati in `android-checkpoint-one-trace/evidence/checkpoint-lifecycle-red-attempt01`. Il gruppo posseduto15292 risulta assente, senza segnali; host rilasciato alle00:23:56.908803 UTC. Esito **COMPILE_SETUP_FAILURE_NOT_FUNCTIONAL_RED**: non autorizza una correzione del P1 lifecycle.
+
+**File modificati:** soltanto dieci chiamate nuove nei test: una nel setup `CheckpointTraceActivityLifecycleTest` e nove in `MerchandiseControlApplicationTest`. `RuntimeEnvironment.getApplication<MerchandiseControlApplication>()` diventa `RuntimeEnvironment.getApplication() as MerchandiseControlApplication`, secondo la firma non generica riportata dal compiler. Delta esplicito di setup nei corpi/helper nuovi; nessuna aspettativa/assert/ID modificata e nessun altro errore ipotetico corretto. I due opt-in v2 restano presenti.
+
+**Azioni e invarianza:** verificata inversa esatta dei due file v2 e preservati i quattro tail originali completi. Tutti157 file produttivi, MainActivity con P1 intenzionale, gli altri input pubblici, 33 casi aggiunti/76 totali, MASTER e Planning780ded sono invariati. Packet v3 separato con diff di sole chiamate, source map, request/card/environment aggiornati; stesso unico selettore lifecycle, nuovo output `checkpoint-lifecycle-red-attempt02`. Packet e ricevute precedenti conservati.
+
+**Check obbligatori:** coerenza Planning/inversa ESEGUITA staticamente; compilazione del candidato v3, lint/warning, RED funzionale, altre75 prove e gate finali NON ESEGUITI. Nessun compiler/engine/socket/client/device/RPC/Git/protected IO eseguito dall'executor. Stato FIX e sorgenti in HOLD per review mirata e fresh GO del primary; nessun retry implicito.
+
+### Esecuzione — checkpoint DEBUG, opt-in locali richiesti dalla review statica, 2026-10-02 UTC
+
+**File modificati:** soltanto annotazione `@OptIn(SupabaseInternal::class)` sui due helper test `withWireServer` (nome qualificato) e `traceSdk`, più questa voce Execution. Il requisito deriva da Auth3.6 `AuthConfig.autoSetupPlatform`, annotato con marker di livello ERROR; nessun opt-in globale o cambio di dipendenza.
+
+**Azioni:** conservato il packet RED v1, aggiunte esclusivamente le due annotazioni, verificata l'inversa che ricostruisce esattamente entrambi i file precedenti. Corpi test, aspettative, 33 nuovi casi/76 totali, sei file produttivi e P1 lifecycle immutati. Nuovo packet esterno `android-checkpoint-one-trace/evidence/checkpoint-candidate-red-preparation-v2` con delta esatto, source map e card vincolati ai nuovi hash; ONE lifecycle resta l'unico selettore.
+
+**Check:** coerenza Planning e invarianza sorgenti/predicati ESEGUITI staticamente; build/lint/warning/runtime e RED funzionale NON ESEGUITI. La correzione rimuove il blocker identificato dalla review, non costituisce prova di compilazione. Planning780ded, MASTER e stato FIX invariati; nessun compiler/engine/socket/client/device/RPC/Git/protected IO. Source hold per review del delta e fresh GO primary.
+
+### Esecuzione — checkpoint DEBUG, preparazione candidato RED isolato, 2026-10-02 UTC
+
+**File modificati:** MainActivity, MerchandiseControlApplication, SupabaseShopSyncReadRemoteDataSource, Task126BusinessDataScopeRuntimeGuard, CatalogSyncStateTracker e ShopContext. Aggiunte nelle quattro classi test esistenti (Application, reader, runtime guard, ShopContext) e nuova CheckpointTraceActivityLifecycleTest. Nessun file del checkout delivery modificato.
+
+**Azioni eseguite:**
+1. Letti MASTER → Task143 → sorgenti/test, protocollo e skill Supabase. Adottata la proposta94f10ffd con accessor epoch e wiring opzionale; pin TEST esatto42a5d011 fornito dal parent, nessun valore configurazione letto. Client e transport SDK originali, body diagnostico one-shot e output scalare; nessuna API pubblica/schema/dependency nuova.
+2. Conservato intenzionalmente il P1 lifecycle: MainActivity è byte-identica al candidato revisionato e controlla ancora RESUMED dentro onNewIntent. Il primo test proposto usa callback Activity reali pause → newIntent → resume; nessuna correzione prima del RED ufficiale. Cold/background/destroy/repeated/share hanno casi separati.
+3. Estratti minimamente i predicati interni reali snapshot/budget per esercitarli senza bypass del target TEST: il runner chiama le stesse condizioni di auth/client/status/threshold, Room e idle scope usate dai test. Pre/post/current/epoch/quiet ed entity equality preservati. Snapshot Room reale a cinque entità e typed-watermark nullable; accessor epoch usa il refreshGeneration sincronizzato già esistente.
+4. Preparati **33 nuovi casi / 76 totali** nelle cinque classi pertinenti: Application19, Activity7, reader28, ShopContext17, Task126guard5. I corpi/helper originali delle quattro classi preesistenti restano byte-identici. Le prove engine future usano SDK/Auth/OkHttp reali sintetici e loopback bounded; i controlli normali devono mostrare replay realmente, altrimenti NOT_PROVEN/failure. Nessun client/socket/test avviato.
+5. Verificate staticamente le firme nei sorgenti cacheSDK3.6 e i tipi Room; nessuna compilazione dedotta. Packet esterno `android-checkpoint-one-trace/evidence/checkpoint-candidate-red-preparation` contiene patch, mappe hash, note e comando proposto ONE per il solo lifecycle RED. Non è GO né readiness.
+
+**Check obbligatori:**
+
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | ❌ NON ESEGUITO | Slot runtime non autorizzato in questa preparazione; compilazione futura del candidato |
+| Lint / warning | ❌ NON ESEGUITO | Static read-only delle firme, nessun claim compiler/lint |
+| Coerenza Planning | ✅ ESEGUITO | Worktree dedicato, sei file ammessi, sole aggiunte test e Execution; prefisso780ded invariato |
+| Criteri di accettazione | ❌ NON ESEGUITO | Candidato/test preparati; RED ufficiale, fix, review, engine/guard e gate finali pendenti |
+
+**Baseline TASK-004:** DefaultInventoryRepositoryTest, DatabaseViewModelTest ed ExcelViewModelTest immutati; regressione futura dopo fix/review. I test JVM/Robolectric preparati non sono acceptance su device autenticato.
+
+**Incertezze / Handoff:** nessun PASS dichiarato. Primo comando deve distinguere compilazione/setup dalla failure nell'assert lifecycle desiderato. Content-Type/charset e replay normali devono essere osservati nell'engine reale; nessun assert rilassato. Il pin TEST resta fail-closed: le prove sintetiche dirette dei predicati non provano dispatch autenticato completo né assenza di attività Auth HTTP privata. Root resta owner di runtime, Git, nuovo APK e finestra live. Stato FIX; nessun RPC/DDL/protected IO o accesso5556.
 
 ### Esecuzione R-A09/R-A10 — gate locali canonici, Compose e candidato TEST, 2026-10-02 UTC
 
@@ -683,6 +791,13 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Fix — 2026-10-03 UTC — chiusura dei due failure ONE76 e port invariato
+
+Il `finally` Task126 ora conserva il registry fino alla completion reale, anche con cleanup NonCancellable e cancellazione LAZY. È un fix del normale confine business oltre che del caller DEBUG. La fixture response-loss usa lo stesso SDK/session/origin con una normale RPC precedente completamente consumata, poi verifica il riuso del socket prima del fault dopo il body completo: nessun retry manuale/client o parametro motore nuovo. I 76 assert/ID rimangono; ONE76 attempt02 è PASS. Il precedente NOT_PROVEN e il primo 74/2 non sono riscritti come successi.
+
+Il port CommonRoot copia gli 11 leaf approvati senza alterare codice, test, build config o dipendenze. Il precedente “nessun ulteriore fix di produzione” appartiene alla slice source7fa; questo delta include il fix Task126. Review e risultati locali sono vincolati al nuovo source264, senza nuova audit globale o prova live. MASTER, Planning raw780ded e stato FIX restano preservati.
+
+
 ### R-A09/R-A10 — consolidamento documentale dei gate finali locali, 2026-10-02 UTC
 
 Nessun ulteriore fix di produzione o test in questa fase. Il freeze7fa resta identico attraverso il mirato442, il canonico1.077, i 5 Compose effettivi e il candidato TEST bd0; i dettagli verificabili sono nel [ledger locale](evidence/TASK-143/android-ra09-ra10-local-gates-ledger.json) e nella nuova Execution. Review c6c5, supplemento cleanup236bed e review candidato36bf approvano soltanto i rispettivi risultati locali. Il false immediato della serial absence e SIGTERM owner restano storici; la successiva osservazione salvata risolve la sola cleanup. Stato FIX, CI exact-SHA e accettazione autenticata/convergenza ancora da completare sotto il coordinamento root.
@@ -819,6 +934,15 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### CURRENT — 2026-10-03 UTC — checkpoint source264 portato, gate locali actual, Git/live pendenti
+
+Il checkout di consegna è CommonRoot sul branch `codex/android-checkpoint-trace-guard`, base `7e538936bf217fffea2ee2c1bbf548433f984c11`. L'header storico e il Planning descrivono il checkout dedicato di esecuzione (`codex/android-checkpoint-one-trace`, HEAD `814b137fb72db58dab99b0ea4971dc4ef50feb29`): sono mantenuti byte-identici per rispettare il Planning raw approvato. La copia del TASK `57a13619…` prima del port riflette quell'autorizzazione; questo handoff non introduce decisioni nuove. Dedicated source264/TASK/MASTER/HEAD restano immutati per la lane PSS.
+
+Source264 freeze `189d3e27…` e fingerprint map `4c40e81b…` coincidono nel checkout di consegna. Gate effettivi: 76/76 mirati; full JVM 1110 = 1103 PASS + 7 SKIP invariati su 73 XML; assemble/lint e androidTest compile; cinque Compose actual; nuovo TEST `3ccf651e…` e otto metadata verificati sulle ricevute. Dettagli, SHA integrali, conteggi per classe e limiti nel [ledger portabile](evidence/TASK-143/android-checkpoint-current-local-gates-ledger.json). Nessun APK/log/profilo/framework è copiato nel repository. Le qualifiche cleanup Compose, booleani source/pair owner, governance ereditata e JBR post-build sono conservate in Execution e ledger.
+
+Root gestisce i 13 percorsi espliciti (11 code/test + TASK + ledger), review finale del port, commit/push/PR, CI del vero SHA e CI main dopo normale integrazione. I conteggi locali non sono attribuiti alla futura CI. Nessun gate locale è rieseguito da questa lane e nessuna operazione Git/runtime/device/protected IO è compiuta durante il port. L'APK corrente non è installato da questa slice: auth, singola traccia live, checkpoint riuscito, READY, recovery/convergenza, PSS, dodici CA e DONE globale rimangono separati. TASK-143 resta FIX; nessun GO runtime è implicito.
+
 
 ### Handoff corrente R-A09/R-A10 — gate locali verificati, integrazione e live pendenti
 

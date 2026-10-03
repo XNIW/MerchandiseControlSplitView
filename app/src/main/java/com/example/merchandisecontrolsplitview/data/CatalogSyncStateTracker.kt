@@ -335,6 +335,12 @@ class CatalogSyncStateTracker(
         Log.i("CatalogCloudSync", "network_available=$available")
     }
 
+    internal fun captureDiagnosticQuietStamp(): Task126DiagnosticQuietStamp? =
+        businessDataScopeFlightGate.captureDiagnosticQuietStamp()
+
+    internal fun isDiagnosticQuietStampCurrent(stamp: Task126DiagnosticQuietStamp): Boolean =
+        businessDataScopeFlightGate.isDiagnosticQuietStampCurrent(stamp)
+
     fun allowsBusinessDataScope(ownerUserId: String, selectedShop: SelectedShop?): Boolean {
         return businessDataScopeFlightGate.allowsBusinessDataScope(ownerUserId, selectedShop)
     }

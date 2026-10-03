@@ -20,6 +20,9 @@ import android.os.Build
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
@@ -36,6 +39,8 @@ import androidx.appcompat.app.AppCompatDelegate
 import com.example.merchandisecontrolsplitview.ui.screens.Task126ReviewInteractionSmokeScreen
 
 class MainActivity : ComponentActivity() {
+
+    private var pendingCheckpointTraceObserver: LifecycleEventObserver? = null
 
     // ⬇️ “bus” per recapitare gli Uri alla UI
     object ShareBus {
@@ -157,6 +162,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        consumeCheckpointTraceIntent(intent, warmForeground = false)
 
         // Imposta il tema predefinito "light" SOLO al primo avvio
         val prefsBoot = getSharedPreferences("settings", MODE_PRIVATE)
@@ -204,8 +210,47 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         this.intent = intent
+        if (consumeCheckpointTraceIntent(
+                intent, warmForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            )) return
         handleShareIntent(intent)
         runTask087SandboxSmokeIfRequested(intent)
+    }
+
+    private fun consumeCheckpointTraceIntent(intent: Intent?, warmForeground: Boolean): Boolean {
+        if (!BuildConfig.DEBUG) return false
+        if (intent?.getBooleanExtra("task143_checkpoint_trace", false) != true) return false
+        intent.removeExtra("task143_checkpoint_trace")
+        if (BuildConfig.DEBUG) {
+            if (warmForeground) {
+                requestCheckpointTraceWhenResumed()
+            } else {
+                (application as MerchandiseControlApplication)
+                    .requestOneCheckpointTrace(warmForeground = false)
+            }
+        }
+        return true
+    }
+
+    private fun requestCheckpointTraceWhenResumed() {
+        if (pendingCheckpointTraceObserver != null) return
+        val observer = object : LifecycleEventObserver {
+            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                when (event) {
+                    Lifecycle.Event.ON_RESUME, Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
+                        source.lifecycle.removeObserver(this)
+                        pendingCheckpointTraceObserver = null
+                        if (event == Lifecycle.Event.ON_RESUME) {
+                            (application as MerchandiseControlApplication)
+                                .requestOneCheckpointTrace(warmForeground = true)
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+        }
+        pendingCheckpointTraceObserver = observer
+        lifecycle.addObserver(observer)
     }
 
     private fun runTask087SandboxSmokeIfRequested(intent: Intent?) {

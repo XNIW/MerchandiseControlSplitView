@@ -1,0 +1,1045 @@
+{
+  "schemaVersion": 1,
+  "status": "LOCAL_GATES_RECORDED_DELIVERY_GIT_AND_LIVE_PENDING",
+  "recordedUTC": "2026-10-03T02:31:14.730580+00:00",
+  "scope": "Byte-exact port of six production and five test leaves; public saved-evidence ledger only. No runtime executed during port.",
+  "source": {
+    "authoritySHA256": "189d3e27bde0d65ea07ca88665e4c3b581b23cc0a8b8fae1b45ae5210ceab272",
+    "publicInputsSHA256": "510caf670d54c34a723fdcd277ffdd2cb6ab3f424efbe3b2cc978c934eba7e2d",
+    "publicInputCount": 264,
+    "publicMapFingerprintSHA256": "4c40e81b1b6f384de424241f89fcbd91a9c26d703a3b8d44998d5a2e625539b2",
+    "fingerprintEncoding": "SHA256 of UTF-8 json.dumps(publicFiles,sort_keys=True,separators=(comma,colon))",
+    "testedHead": "814b137fb72db58dab99b0ea4971dc4ef50feb29",
+    "testedBranch": "codex/android-checkpoint-one-trace",
+    "deliveryBaseHead": "7e538936bf217fffea2ee2c1bbf548433f984c11",
+    "deliveryBranch": "codex/android-checkpoint-trace-guard",
+    "taskInheritedBeforeAppendSHA256": "57a136196c24c2381cb954992ee1077c78d7ac22e12c47b67284afc752af1e6c",
+    "masterSHA256": "1a04c0fbf968b8783e79deddb3619468f44cbcca38883fd5b8f3a379d5045c2b",
+    "planningPrefixSHA256": "780ded37c7d485b0d48baa4709dee888aed6c74a8010dace10c1cb87229f9e7f",
+    "planningQualification": "Approved dedicated Planning copied without new decisions; original header retained. Task appends only Execution/Fix/Handoff.",
+    "portedLeafHashes": {
+      "app/src/main/java/com/example/merchandisecontrolsplitview/MainActivity.kt": "d4bad75ee3615ada39c01647d00857b9e0896a07308fdf2b096494cd668d76e4",
+      "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "78c8d39d4cc6b095f2e809b59e69a312d55861582e5d5e44e2e801a4f3ed991a",
+      "app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogSyncStateTracker.kt": "c24a7daab00352b89497909f8aedfc392074b6df1b2198737377265af1622a4f",
+      "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt": "b14a757c6689b0d8c25fe6d371b739b603957773f2a2e451fa7e166d2bec80b8",
+      "app/src/main/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSource.kt": "95286cb67913743bec3376a190745f723255fc7bb2ca4b239930dc9bc813de0c",
+      "app/src/main/java/com/example/merchandisecontrolsplitview/data/Task126BusinessDataScopeRuntimeGuard.kt": "b7f53dd8f82caf66e100f4223388372d0d1d8ae7aea42eba682698aa76f2482b",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplicationTest.kt": "10467b5a732a8881758a27be3df5623ae170a5d6fa57845dad9443c9c32ed2ff",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopContextTest.kt": "94e9fc16dde3e4b8dfb3143bc3780918601fe0d2089acfb83af9847a5c768bad",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/data/SupabaseShopSyncReadRemoteDataSourceTest.kt": "e1a1d43f5333dbbdb189d53bbe6fd23956536e6982e6b6978cd249ed40219951",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/data/Task126BusinessDataScopeRuntimeGuardTest.kt": "d14e458dfb10633ecc89243759cd6a0dc27737dce7336b462ede5da422fb64d7",
+      "app/src/test/java/com/example/merchandisecontrolsplitview/CheckpointTraceActivityLifecycleTest.kt": "624f93985f3ffdd406a5be8f24f6fa92a3ee8f60bc97100ec44bff8bef9defda"
+    }
+  },
+  "receipts": {
+    "sourceFreeze": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-green-preparation-v3/source-freeze.json",
+      "sha256": "189d3e27bde0d65ea07ca88665e4c3b581b23cc0a8b8fae1b45ae5210ceab272"
+    },
+    "sourceReview": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-green-preparation-v3/independent-review/receipt.json",
+      "sha256": "2dc871dd21437e2b1e330807ad6b5695006108efe19430d74957e1c7f51368e5"
+    },
+    "publicInputs": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-post-green-conditional-preparation/current-public-inputs.json",
+      "sha256": "510caf670d54c34a723fdcd277ffdd2cb6ab3f424efbe3b2cc978c934eba7e2d"
+    },
+    "declarationInventory": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-post-green-conditional-preparation/jvm-declaration-inventory.json",
+      "sha256": "81cb3ae76c22a91dbf682d36b48180b76c939d8131f7ee6c2d566f98bb57afe6"
+    },
+    "targetedActual": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-five-classes-targeted-attempt02/execution-receipt.json",
+      "sha256": "a496a054e81f470a6bd88431ba16df1575ee8f2ea88017456526d957d08f54b2"
+    },
+    "targetedReview": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-five-classes-targeted-attempt02/independent-review/receipt.json",
+      "sha256": "dd4697b2aa4a99fb213b3044a2df490f1088f405cb26dfc775f8993b2577042b"
+    },
+    "canonicalActual": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-canonical-final-attempt01/execution-receipt.json",
+      "sha256": "fa7bd0c22ed23219e1145b3be99d39a6b26ffd2aac10e6c8bc360358b5434ff5"
+    },
+    "canonicalReview": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-canonical-final-attempt01/independent-review/receipt.json",
+      "sha256": "666dad53a5038bd5b47f8a544cc357fa4c0012d4e69f7ad76c4fe8804fc8df40"
+    },
+    "warningProof": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-canonical-final-attempt01/independent-warning-proof.json",
+      "sha256": "2302ea84221a43234453e0880161c70e386ce06c0d93100498b0ba6d3a754e18"
+    },
+    "instrumentationCompile": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-androidtest-compile-attempt01/execution-receipt.json",
+      "sha256": "08edb085f281d4af0a61c7aa753fff047ee5df2e9667de7b611c4590b0bf86e9"
+    },
+    "composeActual": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-compose-device-final-attempt01/result-receipt.json",
+      "sha256": "5a38902d003335425aeeb1efa5f20b53f77f13c11a3c9a6f81baf9164f3ecd2c"
+    },
+    "composeTerminalCleanup": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-compose-device-final-attempt01/postcleanup-owned-group-observation.json",
+      "sha256": "06dbc23662bb86e2ac2a6cfe2239cefc0784d25c6da96312eaf6f21df2e3800b"
+    },
+    "composeReview": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-compose-device-final-attempt01/independent-review/receipt.json",
+      "sha256": "4e29195cd399a5f6a2f092ce08b161530b1798f6f61e13c293dab00e8d2c8161"
+    },
+    "testBuild": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "test-builds/android/checkpoint-one-trace-final-attempt01/build-receipt.json",
+      "sha256": "160b222f46cfaabd65be4d86f9338bf5701a4089418902e2c0bd5fc59de7b9f8"
+    },
+    "eightMetadata": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "evidence/checkpoint-eight-checks-current264-actual/metadata-receipt.json",
+      "sha256": "f6d87b568354acec8484b851597d9047608b9b0c4cf479ffa5fde96518570f2f"
+    },
+    "testAndMetadataReview": {
+      "archiveRoot": "android-checkpoint-one-trace",
+      "relativePath": "test-builds/android/checkpoint-one-trace-final-attempt01/independent-review/receipt.json",
+      "sha256": "3eadaaae2652ccdb001c6fe0135963afed41b3a86f67b82322578eca59d0bf9c"
+    }
+  },
+  "targetedJVM": {
+    "tests": 76,
+    "pass": 76,
+    "fail": 0,
+    "error": 0,
+    "skip": 0,
+    "classes": [
+      {
+        "class": "com.example.merchandisecontrolsplitview.CheckpointTraceActivityLifecycleTest",
+        "tests": 7,
+        "pass": 7,
+        "fail": 0,
+        "error": 0,
+        "skip": 0,
+        "xmlSHA256": "fa9f9b6a99d0f6d07cc8a4f242acd4b8720b537ac66d41d3a9fea566f05e4ffa"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+        "tests": 19,
+        "pass": 19,
+        "fail": 0,
+        "error": 0,
+        "skip": 0,
+        "xmlSHA256": "b8913a22b43677a72ece80ed416988626ef763a8df12f69092c82a81404a726f"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ShopContextTest",
+        "tests": 17,
+        "pass": 17,
+        "fail": 0,
+        "error": 0,
+        "skip": 0,
+        "xmlSHA256": "6392e1a23918c3b7dd7e213753c20c3e162387e1cb3e1e6867fee97f45ec5e8f"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+        "tests": 28,
+        "pass": 28,
+        "fail": 0,
+        "error": 0,
+        "skip": 0,
+        "xmlSHA256": "1726e1840b7a69669e98d298edd16122b38351eb5d450e192b4a1bed6a217f2a"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+        "tests": 5,
+        "pass": 5,
+        "fail": 0,
+        "error": 0,
+        "skip": 0,
+        "xmlSHA256": "028c385781aebce20b06b90ea0d90d95714a35bb9f0b88062c127a8c55182a9d"
+      }
+    ],
+    "qualification": "Frozen v3 passing tests establish same accepted socket reuse after fully decoded ordinary marker, normal >=2 complete measured checkpoint bodies versus diagnostic ==1, warmup exclusion, trace-header scope and serialization equivalence. XML exports no raw socket IDs/bodies/trace values; report is based on passing unchanged assertions, not independent raw payload inspection.",
+    "history": "Attempt01 actual74PASS2FAIL and original fresh single-route response-loss NOT_PROVEN remain immutable; attempt02 positive result uses the separately frozen equal-condition previously successful pooled-connection fixture. Earlier compile failure and lifecycle RED remain separate."
+  },
+  "canonicalJVM": {
+    "variant": "testDebugUnitTest",
+    "xmlCount": 73,
+    "tests": 1110,
+    "pass": 1103,
+    "skip": 7,
+    "fail": 0,
+    "error": 0,
+    "retainedHistoricalCases": 1077,
+    "historicalStatusChanges": 0,
+    "historicalSkipRepresentationChanges": 0,
+    "newCases": 33,
+    "newPass": 33,
+    "idStatusFingerprintSHA256": "b60c86a6ec8094a5cc62f4abf3b588ee9db0e2002cf42971e1be0095d61d53a9",
+    "fingerprintEncoding": "SHA256 compact sorted-key JSON array of lexically sorted [class,name,status] rows",
+    "classes": [
+      {
+        "class": "com.example.merchandisecontrolsplitview.CheckpointTraceActivityLifecycleTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "31c2784e860f16d230257dcee9f3b36c47e1e530f466d7f6a422b13004caf91c"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest",
+        "tests": 19,
+        "pass": 19,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "e619283c1532d387e7f774ce9ccc8fe46f74d46e7ab5ab728d56a0afc9007097"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest",
+        "tests": 22,
+        "pass": 22,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "8e9ef91983a34721be3f8d1b5af2d290a5e963bcc8c40809e2b0a69b55006611"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest",
+        "tests": 31,
+        "pass": 31,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "8348f0ffa4bc94d17fa506c1fb6a76a6f29c01e8d49d183de43aa410a50c1f34"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "e64b37c8d42b15c60f9bed99b6491019146ad94c41034d152c7adcfa980b08d8"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+        "tests": 218,
+        "pass": 217,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "a7f1805da13b1b9343eef8cc3dbddfd1a6b18ba0c58040ed8c2cbff91c2eb2f9"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest",
+        "tests": 19,
+        "pass": 19,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "91dbd7641e1e7698a37c09e99ff7b132c6eb3356f936ac67facf61c279b7c12a"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "8a19b954f5e1b753aad5fe5be53e308d31198732dc8f4e2bf7fbd6c263229ff6"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "4308254a393b244103c4be196593e406847bbc724cdb647783f482d573b735c0"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest",
+        "tests": 15,
+        "pass": 15,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "f3dd4947745835ebaed5d8affaed482eb7abcb9d2a8b3aedc212545e78118e26"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ba1b5db5b7cdb60884bb25a8d9a5692741259759de597b16f311f11e860ac02b"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest",
+        "tests": 8,
+        "pass": 8,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "9ad594df4c2658cd5d9d404289839404e159731c86592299793bf28b93e7e17d"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest",
+        "tests": 5,
+        "pass": 5,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "bf26f577707397a2c0eabc29620cf91f5ffb229e78fdbf57c3578ba08e7f9dbd"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest",
+        "tests": 13,
+        "pass": 13,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "3a90ca95a59550307afb6df6d06cc99fbf57ce32a505e770ee39a4ca3a9c133d"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ShopContextTest",
+        "tests": 17,
+        "pass": 17,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "28aa884e593394dbe6f56017432576e308d60aef03c2ced65006f862187351a1"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "fe268e068ea6c46467d5341c317b7931f25dcf5daff5d2f190cd2eda7af04752"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+        "tests": 111,
+        "pass": 111,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "319ced13cf87259686154102b42b3e4caee44883b98337b356b1d810bfb13396"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "5cd15b76d604a02d95ced54e0ef4f50e305bcf9a17fed9c26f298e847668b75c"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest",
+        "tests": 5,
+        "pass": 5,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ca3498e293b17999cead0e78186bfdb47e68729678b620bf31e205f2b2126953"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
+        "tests": 1,
+        "pass": 1,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "f11e23e0f160d395b068420814cc2e37ace2b3f05514820d5a96db1dfc237593"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest",
+        "tests": 1,
+        "pass": 1,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "03baabec78e077c3a679d9b8f8fb03679b8fd91eb9189073776fb00ce3dba5ac"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest",
+        "tests": 26,
+        "pass": 26,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "eaf308aa594563dacaafe30cc4362cdc9d5156a034e04afa46361b2df8bbfe64"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+        "tests": 25,
+        "pass": 25,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "84be2e616b04ff79e29cea1a1e6a3ac72e81bb79c15b5d7303ce01381f7ab228"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "f4ebd709ce9359d614b029ebcc74aaf4894223cd44c030ecaaa972b318934b22"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest",
+        "tests": 28,
+        "pass": 28,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "c074086a3d2c390cc7cccdc5c1232d87414f6bfb9ee18a1c9d1d4bc60ae62c49"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "c5468141c7ac919ddd6347def4e4206a20f680ab5131897d79031f5b84f2e6bf"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SyncEventContractTest",
+        "tests": 4,
+        "pass": 4,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "880c07d4d4ea22937df57d4165fca0b85b27843699c02d9007750821508d3587"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "dc39fe448c9e3016174a88d268dff434662e0ae286426a8c1817cb04deb57af9"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest",
+        "tests": 2,
+        "pass": 2,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "35e99b94edaee8ef6c54ed0d2bb4f65d38e8ca45f8efaf4b4b94fb29239c41ee"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "2d33a24938d6b7715bb24ee4b5020970577765b2f2c4b62545869873db5a191f"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "cfd7165db41aacb7b1b53ae180e212866890c063dc119fcc07deebaa3a7a5449"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+        "tests": 5,
+        "pass": 5,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "f070aac40534fb0618de8f4e60bb39f466f093a297ba30ce480f081af5697ea5"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest",
+        "tests": 4,
+        "pass": 4,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "d246ba950170034eb37e23ca0ac13e9b98cc5144d0e519fc3b4ab4e6d3c2c43a"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest",
+        "tests": 4,
+        "pass": 4,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "58b29c6fc30e882af0cf6d00f3144e73521aa1593adff4f9b064ba4b0e55f641"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest",
+        "tests": 5,
+        "pass": 5,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "3d975293639148bb601b1802ac6f02a97142ec5f403a3f3f37b374f153c44d5d"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "7cb9570a04c023ac6f8b6d924187e31f6776cc6db025a231335c4bf9331c03c1"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task130PriceContractTest",
+        "tests": 4,
+        "pass": 4,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ebcff5eb91fe2c9049e3f8699eaa21d57735d9fd864794be8e29b8df74b02592"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest",
+        "tests": 20,
+        "pass": 20,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "9fe24ec7c1188c8612b25ff37503e8a4b4e772792a3df167fbf203c3c297ba63"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest",
+        "tests": 8,
+        "pass": 8,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "e64b2ffd0c4fe1089f1506ca073c114fbfadd75030c4f4a7300440b914aab854"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest",
+        "tests": 16,
+        "pass": 16,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "78e41038336a7d412a873f2874ddb169ad35b6fb06c79e24574a06eace5c425c"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "c701660278ec38233dd30514c66265568f7b3a188698d7b0b1391fec283d676f"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest",
+        "tests": 31,
+        "pass": 31,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "b29f135aaf1d2dff11161f84db2394121657b9e4a60169a48f744531f24277eb"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest",
+        "tests": 8,
+        "pass": 8,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ed622e75894317796b5e0998fe6ae51d450931c764ea44f377205fe42a99a2e8"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "9683b1c4e4ed55a6d0d26d61b194feb0fad3b412ef9cc9a275fd580d8f116458"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "40d1c7e4c938781f248e9aa057fb915f8bb7506a2824d4f9715bcf714751f006"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest",
+        "tests": 16,
+        "pass": 16,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "41ac364d0be64cb7240320cf54714315997b3e9cc36e1c6e467dbd0a06333cd3"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest",
+        "tests": 4,
+        "pass": 4,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "3c4fcd0ae3b06d550934e2bbc55ba3bfbb6bdff5fdda1a1bff0105c305eabb80"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "7ac8ebf9adc2b5abe6f5329f75cac1ea6050e364bda64ccb329f956898e4c8de"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "420063a057bae68ac02c2f90ce8cf7ff7bc654bae7f44438799b305d7cb5989f"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "f6994767e98e685d0eedbe71f53c8aa464aa846511d4559a57915238c4dc3998"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "131309196877ec7623d76e73cdcb7b7ee95cc477e363d659a42dc06faec50d3b"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest",
+        "tests": 3,
+        "pass": 3,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "468b269e5d7698a1facab9deb20512a0264f720af583a107d27e38563c991e44"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest",
+        "tests": 1,
+        "pass": 1,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "1db7f26b9c8eca6187b2e059d3dd1c4e228c3af7c0c30e4baa25fb83bf0d3d1b"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest",
+        "tests": 1,
+        "pass": 1,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ac24fc52da3c8f9835c69f7907c4857b84f27f42cbf4dc3e757f4579d5f2e9e8"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest",
+        "tests": 7,
+        "pass": 7,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "6a557a2d529fd7354fbb75147433141828613147b34f79bfa4bb298fbef04606"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest",
+        "tests": 16,
+        "pass": 16,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "249f8e55db392056652e401cf8bfa5ec2f17a283c5ca35708a48421f72ef6ded"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "2046c97bb437dda67c3762edff30c1b8ee7159c65d578cb283f52d2146dd6124"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest",
+        "tests": 2,
+        "pass": 2,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "1832179df63d241a936fd2b79fea16eaf85bb5f33a98f3da87bcd9c48f011bdc"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "89af1f9929b22eb871888077b7c896d810407430f88914496364a537b6a74ba6"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest",
+        "tests": 1,
+        "pass": 1,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "97e6b72e1bc6f1fece9c7a3b4f79c8dfa650a45e61d44fd0cefb744769bf3a1a"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "a70667e3ff3668b47a8181c89b010063dd180a798fbe3e789f4ba7e720aab817"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "4a909beb536afbbb6d84e7e6932ed55e83804a96c4967ecbcbd250fa6406e773"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelUtilsTest",
+        "tests": 48,
+        "pass": 48,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "8c8ca7cc296992053fba5d782fa487ac7f9cdcf54408b6862a7df788cacffa8b"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest",
+        "tests": 5,
+        "pass": 5,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "91c046675678287711515d963258de6c72ff18f5b95f71a80e96aa115f93b2dc"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest",
+        "tests": 8,
+        "pass": 8,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "b9062204a2d1681ffe0fb072e1525597d457ec76d92f5673a7fdad207b8dd624"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest",
+        "tests": 34,
+        "pass": 34,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "ae21569ab4dc0e8b673a9c38e13e1b73c97ceb47b0fd7a0876e83ff5672ab932"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "e976a2731071c61713b7138f9e16659dcec5793bab7f07fc861a8486314b8403"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest",
+        "tests": 6,
+        "pass": 6,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "4e605209a05c0f9ac0890047ba3b533ca6b947b6b6cf0afc333be4dc9be59016"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+        "tests": 1,
+        "pass": 0,
+        "skip": 1,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "7b8da86d5db27281bfed51591835cc0ce0880e03fe9929dadccf74db1e47f536"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest",
+        "tests": 31,
+        "pass": 31,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "4e7d62cd8864dba6c50641f0fb1a110e5e88cb6bff87a979cf79c689b1d08041"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest",
+        "tests": 61,
+        "pass": 61,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "46350cd6540a103818a42c6890ea793e99c908214941de20a7af5636d9ccb061"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
+        "tests": 52,
+        "pass": 52,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "d80730860e44c4793c77bb455244b8db516249c703205b2076e1696215ed27d7"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest",
+        "tests": 25,
+        "pass": 25,
+        "skip": 0,
+        "fail": 0,
+        "error": 0,
+        "xmlSHA256": "70d3cb538e37a45f28fd07f1e0cb992911a709860a550ef5913ccda378dd1578"
+      }
+    ],
+    "knownSkips": [
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+        "name": "wechat 004 real local Supabase fixture converges through production incremental apply",
+        "reason": "org.junit.AssumptionViolatedException: WECHAT_004_LOCAL_E2E_FIXTURE is required for the real local gate",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+        "name": "measure real repository queries and local editor writes at large scale",
+        "reason": "org.junit.AssumptionViolatedException: Opt-in large synthetic dataset benchmark",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+        "name": "live realtime insert is materialized into Room",
+        "reason": "org.junit.AssumptionViolatedException: SUPABASE realtime config assente",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+        "name": "runOrchestratedOracleLoopAndroidFirst",
+        "reason": "org.junit.AssumptionViolatedException: Oracle loop runs only via :app:excelRecognitionOracleLoop",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+        "name": "auditDriveSupplierCorpusReadOnly",
+        "reason": "org.junit.AssumptionViolatedException: Drive batch audit runs only via :app:excelRecognitionDriveBatchAudit",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+        "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+        "reason": "org.junit.AssumptionViolatedException: Oracle v2 runs only via :app:excelRecognitionOracleV2",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+        "name": "dumpShoppingHogarCurrentMapping",
+        "reason": "org.junit.AssumptionViolatedException: Fixture locale opzionale assente (test ignorato): [optional local fixture path redacted]",
+        "status": "SKIP"
+      }
+    ],
+    "qualification": "JVM/unit/Robolectric results; seven conditional skips preserved, no protected fixture read or conditional harness enabled during port."
+  },
+  "buildAndLint": {
+    "assembleDebug": "PASS",
+    "lintErrors": 0,
+    "lintWarnings": 29,
+    "baselineWarnings": 39,
+    "exactUnchangedLintInstances": 27,
+    "coordinateOnlyUseKtxChanges": 2,
+    "rawAddedInstances": 2,
+    "rawRemovedInstances": 12,
+    "absentDependencyAvailabilityNotices": 10,
+    "dependencyNoticeAbsenceIsNotAFix": true,
+    "warningQualification": "Two UseKtx location lines move255→260 and259→264, with column9 and all other recursive fields equal. These are recorded differences, not normalized away. Ten version-availability notices are absent; no dependency-update/fix inference is made. Do not claim all29 current diagnostics exactly match baseline.",
+    "CDSWarningsSeparate": 2,
+    "emittedCanonicalKotlinOrDeprecationDiagnostics": 0,
+    "canonicalCompilerQualification": "All main/unit Kotlin and KSP compile tasks are explicitly UP-TO-DATE in this command. Zero emitted compiler/deprecation diagnostics does not prove a fresh warning-free compile.",
+    "instrumentationCompile": "PASS; KSP/Kotlin/Java/package executed, not instrumentation runtime",
+    "testProfileCompile": "PASS; generated BuildConfig, KSP/Kotlin/Java/DEX/package executed with zero observed Kotlin/deprecation lines",
+    "canonicalExecution": {
+      "startUTC": "2026-10-03T01:33:37.279024+00:00",
+      "endUTC": "2026-10-03T01:36:19.329070+00:00",
+      "hostReleasedUTC": "2026-10-03T01:36:19.381588+00:00",
+      "reportedElapsedSeconds": 162.35638162499998,
+      "exitCode": 0,
+      "timedOut": false,
+      "ownedGroupID": 30452,
+      "signals": [],
+      "ownedGroupExistsAfter": false,
+      "retry": false
+    },
+    "instrumentationCompileExecution": {
+      "executionReceiptSHA256": "08edb085f281d4af0a61c7aa753fff047ee5df2e9667de7b611c4590b0bf86e9",
+      "logSHA256": "452597548ee00e6322f7f752093d74b83819c67a832db5575e03a0038e830f6a",
+      "mainCompileDebugKotlinLine12": "UP-TO-DATE",
+      "testApkOriginMtimeAfterSpawnBeforeTerminal": true,
+      "startUTC": "2026-10-03T01:38:52.599779+00:00",
+      "endUTC": "2026-10-03T01:39:19.152835+00:00",
+      "hostReleasedUTC": "2026-10-03T01:39:19.202705+00:00",
+      "reportedElapsedSeconds": 26.811055000000003,
+      "exitCode": 0,
+      "timedOut": false,
+      "ownedGroupID": 31250,
+      "signals": [],
+      "ownedGroupExistsAfter": false,
+      "retry": false,
+      "instrumentationTestsExecuted": false
+    }
+  },
+  "canonicalArtifacts": {
+    "appSHA256": "f3a902ee0f5d92ce29570f544dd24ffd7ba4002b2362b6b349328a2949991ad6",
+    "androidTestSHA256": "d762cd2841557b77ef1e50a351dab6298c0714c37d833717c5afa32a8e59aefb",
+    "qualification": "Canonical pair copied before TEST profile override; compile and runtime Compose gates distinguished."
+  },
+  "compose": {
+    "tests": 5,
+    "pass": 5,
+    "fail": 0,
+    "methods": [
+      "zeroResultFilterRowKeepsAllAvailable",
+      "expiredRequestShowsExplicitDiscardAction",
+      "rapidFilterChangesKeepCurrentSelectionAndAllAvailable",
+      "collapsedSummaryExpandsToSeparateOperationalAndPublicationActions",
+      "publicCardNeverPresentsOperationalImageAsThePublicVariant"
+    ],
+    "instrumentationCode": -1,
+    "invocations": 1,
+    "ownedSerial": "emulator-5580",
+    "cleanupChronology": {
+      "ownedEmulatorPG": 35707,
+      "immediateOwnedGroupExistsAfter": true,
+      "immediateSignals": [
+        "SIGTERM",
+        "SIGKILL"
+      ],
+      "ownedSerialAbsentImmediate": true,
+      "ownedSerialAbsentFinal": true,
+      "laterTerminalObservationUTC": "2026-10-03T02:06:14.940885+00:00",
+      "laterOwnedGroupExistsNow": false,
+      "laterOwnedGroupMembersIfAny": [],
+      "laterNewSignals": [],
+      "qualification": "Recorded release02:05:14 is not evidence of immediate emulator PG absence. Terminal absence is proved by the distinct saved observation02:06:14; original TRUE and signals remain preserved."
+    },
+    "sourcePairQualification": "Card/preparation hashes and actual install paths are independently checked. Current actual before/after source+APK identity is saved as an owner boolean, without explicit before/after digest rows in this result. This review does not independently rehash the source/APK pair or make an unqualified full-pair verification claim. A minimal public owner digest projection was requested; no private GO read is needed.",
+    "ownerSavedUnchangedAssertion": true,
+    "qualification": "Five actual instrumented tests on the current copied pair; no authenticated device5556 action or business E2E inferred."
+  },
+  "testArtifact": {
+    "sha256": "3ccf651ecd94db92afc4129b1eea825eeebb2fb32270f577d58ffc514835f538",
+    "relativePath": "test-builds/android/checkpoint-one-trace-final-attempt01/app-debug-test-complete-profile-checkpoint-one-trace.apk",
+    "archiveRoot": "android-checkpoint-one-trace",
+    "debugHookIncluded": true,
+    "buildExitCode": 0,
+    "allFiveChildGroupsAbsentNoSignalsNoTimeout": true,
+    "releasedBeforeDeadline": true,
+    "supervisorReleasedUTC": "2026-10-03T02:08:16.127816+00:00",
+    "savedSourceMapExactlyEqualsAuthority": true,
+    "savedPostRestoreSourceUnchangedBoolean": true,
+    "savedCanonicalArtifactsUnchangedBoolean": true,
+    "savedConfigurationChecks": {
+      "generatedAndEmbeddedAuthorizedConfigurationEquality": true,
+      "primaryConfigUnchangedBlindBoolean": true,
+      "privateProfileUnchangedBlindBoolean": true,
+      "worktreeLocalPropertiesRestoredBoolean": true,
+      "previousAPKPreservedBoolean": true,
+      "applicationIdVersionDebuggableSignerComparisonRecordedTrue": true,
+      "qualification": "These are saved authorized-owner checks; no protected values/configuration or APK binaries were independently reread in this review. Original local.properties absence is owner-reported, not separately observed by this reviewer."
+    },
+    "governanceQualification": "Builder actual source_map/source_unchanged checks cover source264 and HEAD814, including the saved post-restore source boolean. Task/master/Planning state is inherited from immutable card and prior Compose owner verification under the frozen single-writer scope; no builder-specific whole Task/master before/after digest check is claimed.",
+    "eightMetadata": {
+      "allEightOwnerVerified": true,
+      "checks": {
+        "baseline_source_is_exact_d7_archive": true,
+        "final_apk_and_264_source_freeze_pinned": true,
+        "same_application_id": true,
+        "same_build_files": true,
+        "same_debug_signer_verified": true,
+        "same_effective_public_test_buildconfig": true,
+        "same_sdk_and_toolchain": true,
+        "same_version_code_and_debuggable": true
+      },
+      "allEightDEXSavedProof": {
+        "allEightEffectiveValuesEqual": true,
+        "baselineCount": 8,
+        "candidateCount": 8,
+        "candidateMatchesSavedBaselineFingerprint": true,
+        "expectedCount": 8,
+        "keysetsExact": true,
+        "typesSame": true
+      },
+      "minSDK": 31,
+      "targetSDK": 36,
+      "declaredCompileSDK": 36,
+      "declaredJvmToolchain": 17,
+      "qualification": "Independent saved-evidence consistency review only, not repeated DEX/APK/parser checks or baseline audit. JDK metadata is a fresh post-build owner read of the public JBR context; recorded matching version/context is not historical compiler-binary attestation. No raw metadata stream is retained, so a specific JBR version is not independently reconstructed here."
+    },
+    "installed": false,
+    "installationQualification": "No installation of this diagnostic TEST artifact or auth/READY/checkpoint outcome is established by these receipts."
+  },
+  "remaining": {
+    "taskStatus": "FIX",
+    "commitPRAndExactHeadCI": "PENDING; root-owned",
+    "mainCI": "PENDING for future integration SHA",
+    "liveAuthenticatedCheckpoint": "PENDING",
+    "readyRecoveryConvergence": "NOT_PROVEN_BY_THIS_SLICE",
+    "performancePSS": "Separate owner-controlled work, not claimed by this ledger",
+    "allTwelveAcceptanceCriteriaAndDONE": "NOT_ESTABLISHED",
+    "runtimeGO": false
+  },
+  "portLimits": [
+    "No source semantic edits or new runtime",
+    "No protected config, token, profile, session, APK contents or fixture reads",
+    "No Git mutation/stage/commit/push/PR",
+    "Dedicated source/task/master/HEAD retained; delivery source264 verified byte-exact against original authority"
+  ]
+}

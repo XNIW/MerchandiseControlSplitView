@@ -13,6 +13,50 @@ import org.junit.Test
 class Task126BusinessDataScopeRuntimeGuardTest {
 
     @Test
+    fun `diagnostic quiet stamp only observes unchanged idle generation`() = runTest {
+        val tracker = trackerReady(ownerScope(OWNER_A, SHOP_A))
+        val stamp = requireNotNull(tracker.captureDiagnosticQuietStamp())
+        assertTrue(tracker.isDiagnosticQuietStampCurrent(stamp))
+        tracker.withBusinessDataScopeTransition {
+            assertTrue(tracker.captureDiagnosticQuietStamp() == null)
+            assertFalse(tracker.isDiagnosticQuietStampCurrent(stamp))
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(ownerScope(OWNER_B, SHOP_B)))
+        }
+        tracker.withBusinessDataScopeTransition {
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(ownerScope(OWNER_A, SHOP_A)))
+        }
+        assertFalse(tracker.isDiagnosticQuietStampCurrent(stamp))
+        assertTrue(tracker.captureDiagnosticQuietStamp() != null)
+        assertTrue(tracker.allowsBusinessDataScope(OWNER_A, selectedShop(SHOP_A)))
+    }
+
+    @Test
+    fun `diagnostic quiet stamp waits real registered flight finally boundary`() = runTest {
+        val tracker = trackerReady(ownerScope(OWNER_A, SHOP_A))
+        val stamp = requireNotNull(tracker.captureDiagnosticQuietStamp())
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val flight = backgroundScope.async {
+            runCatching {
+                tracker.withBusinessDataScopeFlight(OWNER_A, selectedShop(SHOP_A)) {
+                    try { entered.complete(Unit); kotlinx.coroutines.awaitCancellation() }
+                    finally { withContext(NonCancellable) { release.await() } }
+                }
+            }
+        }
+        entered.await()
+        assertTrue(tracker.captureDiagnosticQuietStamp() == null)
+        assertFalse(tracker.isDiagnosticQuietStampCurrent(stamp))
+        flight.cancel()
+        testScheduler.runCurrent()
+        assertTrue(tracker.captureDiagnosticQuietStamp() == null)
+        release.complete(Unit)
+        flight.join()
+        assertTrue(tracker.captureDiagnosticQuietStamp() != null)
+        assertTrue(tracker.isDiagnosticQuietStampCurrent(stamp))
+    }
+
+    @Test
     fun `transition waits non cooperative flight and rejects new outbound admission`() = runTest {
         val scopeA = ownerScope(OWNER_A, SHOP_A)
         val tracker = trackerReady(scopeA)
