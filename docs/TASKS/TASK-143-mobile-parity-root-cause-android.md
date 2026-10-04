@@ -941,6 +941,96 @@ Manifest persistito [`evidence/TASK-143/android-test-manifest.json`](evidence/TA
 
 **Baseline TASK-004 / limiti:** full JVM/Robolectric include DefaultInventoryRepositoryTest218 casi/217 PASS/1 SKIP, DatabaseViewModelTest61/61 e ExcelViewModelTest52/52; non sono test UI Compose/Espresso. I7 skip restano fixture Supabase locale assente, realtime live non configurato,3 harness Excel sospesi, workbook opzionale assente e benchmark grande opt-in, nessuno conteggiato come PASS. La suite non sostituisce gate autenticato. Legacy global PKCE mantiene migration SDK default una sola volta: nessuna rimozione globale senza provenance. Stato task FIX, non DONE; parent coordina runtime, misure prestazionali, CI e integrazione.
 
+### Esecuzione — 2026-10-04 05:27 UTC, integrazione e build/installazione finale
+
+**File modificati:**
+- Questo task, sola sezione Execution — ricevute finali e limiti dell'accettazione runtime; Planning, MASTER e stato FIX invariati.
+- [Rapporto aggregato](/Users/minxiang/.codex/worktrees/mobile-parity-root-cause/MERCHANDISECONTROL_MOBILE_PARITY_ROOT_CAUSE_RESULT.md) — integrazione, CI, preservazione, installazioni e matrice CA aggiornati; documento esterno al source congelato.
+
+**Azioni eseguite:**
+1. Autorizzazione umana del 4 ottobre03:44UTC verificata nella chat coordinatrice: push/PR/merge e successive build/sync/prestazioni. Normale [PR15](https://github.com/XNIW/MerchandiseControlSplitView/pull/15) dal branch `codex/android-native-final-integration`, head4637424e; merge04:12:01UTC `dbebcd0e6ee2bfb7d53276d1d13a39659d0f5e9b`, tree candidato/main f3015559 identico e ancestry verificata. CI head37175401666 e main37176307870 COMPLETED SUCCESS sul checkout esatto; [ricevuta main](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-final-integration-final-android-attempt01/remote-main-pr15/ci-adjudication.json), SHA a488aaac0ffdbf83299adab13eb9ea7d92ff81ef60b8d982c93eba6d1fdfe696.
+2. Gate finale locale una volta sul source da integrare: `test assembleDebug lint assembleDebugAndroidTest`, 74XML debug/1134ID =1127PASS/7SKIP/0FAIL o ERROR; stessi ID/stati/motivi skip su PR e main. Lint54 warning invariati, Kotlin0. Quattro nuovi androidTest compilati, non eseguiti. Nessuna suite immutata ripetuta dopo il PASS locale; CI automatiche distinte.
+3. Primary aggiornato con fast-forward/autostash riapplicato senza conflitti; backup originali13/13, stash esistenti e modifiche locali preservati. AGP9.4.1/KSP2.3.6/Kotlin2.3.21/Gradle9.6.0 e selector preesistente conservati; profilo privato invariato. [Ricevuta primary](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-primary-preservation/android-main-update.json), SHA7a169e1e8e08e0fdecb82e06592adacc84e49e0b47c0297683897b979a9fc6c9.
+4. Build TEST primaria finale04:34:00→04:37:13UTC PASS con toolchain utente, assembleDebug offline e flag serializzazione canonici. APK20fe14782caefc204616a3a1a9408f3a3418a7d70fee9a4663cfbb6fce0c41a8, otto campi/tipi DEX byte-equivalenti al profilo autorizzato8a, stessa firma/package/versione/debuggable. [Ricevuta build](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-integrated-builds-20261004/android-final-attempt01/receipt.json), SHAe343a9fea293c2ffab0d14a73ba91260d2a28dc6cc47b76dc523b47a420291c5; soli processi propri rilasciati, nessuna scrittura delle configurazioni private.
+5. Installazione normale `adb install -r` SUCCESS su emulator5554/MediumPhoneAPI35; SHA installata20fe esatta. Prima/dopo passivi: Room22, quick_checkOK, tutte19tabelle con conteggi/digest tipizzati/ordine colonne identici. Products19744/categories51/suppliers79/prices41206/History83/outbox0; journal1 e manifest61598 sono fatti fisici, non prova READY/stallo. [Ricevuta post-install](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-integrated-builds-20261004/android-post-install-data-readonly.json), SHAd9f6b39c9591ee46c4754b43f8f5e437c2b5788abaae11f2d6a789d59fa9497b.
+6. Input CUA Inventory fallisce `noWindowsAvailable` prima/dopo AXRaise supportato; screenshot Options/account connesso precede il20fe. DeviceHub iOS restituisce `timeoutReached`. Nessun nuovo reopen/recovery/sync concluso o PSS autenticato; chiesto all'utente il foreground delle finestre, risposta pendente. Sampler PSS c6fa/card9a01 e qualifier CSV04 9ebc hanno review statica; zero nuove misure, wrapper official ancora in review separata. CSV03cap3/3 invariato; fixture CSV04 isolata signed-out distinta dal runtime autenticato.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+| --- | --- | --- |
+| Build Gradle | ✅ ESEGUITO | Full locale10e2, CI head/main e build primaria TESTe343 PASS, APK installato esatto. |
+| Lint | ✅ ESEGUITO | 54warning/0errori, firme invariate su source canonico finale e CI. |
+| Warning nuovi | ✅ ESEGUITO | Zero nuovi warning Kotlin/deprecation; lint invariato. |
+| Coerenza con planning | ✅ ESEGUITO | Source congelato10percorsi con review indipendente; UI/diagnostica e guard scope preservati. |
+| Criteri di accettazione | ⚠️ NON ESEGUIBILE integralmente | Stati individuali sotto; TASK resta FIX, nessuna accettazione live dalla CI/installazione. |
+
+**Baseline regressione TASK-004:**
+- Eseguiti full1134 e test JVM/Robolectric Repository217PASS+1SKIP, DatabaseVM61PASS, ExcelVM52PASS, recovery116PASS, coordinator39PASS e Application25PASS.
+- Test aggiunti/aggiornati nel batch source approvato e già tracciati nelle voci precedenti; nessun test nuovo per questo append documentale.
+- Limiti: sette skip opt-in storici, quattro nuovi instrumentation soltanto compilati. Non sono descritti come test UI Compose/Espresso eseguiti.
+
+**Criteri individuali, stato corrente:**
+| Criterio | Stato | Evidenza / limite |
+| --- | --- | --- |
+| CA-01 | ESEGUITO Android | Preservazione primary/19tabelle verificata; la retention iOS completa resta distinta e aperta. |
+| CA-02 | ESEGUITO locale | F01/storage/intent e regressioni deterministiche; live finale in CA07. |
+| CA-03 | ESEGUITO locale; NON ESEGUIBILE nuovo smoke | UI storica e gate locali preservati; input corrente indisponibile. |
+| CA-04 | ESEGUITO locale; NON ESEGUITO live finale | Contratto staging storico12/12 rollback; ACK perso dalle app autentiche nuove non provato. |
+| CA-05 | ESEGUITO | Implementazione, integrazione, build/installazione e acceptance separati. |
+| CA-06 | ESEGUITO matrice | NOT_TESTED/EXTERNAL_DEPENDENCY rimangono espliciti per runtime/hardware. |
+| CA-07 | NON ESEGUIBILE integralmente ora | Recovery/reopen/delta/noWork, stesso scope e convergenza canonica bidirezionale mancano; input CUA fallisce. |
+| CA-08 | NON ESEGUITO integralmente | Gate locali import/export/immagini verificati; workbook/lifecycle immagine reale/hardware ancora aperti; Excel harness sospeso. |
+| CA-09 | NON ESEGUIBILE finale ora | UI/observer/dataset attuali non qualificati; zero nuovi campioni/PSS/target3s accettati. |
+| CA-10 | ESEGUITO gate; NON ESEGUIBILE nuovo UI | RED/GREEN/full/build/lint/CI verificati; instrumentation compile non equivale a execution. |
+| CA-11 | ESEGUITO | Review/fix/re-review, push/PR/merge normale e CI esatta verdi. |
+| CA-12 | ESEGUITO tracciamento; NON ESEGUITO chiusura | Report corrente; TASK143/144 FIX e mandato globale aperto. |
+
+**Incertezze:**
+- Sessione/scopo/READY dopo installazione non verificati dalla UI; journal1 non identifica una causa runtime.
+- Baseline PSS8a non misurata prima dell'upgrade; non attribuire confronti autenticati al vecchio PSS signed-out.
+
+**Handoff notes:**
+- N solo writer/input nativi; coordinator C conserva il ledger condiviso e W resta senza input nativo concorrente.
+- Il solo prerequisito UI richiesto è riportare in foreground le finestre; nessun logout/reset, bypass strumenti o ripetizione di test immutati. Recuperare prima sessione/recovery terminale e convergenza per record, quindi misure qualificate.
+- Append documentale successivo al merge PR15, non una nuova modifica di codice né una nuova CI/source accettata.
+
+### Esecuzione — 2026-10-04 06:05 UTC, quattro test Compose su AVD isolato
+
+**File modificati:**
+- `app/src/androidTest/java/com/example/merchandisecontrolsplitview/ui/screens/CrossPlatformReliabilityComposeDeviceTest.kt` — corregge soltanto il setup del test di retry: apertura reale dell'editor nel ViewModel e prova dei due ingressi nel repository; nessuna modifica di produzione.
+- Questo task, sola Execution — RED/GREEN, build/lint e limiti; Planning/MASTER/FIX invariati.
+
+**Azioni eseguite:**
+1. Individuati gli APK finali già compilati: app keyless212315798d4b2b74a023bd024f60a32d2c20fb640611ddb8d0394095f70e41af e testfdcd767f2fac6172135bc4299b1e6a77eedbe599137d8bba1e3cdeed99abab6d, firma b4afd047 identica. Usato solo il Codex_Mobile_Parity_Final_API_35/serial5582, separato dal5554autenticato.
+2. Primo bootstrap preflight fermato prima di install/test: riferimento APK96b storico, superato dal baseline7c4a conservato nel successivo runtime-memory-slot01. Ricevute storiche più recenti hash-verificate; nessuna classe eseguita in questa preflight. Processi propri chiusi e ritardo ADB nell'assenza serial risolto con letture passive, nessun restart server/reset.
+3. RED qualificato05:50:19→05:51:09UTC: actualAPK7c e database reale isolato Room22/quick_checkOK/sette tabelle vuote prima e dopo, install keyless/test e una sola classe4. **3PASS/1FAIL/0SKIP**, timeout5000 alla chiusura dopo retry. [Receipt RED](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-final-instrumentation-20261004/isolated-compose-attempt02/receipt.json), SHA331547b091d1e6ab16ee3056111e098d79d83254a7202f574d1e6c9d3ee727fb, log originale conservato.
+4. Review causale indipendente conferma fixture incompleta: il dialog era montato senza `openProductEditor`; `saveProductFromEditor` rifiutava il target nullo prima del repository su entrambi click. Non era una regressione dell'app né un errore auth/READY. Fix minimo nel solo metodo: apertura reale su idle prima degli input, targetassert, hook AtomicInteger che fallisce solo al primo ingresso e assert1/2 per fault/retry; attesa5000 per l'errore Room asincrono. Tutti gli assert precedenti, il timeout5000 di chiusura e i tre altri test byte-invariati; nessuna nuova dipendenza o bypass guard. Source test62e3afa9f4dde86f7929ad8a3433a9cf2a2603c37eb96f2fd3860ef882124594, re-review APPROVED_STATIC.
+5. Build/lint/assembleDebugAndroidTest06:00:01→06:00:35UTC PASS. Primo launcher build aveva omesso SDK env e si era fermato prima del compiler; corretto solo ANDROID_HOME verso SDK esistente, senza creare local.properties. [Receipt build finale](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-final-instrumentation-20261004/fixture-build-attempt02/receipt.json), SHAd60a1a18c7be80c6859d8a8a75deb82ce5b8a47b49e16f440f8177b7e4573d05. Lint XML3d7982b3 byte-identico/54warning0errori, Kotlin0. App212byte-identico; nuovo testAPK57df42a1a079f74f20a636e8cf83f6168842bbf4dc4cde40f17ae31da16d0e84 e stessa firma.
+6. GREEN qualificato06:02:30→06:03:13UTC, una sola nuova invocazione dopo i nuovi byte fixture: **4PASS/0FAIL/0SKIP**, quattro ID esatti con terminal status0, fault repository1 e retry2, rollback iniziale/draft/focus/singola history e chiusura verificati. [Receipt GREEN](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/native-final-instrumentation-20261004/isolated-compose-green-attempt01/receipt.json), SHA471d727e33bc8aef17f0b00292604b78f53bc0d6f317d2b928a02d91814ec05d. Room22/sette conteggi vuoti prima/dopo, gruppi propri e serial5582 assenti, APK/app/config AVD preservati. Nessun input/reset/logout/install sui target5554/459.
+7. Branch dedicato `codex/android-compose-retry-fixture` da main dbeb; normale integrazione del solo test e registro in preparazione, review/CI esatta prima del merge. La source di produzione e l'APK autenticato20fe restano invariati; nessun nuovo confronto performance o accettazione sync.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+| --- | --- | --- |
+| Build Gradle | ✅ ESEGUITO | assembleDebug +assembleDebugAndroidTest finale PASS. |
+| Lint | ✅ ESEGUITO |54warning/0errori, XML byte-identico al precedente gate. |
+| Warning nuovi | ✅ ESEGUITO |Zero warning Kotlin/deprecation nuovi. |
+| Coerenza con planning | ✅ ESEGUITO |CA10 runtime dei4test esistenti; solo fixture minima, review indipendente. |
+| Criteri di accettazione | ⚠️ NON ESEGUIBILE integralmente |CA10:4Compose ora ESEGUITI; CA07/09 e sessione/retention iOS ancora aperti per UI CUA. |
+
+**Baseline regressione TASK-004:**
+- Prodotto e test JVM byte-invariati; ultimo full1134=1127PASS7SKIP rimane applicabile alle medesime logiche. Non ripetuto senza delta pertinente.
+- Test modificato: solo fixture Compose di retry;4strumentati eseguiti sul nuovo testAPK. Sono test UI separati dalla baseline JVM/Robolectric.
+- Limiti: i4PASS isolati keyless non certificano app autenticata, recovery terminale, convergenza bidirezionale o prestazioni.
+
+**Incertezze:**
+- Nessuna sul difetto fixture corretto e sui quattro esiti salvati.
+- CUA native conserva noWindowsAvailable/timeoutReached; foreground richiesto all'utente e ancora pendente.
+
+**Handoff notes:**
+- CA01/02/03/04/05/06/08/11/12 conservano i limiti della voce05:27 e della matrice del report; CA10 aggiorna soltanto i quattro instrumentation da compilati a eseguiti.
+- Non ripetere RED/GREEN immutati né indebolire guard/timeout. Chiudere nuova CI/merge normalmente; poi runtime autenticato ancora da verificare. TASK resta FIX.
+
 ## Review
 
 Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
