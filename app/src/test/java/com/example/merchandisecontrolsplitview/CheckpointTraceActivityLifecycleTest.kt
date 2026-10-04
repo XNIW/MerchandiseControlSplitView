@@ -7,6 +7,9 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
@@ -115,6 +118,58 @@ class CheckpointTraceActivityLifecycleTest {
             assertTrue(traces().isEmpty())
             assertFalse(activity.get().intent.hasExtra(Intent.EXTRA_STREAM))
         } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun readinessIntentNeverConsumesOrArmsTraceAndLaterTriggerStillRunsOnce() {
+        val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val activity = Robolectric.buildActivity(MainActivity::class.java, ordinaryIntent())
+            .create().start().resume()
+        try {
+            val mixed = ordinaryIntent().putExtra("task143_checkpoint_readiness", true).putExtra(EXTRA, true)
+            activity.pause().newIntent(mixed).resume()
+            assertFalse(mixed.hasExtra("task143_checkpoint_readiness"))
+            assertFalse(mixed.hasExtra(EXTRA))
+            assertTrue(traces().isEmpty())
+            val consumed = app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }
+            assertFalse(consumed.getBoolean(app))
+            val observer = activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
+                .apply { isAccessible = true }
+            assertNull(observer.get(activity.get()))
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").single().msg
+                .contains("outcome=BLOCKED_CONFLICT"))
+            activity.pause().newIntent(ordinaryIntent().putExtra("task143_checkpoint_readiness", true)).resume()
+            assertTrue(traces().isEmpty())
+            assertFalse(consumed.getBoolean(app))
+            assertNull(observer.get(activity.get()))
+            activity.pause().newIntent(diagnosticIntent()).resume()
+            activity.pause().newIntent(diagnosticIntent()).resume()
+            assertEquals(1, traces().count { it.contains("outcome=BLOCKED_TEST_TARGET") })
+            assertEquals(1, traces().count { it.contains("outcome=BLOCKED_USED") })
+            assertTrue(traces().all { it.contains("localRpcAttemptCount=0") })
+        } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun readinessSamplesActivityWhenQueryRunsAndDoesNotWaitForResume() {
+        val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val activity = Robolectric.buildActivity(MainActivity::class.java, ordinaryIntent()).create().start().resume()
+        val queued = StandardTestDispatcher()
+        Dispatchers.setMain(queued)
+        try {
+            activity.pause().newIntent(ordinaryIntent().putExtra("task143_checkpoint_readiness", true))
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").isEmpty())
+            activity.resume()
+            queued.scheduler.runCurrent()
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").single().msg.contains("activity_resumed=true"))
+            ShadowLog.clear()
+            activity.pause().newIntent(ordinaryIntent().putExtra("task143_checkpoint_readiness", true)).stop()
+            queued.scheduler.runCurrent()
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").single().msg.contains("activity_resumed=false"))
+            assertFalse(app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
+            assertTrue(traces().isEmpty())
+        } finally {
+            Dispatchers.setMain(dispatcherRule.dispatcher)
+            activity.destroy()
+        }
     }
 
     private fun ordinaryIntent() = Intent(Intent.ACTION_MAIN).putExtra("task126_ui_smoke_kind", "checkpoint-lifecycle")

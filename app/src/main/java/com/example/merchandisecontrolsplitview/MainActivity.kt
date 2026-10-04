@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
@@ -162,7 +163,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        consumeCheckpointTraceIntent(intent, warmForeground = false)
+        if (!consumeCheckpointReadinessIntent(intent, warmForeground = false)) {
+            consumeCheckpointTraceIntent(intent, warmForeground = false)
+        }
 
         // Imposta il tema predefinito "light" SOLO al primo avvio
         val prefsBoot = getSharedPreferences("settings", MODE_PRIVATE)
@@ -210,11 +213,33 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         this.intent = intent
+        if (consumeCheckpointReadinessIntent(
+                intent, warmForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            )) return
         if (consumeCheckpointTraceIntent(
                 intent, warmForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             )) return
         handleShareIntent(intent)
         runTask087SandboxSmokeIfRequested(intent)
+    }
+
+    private fun consumeCheckpointReadinessIntent(intent: Intent?, warmForeground: Boolean): Boolean {
+        if (!BuildConfig.DEBUG ||
+            intent?.getBooleanExtra("task143_checkpoint_readiness", false) != true) return false
+        val conflictingTrace = intent.getBooleanExtra("task143_checkpoint_trace", false)
+        intent.removeExtra("task143_checkpoint_readiness")
+        // Mixed extras never accidentally consume or arm the diagnostic attempt.
+        if (conflictingTrace) intent.removeExtra("task143_checkpoint_trace")
+        // Dispatch the query after this callback; sample actual state, never wait for or request resume.
+        // Own bounded local-query coroutine; no auth/recovery job or lifecycle observer is armed.
+        lifecycleScope.launch(Dispatchers.Main) {
+            (application as MerchandiseControlApplication).reportCheckpointReadiness(
+                warmForeground,
+                isActivityResumed = { lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) },
+                isTraceObserverIdle = { pendingCheckpointTraceObserver == null },
+                conflictingTrace = conflictingTrace)
+        }
+        return true
     }
 
     private fun consumeCheckpointTraceIntent(intent: Intent?, warmForeground: Boolean): Boolean {

@@ -2,7 +2,10 @@ package com.example.merchandisecontrolsplitview.data
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -18,6 +21,206 @@ import org.robolectric.annotation.Config
 @Config(sdk = [33])
 @OptIn(ExperimentalCoroutinesApi::class)
 class CatalogAutoSyncCoordinatorTest {
+
+    @Test
+    fun `efficiency busy local push retries do not request device status`() = runTest {
+        assertBusyCycleAvoidsDeviceRequests("catalog_push")
+    }
+
+    @Test
+    fun `efficiency busy bootstrap retries do not request device status`() = runTest {
+        assertBusyCycleAvoidsDeviceRequests("catalog_bootstrap")
+    }
+
+    @Test
+    fun `efficiency busy event drain retries do not request device status`() = runTest {
+        assertBusyCycleAvoidsDeviceRequests("sync_events_drain")
+    }
+
+    @Test
+    fun `efficiency concurrent signals reserve the flight before slow device authorization`() = runTest {
+        val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+        val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+        val statusStarted = CompletableDeferred<Unit>()
+        val releaseStatus = CompletableDeferred<Unit>()
+        val deviceRemote = FakeShopDeviceRegistrationRemote072("active").apply {
+            onStatusSuspendingCall = {
+                statusStarted.complete(Unit)
+                releaseStatus.await()
+            }
+        }
+        val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote)
+        val push = launch { coordinator.runPushCycle("local_catalog_commit") }
+        statusStarted.await()
+        val bootstrap = launch { coordinator.runBootstrapCycle("foreground") }
+        val drain = launch { coordinator.runSyncEventDrainCycle("foreground") }
+        runCurrent()
+        val deviceCallsWhileSuspended = deviceRemote.statusCalls
+        val flightReserved = !tracker.tryBegin(CatalogSyncFlightOwner.MANUAL)
+        if (!flightReserved) tracker.finish(CatalogSyncFlightOwner.MANUAL)
+        val bootstrapCoalesced = bootstrap.isCompleted
+        val drainCoalesced = drain.isCompleted
+        val remoteCallsWhileSuspended = repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls
+        releaseStatus.complete(Unit)
+        push.join()
+        bootstrap.join()
+        drain.join()
+        assertEquals(1, deviceCallsWhileSuspended)
+        assertTrue("flight must be reserved while authorization is suspended", flightReserved)
+        assertTrue("busy bootstrap must return without waiting for authorization", bootstrapCoalesced)
+        assertTrue("busy drain must return without waiting for authorization", drainCoalesced)
+        assertEquals(0, remoteCallsWhileSuspended)
+        assertEquals(1, repository.quickWithEventsCalls)
+        assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+        tracker.finish(CatalogSyncFlightOwner.MANUAL)
+        coordinator.shutdown()
+    }
+
+    @Test
+    fun `efficiency device denial releases every reserved cycle without remote work`() = runTest {
+        for (cycle in listOf("catalog_push", "catalog_bootstrap", "sync_events_drain")) {
+            val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+            val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+            val deviceRemote = FakeShopDeviceRegistrationRemote072("revoked")
+            val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote)
+
+            runEfficiencyCycle(coordinator, cycle)
+
+            assertEquals(1, deviceRemote.statusCalls)
+            assertEquals(0, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+            assertTrue("denial must release $cycle", tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+            tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            coordinator.shutdown()
+        }
+    }
+
+    @Test
+    fun `efficiency cancellation during device check releases every reserved cycle`() = runTest {
+        for (cycle in listOf("catalog_push", "catalog_bootstrap", "sync_events_drain")) {
+            val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+            val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+            val statusStarted = CompletableDeferred<Unit>()
+            val deviceRemote = FakeShopDeviceRegistrationRemote072("active").apply {
+                onStatusSuspendingCall = {
+                    statusStarted.complete(Unit)
+                    CompletableDeferred<Unit>().await()
+                }
+            }
+            val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote)
+            val job = launch { runEfficiencyCycle(coordinator, cycle) }
+            statusStarted.await()
+
+            val flightReserved = !tracker.tryBegin(CatalogSyncFlightOwner.MANUAL)
+            if (!flightReserved) tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            job.cancel()
+            job.join()
+
+            assertTrue("authorization must own $cycle", flightReserved)
+            assertEquals(0, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+            assertTrue("cancellation must release $cycle", tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+            tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            coordinator.shutdown()
+        }
+    }
+
+    @Test
+    fun `efficiency device check exception releases every reserved cycle`() = runTest {
+        for (cycle in listOf("catalog_push", "catalog_bootstrap", "sync_events_drain")) {
+            val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+            val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+            val deviceRemote = FakeShopDeviceRegistrationRemote072("active").apply {
+                onStatusCall = { error("synthetic_status_failure") }
+            }
+            val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote)
+
+            assertTrue(runCatching { runEfficiencyCycle(coordinator, cycle) }.isFailure)
+
+            assertEquals(0, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+            assertTrue("status exception must release $cycle", tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+            tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            coordinator.shutdown()
+        }
+    }
+
+    @Test
+    fun `efficiency logout account or shop change during device check fences every reserved cycle`() = runTest {
+        for (scopeChange in listOf("logout", "account", "shop")) {
+            for (cycle in listOf("catalog_push", "catalog_bootstrap", "sync_events_drain")) {
+                val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+                val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+                val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(USER_ID, "user@example.test"))
+                var shop = selectedShop(SHOP_ID)
+                val deviceRemote = FakeShopDeviceRegistrationRemote072("active").apply {
+                    onStatusCall = {
+                        when (scopeChange) {
+                            "logout" -> auth.value = AuthState.SignedOut
+                            "account" -> auth.value = AuthState.SignedIn("synthetic-other-owner", "other@example.test")
+                            "shop" -> shop = selectedShop("synthetic-other-shop")
+                        }
+                    }
+                }
+                val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote, auth) { shop }
+
+                runEfficiencyCycle(coordinator, cycle)
+
+                assertEquals(1, deviceRemote.statusCalls)
+                assertEquals("$scopeChange must fence $cycle", 0, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+                assertTrue("$scopeChange must release $cycle", tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+                tracker.finish(CatalogSyncFlightOwner.MANUAL)
+                coordinator.shutdown()
+            }
+        }
+    }
+
+    private suspend fun TestScope.assertBusyCycleAvoidsDeviceRequests(cycle: String) {
+        val repository = FakeCatalogAutoSyncRepository043().apply { shouldBootstrap = false }
+        val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+        val deviceRemote = FakeShopDeviceRegistrationRemote072("active")
+        val coordinator = efficiencyCoordinator(repository, tracker, deviceRemote)
+        assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+
+        runEfficiencyCycle(coordinator, cycle)
+        advanceTimeBy(2_001L)
+        runCurrent()
+        println("sync_efficiency scenario=$cycle heldFlightMs=2001 deviceStatusCallsWhileBusy=${deviceRemote.statusCalls}")
+        assertEquals("busy $cycle must not make authorization requests", 0, deviceRemote.statusCalls)
+        assertEquals(0, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+
+        tracker.finish(CatalogSyncFlightOwner.MANUAL)
+        advanceTimeBy(1_001L)
+        runCurrent()
+        assertEquals("deferred $cycle must check device status when admitted", 1, deviceRemote.statusCalls)
+        assertEquals(1, repository.quickWithEventsCalls + repository.bootstrapCalls + repository.drainCalls)
+        coordinator.shutdown()
+    }
+
+    private fun TestScope.efficiencyCoordinator(
+        repository: FakeCatalogAutoSyncRepository043,
+        tracker: CatalogSyncStateTracker,
+        deviceRemote: FakeShopDeviceRegistrationRemote072,
+        auth: MutableStateFlow<AuthState> = MutableStateFlow(AuthState.SignedIn(USER_ID, "user@example.test")),
+        shopProvider: () -> SelectedShop? = { selectedShop(SHOP_ID) }
+    ): CatalogAutoSyncCoordinator = CatalogAutoSyncCoordinator(
+        repository = repository,
+        remote = FakeCatalogRemote043(),
+        priceRemote = FakePriceRemote043(),
+        syncEventRemote = FakeSyncEventRemote043(),
+        deviceAuthorization = ShopDeviceAuthorizationRepository(deviceRemote),
+        authFlow = auth,
+        selectedShopProvider = shopProvider,
+        syncStateTracker = tracker,
+        scope = backgroundScope,
+        debounceMs = Long.MAX_VALUE
+    )
+
+    private suspend fun runEfficiencyCycle(coordinator: CatalogAutoSyncCoordinator, cycle: String) {
+        when (cycle) {
+            "catalog_push" -> coordinator.runPushCycle("local_catalog_commit")
+            "catalog_bootstrap" -> coordinator.runBootstrapCycle("foreground")
+            "sync_events_drain" -> coordinator.runSyncEventDrainCycle("foreground")
+            else -> error("unknown synthetic cycle")
+        }
+    }
 
     @Test
     fun `123 default catalog auto push debounce stays within warm autosync budget`() {
@@ -1215,6 +1418,7 @@ class CatalogAutoSyncCoordinatorTest {
         override val isConfigured: Boolean = true
         var nextStatus: Result<ShopDeviceAuthorizationSnapshot>? = null
         var onStatusCall: (() -> Unit)? = null
+        var onStatusSuspendingCall: (suspend () -> Unit)? = null
         var statusCalls = 0
 
         override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
@@ -1223,6 +1427,7 @@ class CatalogAutoSyncCoordinatorTest {
         override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> {
             statusCalls += 1
             onStatusCall?.invoke()
+            onStatusSuspendingCall?.invoke()
             return nextStatus?.also { nextStatus = null } ?: Result.success(
                 ShopDeviceAuthorizationSnapshot(
                     status = status,

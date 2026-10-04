@@ -422,8 +422,18 @@ class CatalogAutoSyncCoordinator(
             )
             return
         }
-        if (!ensureDeviceActiveForScopedSync(auth.userId, "catalog_push", reason, selectedShop)) return
+        if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH)) {
+            pendingLocalCatalogPushSignal = true
+            val hintCount = synchronized(dirtyLock) { dirtyHints.size }
+            logger("cycle=catalog_push outcome=skip reason=sync_busy dirtyHints=$hintCount")
+            schedulePushAfterBusy(reason)
+            return
+        }
+        if (!ensureDeviceActiveForReservedSync(
+                CatalogSyncFlightOwner.AUTO_PUSH, auth.userId, "catalog_push", reason, selectedShop
+            )) return
         if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            syncStateTracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
             logger("cycle=catalog_push outcome=skip reason=business_scope_changed_after_device_check")
             return
         }
@@ -431,13 +441,6 @@ class CatalogAutoSyncCoordinator(
             val copy = dirtyHints.toSet()
             dirtyHints.clear()
             copy
-        }
-        if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.AUTO_PUSH)) {
-            synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
-            pendingLocalCatalogPushSignal = true
-            logger("cycle=catalog_push outcome=skip reason=sync_busy dirtyHints=${hinted.size}")
-            schedulePushAfterBusy(reason)
-            return
         }
         if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
             synchronized(dirtyLock) { dirtyHints.addAll(hinted) }
@@ -657,11 +660,6 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrapAfterBusy(reason)
             return
         }
-        if (!ensureDeviceActiveForScopedSync(auth.userId, "catalog_bootstrap", reason, selectedShop)) return
-        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
-            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_after_device_check")
-            return
-        }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.BOOTSTRAP)) {
             logger(
                 "cycle=catalog_bootstrap outcome=queued_after_busy " +
@@ -670,9 +668,12 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrapAfterBusy(reason)
             return
         }
+        if (!ensureDeviceActiveForReservedSync(
+                CatalogSyncFlightOwner.BOOTSTRAP, auth.userId, "catalog_bootstrap", reason, selectedShop
+            )) return
         if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
             syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
-            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_before_remote")
+            logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_after_device_check")
             return
         }
         if (consumePendingCatalogBootstrapAfterBusy()) {
@@ -804,11 +805,6 @@ class CatalogAutoSyncCoordinator(
             scheduleBootstrap(BOOTSTRAP_REASON_SYNC_EVENT_GAP)
             return
         }
-        if (!ensureDeviceActiveForScopedSync(auth.userId, "sync_events_drain", reason, selectedShop)) return
-        if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
-            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_after_device_check")
-            return
-        }
         if (!syncStateTracker.tryBegin(CatalogSyncFlightOwner.SYNC_EVENTS)) {
             logger(
                 "cycle=sync_events_drain outcome=queued_after_busy " +
@@ -817,9 +813,12 @@ class CatalogAutoSyncCoordinator(
             scheduleSyncEventDrainAfterBusy(reason)
             return
         }
+        if (!ensureDeviceActiveForReservedSync(
+                CatalogSyncFlightOwner.SYNC_EVENTS, auth.userId, "sync_events_drain", reason, selectedShop
+            )) return
         if (!businessDataScopeStillAllows(auth.userId, selectedShop)) {
             syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
-            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_before_remote")
+            logger("cycle=sync_events_drain outcome=skip reason=business_scope_changed_after_device_check")
             return
         }
         if (consumePendingSyncEventDrainAfterBusy()) {
@@ -981,6 +980,27 @@ class CatalogAutoSyncCoordinator(
     } catch (_: Task126BusinessDataScopeChangedException) {
         logger("cycle=$cycle outcome=skip reason=business_scope_changed_during_device_check")
         false
+    }
+
+    /**
+     * Reserve the existing single flight before the forced device-status RPC.
+     * Busy retries keep their signals without issuing authorization requests;
+     * every admitted cycle still performs its authoritative status check.
+     */
+    private suspend fun ensureDeviceActiveForReservedSync(
+        owner: CatalogSyncFlightOwner,
+        ownerUserId: String,
+        cycle: String,
+        reason: String,
+        selectedShop: SelectedShop?
+    ): Boolean {
+        var authorized = false
+        try {
+            authorized = ensureDeviceActiveForScopedSync(ownerUserId, cycle, reason, selectedShop)
+            return authorized
+        } finally {
+            if (!authorized) syncStateTracker.finish(owner)
+        }
     }
 
     private sealed interface DeviceStatusRetryPlan {

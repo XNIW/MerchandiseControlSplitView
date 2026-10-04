@@ -3920,6 +3920,231 @@ class ShopSyncRecoveryCoordinatorTest {
         validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
     }
 
+    @Test
+    fun ordinaryNoEventMarkerHttp500FailsWithoutRecoveryAndCanRetryAfterReopen() = runTest {
+        assertNoEventMarkerTransientPreservesActivatedZero(
+            ShopSyncContractException("shop_sync_rpc_http_500")
+        )
+    }
+
+    @Test
+    fun ordinaryNoEventMarkerIOExceptionFailsWithoutRecoveryAndCanRetryAfterReopen() = runTest {
+        assertNoEventMarkerTransientPreservesActivatedZero(java.io.IOException("fixture_marker_io"))
+    }
+
+    @Test
+    fun ordinaryChangedWindowMarkerHttp500PreservesAThenRetryPublishesC() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        assertNotNull(db.syncEventDeviceStateDao().get())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        val before = ordinaryMarkerApplicationRows()
+        val fullPages = remote.pageCalls
+        val delta = prepareFirstZeroHistoryDelta()
+        val source = OrdinaryFencedReadFixture(remote)
+        val transportFailure = ShopSyncContractException("shop_sync_rpc_http_500")
+        var markerCalls = 0
+        val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                markerCalls++
+                assertEquals("1", context.verifiedBaselineId)
+                return if (markerCalls == 1) Result.failure(transportFailure) else source.convergenceMarker(context)
+            }
+        }
+
+        val failed = drainOrdinary(reader)
+
+        assertTrue("HTTP failure must not become a successful recovery-required summary: $failed", failed.isFailure)
+        assertSame(transportFailure, failed.exceptionOrNull())
+        assertEquals(1, markerCalls)
+        assertTrue("Changed window must reach targeted material before its marker", source.targetedContexts.isNotEmpty())
+        assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+        assertNull(db.syncEventApplyStatusDao().get(ACCOUNT, activeScope().storeId, 1L))
+        reopenOrdinaryDatabase()
+        assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+
+        val retried = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(2, markerCalls)
+        assertFalse(retried.manualFullSyncRequired)
+        assertFalse(retried.syncEventsGapDetected)
+        assertEquals(1, retried.syncEventsProcessed)
+        assertEquals(1L, retried.syncEventsWatermarkAfter)
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(fullPages, remote.pageCalls)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 1L)
+        reopenOrdinaryDatabase()
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 1L)
+        validateShopSyncActiveReceipt(db, baseline.generationId,
+            decodeRecoveryCheckpointJson(requireNotNull(db.syncRecoveryBaselineDao().get()).checkpointJson))
+        assertFalse(drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow().manualFullSyncRequired)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(fullPages, remote.pageCalls)
+    }
+
+    @Test
+    fun ordinaryNoEventWrongShopAndMalformedMarkerStillRequireRecovery() = runTest {
+        for (malformed in listOf(false, true)) {
+            if (malformed) {
+                db.close()
+                app.deleteDatabase(ACTIVE_DATABASE)
+                db = openDatabase(ACTIVE_DATABASE)
+                repository = DefaultInventoryRepository(db)
+            }
+            seedOldMismatchGeneration()
+            val baseline = recoverAndReopenZeroOrdinaryFixture()
+            assertNotNull(db.syncEventDeviceStateDao().get())
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            val before = ordinaryMarkerApplicationRows()
+            val fullPages = remote.pageCalls
+            val source = OrdinaryFencedReadFixture(remote)
+            var markerCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                    markerCalls++
+                    return if (malformed) {
+                        Result.failure(ShopSyncContractException("shop_sync_rpc_json_invalid"))
+                    } else {
+                        source.convergenceMarker(context).map { it.copy(shopId = OLD_ACCOUNT) }
+                    }
+                }
+            }
+
+            val summary = drainOrdinary(reader).getOrThrow()
+
+            assertEquals(1, markerCalls)
+            assertTrue("Contract failure must retain the recovery latch (malformed=$malformed)", summary.manualFullSyncRequired)
+            assertTrue(summary.syncEventsGapDetected)
+            assertEquals(0L, summary.syncEventsWatermarkAfter)
+            val journal = requireNotNull(db.syncRecoveryJournalDao().get())
+            assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, journal.reason)
+            assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
+            assertEquals(SyncRecoveryAuthorizationModes.SAME_SCOPE, journal.authorizationMode)
+            assertEquals(activeScope().ownerHash, journal.ownerHash)
+            assertEquals(SHOP, journal.shopId)
+            assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+                ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+            reopenOrdinaryDatabase()
+            assertEquals(journal, db.syncRecoveryJournalDao().get())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+                ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+            assertEquals(fullPages, remote.pageCalls)
+            validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        }
+    }
+
+    @Test
+    fun ordinaryMarkerCancellationPropagatesWithoutJournalForNoEventAndChangedWindow() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        assertNotNull(db.syncEventDeviceStateDao().get())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        val before = ordinaryMarkerApplicationRows()
+        val fullPages = remote.pageCalls
+        for (changed in listOf(false, true)) {
+            if (changed) prepareFirstZeroHistoryDelta()
+            val source = OrdinaryFencedReadFixture(remote)
+            var markerCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                    markerCalls++
+                    assertEquals(if (changed) "1" else "0", context.verifiedBaselineId)
+                    return Result.failure(CancellationException("fixture_marker_cancel"))
+                }
+            }
+
+            val cancelled = runCatching { drainOrdinary(reader) }.exceptionOrNull()
+
+            assertTrue("Cancellation must propagate rather than becoming Result.failure or a recovery latch", cancelled is CancellationException)
+            assertEquals("fixture_marker_cancel", cancelled?.message)
+            assertEquals(1, markerCalls)
+            assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+            reopenOrdinaryDatabase()
+            assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+            assertEquals(fullPages, remote.pageCalls)
+        }
+    }
+
+    private suspend fun assertNoEventMarkerTransientPreservesActivatedZero(transportFailure: Exception) {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        assertNotNull(db.syncEventDeviceStateDao().get())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+        val before = ordinaryMarkerApplicationRows()
+        val fullPages = remote.pageCalls
+        val source = OrdinaryFencedReadFixture(remote)
+        var markerCalls = 0
+        val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                markerCalls++
+                assertEquals("0", context.verifiedBaselineId)
+                assertEquals(SHOP, context.shopId)
+                return if (markerCalls == 1) Result.failure(transportFailure) else source.convergenceMarker(context)
+            }
+        }
+
+        val failed = drainOrdinary(reader)
+
+        assertTrue("Transient marker failure must not become successful no-work or recovery-required: $failed", failed.isFailure)
+        assertSame(transportFailure, failed.exceptionOrNull())
+        assertEquals(1, markerCalls)
+        assertTrue(source.targetedContexts.isEmpty())
+        assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+        reopenOrdinaryDatabase()
+        assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+
+        val retried = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(2, markerCalls)
+        assertFalse(retried.manualFullSyncRequired)
+        assertFalse(retried.syncEventsGapDetected)
+        assertEquals(0, retried.syncEventsFetched)
+        assertEquals(0, retried.syncEventsProcessed)
+        assertEquals(0L, retried.syncEventsWatermarkAfter)
+        assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+        assertEquals(fullPages, remote.pageCalls)
+    }
+
+    private suspend fun assertActivatedZeroMarkerFailureUnchanged(
+        baseline: SyncRecoveryBaseline,
+        before: Map<String, List<List<String>>>
+    ) {
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertEquals(before, ordinaryMarkerApplicationRows())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        assertForeignKeysClean(db)
+    }
+
+    /** Exact typed rows in the synthetic Room database, including manifests, queues and nullable watermark. */
+    private fun ordinaryMarkerApplicationRows(): Map<String, List<List<String>>> {
+        val sql = db.openHelper.readableDatabase
+        val tables = sql.query("SELECT name FROM sqlite_master WHERE type = 'table' " +
+            "AND name NOT LIKE 'sqlite_%' AND name != 'room_master_table' ORDER BY name").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        return tables.associateWith { table ->
+            val quoted = table.replace("\"", "\"\"")
+            sql.query("SELECT * FROM \"$quoted\"").use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(List(cursor.columnCount) { column ->
+                            when (cursor.getType(column)) {
+                                android.database.Cursor.FIELD_TYPE_NULL -> "NULL"
+                                android.database.Cursor.FIELD_TYPE_BLOB -> "BLOB:${cursor.getBlob(column).contentToString()}"
+                                else -> "${cursor.getType(column)}:${cursor.getString(column)}"
+                            }
+                        })
+                    }
+                }
+            }.sortedBy { Json.encodeToString(it) }
+        }
+    }
+
     private suspend fun recoverAndReopenZeroOrdinaryFixture(): SyncRecoveryBaseline {
         val empty = emptyTargetFixture()
         val zero = empty.copy(checkpoint = empty.checkpoint.copy(syncEvents = empty.checkpoint.syncEvents.copy(
