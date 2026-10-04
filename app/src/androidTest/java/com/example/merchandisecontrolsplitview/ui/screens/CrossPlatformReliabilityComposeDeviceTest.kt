@@ -92,10 +92,9 @@ class CrossPlatformReliabilityComposeDeviceTest {
             repository.findProductByBarcode(initial.barcode)
         })
         val historyBefore = runBlocking { db.productPriceDao().countAll() }
-        var failNextWrite = true
+        val writeAttempts = AtomicInteger()
         DefaultInventoryRepositoryTestHooks.afterLocalProductWrite = {
-            if (failNextWrite) {
-                failNextWrite = false
+            if (writeAttempts.incrementAndGet() == 1) {
                 throw IllegalStateException("deterministic repository failure")
             }
         }
@@ -116,6 +115,11 @@ class CrossPlatformReliabilityComposeDeviceTest {
             }
         }
 
+        composeRule.runOnIdle {
+            viewModel.openProductEditor(persisted)
+            assertEquals(persisted, viewModel.productEditorTarget.value)
+        }
+
         composeRule.onNodeWithTag("product-editor-name")
             .performTextReplacement("Draft survives")
         composeRule.onNodeWithTag("task141.edit.purchase-price")
@@ -125,10 +129,16 @@ class CrossPlatformReliabilityComposeDeviceTest {
         composeRule.onNodeWithTag("product-editor-save")
             .performClick()
 
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("product-editor-save-error")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
         composeRule.onNodeWithTag("product-editor-save-error").assertExists()
         composeRule.onNodeWithTag("task141.edit.dialog-root").assertExists()
         composeRule.onNodeWithText("Draft survives").assertExists()
         composeRule.onNodeWithTag("product-editor-retail-price").assertIsFocused()
+        assertEquals(1, writeAttempts.get())
         assertEquals("Original", runBlocking {
             repository.findProductByBarcode(initial.barcode)?.productName
         })
@@ -142,6 +152,7 @@ class CrossPlatformReliabilityComposeDeviceTest {
         }
 
         val recovered = runBlocking { repository.findProductByBarcode(initial.barcode) }
+        assertEquals(2, writeAttempts.get())
         assertEquals("Draft survives", recovered?.productName)
         assertEquals(historyBefore + 1, runBlocking { db.productPriceDao().countAll() })
     }
