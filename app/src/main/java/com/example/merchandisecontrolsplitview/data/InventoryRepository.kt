@@ -4814,7 +4814,15 @@ class DefaultInventoryRepository(
                         }.getOrThrow()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (_: Exception) {
+                    } catch (failure: Exception) {
+                        val classification = SyncErrorClassifier.classify(failure)
+                        if ((failure is ShopSyncContractException &&
+                                failure.code.startsWith("shop_sync_rpc_http_")) ||
+                            classification.httpStatus != null ||
+                            classification.category == SyncErrorCategory.NetworkOfflineOrTimeout
+                        ) {
+                            throw failure
+                        }
                         null
                     }
                     // With no new captured window, the existing A receipt must still
@@ -5124,7 +5132,9 @@ class DefaultInventoryRepository(
         } catch (deferred: OrdinaryShopSyncDeferred) {
             return result(dirty = deferred.pendingCount)
         } catch (failure: ShopSyncContractException) {
-            if (failure.code == "ordinary_captured_publication_changed") throw failure
+            if (failure.code.startsWith("shop_sync_rpc_http_") ||
+                failure.code == "ordinary_captured_publication_changed"
+            ) throw failure
             val bound = failure.code == "ordinary_prepared_window_bound_exceeded"
             val reason = when {
                 initialProofComplete && failure.code == "ordinary_targeted_missing_remote" -> SyncEventApplyStatusReasons.MISSING_REMOTE

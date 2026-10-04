@@ -27,6 +27,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -1035,6 +1036,296 @@ class MerchandiseControlApplication : Application() {
             scopeState.errorCode == "sync_recovery_required" && !scopeState.allowsCloudSync &&
             !catalogSyncStateTracker.isSyncing.value && !businessDataScopeMutex.isLocked &&
             synchronized(shopContextRecoveryLock) { shopContextRecoveryJob?.isCompleted != false }
+
+
+    internal enum class CheckpointReadinessOutcome {
+        BLOCKED_RELEASE, BLOCKED_TEST_TARGET, BLOCKED_NOT_WARM, BLOCKED_CONFLICT, BLOCKED_UNAVAILABLE,
+        SNAPSHOT_INCOMPLETE, SNAPSHOT_ELIGIBLE, BLOCKED_LOCAL_OR_STALE, TIMEOUT_UNKNOWN
+    }
+
+    internal enum class CheckpointJournalPhase {
+        REQUIRED, STAGING, READY_TO_ACTIVATE, ACTIVATED_CLEANUP_PENDING
+    }
+
+    internal enum class CheckpointJournalError {
+        HTTP_SERVER, HTTP_OTHER, AUTH, FORBIDDEN, NETWORK_OR_TIMEOUT, LOCAL_PENDING,
+        CANCELLED, CLEANUP_PENDING, READER_UNAVAILABLE, UNKNOWN
+    }
+
+    /** Scalars only. UNKNOWN is never a lease, READY, or permission to invoke the trace. */
+    internal data class CheckpointReadinessSnapshot(
+        val outcome: CheckpointReadinessOutcome,
+        val targetTest: Boolean? = null,
+        val activityWarm: Boolean? = null,
+        val activityResumed: Boolean? = null,
+        val traceObserverIdle: Boolean? = null,
+        val sdkSession: Boolean? = null,
+        val refreshBudget: Boolean? = null,
+        val sdkClientSameCapture: Boolean? = null,
+        val scopeIdle: Boolean? = null,
+        val scopeCurrent: Boolean? = null,
+        val generationStable: Boolean? = null,
+        val businessGenerationQuiet: Boolean? = null,
+        val recoveryIdle: Boolean? = null,
+        val scopeMutexIdle: Boolean? = null,
+        val shopRecoveryIdle: Boolean? = null,
+        val oneUseUnconsumed: Boolean? = null,
+        val localScopeGuard: Boolean? = null,
+        val deviceJournalPresent: Boolean? = null,
+        val journalRequired: Boolean? = null,
+        val baselinePresent: Boolean? = null,
+        val watermarkPresent: Boolean? = null,
+        val localSnapshotUnchanged: Boolean? = null,
+        val fenceCurrent: Boolean? = null,
+        val preflightEligible: Boolean? = null,
+        val journalPhase: CheckpointJournalPhase? = null,
+        val journalAttempt: Int? = null,
+        val journalNextRetryAtMs: Long? = null,
+        val journalError: CheckpointJournalError? = null
+    ) {
+        internal fun hasRequiredMemoryFacts(): Boolean = listOf(
+            activityWarm, activityResumed, traceObserverIdle, sdkSession, refreshBudget,
+            sdkClientSameCapture, scopeIdle, scopeCurrent, generationStable, businessGenerationQuiet,
+            recoveryIdle, scopeMutexIdle, shopRecoveryIdle, oneUseUnconsumed
+        ).all { it == true }
+        private fun flag(value: Boolean?) = value?.toString() ?: "UNKNOWN"
+        fun safeLogLine(): String =
+            "outcome=" + outcome.name + " business_READY=false atomic_attempt_rechecks=REQUIRED target_TEST=" + flag(targetTest) +
+                " activity_warm=" + flag(activityWarm) + " activity_resumed=" + flag(activityResumed) +
+                " trace_observer_idle=" + flag(traceObserverIdle) + " sdk_session=" + flag(sdkSession) +
+                " refresh_budget=" + flag(refreshBudget) + " sdk_client_same_capture=" + flag(sdkClientSameCapture) +
+                " scope_idle=" + flag(scopeIdle) + " scope_current=" + flag(scopeCurrent) +
+                " generation_stable=" + flag(generationStable) +
+                " business_generation_quiet=" + flag(businessGenerationQuiet) +
+                " recovery_idle=" + flag(recoveryIdle) + " scope_mutex_idle=" + flag(scopeMutexIdle) +
+                " shop_recovery_idle=" + flag(shopRecoveryIdle) + " one_use_unconsumed=" + flag(oneUseUnconsumed) +
+                " local_scope_guard=" + flag(localScopeGuard) + " device_journal_present=" + flag(deviceJournalPresent) +
+                " journal_required=" + flag(journalRequired) + " baseline_present=" + flag(baselinePresent) +
+                " watermark_present=" + flag(watermarkPresent) + " local_snapshot_unchanged=" + flag(localSnapshotUnchanged) +
+                " fence_current=" + flag(fenceCurrent) + " preflight_eligible=" + flag(preflightEligible) +
+                " journal_phase=" + (journalPhase?.name ?: "UNKNOWN") +
+                " journal_attempt=" + (journalAttempt?.toString() ?: "UNKNOWN") +
+                " journal_next_retry_at_ms=" + (journalNextRetryAtMs?.toString() ?: "UNKNOWN") +
+                " journal_error=" + (journalError?.name ?: "UNKNOWN")
+    }
+
+    // Only our own compiler-generated lazy fields, in the debug-only snapshot path.
+    // Missing/renamed/uninitialized fields fail closed; never invoke a lazy initializer.
+    private inline fun <reified T> checkpointReadinessExistingLazy(name: String): T? = try {
+        val lazyValue = javaClass.getDeclaredField(name + "\$delegate")
+            .apply { isAccessible = true }.get(this) as? Lazy<*>
+        if (lazyValue?.isInitialized() == true) lazyValue.value as? T else null
+    } catch (_: ReflectiveOperationException) {
+        null
+    } catch (_: SecurityException) {
+        null
+    }
+
+    @OptIn(SupabaseInternal::class)
+    internal fun checkpointReadinessMemory(
+        warmForeground: Boolean, activityResumed: Boolean, traceObserverIdle: Boolean
+    ): CheckpointReadinessSnapshot {
+        if (!warmForeground) return CheckpointReadinessSnapshot(
+            CheckpointReadinessOutcome.BLOCKED_NOT_WARM, activityWarm = false,
+            activityResumed = activityResumed, traceObserverIdle = traceObserverIdle)
+        val oneUseAndRecovery = synchronized(businessRecoveryLock) {
+            !checkpointTraceConsumed to (checkpointTraceReservation == null &&
+                businessRecoveryJob?.isCompleted != false && !businessRecoveryExecutionMutex.isLocked)
+        }
+        val shopIdle = synchronized(shopContextRecoveryLock) { shopContextRecoveryJob?.isCompleted != false }
+        val owner = checkpointReadinessExistingLazy<GenerationOwnedSupabaseClient>("supabaseClient")
+        val sdk = owner?.captureClientOrNull()
+        val auth = checkpointReadinessExistingLazy<SupabaseAuthManager>("authManager")
+        val tracker = checkpointReadinessExistingLazy<CatalogSyncStateTracker>("catalogSyncStateTracker")
+        val shop = checkpointReadinessExistingLazy<ShopContextRepository>("shopContextRepository")
+        val shopEpoch = shop?.diagnosticShopEpoch()
+        val shopContext = shop?.state?.value
+        val authSafeEnd = Clock.System.now() + 10.seconds
+        val appState = auth?.state?.value
+        val status = sdk?.auth?.sessionStatus?.value
+        val signedIn = appState as? AuthState.SignedIn
+        val authenticated = status as? SessionStatus.Authenticated
+        val sdkSession = if (sdk == null || auth == null) null else
+            signedIn != null && authenticated != null && sdk.auth.currentUserOrNull()?.id == signedIn.userId
+        val budget = if (sdk == null) null else authenticated?.let {
+            checkpointTraceAuthBudgetCurrent(sdk, it, authSafeEnd)
+        } ?: false
+        val clientSame = sdk?.let {
+            owner.captureClientOrNull() === it && it.auth.sessionStatus.value === status &&
+                auth?.state?.value === appState
+        }
+        val scope = tracker?.businessDataScopeState?.value
+        val scopeIdle = scope?.let { checkpointTraceScopeIdle(it) }
+        val stamp = tracker?.captureDiagnosticQuietStamp()
+        val quiet = tracker?.let { stamp != null && it.isDiagnosticQuietStampCurrent(stamp) }
+        val scopeCurrent = if (auth == null || shop == null || tracker == null) null else
+            signedIn != null && shopContext?.selectedShop != null &&
+                currentAuthAndShopMatch(signedIn.userId, shopContext.selectedShop)
+        // Same observable fences as the existing attempt, not a new generation lease.
+        val generationCurrent = if (owner == null || sdk == null || auth == null ||
+            tracker == null || shop == null) null else
+            signedIn != null && authenticated != null && stamp != null &&
+                checkpointTraceOwnedAuthCurrent(owner, sdk, signedIn, auth.state.value,
+                    authenticated, authSafeEnd) &&
+                shop.diagnosticShopEpoch() == shopEpoch && shop.state.value == shopContext &&
+                shop.diagnosticShopEpoch() == shopEpoch &&
+                tracker.businessDataScopeState.value == scope && tracker.isDiagnosticQuietStampCurrent(stamp)
+        // This memory-only stage cannot attest local storage; the bounded read follows separately.
+        return CheckpointReadinessSnapshot(
+            CheckpointReadinessOutcome.SNAPSHOT_INCOMPLETE,
+            activityWarm = true, activityResumed = activityResumed, traceObserverIdle = traceObserverIdle,
+            sdkSession = sdkSession, refreshBudget = budget, sdkClientSameCapture = clientSame,
+            scopeIdle = scopeIdle, scopeCurrent = scopeCurrent,
+            generationStable = generationCurrent, businessGenerationQuiet = quiet,
+            recoveryIdle = oneUseAndRecovery.second, scopeMutexIdle = !businessDataScopeMutex.isLocked,
+            shopRecoveryIdle = shopIdle, oneUseUnconsumed = oneUseAndRecovery.first)
+    }
+
+    internal suspend fun reportCheckpointReadiness(
+        warmForeground: Boolean, isActivityResumed: () -> Boolean, isTraceObserverIdle: () -> Boolean,
+        conflictingTrace: Boolean
+    ): CheckpointReadinessSnapshot {
+        if (!BuildConfig.DEBUG) return CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_RELEASE)
+        val startedAt = SystemClock.elapsedRealtime()
+        val digest = MessageDigest.getInstance("SHA-256").digest(BuildConfig.SUPABASE_URL.encodeToByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val target = digest == CHECKPOINT_TRACE_TEST_URL_SHA256
+        val resumedNow = isActivityResumed()
+        val observerIdleNow = isTraceObserverIdle()
+        val snapshot = when {
+            conflictingTrace -> CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_CONFLICT)
+            !target -> CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_TEST_TARGET)
+            !warmForeground -> CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_NOT_WARM,
+                activityWarm = false, activityResumed = resumedNow, traceObserverIdle = observerIdleNow)
+            else -> try {
+                checkpointReadinessPreflight(warmForeground, isActivityResumed, isTraceObserverIdle, startedAt)
+            } catch (error: CancellationException) {
+                throw error // Never cancel or touch an external job; propagate caller cancellation.
+            } catch (_: Exception) {
+                CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_UNAVAILABLE)
+            }
+        }.let { it.copy(targetTest = target, activityWarm = it.activityWarm ?: warmForeground,
+            activityResumed = it.activityResumed ?: resumedNow,
+            traceObserverIdle = it.traceObserverIdle ?: observerIdleNow) }
+        Log.i("Task143CheckpointReadiness", snapshot.safeLogLine())
+        return snapshot
+    }
+
+
+    /** Read-only local-query coroutine only; original recovery/one-shot runners remain unchanged. */
+    private suspend fun checkpointReadinessPreflight(
+        warmForeground: Boolean, isActivityResumed: () -> Boolean, isTraceObserverIdle: () -> Boolean, startedAt: Long
+    ): CheckpointReadinessSnapshot {
+        val memory = checkpointReadinessMemory(warmForeground, isActivityResumed(), isTraceObserverIdle())
+        // Causal observation may read an already-open journal while recovery is busy.
+        // Qualification still requires every original memory fact and the original idle fences.
+        val requireIdle = memory.hasRequiredMemoryFacts()
+        val owner = checkpointReadinessExistingLazy<GenerationOwnedSupabaseClient>("supabaseClient")
+            ?: return memory.copy(preflightEligible = false)
+        val sdk = owner.captureClientOrNull() ?: return memory.copy(preflightEligible = false)
+        val auth = checkpointReadinessExistingLazy<SupabaseAuthManager>("authManager")
+            ?: return memory.copy(preflightEligible = false)
+        val signedIn = auth.state.value as? AuthState.SignedIn ?: return memory.copy(preflightEligible = false)
+        val status = sdk.auth.sessionStatus.value as? SessionStatus.Authenticated
+            ?: return memory.copy(preflightEligible = false)
+        if (sdk.auth.currentUserOrNull()?.id != signedIn.userId) return memory.copy(preflightEligible = false)
+        val shop = checkpointReadinessExistingLazy<ShopContextRepository>("shopContextRepository")
+            ?: return memory.copy(preflightEligible = false)
+        val tracker = checkpointReadinessExistingLazy<CatalogSyncStateTracker>("catalogSyncStateTracker")
+            ?: return memory.copy(preflightEligible = false)
+        val epoch = shop.diagnosticShopEpoch()
+        val context = shop.state.value
+        val selected = context.selectedShop ?: return memory.copy(preflightEligible = false)
+        val scopeState = tracker.businessDataScopeState.value
+        val stamp = tracker.captureDiagnosticQuietStamp() ?: return memory.copy(preflightEligible = false)
+        val authEnd = Clock.System.now() + 10.seconds
+        val activeScope = task126ActiveOwnerStoreScope(signedIn.userId, selected)
+        fun current(): Boolean {
+            val recoveryIdle = synchronized(businessRecoveryLock) {
+                !checkpointTraceConsumed && checkpointTraceReservation == null &&
+                    businessRecoveryJob?.isCompleted != false && !businessRecoveryExecutionMutex.isLocked
+            }
+            return isActivityResumed() && isTraceObserverIdle() &&
+                sdk.auth.currentUserOrNull()?.id == signedIn.userId &&
+                checkpointTraceOwnedAuthCurrent(owner, sdk, signedIn,
+                auth.state.value, status, authEnd) && shop.diagnosticShopEpoch() == epoch &&
+                shop.state.value == context && shop.diagnosticShopEpoch() == epoch &&
+                tracker.businessDataScopeState.value == scopeState &&
+                currentAuthAndShopMatch(signedIn.userId, selected) &&
+                tracker.isDiagnosticQuietStampCurrent(stamp) &&
+                (!requireIdle || (recoveryIdle && checkpointTraceScopeIdle(scopeState)))
+        }
+        return checkpointReadinessLocalGuards(signedIn.userId, activeScope, selected.shopId,
+            2_000 - (SystemClock.elapsedRealtime() - startedAt), ::current, memory)
+    }
+
+    internal suspend fun checkpointReadinessLocalGuards(
+        ownerId: String, activeScope: Task126OwnerStoreScope, shopId: String, remainingMs: Long,
+        current: () -> Boolean, memory: CheckpointReadinessSnapshot
+    ): CheckpointReadinessSnapshot {
+        if (remainingMs <= 0) return memory.copy(outcome = CheckpointReadinessOutcome.TIMEOUT_UNKNOWN,
+            preflightEligible = false)
+        // No Room opening/migration: reuse only the database that the normal app already initialized.
+        val localDatabase = checkpointReadinessExistingLazy<AppDatabase>("database")
+        if (localDatabase == null || !localDatabase.isOpen)
+            return memory.copy(outcome = CheckpointReadinessOutcome.BLOCKED_UNAVAILABLE, preflightEligible = false)
+        return withTimeoutOrNull(remainingMs) {
+            if (!current()) return@withTimeoutOrNull memory.copy(
+                outcome = CheckpointReadinessOutcome.BLOCKED_LOCAL_OR_STALE, fenceCurrent = false, preflightEligible = false)
+            val before = checkpointTraceSnapshot(ownerId, activeScope.storeId)
+            val scopeOk = before.allowsCheckpointScope(activeScope, shopId)
+            val after = checkpointTraceSnapshot(ownerId, activeScope.storeId)
+            val unchanged = after == before
+            val fence = current()
+            val localEligible = scopeOk && unchanged && fence
+            val eligible = localEligible && memory.hasRequiredMemoryFacts()
+            // Observe only this authenticated device/scope. Phase is not an observation gate:
+            // staging/cleanup are useful evidence but never qualify the original trace.
+            val journal = before.journal?.takeIf {
+                unchanged && fence && it.ownerHash == activeScope.ownerHash &&
+                    it.storeScope == activeScope.storeId && it.shopId?.lowercase() == shopId.lowercase() &&
+                    before.device?.deviceId?.isNotBlank() == true && it.deviceId == before.device.deviceId &&
+                    it.authorizationMode in setOf(SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                        SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED)
+            }
+            val phase = when (journal?.phase) {
+                SyncRecoveryJournalPhases.REQUIRED -> CheckpointJournalPhase.REQUIRED
+                SyncRecoveryJournalPhases.STAGING -> CheckpointJournalPhase.STAGING
+                SyncRecoveryJournalPhases.READY_TO_ACTIVATE -> CheckpointJournalPhase.READY_TO_ACTIVATE
+                SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING -> CheckpointJournalPhase.ACTIVATED_CLEANUP_PENDING
+                else -> null
+            }
+            // reason is the durable retry code, not a raw exception. Never emit it verbatim.
+            val code = journal?.reason
+            val http = code?.takeIf { it.matches(Regex("shop_sync_rpc_http_[1-5][0-9]{2}")) }
+                ?.takeLast(3)?.toIntOrNull()
+            val error = if (journal == null) null else when {
+                http == 401 -> CheckpointJournalError.AUTH
+                http == 403 -> CheckpointJournalError.FORBIDDEN
+                http == 408 || http == 504 -> CheckpointJournalError.NETWORK_OR_TIMEOUT
+                http != null && http >= 500 -> CheckpointJournalError.HTTP_SERVER
+                http != null -> CheckpointJournalError.HTTP_OTHER
+                code == "recovery_local_pending" -> CheckpointJournalError.LOCAL_PENDING
+                code == "recovery_cancelled" -> CheckpointJournalError.CANCELLED
+                code in setOf("recovery_staging_cleanup_deferred", "recovery_orphan_cleanup_deferred") ->
+                    CheckpointJournalError.CLEANUP_PENDING
+                code == "shop_sync_reader_unavailable" -> CheckpointJournalError.READER_UNAVAILABLE
+                else -> CheckpointJournalError.UNKNOWN
+            }
+            memory.copy(outcome = when {
+                eligible -> CheckpointReadinessOutcome.SNAPSHOT_ELIGIBLE
+                localEligible -> CheckpointReadinessOutcome.SNAPSHOT_INCOMPLETE
+                else -> CheckpointReadinessOutcome.BLOCKED_LOCAL_OR_STALE
+            },
+                localScopeGuard = scopeOk, deviceJournalPresent = before.device != null && before.journal != null,
+                journalRequired = before.journal?.phase == SyncRecoveryJournalPhases.REQUIRED,
+                baselinePresent = before.baseline != null, watermarkPresent = before.watermark != null,
+                localSnapshotUnchanged = unchanged, fenceCurrent = fence, preflightEligible = eligible,
+                journalPhase = phase,
+                journalAttempt = journal?.attemptCount?.takeIf { it in 0..1_000_000 },
+                journalNextRetryAtMs = journal?.nextRetryAtMs?.takeIf { it >= 0 }, journalError = error)
+        } ?: memory.copy(outcome = CheckpointReadinessOutcome.TIMEOUT_UNKNOWN, preflightEligible = false)
+    }
 
     internal fun requestOneCheckpointTrace(warmForeground: Boolean) {
         if (!BuildConfig.DEBUG) return
