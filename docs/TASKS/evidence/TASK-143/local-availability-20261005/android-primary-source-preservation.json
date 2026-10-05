@@ -1,0 +1,14 @@
+{
+  "before": "fe0927c379082925864b200b747bf9d152c5b750",
+  "after": "37505e11d74fb6625df180771322ae3cef5eae10",
+  "fast_forward_exit": 0,
+  "dirty_untracked_paths_preserved": {
+    "gradle/libs.versions.toml": "4144435451a26878174db8ae028626524e64753cd43ce0c12ca9653486df6de7",
+    "gradle/wrapper/gradle-wrapper.properties": "10af740d6d50f4c4294ae3e3c2e593dbf9b5a03bf25ed0a955155ade7a1bc387",
+    ".idea/deploymentTargetSelector.xml": "8db1230383fbb6a80e5c5f0760a0d194e7721048f6f3fee32f8c1e1d284b4262"
+  },
+  "status_unchanged": true,
+  "approved_app_source_test_files_match": 36,
+  "device_access": 0,
+  "installation": "NOT_RUN"
+}

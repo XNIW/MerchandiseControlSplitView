@@ -1,0 +1,26 @@
+{
+  "run": 37357374445,
+  "head": "01f87b2ecf78d996b4ecb076a279571170d14110",
+  "conclusion": "success",
+  "artifact_id": 11365068824,
+  "artifact_zip_sha256": "3be8793b524830892eb5d309858fa1dd7fc25127aa94d19e14e1013a5bd23551",
+  "counts": {
+    "XML_files": 76,
+    "total": 1171,
+    "pass": 1164,
+    "fail": 0,
+    "error": 0,
+    "skip": 7
+  },
+  "conditional_skips": [
+    "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest.wechat 004 real local Supabase fixture converges through production incremental apply",
+    "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest.measure real repository queries and local editor writes at large scale",
+    "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest.live realtime insert is materialized into Room",
+    "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest.runOrchestratedOracleLoopAndroidFirst",
+    "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest.auditDriveSupplierCorpusReadOnly",
+    "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test.validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+    "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest.dumpShoppingHogarCurrentMapping"
+  ],
+  "remote_archive_only_read_in_memory": true,
+  "auth_runtime_or_install_proof": false
+}

@@ -1,0 +1,14 @@
+{
+  "captured_utc": "2026-10-05T18:59:04.239724+00:00",
+  "supported_tool": "mcp__cua_repl.js",
+  "entrypoint": "cua.getApp(Android Studio)",
+  "current_supported_input_allowed": false,
+  "outcome": "BLOCKED_EXTERNAL_CURRENT_MAC_LOCKED",
+  "tool_reason": "The Mac is locked and automatic unlock could not unlock it. Ask the user to unlock the Mac manually before continuing.",
+  "ui_inputs": 0,
+  "baseline": "NOT_RUN",
+  "primary_install": "NOT_RUN",
+  "alternate_channel_attempts": 0,
+  "resumption_requires": "human reports Mac manually unlocked; fresh supported check after changed condition",
+  "prior_denials_used_as_current_evidence": false
+}
