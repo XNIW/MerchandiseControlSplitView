@@ -1,0 +1,16 @@
+{
+  "gradle_exit": 1,
+  "total": 2,
+  "pass": 1,
+  "fail": 1,
+  "skip": 0,
+  "source_unchanged": true,
+  "producer_sha256": "eaff7fecbe29414e8eefbcf1c60f079f1cff1d36a6f3e5bd4e780acd6719272c",
+  "selectors": [
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 new price ACK then scoped parent delete remains qualified after reopen",
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 raw parent cascade after new price ACK remains corruption after reopen"
+  ],
+  "xml_sha256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "0d43513b64cf4536a3b441828403a1b481ef5c471e7c9cd5728a5287f8ce69cc"
+  }
+}

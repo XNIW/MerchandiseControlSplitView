@@ -24,7 +24,8 @@ import kotlin.coroutines.CoroutineContext
 internal data class Task126BusinessDataScopeLease(
     val generation: Long,
     val boundScope: Task126OwnerStoreScope?,
-    val unmanaged: Boolean
+    val unmanaged: Boolean,
+    val localOnly: Boolean = false
 )
 
 class Task126BusinessDataScopeSignalToken internal constructor(
@@ -51,6 +52,11 @@ interface Task126BusinessDataScopeRuntimeGuard {
     suspend fun <T> withCurrentBusinessDataScopeFlight(
         block: suspend () -> T
     ): T
+
+    suspend fun <T> withLocalBusinessDataScopeFlight(block: suspend () -> T): T =
+        withCurrentBusinessDataScopeFlight(block)
+
+    suspend fun requireCloudBusinessDataScope() = requireCurrentBusinessDataScope()
 
     suspend fun requireCurrentBusinessDataScope()
 
@@ -112,6 +118,7 @@ internal class Task126BusinessDataScopeFlightGate(
     private val transitionMutex = Mutex()
     private var state = initialState
     private var generation = 0L
+    private var localGeneration = 0L
     private var nextFlightId = 1L
     private var transitioning = false
     /**
@@ -122,7 +129,8 @@ internal class Task126BusinessDataScopeFlightGate(
      */
     private data class ActiveFlight(
         val deferred: Deferred<*>,
-        val quiesced: CompletableDeferred<Unit>
+        val quiesced: CompletableDeferred<Unit>,
+        val lease: Task126BusinessDataScopeLease
     )
 
     private val activeFlights = linkedMapOf<Long, ActiveFlight>()
@@ -141,13 +149,11 @@ internal class Task126BusinessDataScopeFlightGate(
     fun updateState(next: Task126BusinessDataScopeState) {
         val toCancel = synchronized(lock) {
             val boundaryChanged = boundarySignature(state) != boundarySignature(next)
+            val localChanged = localBoundarySignature(state) != localBoundarySignature(next)
             state = next
-            if (!boundaryChanged) {
-                emptyList()
-            } else {
-                generation += 1L
-                activeFlights.values.map { it.deferred }
-            }
+            if (boundaryChanged) generation += 1L
+            if (localChanged) localGeneration += 1L
+            activeFlights.values.filter { !isLeaseCurrentLocked(it.lease) }.map { it.deferred }
         }
         if (toCancel.isNotEmpty()) {
             val cause = CancellationException("business_data_scope_invalidated")
@@ -171,6 +177,7 @@ internal class Task126BusinessDataScopeFlightGate(
         val inherited = currentCoroutineContext()[Task126BusinessDataScopeLeaseContext]?.lease
         if (inherited != null) {
             requireLeaseCurrent(inherited)
+            if (inherited.localOnly) throw Task126BusinessDataScopeChangedException("cloud_scope_lease_required")
             requireLeaseMatches(inherited, ownerUserId, selectedShop)
             return block()
         }
@@ -192,6 +199,37 @@ internal class Task126BusinessDataScopeFlightGate(
             captureLeaseLocked(ownerUserId = null, selectedShop = null)
         }
         return runRegisteredFlight(lease, block)
+    }
+
+    override suspend fun <T> withLocalBusinessDataScopeFlight(block: suspend () -> T): T {
+        val inherited = currentCoroutineContext()[Task126BusinessDataScopeLeaseContext]?.lease
+        if (inherited != null) {
+            synchronized(lock) {
+                if (!state.localWritesAllowed) throw Task126BusinessDataScopeChangedException("local_business_write_denied")
+                requireLeaseCurrentLocked(inherited)
+            }
+            return block()
+        }
+        val lease = synchronized(lock) {
+            if (transitioning || !state.allowsLocalOperations || !state.localWritesAllowed) {
+                throw Task126BusinessDataScopeChangedException("local_business_scope_unavailable")
+            }
+            if (state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED) {
+                Task126BusinessDataScopeLease(localGeneration, null, unmanaged = true, localOnly = true)
+            } else {
+                val scope = state.localAccessScope ?: state.boundScope
+                    ?: throw Task126BusinessDataScopeChangedException("local_business_scope_binding_missing")
+                Task126BusinessDataScopeLease(localGeneration, scope, unmanaged = false, localOnly = true)
+            }
+        }
+        return runRegisteredFlight(lease, block)
+    }
+
+    override suspend fun requireCloudBusinessDataScope() {
+        val lease = currentCoroutineContext()[Task126BusinessDataScopeLeaseContext]?.lease
+            ?: throw Task126BusinessDataScopeChangedException("business_data_scope_lease_missing")
+        requireLeaseCurrent(lease)
+        if (lease.localOnly) throw Task126BusinessDataScopeChangedException("cloud_scope_lease_required")
     }
 
     override suspend fun requireCurrentBusinessDataScope() {
@@ -240,6 +278,7 @@ internal class Task126BusinessDataScopeFlightGate(
                 val flights = synchronized(lock) {
                     transitioning = true
                     generation += 1L
+                    localGeneration += 1L
                     activeFlights.values.toList()
                 }
                 try {
@@ -278,7 +317,8 @@ internal class Task126BusinessDataScopeFlightGate(
                 nextFlightId += 1L
                 activeFlights[id] = ActiveFlight(
                     deferred = flight,
-                    quiesced = quiesced
+                    quiesced = quiesced,
+                    lease = lease
                 )
             }
         }
@@ -376,11 +416,13 @@ internal class Task126BusinessDataScopeFlightGate(
         synchronized(lock) { isLeaseCurrentLocked(lease) }
 
     private fun isLeaseCurrentLocked(lease: Task126BusinessDataScopeLease): Boolean {
-        if (generation != lease.generation) return false
+        if ((if (lease.localOnly) localGeneration else generation) != lease.generation) return false
         if (lease.unmanaged) {
             return state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
         }
-        if (state.status != Task126BusinessDataScopeStatus.READY) return false
+        if (lease.localOnly) {
+            if (!state.allowsLocalOperations || !state.localWritesAllowed) return false
+        } else if (state.status != Task126BusinessDataScopeStatus.READY) return false
         val current = state.boundScope ?: return false
         val captured = lease.boundScope ?: return false
         return Task126OwnerStoreGate.validate(captured, current) ==
@@ -399,4 +441,11 @@ internal class Task126BusinessDataScopeFlightGate(
             scope?.storeEpoch?.toString().orEmpty()
         ).joinToString("|")
     }
+
+    private fun localBoundarySignature(value: Task126BusinessDataScopeState): String =
+        boundarySignature(value.copy(
+            status = if (value.allowsLocalOperations) Task126BusinessDataScopeStatus.READY
+                else Task126BusinessDataScopeStatus.CHECKING,
+            boundScope = value.localAccessScope ?: value.boundScope
+        )) + ":${value.localWritesAllowed}:${value.localReadsAllowed}"
 }

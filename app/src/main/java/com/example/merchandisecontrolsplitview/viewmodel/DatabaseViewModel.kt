@@ -372,6 +372,10 @@ class DatabaseViewModel(
     private val _productDetailsOverrides = MutableStateFlow<Map<Long, ProductWithDetails>>(emptyMap())
     val productDetailsOverrides: StateFlow<Map<Long, ProductWithDetails>> =
         _productDetailsOverrides.asStateFlow()
+    private val lastSavedProductId=MutableStateFlow<Long?>(null)
+    val lastProductSaveCloudConfirmed: StateFlow<Boolean?> = lastSavedProductId.flatMapLatest { id ->
+        if(id==null) flowOf<Boolean?>(null) else repository.observeProductCloudConfirmed(id).map<Boolean,Boolean?> { it }
+    }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000L),null)
 
     private val appContext = getApplication<Application>().applicationContext
     private val merchandiseApplication =
@@ -1325,8 +1329,7 @@ class DatabaseViewModel(
         return if (
             auth is AuthState.SignedIn &&
             shopContext.ownerUserId == auth.userId &&
-            !shopContext.isLoading &&
-            shopContext.syncAllowed
+            shopContext.localAccessAllowed
         ) {
             ProductImageOwnerShopScope(auth.userId, shopContext.activeShopId)
         } else {
@@ -1900,8 +1903,9 @@ class DatabaseViewModel(
                     is AuthState.SignedIn -> {
                         if (
                             shopContext.ownerUserId != auth.userId ||
-                            shopContext.isLoading ||
-                            !shopContext.syncAllowed
+                            !shopContext.localAccessAllowed ||
+                            // A missing selection during checking/retry is not a confirmed switch to legacy.
+                            (shopContext.selectedShop==null && !shopContext.syncAllowed)
                         ) {
                             null
                         } else {
@@ -1926,6 +1930,7 @@ class DatabaseViewModel(
                         return@collect
                     }
                     if (oldScope == currentScope) return@collect
+                    lastSavedProductId.value=null
                     if (oldScope.accountId.isBlank() && currentScope.accountId.isNotBlank()) {
                         productImageScopeGeneration += 1
                         _productImageScopeEpoch.value = productImageScopeGeneration
@@ -2999,6 +3004,7 @@ class DatabaseViewModel(
             if (isNewProduct) {
                 val productId = repository.addProductAndReturnId(product)
                 if (productId <= 0L) error("Inserted product id is unavailable")
+                lastSavedProductId.value=productId
                 _uiState.value = UiState.Success(
                     appContext.getString(R.string.success_product_added)
                 )
@@ -3030,6 +3036,7 @@ class DatabaseViewModel(
                     else R.string.success_product_updated
                 )
             )
+            lastSavedProductId.value=product.id
             ProductEditorSaveResult.Saved(product.id.takeIf { it > 0L })
         } catch (cancelled: CancellationException) {
             throw cancelled

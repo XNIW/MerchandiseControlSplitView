@@ -1,0 +1,15 @@
+{
+  "gradle_exit": 1,
+  "total": 1,
+  "pass": 0,
+  "fail": 1,
+  "skip": 0,
+  "source_unchanged": true,
+  "producer_sha256": "d721e8fe4e565eedf07419c575caf471d78bcb5af93dc6273f266c4d9ed6829f",
+  "selectors": [
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.ordinary failure after activation commit preserves exact durable generation for reopen cleanup"
+  ],
+  "xml_sha256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "233e697d48354ef667519ff2270aeac60a5592e5017535da74e9ef01ca001121"
+  }
+}

@@ -152,7 +152,8 @@ class ShopContextTest {
         assertNull(resolution.context.selectedShop)
         assertNull(resolution.context.activeShopId)
         assertNull(resolution.persistedSelection)
-        assertTrue(resolution.context.syncAllowed)
+        assertFalse(resolution.context.syncAllowed)
+        assertFalse(resolution.context.localAccessAllowed)
     }
 
     @Test

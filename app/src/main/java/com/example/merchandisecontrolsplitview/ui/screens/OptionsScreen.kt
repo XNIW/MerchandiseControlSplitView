@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.ui.screens
 
 import android.app.Activity
 import android.content.Context
+import androidx.compose.ui.platform.testTag
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -803,7 +804,7 @@ private fun ConnectedAccountRow(
             .fillMaxWidth()
             .padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(spacing.md),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Top
     ) {
         Surface(
             modifier = Modifier.size(44.dp),
@@ -824,10 +825,10 @@ private fun ConnectedAccountRow(
         ) {
             Text(
                 text = stringResource(R.string.account_cloud_connected_title),
+                modifier = Modifier.fillMaxWidth().testTag("options-account-title"),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                softWrap = true
             )
             Text(
                 text = if (maskedEmail != null) {
@@ -835,24 +836,25 @@ private fun ConnectedAccountRow(
                 } else {
                     stringResource(R.string.account_signed_in)
                 },
+                modifier = Modifier.fillMaxWidth().testTag("options-account-email"),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                softWrap = true
             )
-        }
-
-        OutlinedButton(
-            onClick = onSignOut,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ExitToApp,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(stringResource(R.string.account_sign_out))
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                modifier = Modifier.testTag("options-account-signout"),
+                onClick = onSignOut,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ExitToApp,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.account_sign_out))
+            }
         }
     }
 }

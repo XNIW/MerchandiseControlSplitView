@@ -394,6 +394,14 @@ data class SyncEventOutboxEntry(
 
 @Dao
 interface SyncEventOutboxDao {
+    @Query("SELECT * FROM sync_event_outbox WHERE ownerUserId=:owner AND clientEventId=:key LIMIT 1")
+    suspend fun getByOperationKey(owner: String, key: String): SyncEventOutboxEntry?
+
+    @Query("SELECT * FROM sync_event_outbox WHERE id=:id LIMIT 1")
+    suspend fun getById(id: Long): SyncEventOutboxEntry?
+
+    @Query("SELECT id, length(CAST(metadataJson AS BLOB)) AS payloadBytes FROM sync_event_outbox WHERE ownerUserId=:owner AND storeScope=:store AND eventType='LOCAL_BUSINESS_WRITE_V1' AND domain IN (:kinds) ORDER BY createdAtMs,id LIMIT :limit")
+    suspend fun listBusinessWriteHeaders(owner: String, store: String, kinds: Set<String>, limit: Int): List<BusinessWriteHeader>
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(row: SyncEventOutboxEntry): Long
 
@@ -431,6 +439,7 @@ interface SyncEventOutboxDao {
         WHERE ownerUserId = :ownerUserId
           AND storeScope = :storeScope
           AND attemptCount < :maxAttempts
+          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
         ORDER BY createdAtMs ASC, id ASC
         LIMIT :limit
         """

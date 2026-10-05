@@ -1,0 +1,552 @@
+{
+  "kind": "canonical assembleDebug/lint/test/assembleDebugAndroidTest, generic CI profile; no device",
+  "gradle_exit": 0,
+  "argv": [
+    "./gradlew",
+    "--no-daemon",
+    "assembleDebug",
+    "lint",
+    "test",
+    "assembleDebugAndroidTest",
+    "--console=plain"
+  ],
+  "started_utc": "2026-10-05T18:29:00.706075+00:00",
+  "elapsed_seconds": 76.602,
+  "variants": {
+    "testDebugUnitTest": {
+      "total": 1171,
+      "pass": 1164,
+      "fail": 0,
+      "skip": 7,
+      "classes": {
+        "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationMatrixTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.CheckpointTraceActivityLifecycleTest": {
+          "total": 9,
+          "pass": 9,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest": {
+          "total": 31,
+          "pass": 31,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.PriceBackfillWorkerTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest": {
+          "total": 52,
+          "pass": 52,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.OptionsScreenPublicUxTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.CatalogTextPolicyTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.SyncEventContractTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.PreGenerateEntityResolutionTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditTest": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126CacheMemoryTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest": {
+          "total": 25,
+          "pass": 25,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.DatabaseExportWriterTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest": {
+          "total": 8,
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ImportResourcePolicyTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.productimage.ProductImageServiceTest": {
+          "total": 31,
+          "pass": 31,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingSourceTest": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.CheckpointReadinessSnapshotTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.SupabaseShopSyncReadRemoteDataSourceTest": {
+          "total": 28,
+          "pass": 28,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.FullDbCatalogTextDiagnosticsTest": {
+          "total": 5,
+          "pass": 5,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest": {
+          "total": 222,
+          "pass": 221,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.ProductBaselineFingerprintTest": {
+          "total": 2,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ImportAnalyzerTest": {
+          "total": 34,
+          "pass": 34,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.FilePickerScreenTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.productimage.ProductImageSharedContractTest": {
+          "total": 8,
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewUiTest": {
+          "total": 5,
+          "pass": 5,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.OperationalMutationIntegrityTest": {
+          "total": 15,
+          "pass": 15,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.SyncErrorClassifierTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.OrderQuantitySummaryTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest": {
+          "total": 137,
+          "pass": 137,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOriginTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task139BusinessDataScopeBindingTest": {
+          "total": 20,
+          "pass": 20,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.BusinessScopeMismatchDialogTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepositoryTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest": {
+          "total": 61,
+          "pass": 61,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.CheckedAuthSettingsTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest": {
+          "total": 25,
+          "pass": 25,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.FullDbExportImportRoundTripTest": {
+          "total": 8,
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ClNumberFormattersTest": {
+          "total": 16,
+          "pass": 16,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126AccountStoreBoundaryTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.ShopContextOfflineAuthorizationTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126ConflictReviewTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.CrossPlatformReliabilityPresentationTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ExcelUtilsTest": {
+          "total": 48,
+          "pass": 48,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126SyncPolicyTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.StorefrontLocalizationTest": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.RealtimeRefreshCoordinatorTest": {
+          "total": 13,
+          "pass": 13,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.productimage.ProductImageProcessorTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.ShopContextTest": {
+          "total": 17,
+          "pass": 17,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest": {
+          "total": 8,
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task113AndroidOfflineHarnessJvmTest": {
+          "total": 2,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ErrorExporterCatalogTextTest": {
+          "total": 2,
+          "pass": 2,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.ProductImageCatalogContractTest": {
+          "total": 8,
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.HistorySessionPushCoordinatorTest": {
+          "total": 19,
+          "pass": 19,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest": {
+          "total": 5,
+          "pass": 5,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinatorTest": {
+          "total": 39,
+          "pass": 39,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test": {
+          "total": 1,
+          "pass": 0,
+          "fail": 0,
+          "skip": 1
+        },
+        "com.example.merchandisecontrolsplitview.data.Task130PriceContractTest": {
+          "total": 4,
+          "pass": 4,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest": {
+          "total": 25,
+          "pass": 25,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.AppDatabaseMigrationTest": {
+          "total": 22,
+          "pass": 22,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest": {
+          "total": 16,
+          "pass": 16,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.screens.Task141ImportPolicyLocalizationTest": {
+          "total": 1,
+          "pass": 1,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.Task126AccountSwitchReviewUiTest": {
+          "total": 3,
+          "pass": 3,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.ui.navigation.GeneratedExitDestinationResolverTest": {
+          "total": 16,
+          "pass": 16,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.SyncEventReadBoundaryTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.InventoryRemoteFetchSupportTest": {
+          "total": 6,
+          "pass": 6,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.ProjectSessionPersistenceTest": {
+          "total": 5,
+          "pass": 5,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.StorefrontAuthoringContractTest": {
+          "total": 7,
+          "pass": 7,
+          "fail": 0,
+          "skip": 0
+        },
+        "com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest": {
+          "total": 26,
+          "pass": 26,
+          "fail": 0,
+          "skip": 0
+        }
+      },
+      "non_pass_cases": [
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+          "name": "live realtime insert is materialized into Room",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+          "name": "measure real repository queries and local editor writes at large scale",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+          "name": "dumpShoppingHogarCurrentMapping",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+          "name": "wechat 004 real local Supabase fixture converges through production incremental apply",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+          "name": "runOrchestratedOracleLoopAndroidFirst",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+          "name": "auditDriveSupplierCorpusReadOnly",
+          "status": "SKIP"
+        },
+        {
+          "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+          "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+          "status": "SKIP"
+        }
+      ],
+      "xml_count": 76
+    }
+  },
+  "lint_counts": {
+    "Warning": 59
+  },
+  "new_lint_issue_count": 5,
+  "new_lint_issue_keys": [
+    [
+      "ApplySharedPref",
+      "Warning",
+      "Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background",
+      [
+        "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt"
+      ],
+      2
+    ],
+    [
+      "UseKtx",
+      "Warning",
+      "Use the KTX extension function `SharedPreferences.edit` instead?",
+      [
+        "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt"
+      ],
+      3
+    ]
+  ],
+  "removed_lint_issue_count": 0,
+  "kotlin_warning_lines": [],
+  "source_unchanged": true,
+  "producer_sha256": "20cc79a254c544eed37a5722e25fc3d0885d7d30848aff61f0d01e40001e3eb7",
+  "artifacts_sha256": {
+    "canonical-app.apk": "230dc8a4526e851f51b58d7f1e2b2a1c59bef5cfa20434afc72d823100ab5425",
+    "canonical-test.apk": "335bec36a7998013180533264743f1074e1fbc310a967a3a0839eb7758e17584"
+  },
+  "lint_sha256": "8e898277aa14376517bb282c5f6e97679785ff53e4d02e3210da0e084597f2f6"
+}

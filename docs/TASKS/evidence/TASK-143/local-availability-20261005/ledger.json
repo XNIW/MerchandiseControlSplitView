@@ -1,0 +1,168 @@
+{
+  "baseline_head": "fe0927c379082925864b200b747bf9d152c5b750",
+  "branch": "codex/android-local-availability-20261004",
+  "core_and_root_producer_sha256": "bbd1f147003667a089d09e0f317114eac6228a1c2897dd2be791aa3dfa5b1ded",
+  "current_production_unchanged_from_root14_and_core01": false,
+  "production_sha256": {
+    "app/src/main/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplication.kt": "043e49dc3dd79d1bfe9d0d2b1a6722a39f399242ae40bd0dd40f50a682018d85",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/CatalogSyncStateTracker.kt": "2b880e53bdfbbf1af240a568de437b60da0495093afddbc355c14c83a76e5b42",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/HistoryEntryDao.kt": "6e9f6ae22344cbd1ce50772b9bd8f04e715d53ad4d7cc0f7ad01cd3948d016c7",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryCatalogRemoteRows.kt": "19e6097fa7cb118d101aff3847a4a19836e3cc404eceeb3e290bf042f31ec45c",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt": "34aeff59dcac7cf8d4bde2b1f51ed6891ece0e5417666b79c54ab48dbd4a4d5c",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ProductRemoteRefDao.kt": "2d13dd543730f9587b8b21f1d9c485347a695c4627cad4735dd67c32cb81705e",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopContext.kt": "9013dc221df10b69b1adcbca59f3072a29c60b7ea87749e599b745e93f4b48e2",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopDeviceRegistrationRemoteDataSource.kt": "049d9ee88123917088c71159c09108f4d64a5a6190913f2b15a9e23b90fd1b32",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt": "04c2bbb8a9d133522452bc9400d963fc484e54382d68a1f554b09edc4b8df59a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SyncEventModels.kt": "a96af5e3349c5a4329454e3bf499b5e44afea3da04616566c5821a8576ddb17a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SyncRecoveryModels.kt": "02d671f13bb377b3b7547e483dbcdfdc16a45dbef7b5800bc279123b48ce06de",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/Task126BusinessDataScopeRuntimeGuard.kt": "c1a6cef4844ed169b3accb904e43cdcbcb054d0f34a75535d858987a4d1fba37",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/Task126SyncPolicy.kt": "d61c511da09c42d19c5e6660379acdd37c5db5b89face0fd727100f06678151e",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/components/CloudSyncIndicator.kt": "13f6f10227c81c94d97ddaa4d01fc7c73c957e1b50536b8e416bcc206c5b22eb",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/navigation/NavGraph.kt": "be39edbebc83a46ae2fd3f3e7c3073d0d0aa9468c9225edd4c5acab61305bd20",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/DatabaseScreen.kt": "ee4b1715e90f246e4aaaab00cc9aad60c2c74ca693b2c67b2858235f91bad5bb",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/DatabaseScreenComponents.kt": "e29774feda7b774b8e0749c82d2da4cbbb5f0c82c22cdec9bb889c516421cfdd",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/ui/screens/OptionsScreen.kt": "89b7df597dc813c0fa0e84d7d8f65bee016b9467af8e292848a4a133b5dfa65a",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModel.kt": "6d276f1e1170414372ba701cbdbf3b56c4a487a00b071413ff7657131256459a",
+    "app/src/main/res/values-en/strings.xml": "73cf33a72e0aaf8c3966d93795c3bff11e1be47ac27f54d9e5a484b40a5cb007",
+    "app/src/main/res/values-es/strings.xml": "cdbca9436679b53cdaaebfe62fc9a6c2701dda15aa86568280c4ca936d91f380",
+    "app/src/main/res/values-zh/strings.xml": "421592f65af67996f23fd04a87defa9842796848fb41a5356cc9487b47ba42f7",
+    "app/src/main/res/values/strings.xml": "8e6eaebdf7525e323d796da2dc8d15d9351efd31a473f78f7b7fdf49c0d7bd45",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/BusinessWriteAttempt.kt": "106bdd2f9f9bd5b9daa3589da974b6e827be07e32153712033c47a039f7c1a23",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/LocalAcknowledgedBodies.kt": "f73ff673e374b816956ab9ded25a9185acc5bc50c90a9c021a42a31fbb6b561d",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/RecoveryPageProgress.kt": "f490cefaa0b241cbaaa6d70e0ef88e10b1ba7d41e3860d12c6233f11a2959e30",
+    "app/src/main/java/com/example/merchandisecontrolsplitview/data/SameScopeRecoveryOverlay.kt": "44e0e7d9b33146399a67a684f9b54e35ced09e2a5eadd16dfaa54c84e1af1381"
+  },
+  "root_actual": {
+    "pass": 3,
+    "fail": 0,
+    "skip": 0,
+    "kind": "Actual AppNavGraphContent, real Room/repository/ViewModels/AutoSync, held controlled RPC",
+    "whole_application_sdk": "NOT_RUN",
+    "authenticated_backend": "NOT_RUN",
+    "performance_budgets": "NOT_RUN"
+  },
+  "core_actual": {
+    "total": 505,
+    "pass": 504,
+    "fail": 0,
+    "skip": 1,
+    "kind": "JVM/Robolectric",
+    "existing_skip": "wechat 004 real local Supabase fixture converges through production incremental apply"
+  },
+  "postcommit_ordinary_fault": {
+    "red": "expected activated_cleanup_pending but actual staging",
+    "green": "Included unchanged desired test in core01 133 recovery PASS"
+  },
+  "after_root14_test_only_delta": "Extra BEFORE PNG capture executed in root15; exact same second unsaved draft visible before/after C. Root14 four-language/font and empty-root results remain separate baseline results.",
+  "root14_core01_reuse": "Historical baseline: exactly two production files now changed by scoped parent-delete proof retirement; final canonical suite/root selector pending.",
+  "price_parent_delete": {
+    "red": {
+      "pass": 1,
+      "fail": 1,
+      "skip": 0,
+      "receipt_sha256": "70094b5c00f84070fa443279e01719332aec601a3c1765a57b421d95b0c55d48"
+    },
+    "green": {
+      "pass": 3,
+      "fail": 0,
+      "skip": 0,
+      "receipt_sha256": "52b5dc9d28106add14acfeb8ccc0e06b42ef80aa2e5b1283d419225f5ac85e79"
+    },
+    "scope": "Only private ACK price-body proofs, bounded256 physical parent/bridge/body/owner/device verification, same deletion transaction. Canonical checkpoint/manifest and unrelated pending unchanged. Raw cascade fails closed; corrupt price blocks delete with rollback.",
+    "revision_guard": {
+      "red": {
+        "pass": 0,
+        "fail": 1,
+        "skip": 0
+      },
+      "green": {
+        "pass": 4,
+        "fail": 0,
+        "skip": 0
+      },
+      "rule": "PRICE revision must equal0 as in the physical reopen qualifier; corrupted revision rolls back parent/tombstone/private proofs unchanged."
+    }
+  },
+  "root15_actual": {
+    "pass": 1,
+    "fail": 0,
+    "skip": 0,
+    "receipt_sha256": "e76dcdfdd641acb384af278f400f8220bbbf9897b43163a29e9a704a21cefc71",
+    "same_unsaved_before_after_png": [
+      "root15-android-root-held-second-draft.png",
+      "root15-android-root-activated-draft.png"
+    ],
+    "kind": "Same real AppNavGraphContent/fileDB/VM/AutoSync controlled held RPC main selector, real C/ACK/reopen; no authenticated E2E/performance",
+    "source_delta_after": "Only PRICE revision0 delete-proof guard, not used by the root selector; canonical compile/full suite pending; UI/AppNavGraph source identical.",
+    "fresh_images": "Only five root15 main-selector PNGs; exported older Options locale PNGs are not new root15 executions."
+  },
+  "v4_reviews": {
+    "data": "APPROVED",
+    "ux": "APPROVED",
+    "manifest_sha256": "ef065b4a2cbfe1c691226d1b5a116e2da95cdbf41d502a66b9d5b0ca34c17ffe",
+    "patch_sha256": "07fa75c7ea9a2b9efeb3b984e9250167c17d33a3e80de6153123d01f7dbe4982",
+    "scope": "same two reviewers, narrow price revision guard, same root15 draft visual verified"
+  },
+  "canonical_actual": {
+    "gradle_exit": 0,
+    "argv": [
+      "./gradlew",
+      "--no-daemon",
+      "assembleDebug",
+      "lint",
+      "test",
+      "assembleDebugAndroidTest",
+      "--console=plain"
+    ],
+    "total": 1171,
+    "pass": 1164,
+    "fail": 0,
+    "skip": 7,
+    "xml_count": 76,
+    "skipped_cases": [
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.SupabaseRealtimeSessionSubscriberLiveTest",
+        "name": "live realtime insert is materialized into Room",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.MobileParityLargeDatasetBenchmarkTest",
+        "name": "measure real repository queries and local editor writes at large scale",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ShoppingHogarLocalDebugTest",
+        "name": "dumpShoppingHogarCurrentMapping",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+        "name": "wechat 004 real local Supabase fixture converges through production incremental apply",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionAuditOracleLoopTest",
+        "name": "runOrchestratedOracleLoopAndroidFirst",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionDriveBatchAuditTest",
+        "name": "auditDriveSupplierCorpusReadOnly",
+        "status": "SKIP"
+      },
+      {
+        "class": "com.example.merchandisecontrolsplitview.util.ExcelRecognitionOracleV2Test",
+        "name": "validatePinmarkAndModalinaWithIndependentRawWorkbookOracle",
+        "status": "SKIP"
+      }
+    ],
+    "lint_warnings": 59,
+    "lint_errors": 0,
+    "new_lint_advisories": 5,
+    "advisories_rationale": "android-final-lint-classification.json",
+    "new_kotlin_warnings": 0,
+    "source_unchanged_from_v4": true,
+    "receipt_sha256": "6a0936e7830ad6621e340fb3b2daffe51d33958782f4c05f81e1dfccd87172e9",
+    "profile": "generic CI; proper existing full TEST artifact/SDK/runtime pending"
+  }
+}

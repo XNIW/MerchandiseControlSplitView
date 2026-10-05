@@ -7,6 +7,20 @@ import androidx.room.Query
 
 @Dao
 interface ProductRemoteRefDao {
+    /** Current record only: actual ACK/inbound revision, every price bridge, no unconfirmed original call.
+     * A quoted identity match is deliberately conservative; an ambiguous receipt can only delay confirmation.
+     */
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM products p JOIN product_remote_refs r ON r.productId=p.id
+            WHERE p.id=:productId AND r.lastRemoteAppliedAt IS NOT NULL
+              AND r.localChangeRevision=r.lastSyncedLocalRevision
+              AND NOT EXISTS(SELECT 1 FROM product_prices v LEFT JOIN product_price_remote_refs b ON b.productPriceId=v.id
+                  WHERE v.productId=p.id AND b.id IS NULL)
+              AND NOT EXISTS(SELECT 1 FROM sync_event_outbox o WHERE o.eventType='LOCAL_BUSINESS_WRITE_V1'
+                  AND o.domain IN ('PRODUCTS','PATCH','PRICES') AND instr(o.metadataJson,'"'||r.remoteId||'"')>0))
+    """)
+    fun observeProductCloudConfirmed(productId: Long): kotlinx.coroutines.flow.Flow<Boolean>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(ref: ProductRemoteRef): Long
 
@@ -52,8 +66,8 @@ interface ProductRemoteRefDao {
         lastRemoteAppliedAt = :appliedAt,
         lastRemotePayloadFingerprint = :fingerprint,
         remoteUpdatedAt = COALESCE(:remoteUpdatedAt, remoteUpdatedAt),
-        localChangedFields = NULL
-        WHERE productId = :productId
+        localChangedFields = CASE WHEN localChangeRevision = :rev THEN NULL ELSE localChangedFields END
+        WHERE productId = :productId AND lastSyncedLocalRevision <= :rev
         """
     )
     suspend fun updateRemoteApplyState(

@@ -1037,6 +1037,81 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Esecuzione / Fix — 2026-10-05 — disponibilità locale e root reale Android
+
+Mandato originale e addenda utente 2026-10-04 preservati; questa voce riguarda il nuovo delta sul worktree isolato `codex/android-local-availability-20261004`, baseline main `fe0927c379082925864b200b747bf9d152c5b750`. Lo stato resta FIX. Checkout primario (Gradle/libs/wrapper e file IDE preesistenti), MASTER/Planning/backlog, harness Excel e altre lane preservati. Evidenza portabile: [ledger](evidence/TASK-143/local-availability-20261005/ledger.json), [limiti e ricevute](evidence/TASK-143/local-availability-20261005/README.md). C resta unico writer del report ecosistema; questo log non ne sostituisce la matrice.
+
+**File modificati (percorsi completi e hash nel producer/ledger):**
+- `MerchandiseControlApplication.kt` — qualificazione fisica locale in IO, restore del contesto confermato prima della verifica remota e separazione delle autorità locali/cloud.
+- `CatalogSyncStateTracker.kt`, `Task126BusinessDataScopeRuntimeGuard.kt`, `Task126SyncPolicy.kt` — letture/scritture sullo stesso snapshot qualificato durante checking/retry/recovery; foreign/unknown/unbound/revoked restano protetti.
+- `ShopContext.kt`, `ShopDeviceRegistrationRemoteDataSource.kt` — cache bounded per owner/shop già confermato e diniego dispositivo autorevole durevole; 401 refresh distinto da 403 denial.
+- `InventoryRepository.kt`, `BusinessWriteAttempt.kt`, `InventoryCatalogRemoteRows.kt`, `SyncEventModels.kt` — stesso outbox esistente con tentativo wire immutabile, identità sealed/readback prima HTTP, replay prima del nuovo lavoro, ACK della sola revisione inviata e gestione del Save successivo.
+- `LocalAcknowledgedBodies.kt`, `HistoryEntryDao.kt` — prova sparsa del body esatto realmente ACKed e qualificazione fisica bounded; mantenimento del checkpoint server originale e rifiuto del tamper clean Product/History/Price.
+- `ProductRemoteRefDao.kt` — conferma del singolo prodotto/revisione corrente indipendente da altro pending, prezzi non bridged e receipt pertinenti esclusi dal successo prematuro.
+- `ShopSyncRecoveryCoordinator.kt`, `SyncRecoveryModels.kt`, `RecoveryPageProgress.kt` — ledger/proiezione/cursore di pagina atomici sotto A originale, resume senza riscaricare pagine accettate, cutover con scope/device/G/journal CAS, preservazione del commit durevole su fault ordinario postcommit e budget storage con scratch TEMP.
+- `SameScopeRecoveryOverlay.kt` — stesso intento/payload A conservato durante cutover; merge dei soli campi dirty, prova owned History e mapping esatto del prezzo A con ACK perso; nessuna History/Price duplicata. Sorgente staging copiata con cursore e prepared statement nelle sole TEMP della transazione, senza ATTACH/DETACH o cambio WAL.
+- `DatabaseViewModel.kt` — editor field-aware rispetto alla baseline reale; conferma del last saved ID dal DAO; null shop transitorio non cancella lo scope immagini valido.
+- `NavGraph.kt` — AppNavGraphContent reale condiviso dal wrapper produzione, shell/tabs navigabili, guard business prima della composizione e altezza NavigationBar adattata al font.
+- `DatabaseScreen.kt`, `DatabaseScreenComponents.kt` — feedback locale/pending e conferma remota realmente provata; tag dei controlli esistenti per il test integrato reale.
+- `OptionsScreen.kt` — dipendenza auth passata coerentemente e account title/email a larghezza stabile con wrapping.
+- `CloudSyncIndicator.kt` — progress debounced e animazione solo durante lavoro attivo; errore persistente statico.
+- `values/strings.xml`, `values-en/strings.xml`, `values-es/strings.xml`, `values-zh/strings.xml` — successo locale distinto dalla conferma cloud nelle quattro lingue.
+- `DefaultInventoryRepositoryTest.kt`, `ShopSyncRecoveryCoordinatorTest.kt` — regressioni reali A/lost ACK/B/cutover/replay/reopen, body corruption e fault ordinario postcommit, mantenendo i guard originali.
+- `ShopContextTest.kt`, `ShopContextOfflineAuthorizationTest.kt`, `Task126BusinessDataScopeRuntimeGuardTest.kt`, `BusinessContentGateTest.kt`, `ProductBaselineFingerprintTest.kt` — checking/offline/denial/scope/capability e confronto del body originale; nessun READY fabbricato.
+- `Task139ShopSyncRecoveryForceStopDeviceTest.kt` — sola visibilità interna della fixture canonica riusata; `LocalAvailabilityRootDeviceTest.kt` — actual root/Room/ViewModel/AutoSync con rete held prima degli input, bootstrap vuoto, font1.6/quattro lingue, draft/focus/query/scroll e reopen. Dopo root14 aggiunta capture BEFORE del secondo draft; root15 main selector1 PASS con coppia visuale del medesimo draft prima/dopo C (font/empty restano prove separate root14).
+- `docs/TASKS/evidence/TASK-143/local-availability-20261005/*` e questa sezione Fix — ricevute, hash, screenshot sintetici originali e confini della prova.
+
+**Azioni eseguite:**
+1. Distinte identità/autorizzazione, integrità locale e freschezza cloud: pending/conflict non diventano un blocco globale sui dati sicuri dello stesso scope.
+2. Preservate le operazioni già inviate byte per byte. Core reale copre Product/History/Price A→ACK perso/tardivo→B stesso/differenti campi→cutover/reopen→replay A originale→ACK B; drain ripetuti senza duplicati. Nessuna riscrittura di A dai valori B o deduzione di ACK dallo snapshot.
+3. Il test actual root ha trovato DAO hot/VM stale mentre DAO fresh provava ACK; execSQL ATTACH disabilita WAL e perde TEMP Room. I candidati prepared ATTACH/DETACH e public deferred cleanup hanno FAIL preservati. Driver ufficiale2.6.2 mappa DEFERRED a reader; rimossi i workaround, ora source/overlay TEMP e commit principale unici mantengono WAL e invalidazioni. Non ricreate tabelle interne Room e non forzata conferma UI.
+4. Nuovo fault ordinario dopo commit riproduce RED1: atteso activated_cleanup_pending, ottenuto staging. Catch normale ora riusa la stessa prova durevole scoped/CAS già presente nella cancellazione. Test desiderato invariato GREEN in Recovery133; nuova istanza completa il cleanup della stessa C/G, non ridownload implicito.
+5. **UI/UX intenzionale:** copy Saved on device/cloud pending e conferma per record (chiarezza); error progress statico/debounced (stabilità); account wrapping e altezza/font NavigationBar in it/en/es/zh (leggibilità). Nessuna feature Android rimossa o business logic spostata nei composable.
+6. `android-root-temp-source-14`: actual3 PASS/0 FAIL/0 SKIP su emulator5556 isolato. Held prima di tab/search/editor/Save locale durevole; secondo draft ancora unsaved e focused conservato al cutover effettivo, tab/query/scroll invariati; normale AutoSync conferma DAO/VM/UI e secondo Save, file-backed reopen qualifica. Bootstrap vuoto e Options/Nav quattro lingue font1.6 PASS. APK e sorgenti pin/hash nelle ricevute,10 PNG originali validi; non SDK wiring dell'intera Application o backend autenticato.
+7. `android-temp-source-current-core-01`:505=504 PASS/0 FAIL/1 SKIP preesistente. Repository222=221P1S; Recovery133P; DatabaseVM61P; ExcelVM52P; ShopContext17P/offline6P; RuntimeGuard8P; ContentGate4P; Fingerprint2P. Producer `bbd1f147003667a089d09e0f317114eac6228a1c2897dd2be791aa3dfa5b1ded` uguale a root14 per quel baseline; due file produttivi poi cambiati dal fix scoped delete descritto sotto. Sono test JVM/Robolectric, non UI Compose/Espresso.
+
+8. Review v2 UX APPROVED; dati CHANGES_REQUESTED per prezzo nuovo ACKed → deleteProduct legittimo → reopen. RED1:1 PASS/1 FAIL, assertion desiderata di qualificazione fallisce; controllo raw cascade passa. Correzione minima `InventoryRepository.kt`/`LocalAcknowledgedBodies.kt`: prima della FK cascade, nella stessa transazione/tombstone, ritirate soltanto prove private di prezzi del padre verificato, identità binding/device/G e body esatto validati con join/keyset bounded256. Canonical C/manifest e outbox non modificati. GREEN2:3 PASS/0 FAIL/0 SKIP, medesimo test desiderato più controllo corrupt body con rollback prodotto/tombstone/prove. Primo tentativo GREEN non compilato (array type), runtime NON ESEGUITO. Ricevute/XML portabili separati; nuovo freeze v3 e gate canonici ancora pendenti.
+
+9. Root15 main selector actual1 PASS/0 FAIL/0 SKIP, build0,5PNG root freschi inclusa la coppia stesso draft BEFORE/AFTER C, input/focus/tab/query/scroll e drain/ACK/reopen invariati. Le Options PNG esportate dal device non sono nuovi test root15; quattro lingue/empty riusate da root14 senza cambi UX. Receipt `e76dcdfdd641acb384af278f400f8220bbbf9897b43163a29e9a704a21cefc71`.
+10. Review v3 UX APPROVED/equivalente, P1 delete chiuso; P2 guard PRICE revision deve essere0 come nel qualificatore fisico. Test desiderato nuova revisione corrotta RED1:0 PASS/1 FAIL; aggiunto solo `identity.revision == 0L` prima del retire. GREEN1:4 PASS/0 FAIL/0 SKIP, rollback padre/tombstone/prove e pending/C invariati. Root15 precede soltanto questo guard delete non invocato nel caso root; UI/cutover source invariati. Freeze v4/re-review dello stretto delta e gate finali ancora pendenti.
+
+11. V4 entrambe review APPROVED (stessi2reviewer),72/72 hash controllati, guard revisione/body/scoped delete/canonical/pending e root15 stessa bozza verificati. Canonico `android-final-canonical-v4-01`:assembleDebug/lint/test/assembleDebugAndroidTest PASS, source72 invariato,76 XML/1171=1164 PASS/0 FAIL/7 SKIP preesistenti. Repository/Recovery/DatabaseVM/ExcelVM inclusi full; nessun nuovo warning Kotlin/deprecation. Lint0 errori/59 warning,5 nuovi advisory ShopContext motivati:2 apply-vs-commit contrari alla persistenza sincrona cache confermata e3 KTX stilistici (device denial verifica Boolean commit). Motivazione portabile nel ledger/classification; nessun suppression o cambio comportamento. CI/integrazione/TEST/primary auth ancora pendenti.
+
+**Check obbligatori correnti:**
+| Check | Stato | Evidenza / limite |
+|---|---|---|
+| Build Gradle | ESEGUITO | assembleDebug + assembleDebugAndroidTest canonico v4 PASS; root15 capture/device PASS precede solo il guard prezzo delete non invocato in quel scenario |
+| Lint | ESEGUITO | lint canonico v4 PASS,0 errori/59 warning;5 advisory nuovi motivati nel classification, nessun warning/deprecation Kotlin |
+| Warning nuovi | ESEGUITO per build/core | nessun nuovo warning Kotlin/deprecation;5 lint advisory di storage/KTX esplicitamente motivati (protocollo consente motivazione); class-sharing JVM preesistente |
+| Coerenza planning | ESEGUITO | task/addenda correnti, stesso motore/outbox/schema/API/dipendenze; scope/device/lease/CAS conservati |
+| Criteri accettazione | NON ESEGUITO integralmente | stato individuale corrente sotto; niente DONE o acceptance live dai fake |
+
+**Baseline regressione TASK-004:** test eseguiti Repository, DatabaseVM, ExcelVM e adiacenti sopra; aggiornati test dei confini realmente cambiati e nuovo fault postcommit. I61 DatabaseVM originali e52 ExcelVM sono verdi; null-shop image regression corretta in produzione, assertion non indebolita. Limiti: CI finale, primary SDK/authenticated flow, hardware e prestazioni non sostituiti dalla suite.
+
+**Criteri individuali — corrente candidate, non chiusura finale:**
+| Criterio | Stato | Evidenza / limite |
+|---|---|---|
+| CA-01 | ESEGUITO per baseline/preservazione; NON ESEGUITO integrazione | branch/main fe0927 e dirty primari preservati; nuova PR/CI ancora pendenti |
+| CA-02 | ESEGUITO locale | intento/storage e root Save held +secondo draft/C/reopen; collaudo live in CA07 |
+| CA-03 | ESEGUITO Android controllato; NON ESEGUITO controparte/live | root tab/query/scroll/editor conservati; iOS owner separato |
+| CA-04 | ESEGUITO locale; NON ESEGUITO live nuovo | Product/History/Price A/B/ACK/replay/C/reopen reali controllati; staging autenticato non eseguito sul nuovo candidato |
+| CA-05 | NON ESEGUITO nuovo closeout | vecchie PR/CI distinte; iOS nuovo delta ancora in esecuzione dal suo unico writer |
+| CA-06 | ESEGUITO tracciamento; NON ESEGUITO completo | matrice C mantiene lane runtime/hardware/UX mancanti; non importata readiness POS |
+| CA-07 | NON ESEGUITO live finale | controllati root3/core504 verdi; servono review/CI/TEST install preservativa e A↔I/offline/reconnect/reopen autenticati |
+| CA-08 | ESEGUITO regressione JVM pertinente; NON ESEGUITO runtime completo | ExcelVM52 e repository; stesso workbook/immagini/hardware non rimpiazzati; harness sospeso |
+| CA-09 | NON ESEGUITO | nessun campione dataset/PSS/CSV04 qualificato nuovo; tempi runner non sono budget1s/100ms/300ms/500ms/~3s |
+| CA-10 | ESEGUITO locale | RED/GREEN/core/root15, canonico1164 PASS/7 SKIP, lint motivato, build/AndroidTest compile; live separato |
+| CA-11 | ESEGUITO review; NON ESEGUITO CI/merge | freezev4 due APPROVED e gate locali; CI exact-head e merge normale autorizzato da completare |
+| CA-12 | ESEGUITO log; NON ESEGUITO chiusura | report consolidato soltanto C; task FIX e nessuna percentuale/GO |
+
+**Incertezze:**
+- Primo install nuovo profilo TEST e SDK Application, autenticazione/convergenza e misure reali non provati da controlled root. Vecchio diniego macOS input è storico: nuovo check primary supportato non ancora eseguito, quindi non è un nuovo BLOCKED.
+- TEMP source scratch è coperto dal nuovo headroom conservativo; costo sul dataset reale da misurare, nessuna promessa3s dal fixture.
+
+**Handoff notes:**
+- Congelare candidato Android indipendentemente da iOS; riusare i reviewer esistenti per il solo delta. Dopo review/fix: assemble/lint/full/warning/compile preview e capture finale→commit selettivo/push/PR/CI exact-SHA→merge normale già autorizzato. Primary TEST solo dopo baseline minima fresca/redatta e preservando auth/session/DB; zero reset/wipe.
+- Nessun deploy produzione/store, migration/SQL155/old trace, nuovo framework/owner o riattivazione Excel/Win7. Se fresh OS input deny, fermare la sola lane interessata senza bypass e documentare motivo attuale.
+
 ### Fix — 2026-10-03 UTC — chiusura dei due failure ONE76 e port invariato
 
 Il `finally` Task126 ora conserva il registry fino alla completion reale, anche con cleanup NonCancellable e cancellazione LAZY. È un fix del normale confine business oltre che del caller DEBUG. La fixture response-loss usa lo stesso SDK/session/origin con una normale RPC precedente completamente consumata, poi verifica il riuso del socket prima del fault dopo il body completo: nessun retry manuale/client o parametro motore nuovo. I 76 assert/ID rimangono; ONE76 attempt02 è PASS. Il precedente NOT_PROVEN e il primo 74/2 non sono riscritti come successi.

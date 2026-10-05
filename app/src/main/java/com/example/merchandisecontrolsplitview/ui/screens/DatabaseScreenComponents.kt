@@ -69,6 +69,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -227,7 +228,7 @@ internal fun DatabaseSearchField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().testTag("database-search"),
         singleLine = true,
         placeholder = {
             Text(placeholder)
@@ -592,7 +593,7 @@ internal fun DatabaseProductListSection(
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag("database-product-list"),
                 contentPadding = DatabaseListContentPadding,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {

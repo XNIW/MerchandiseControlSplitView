@@ -156,6 +156,68 @@ class Task126BusinessDataScopeRuntimeGuardTest {
         assertTrue(tracker.allowsBusinessDataScope(OWNER_A, selectedShop(SHOP_A)))
     }
 
+    @Test
+    fun `143 local lease survives cloud checking but never admits outbound work`() = runTest {
+        val scope = ownerScope(OWNER_A, SHOP_A)
+        val tracker = Task126BusinessDataScopeFlightGate(Task126BusinessDataScopeState.ready(scope))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val local = async {
+            tracker.withLocalBusinessDataScopeFlight {
+                entered.complete(Unit); release.await()
+                tracker.requireCurrentBusinessDataScope()
+                assertTrue(runCatching { tracker.requireCloudBusinessDataScope() }.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                143
+            }
+        }
+        entered.await()
+        tracker.updateState(Task126BusinessDataScopeState(
+            Task126BusinessDataScopeStatus.CHECKING, boundScope = scope, localAccessScope = scope))
+        assertFalse(tracker.allowsBusinessDataScope(OWNER_A, selectedShop(SHOP_A)))
+        assertTrue(runCatching { tracker.withBusinessDataScopeFlight(OWNER_A, selectedShop(SHOP_A)) {} }.isFailure)
+        release.complete(Unit)
+        assertEquals(143, local.await())
+    }
+
+    @Test
+    fun `143 local lease is invalidated by scope or permission change`() = runTest {
+        for (next in listOf(
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_B, SHOP_B)),
+            Task126BusinessDataScopeState.ready(ownerScope(OWNER_A, SHOP_A)).copy(localWritesAllowed = false))) {
+            val tracker = trackerReady(ownerScope(OWNER_A, SHOP_A))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val local = async {
+                runCatching {
+                    tracker.withLocalBusinessDataScopeFlight {
+                        entered.complete(Unit)
+                        withContext(NonCancellable) { release.await() }
+                        tracker.requireCurrentBusinessDataScope()
+                    }
+                }
+            }
+            entered.await()
+            tracker.updateBusinessDataScopeState(next)
+            release.complete(Unit)
+            assertTrue(local.await().exceptionOrNull() is Task126BusinessDataScopeChangedException)
+        }
+    }
+
+    @Test
+    fun `143 readonly or mismatched local provenance cannot authorize save`() = runTest {
+        val scope = ownerScope(OWNER_A, SHOP_A)
+        for (state in listOf(
+            Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING, boundScope=scope,
+                localAccessScope=ownerScope(OWNER_B, SHOP_A)),
+            Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING, boundScope=scope,
+                localAccessScope=scope, localWritesAllowed=false))) {
+            val tracker = CatalogSyncStateTracker(state)
+            var calls = 0
+            assertTrue(runCatching { tracker.withLocalBusinessDataScopeFlight { calls++ } }.isFailure)
+            assertEquals(0, calls)
+        }
+    }
+
     private fun trackerReady(scope: Task126OwnerStoreScope): CatalogSyncStateTracker =
         CatalogSyncStateTracker(
             Task126BusinessDataScopeState(

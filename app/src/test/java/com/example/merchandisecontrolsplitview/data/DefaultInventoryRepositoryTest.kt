@@ -4985,7 +4985,7 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun `068 bulk product push falls back to single rows after split failures`() = runTest {
+    fun `068 bulk product push falls back to single rows after definitive split rejections`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000682"
         repeat(30) { index ->
             repository.addProduct(
@@ -4999,7 +4999,8 @@ class DefaultInventoryRepositoryTest {
         }
         val remote = FakeCatalogRemote016().apply {
             productUpsertFailure = { rows, _ ->
-                if (rows.size > 1) IOException("batch rejected") else null
+                // A PostgreSQL constraint rejection proves the statement did not commit.
+                if (rows.size > 1) IllegalStateException("HTTP 409 23505 duplicate key") else null
             }
         }
 
@@ -5467,6 +5468,131 @@ class DefaultInventoryRepositoryTest {
         val product = repository.findProductByBarcode("task125-catalog-price-target")!!
         assertEquals(1, repository.getPriceSeries(product.id, "PURCHASE").first().size)
         assertEquals(1, repository.getPriceSeries(product.id, "RETAIL").first().size)
+    }
+
+    @Test
+    fun `143 late catalog ACK preserves fields from a second actual Save`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000457"
+        repository.addProduct(Product(barcode="143-late-ack", productName="Original"))
+        val remote = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016()
+        val events = FakeSyncEventRemote()
+        repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter=CatalogSyncProgressReporter { }).getOrThrow()
+        val original = requireNotNull(repository.findProductByBarcode("143-late-ack"))
+        repository.updateProduct(original.copy(productName="First Save"))
+        val sent = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        var secondSaved = false
+        val held = object : CatalogRemoteDataSource by remote {
+            override suspend fun patchProduct(id: String, ownerUserId: String, shopId: String?, patch: InventoryProductPatch): Result<Unit> =
+                patchProduct(id, ownerUserId, patch)
+            override suspend fun patchProduct(id: String, ownerUserId: String, patch: InventoryProductPatch): Result<Unit> {
+                val accepted = remote.patchProduct(id, ownerUserId, patch)
+                assertEquals("First Save", patch.productName)
+                repository.updateProduct(requireNotNull(db.productDao().getById(original.id)).copy(productName="Second Save"))
+                secondSaved = true
+                return accepted // First ACK arrives only after second Save committed.
+            }
+        }
+        repository.syncCatalogQuickWithEvents(held, prices, events, owner,
+            progressReporter=CatalogSyncProgressReporter { }).getOrThrow()
+        assertTrue(secondSaved)
+        val pending = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+        assertEquals("Second Save", db.productDao().getById(original.id)?.productName)
+        assertEquals(sent.localChangeRevision, pending.lastSyncedLocalRevision)
+        assertTrue(pending.localChangeRevision > pending.lastSyncedLocalRevision)
+        assertEquals("productname", pending.localChangedFields)
+        assertTrue(db.productRemoteRefDao().hasPendingWork())
+        repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter=CatalogSyncProgressReporter { }).getOrThrow()
+        assertEquals("Second Save", remote.fetchCatalog().getOrThrow().products.single().productName)
+        assertFalse(db.productRemoteRefDao().hasPendingWork())
+        val sentCount = remote.patchedProducts.size
+        repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter=CatalogSyncProgressReporter { }).getOrThrow()
+        assertEquals("an additional drain must not resend confirmed revisions", sentCount, remote.patchedProducts.size)
+        assertEquals(1, remote.fetchCatalog().getOrThrow().products.size)
+    }
+
+    @Test
+    fun `143 lost business ACK replays original before confirming same field Save after reopen`() = runTest {
+        proveLostBusinessAckAfterReopen(differentField = false)
+    }
+
+    @Test
+    fun `143 lost business ACK replays original before confirming different field Save after reopen`() = runTest {
+        proveLostBusinessAckAfterReopen(differentField = true)
+    }
+
+    private suspend fun proveLostBusinessAckAfterReopen(differentField: Boolean) {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val name = "143-business-ack-${if (differentField) "different" else "same"}.db"
+        db.close(); context.deleteDatabase(name)
+        fun open() = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
+        db = open(); repository = DefaultInventoryRepository(db)
+        val owner = "00000000-0000-4000-8000-000000000457"
+        val remote = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016()
+        val events = FakeSyncEventRemote()
+        val report = CatalogSyncProgressReporter { }
+        try {
+            repository.addProduct(Product(barcode="143-replay", productName="Original", itemNumber="Original item"))
+            repository.syncCatalogQuickWithEvents(remote, prices, events, owner, progressReporter=report).getOrThrow()
+            val original = requireNotNull(repository.findProductByBarcode("143-replay"))
+            repository.updateProduct(original.copy(productName="Save A"))
+            val lost = object : CatalogRemoteDataSource by remote {
+                override suspend fun patchProduct(id: String, ownerUserId: String, shopId: String?, patch: InventoryProductPatch): Result<Unit> {
+                    remote.patchProduct(id, ownerUserId, patch).getOrThrow()
+                    return Result.failure(IOException("fixture committed A but lost response"))
+                }
+            }
+            assertTrue(repository.syncCatalogQuickWithEvents(lost, prices, events, owner, progressReporter=report).isFailure)
+            val sentA = remote.patchedProducts.single()
+            val later = if (differentField) requireNotNull(db.productDao().getById(original.id)).copy(itemNumber="Save B item")
+                else requireNotNull(db.productDao().getById(original.id)).copy(productName="Save B")
+            repository.updateProduct(later)
+            val revisionB = requireNotNull(db.productRemoteRefDao().getByProductId(original.id)).localChangeRevision
+            db.close(); db = open(); repository = DefaultInventoryRepository(db)
+            repository.syncCatalogQuickWithEvents(remote, prices, events, owner, progressReporter=report).getOrThrow()
+            assertEquals("reopen must replay the exact original A before current B", sentA, remote.patchedProducts[1])
+            assertEquals(3, remote.patchedProducts.size)
+            val cloud = remote.fetchCatalog().getOrThrow().products.single()
+            assertEquals(if (differentField) "Save A" else "Save B", cloud.productName)
+            assertEquals(if (differentField) "Save B item" else "Original item", cloud.itemNumber)
+            val ref = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+            assertEquals(revisionB, ref.lastSyncedLocalRevision)
+            assertEquals(revisionB, ref.localChangeRevision)
+            assertNull(ref.localChangedFields)
+            assertEquals(later, db.productDao().getById(original.id))
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            val calls = remote.patchedProducts.size
+            repository.syncCatalogQuickWithEvents(remote, prices, events, owner, progressReporter=report).getOrThrow()
+            assertEquals(calls, remote.patchedProducts.size)
+            assertEquals(0, db.productPriceDao().countAll())
+            assertEquals(0, db.historyEntryDao().countUserVisible())
+        } finally { db.close(); context.deleteDatabase(name); db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build() }
+    }
+
+    @Test
+    fun `143 lost ACK replays exact complete persisted sync event payload`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000457"
+        repository.addProduct(Product(barcode = "143-lost-ack", productName = "Lost ACK", purchasePrice = 4.0, retailPrice = 6.0))
+        val remote = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016()
+        val events = FakeSyncEventRemote().apply { commitThenLoseAckDomains += SyncEventDomains.CATALOG }
+        val first = repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+        assertEquals(1, first.syncEventOutboxPending)
+        val original = events.recordedParams.single { it.domain == SyncEventDomains.CATALOG }
+        assertTrue(original.metadata.size > 1)
+        val queued = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(original.clientEventId, queued.clientEventId)
+        val second = repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+        val retry = events.allRecordAttempts.last { it.domain == SyncEventDomains.CATALOG }
+        assertEquals("retry must preserve all parameters, including metadata, under the same key", original, retry)
+        assertEquals(0, second.syncEventOutboxPending)
+        assertEquals(1, events.emittedRows.count { it.clientEventId == original.clientEventId })
     }
 
     @Test
@@ -8643,6 +8769,8 @@ private class FakeSyncEventRemote(
 ) : SyncEventRemoteDataSource {
     override val isConfigured: Boolean get() = true
     val recordedParams = mutableListOf<SyncEventRecordRpcParams>()
+    val allRecordAttempts = mutableListOf<SyncEventRecordRpcParams>()
+    val commitThenLoseAckDomains = mutableSetOf<String>()
     val emittedRows = mutableListOf<SyncEventRemoteRow>()
     val externalEvents = mutableListOf<SyncEventRemoteRow>()
     val failRecordForDomains = mutableSetOf<String>()
@@ -8659,6 +8787,7 @@ private class FakeSyncEventRemote(
     }
 
     override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+        allRecordAttempts += params
         if (!capabilities.recordSyncEventAvailable) {
             return Result.failure(IOException("record_sync_event unavailable"))
         }
@@ -8669,7 +8798,11 @@ private class FakeSyncEventRemote(
             return Result.failure(IOException("record_sync_event failed for ${params.domain}"))
         }
         val existing = emittedRows.firstOrNull { it.clientEventId == params.clientEventId }
-        if (existing != null) return Result.success(existing)
+        if (existing != null) {
+            val committed = recordedParams.first { it.clientEventId == params.clientEventId }
+            if (committed != params) return Result.failure(IOException("sync_event_client_event_id_conflict"))
+            return Result.success(existing)
+        }
         recordedParams += params
         val row = SyncEventRemoteRow(
             id = nextId++,
@@ -8687,6 +8820,7 @@ private class FakeSyncEventRemote(
             createdAt = "2026-04-24T10:00:00Z"
         )
         emittedRows += row
+        if (commitThenLoseAckDomains.remove(params.domain)) return Result.failure(IOException("fixture lost ACK after COMMIT"))
         return Result.success(row)
     }
 

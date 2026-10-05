@@ -1,0 +1,15 @@
+{
+  "gradle_exit": 1,
+  "total": 1,
+  "pass": 0,
+  "fail": 1,
+  "skip": 0,
+  "source_unchanged": true,
+  "producer_sha256": "d03b34c877989c5ae0404b6c5a8de8a5969d3d47d5a78495247987ca7c08ba72",
+  "selectors": [
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 parent delete cannot retire an acknowledged price proof with corrupted revision"
+  ],
+  "xml_sha256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "d73156cca79a7d45c5c4d5e4b4aaaf1c83db31412183dffb29d0e4206addd4a6"
+  }
+}

@@ -199,8 +199,20 @@ data class Task126BusinessDataScopeState(
     val status: Task126BusinessDataScopeStatus,
     val boundScope: Task126OwnerStoreScope? = null,
     val localSnapshot: LocalDatabaseStatusSnapshot? = null,
-    val errorCode: String? = null
+    val errorCode: String? = null,
+    /** Local provenance, published only after durable binding and store checks. Not cloud freshness. */
+    val localAccessScope: Task126OwnerStoreScope? = null,
+    val localWritesAllowed: Boolean = true,
+    val localReadsAllowed: Boolean = true
 ) {
+    val allowsLocalOperations: Boolean
+        get() = localReadsAllowed && (allowsCloudSync ||
+            (status in setOf(Task126BusinessDataScopeStatus.CHECKING,
+                Task126BusinessDataScopeStatus.ERROR_RECOVERABLE) &&
+                localAccessScope != null && boundScope != null &&
+                Task126OwnerStoreGate.validate(localAccessScope, boundScope) ==
+                Task126OwnerStoreGateDecision.Allowed))
+
     val allowsCloudSync: Boolean
         get() = status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
             status == Task126BusinessDataScopeStatus.READY
