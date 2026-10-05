@@ -1091,26 +1091,32 @@ Mandato originale e addenda utente 2026-10-04 preservati; questa voce riguarda i
 **Criteri individuali — corrente candidate, non chiusura finale:**
 | Criterio | Stato | Evidenza / limite |
 |---|---|---|
-| CA-01 | ESEGUITO per baseline/preservazione; NON ESEGUITO integrazione | branch/main fe0927 e dirty primari preservati; nuova PR/CI ancora pendenti |
+| CA-01 | ESEGUITO sorgente/preservazione checkout; NON ESEGUIBILE baseline dati attuale | PR17 integrata/main37505e11 e dirty byte-identici; baseline preinstall fermata dal Mac locked attuale |
 | CA-02 | ESEGUITO locale | intento/storage e root Save held +secondo draft/C/reopen; collaudo live in CA07 |
 | CA-03 | ESEGUITO Android controllato; NON ESEGUITO controparte/live | root tab/query/scroll/editor conservati; iOS owner separato |
 | CA-04 | ESEGUITO locale; NON ESEGUITO live nuovo | Product/History/Price A/B/ACK/replay/C/reopen reali controllati; staging autenticato non eseguito sul nuovo candidato |
 | CA-05 | NON ESEGUITO nuovo closeout | vecchie PR/CI distinte; iOS nuovo delta ancora in esecuzione dal suo unico writer |
 | CA-06 | ESEGUITO tracciamento; NON ESEGUITO completo | matrice C mantiene lane runtime/hardware/UX mancanti; non importata readiness POS |
-| CA-07 | NON ESEGUITO live finale | controllati root3/core504 verdi; servono review/CI/TEST install preservativa e A↔I/offline/reconnect/reopen autenticati |
+| CA-07 | NON ESEGUIBILE target principale attuale; NON ESEGUITO live finale | root14/15 controllati verdi, canonico/CI1171 verificati; TEST install e A↔I/offline/reconnect/reopen fermati dal nuovo Mac locked, iOS candidato ancora in esecuzione |
 | CA-08 | ESEGUITO regressione JVM pertinente; NON ESEGUITO runtime completo | ExcelVM52 e repository; stesso workbook/immagini/hardware non rimpiazzati; harness sospeso |
 | CA-09 | NON ESEGUITO | nessun campione dataset/PSS/CSV04 qualificato nuovo; tempi runner non sono budget1s/100ms/300ms/500ms/~3s |
 | CA-10 | ESEGUITO locale | RED/GREEN/core/root15, canonico1164 PASS/7 SKIP, lint motivato, build/AndroidTest compile; live separato |
-| CA-11 | ESEGUITO review; NON ESEGUITO CI/merge | freezev4 due APPROVED e gate locali; CI exact-head e merge normale autorizzato da completare |
+| CA-11 | ESEGUITO Android review/CI/merge | due APPROVED v4; PR17 head01f87b2/CI37357374445 e main37505e11/CI37359159127 SUCCESS; entrambi XML1164 PASS/0 FAIL/7 SKIP |
 | CA-12 | ESEGUITO log; NON ESEGUITO chiusura | report consolidato soltanto C; task FIX e nessuna percentuale/GO |
 
 **Incertezze:**
-- Primo install nuovo profilo TEST e SDK Application, autenticazione/convergenza e misure reali non provati da controlled root. Vecchio diniego macOS input è storico: nuovo check primary supportato non ancora eseguito, quindi non è un nuovo BLOCKED.
+- Primo install nuovo profilo TEST e SDK Application, autenticazione/convergenza e misure reali non provati da controlled root. Il check supportato fresco `cua.getApp(Android Studio)` alle18:59:04Z ha restituito Mac locked e richiesta di sblocco manuale: BLOCKED_EXTERNAL attuale, UIinput/baseline/install0, nessun canale alternativo; richiesta umana pendente. I precedenti deny restano storici.
 - TEMP source scratch è coperto dal nuovo headroom conservativo; costo sul dataset reale da misurare, nessuna promessa3s dal fixture.
 
 **Handoff notes:**
-- Congelare candidato Android indipendentemente da iOS; riusare i reviewer esistenti per il solo delta. Dopo review/fix: assemble/lint/full/warning/compile preview e capture finale→commit selettivo/push/PR/CI exact-SHA→merge normale già autorizzato. Primary TEST solo dopo baseline minima fresca/redatta e preservando auth/session/DB; zero reset/wipe.
+- Android integrato indipendentemente da iOS: PR17/main37505e11 e CI head/main SUCCESS, checkout principale riconciliato preservando tre dirty/untracked hash. APK full TEST88e84eef con otto campi DEX/tipi e firma precedenti esatti, sorgenti app/test36 equivalenti al merge; nessuna installazione nuova. Dopo risposta umana di Mac sbloccato: nuovo controllo supportato su condizione cambiata, baseline minima fresca/redatta e install-r preservativa, readback e collaudo autenticato; nessun nuovo GO, reset/wipe o vecchia trace.
 - Nessun deploy produzione/store, migration/SQL155/old trace, nuovo framework/owner o riattivazione Excel/Win7. Se fresh OS input deny, fermare la sola lane interessata senza bypass e documentare motivo attuale.
+
+**Aggiornamento Git/TEST e limite runtime — 2026-10-05, 19:04 UTC:**
+- File documentazione aggiornati: questo solo log Fix e README; aggiunte cinque ricevute JSON portabili di profilo TEST, preservazione checkout, CI head, integrazione e blocco UI attuale. Nessun sorgente/test/risorsa/build config modificato dopo v4.
+- PR17 merge normale `37505e11d74fb6625df180771322ae3cef5eae10`, tree app identico al head approvato `01f87b2`; CI head/main SUCCESS, entrambi76XML/1171=1164 PASS/0 FAIL/7 SKIP verificati dagli archivi ufficiali soltanto in memoria. Profilo full TEST APK `88e84eef19332c8bff0dcb00d83e18fe960de097b1909e1e5348c739f17d3225`, firma e otto costanti DEX verificati senza esportarne i valori.
+- Check di questo delta solo documentazione: BUILD/LINT/WARNING N/A; coerenza planning e criteri ESEGUITI con stati individuali sopra, stato task FIX. I gate di produzione già PASS restano riferiti al candidato invariato; nessuna reinstallazione o collaudo autenticato dedotto.
+- Baseline dati/in-place/runtime/PSS/CSV04 nuovi NOT_RUN, perché il tool UI corrente richiede lo sblocco manuale prima di proseguire nella lane primaria. Preparazione read-only non eseguita; nessuna continuità auth/data dell'installazione mai effettuata dichiarata. Il solo successo Git/CI non chiude CA07/09/12.
 
 ### Fix — 2026-10-03 UTC — chiusura dei due failure ONE76 e port invariato
 
