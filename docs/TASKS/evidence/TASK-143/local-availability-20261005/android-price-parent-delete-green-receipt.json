@@ -1,0 +1,17 @@
+{
+  "gradle_exit": 0,
+  "total": 3,
+  "pass": 3,
+  "fail": 0,
+  "skip": 0,
+  "source_unchanged": true,
+  "producer_sha256": "31fffe5d268cf0bb5fb682a4a035c0fa5d5383a82b81ba5f5faeef7fbcb91ea0",
+  "selectors": [
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 new price ACK then scoped parent delete remains qualified after reopen",
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 raw parent cascade after new price ACK remains corruption after reopen",
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.143 parent delete cannot retire a corrupted acknowledged price proof"
+  ],
+  "xml_sha256": {
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "204441112ccd0c8a4562b0cbe533a00d59a41eaf684a5612d1c2ff2c6b36f0d4"
+  }
+}

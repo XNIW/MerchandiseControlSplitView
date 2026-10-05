@@ -222,9 +222,9 @@
     <string name="error_file_too_large_or_complex">The file is too large or complex to process.</string>
     <string name="error_legacy_xls_unreadable">The selected .xls file contains unreadable legacy objects. Open it in Excel, save it again, and try once more.</string>
     <string name="error_strict_ooxml_not_supported">The selected .xlsx file uses Strict OOXML. Save it as a standard Excel workbook and try again.</string>
-    <string name="success_product_added">Product added successfully.</string>
+    <string name="success_product_added">Product saved on this device. Cloud confirmation pending.</string>
     <string name="error_product_added">Error adding product.</string>
-    <string name="success_product_updated">Product updated successfully.</string>
+    <string name="success_product_updated">Product saved on this device. Cloud confirmation pending.</string>
     <string name="error_product_updated">Error updating product.</string>
     <string name="success_product_deleted">Product deleted successfully.</string>
     <string name="error_product_deleted">Error deleting product.</string>
@@ -844,4 +844,5 @@
     <string name="storefront_expired_request_help">The saved request can no longer be retried automatically. Discard the request to save again; your input will be kept.</string>
     <string name="storefront_discard_pending">Discard saved request</string>
     <string name="account_session_cleanup_failed">Local sign-out could not be verified. Try again.</string>
+    <string name="product_save_cloud_confirmed">This product is confirmed in the cloud.</string>
 </resources>

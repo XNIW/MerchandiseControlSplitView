@@ -1,0 +1,31 @@
+{
+  "gradle_exit": 0,
+  "total": 505,
+  "pass": 504,
+  "fail": 0,
+  "skip": 1,
+  "source_unchanged": true,
+  "producer_sha256": "bbd1f147003667a089d09e0f317114eac6228a1c2897dd2be791aa3dfa5b1ded",
+  "selectors": [
+    "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",
+    "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+    "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest",
+    "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
+    "com.example.merchandisecontrolsplitview.data.ShopContextTest",
+    "com.example.merchandisecontrolsplitview.data.ShopContextOfflineAuthorizationTest",
+    "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+    "com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest",
+    "com.example.merchandisecontrolsplitview.data.ProductBaselineFingerprintTest"
+  ],
+  "xml_sha256": {
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest.xml": "184da427f1ee9c7e8088f909dcde9396ae322a0f5000d65a4a892afec5adfd67",
+    "TEST-com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest.xml": "88d53e6801d937c4508f38bcba7b37ce890439ea5023ecfec79c8c7e44cd62b1",
+    "TEST-com.example.merchandisecontrolsplitview.data.ProductBaselineFingerprintTest.xml": "4f3b6d8c612f44f459216eaedcfb60b5a37a2945dd0b4d16bdcc3f1a7048c0b8",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest.xml": "a1d386829cd373c715ade36bbf9daa24c50b9d6610274c359858f81acbaf49ae",
+    "TEST-com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModelTest.xml": "07163c7d80ff5c30f6c33af72e030b82f66775371d287458c7da27aa4f847423",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopContextOfflineAuthorizationTest.xml": "0b585efd1ce4a3fd2ddeae7e6a7c6e4d32c7d74b3b0bbefe6dc4db0e91212f14",
+    "TEST-com.example.merchandisecontrolsplitview.data.ShopContextTest.xml": "fbf633925ca265f2aefd50435b7f4430101037031ae48a63938a9302b727d22c",
+    "TEST-com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest.xml": "6d13ef7fa5802b1462d7708a22f0dd2853eb2679ab30dffa7eb2b0783184a684",
+    "TEST-com.example.merchandisecontrolsplitview.ui.navigation.BusinessContentGateTest.xml": "464b40a68bf00e347de6d63676653a1fa9ee5c1bbd3be9d347f4c74ad276d914"
+  }
+}

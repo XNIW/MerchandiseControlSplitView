@@ -10,10 +10,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import io.github.jan.supabase.exceptions.RestException
 
 private const val SHOP_SCOPE_PREFIX = "shop:"
 private const val SELECTED_SHOP_PREF_PREFIX = "selected_shop_id:"
 
+@Serializable
 data class LinkedShop(
     val shopId: String,
     val code: String?,
@@ -35,6 +39,7 @@ data class LinkedShop(
             !shopStatus.isShopStatusDisabled()
 }
 
+@Serializable
 data class SelectedShop(
     val shopId: String,
     val code: String?,
@@ -47,13 +52,16 @@ data class SelectedShop(
         get() = name.ifBlank { code.orEmpty().ifBlank { shopId } }
 }
 
+@Serializable
 data class ShopContext(
     val ownerUserId: String?,
     val linkedShops: List<LinkedShop>,
     val selectedShop: SelectedShop?,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
-    val syncAllowed: Boolean = true
+    val syncAllowed: Boolean = true,
+    /** Last confirmed authorization for this owner/selection; never grants cloud authority. */
+    val localAccessAllowed: Boolean = syncAllowed && ownerUserId != null
 ) {
     val selectableShops: List<LinkedShop>
         get() = linkedShops.filter { it.canBeSelected }
@@ -77,7 +85,8 @@ data class ShopContext(
                 linkedShops = emptyList(),
                 selectedShop = null,
                 errorMessage = message,
-                syncAllowed = false
+                syncAllowed = false,
+                localAccessAllowed = false
             )
     }
 }
@@ -101,7 +110,9 @@ object ShopContextResolver {
             context = ShopContext(
                 ownerUserId = ownerUserId,
                 linkedShops = linkedShops,
-                selectedShop = selectedShop
+                selectedShop = selectedShop,
+                syncAllowed = linkedShops.isEmpty() || selectedShop != null,
+                localAccessAllowed = ownerUserId != null && (linkedShops.isEmpty() || selectedShop != null)
             ),
             persistedSelection = selectedShop?.shopId
         )
@@ -112,6 +123,11 @@ interface SelectedShopStore {
     fun getSelectedShopId(ownerUserId: String): String?
     fun setSelectedShopId(ownerUserId: String, shopId: String)
     fun clearSelectedShopId(ownerUserId: String)
+    fun getConfirmedContext(ownerUserId: String): ShopContext? = null
+    fun setConfirmedContext(ownerUserId: String, context: ShopContext) = Unit
+    fun clearConfirmedContext(ownerUserId: String) = Unit
+    fun isDeviceDenied(ownerUserId: String, shopId: String?, deviceId: String): Boolean = false
+    fun setDeviceDenied(ownerUserId: String, shopId: String?, deviceId: String, denied: Boolean) = Unit
 }
 
 interface LinkedShopRemoteDataSource {
@@ -125,6 +141,8 @@ object EmptyLinkedShopRemoteDataSource : LinkedShopRemoteDataSource {
         Result.success(emptyList())
 }
 
+internal class ShopAccessRejectedException : IllegalStateException("shop_access_rejected")
+
 class SupabaseLinkedShopRemoteDataSource(
     private val client: SupabaseClient?
 ) : LinkedShopRemoteDataSource {
@@ -136,7 +154,7 @@ class SupabaseLinkedShopRemoteDataSource(
                 .postgrest
                 .rpc("mobile_linked_shops")
                 .decodeAs<MobileLinkedShopsResponse>()
-            if (!response.ok) error("mobile_linked_shops failed: ${response.code}")
+            if (!response.ok) throw ShopAccessRejectedException()
             response.shops.map { it.toLinkedShop() }
         }
 }
@@ -144,7 +162,8 @@ class SupabaseLinkedShopRemoteDataSource(
 class ShopContextRepository(
     private val remote: LinkedShopRemoteDataSource,
     private val selectedShopStore: SelectedShopStore,
-    private val currentOwnerUserId: () -> String?
+    private val currentOwnerUserId: () -> String?,
+    private val currentDeviceIdentifier: () -> String? = { null }
 ) {
     private val refreshLock = Any()
     private var refreshGeneration = 0L
@@ -173,23 +192,10 @@ class ShopContextRepository(
 
         synchronized(refreshLock) {
             if (!isRefreshCurrentLocked(generation, ownerUserId)) return
-            val previous = mutableState.value
-            mutableState.value = if (previous.ownerUserId == ownerUserId) {
-                previous.copy(
-                    ownerUserId = ownerUserId,
-                    isLoading = true,
-                    errorMessage = null,
-                    syncAllowed = false
-                )
-            } else {
-                ShopContext(
-                    ownerUserId = ownerUserId,
-                    linkedShops = emptyList(),
-                    selectedShop = null,
-                    isLoading = true,
-                    syncAllowed = false
-                )
-            }
+            val previous = mutableState.value.takeIf { it.ownerUserId == ownerUserId && it.localAccessAllowed }
+                ?: confirmedContext(ownerUserId)
+            mutableState.value = applyDeviceDenial(previous ?: ShopContext.blocked(ownerUserId, null)).copy(
+                isLoading = true, errorMessage = null, syncAllowed = false)
         }
         val linkedShopsResult = remote.fetchLinkedShops()
         linkedShopsResult.exceptionOrNull()?.let { error ->
@@ -199,10 +205,13 @@ class ShopContextRepository(
         if (linkedShops == null) {
             synchronized(refreshLock) {
                 if (isRefreshCurrentLocked(generation, ownerUserId, requirePublishedOwner = true)) {
-                    mutableState.value = ShopContext.blocked(
-                        ownerUserId,
-                        linkedShopsResult.exceptionOrNull()?.message
-                    )
+                    val error = linkedShopsResult.exceptionOrNull()
+                    val denied = error is ShopAccessRejectedException || (error is RestException && error.statusCode == 403)
+                    if (denied) selectedShopStore.clearConfirmedContext(ownerUserId)
+                    val previous = mutableState.value
+                    mutableState.value = if (!denied && previous.localAccessAllowed) {
+                        previous.copy(isLoading = false, syncAllowed = false, errorMessage = error?.message)
+                    } else ShopContext.blocked(ownerUserId, error?.message)
                 }
             }
             return
@@ -214,7 +223,9 @@ class ShopContextRepository(
             resolution.persistedSelection?.let {
                 selectedShopStore.setSelectedShopId(ownerUserId, it)
             } ?: selectedShopStore.clearSelectedShopId(ownerUserId)
-            mutableState.value = resolution.context
+            if (resolution.context.localAccessAllowed) selectedShopStore.setConfirmedContext(ownerUserId, resolution.context)
+            else selectedShopStore.clearConfirmedContext(ownerUserId)
+            mutableState.value = applyDeviceDenial(resolution.context)
         }
     }
 
@@ -235,10 +246,61 @@ class ShopContextRepository(
             val selected = linked.toSelectedShop()
             refreshGeneration += 1L
             selectedShopStore.setSelectedShopId(ownerUserId, selected.shopId)
-            mutableState.value = current.copy(selectedShop = selected)
+            mutableState.value = applyDeviceDenial(current.copy(selectedShop = selected, localAccessAllowed = true))
+            selectedShopStore.setConfirmedContext(ownerUserId, mutableState.value)
             return true
         }
     }
+
+    /** Small local read before network; no adoption, no cloud permission, no cross-owner fallback. */
+    fun restoreLocalAuthorization(ownerUserId: String) {
+        synchronized(refreshLock) {
+            if (currentOwnerUserId() != ownerUserId) return
+            val cached = confirmedContext(ownerUserId) ?: return
+            mutableState.value = applyDeviceDenial(cached).copy(isLoading = true, syncAllowed = false, errorMessage = null)
+        }
+    }
+
+    fun invalidateLocalAuthorization(ownerUserId: String, shopId: String?) {
+        synchronized(refreshLock) {
+            if (currentOwnerUserId() != ownerUserId || mutableState.value.ownerUserId != ownerUserId ||
+                mutableState.value.activeShopId != shopId) return
+            refreshGeneration += 1L
+            selectedShopStore.clearConfirmedContext(ownerUserId)
+            mutableState.value = ShopContext.blocked(ownerUserId, "shop_access_rejected")
+        }
+    }
+
+    /** Only a successful, freshly scoped device-status RPC may change this durable denial. */
+    fun recordDeviceAuthorization(ownerUserId: String, shopId: String?, deviceId: String,
+        status: String, canWrite: Boolean) {
+        synchronized(refreshLock) {
+            val current = mutableState.value
+            if (currentOwnerUserId() != ownerUserId || current.ownerUserId != ownerUserId ||
+                current.activeShopId != shopId || currentDeviceIdentifier() != deviceId) return
+            val denied = status in setOf("revoked", "retired", "suspended")
+            val restored = status == "active" && canWrite
+            if (!denied && !restored) return
+            selectedShopStore.setDeviceDenied(ownerUserId, shopId, deviceId, denied)
+            refreshGeneration += 1L
+            val membershipAllows = current.linkedShops.isEmpty() ||
+                current.selectableShops.any { it.shopId == shopId }
+            mutableState.value = current.copy(localAccessAllowed = !denied && membershipAllows,
+                errorMessage = if (denied) "device_access_rejected" else null)
+        }
+    }
+
+    private fun applyDeviceDenial(context: ShopContext): ShopContext {
+        val owner = context.ownerUserId ?: return context
+        val device = currentDeviceIdentifier() ?: return context
+        return if (selectedShopStore.isDeviceDenied(owner, context.activeShopId, device))
+            context.copy(localAccessAllowed = false, errorMessage = "device_access_rejected") else context
+    }
+
+    private fun confirmedContext(ownerUserId: String): ShopContext? = selectedShopStore.getConfirmedContext(ownerUserId)
+        ?.takeIf { cached -> cached.ownerUserId == ownerUserId && cached.localAccessAllowed && cached.syncAllowed &&
+            !cached.isLoading && cached.selectedShop?.shopId == selectedShopStore.getSelectedShopId(ownerUserId) &&
+            (cached.linkedShops.isEmpty() || cached.selectableShops.any { it.shopId == cached.selectedShop?.shopId }) }
 
     private fun isRefreshCurrentLocked(
         generation: Long,
@@ -262,6 +324,41 @@ class SharedPreferencesSelectedShopStore(
 
     override fun clearSelectedShopId(ownerUserId: String) {
         preferences.edit().remove(key(ownerUserId)).apply()
+    }
+
+    private val cacheJson = Json { ignoreUnknownKeys = false }
+    private fun confirmedKey(ownerUserId: String) = "confirmed_local_context:" + task126OwnerHash(ownerUserId)
+
+    override fun getConfirmedContext(ownerUserId: String): ShopContext? {
+        val raw = preferences.getString(confirmedKey(ownerUserId), null) ?: return null
+        if (raw.length > 65_536) return null
+        return runCatching { cacheJson.decodeFromString<ShopContext>(raw) }.getOrNull()
+            ?.takeIf { it.ownerUserId == ownerUserId }
+    }
+
+    override fun setConfirmedContext(ownerUserId: String, context: ShopContext) {
+        if (context.ownerUserId != ownerUserId || !context.localAccessAllowed || !context.syncAllowed || context.isLoading) return
+        val raw = cacheJson.encodeToString(context.copy(errorMessage = null))
+        if (raw.length > 65_536) { clearConfirmedContext(ownerUserId); return }
+        preferences.edit().putString(confirmedKey(ownerUserId), raw).commit()
+    }
+
+    override fun clearConfirmedContext(ownerUserId: String) {
+        preferences.edit().remove(confirmedKey(ownerUserId)).commit()
+    }
+
+    private fun denialKey(owner: String, shop: String?, device: String) =
+        "confirmed_device_denial:" + task126OwnerHash(owner) + ":" +
+            task126OwnerHash(shop ?: "legacy") + ":" + task126OwnerHash(device)
+
+    override fun isDeviceDenied(ownerUserId: String, shopId: String?, deviceId: String): Boolean =
+        preferences.getBoolean(denialKey(ownerUserId, shopId, deviceId), false)
+
+    override fun setDeviceDenied(ownerUserId: String, shopId: String?, deviceId: String, denied: Boolean) {
+        val edit = preferences.edit()
+        val key = denialKey(ownerUserId, shopId, deviceId)
+        if (denied) edit.putBoolean(key, true) else edit.remove(key)
+        check(edit.commit()) { "device_authorization_persistence_failed" }
     }
 
     private fun key(ownerUserId: String): String =

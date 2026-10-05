@@ -56,6 +56,9 @@ internal sealed interface ShopSyncRecoveryResult {
 
 internal object ShopSyncRecoveryTestHooks {
     @Volatile
+    var onRecoveryFailure: ((Exception) -> Unit)? = null
+
+    @Volatile
     var afterStagingJournalPersisted: (() -> Unit)? = null
 
     @Volatile
@@ -79,7 +82,12 @@ internal object ShopSyncRecoveryTestHooks {
     @Volatile
     var beforeRetryTransaction: (suspend () -> Unit)? = null
 
+    @Volatile
+    var afterPageMaterializedBeforeCommit: ((ShopSyncRowDomain) -> Unit)? = null
+
     fun reset() {
+        onRecoveryFailure = null
+        afterPageMaterializedBeforeCommit = null
         afterStagingJournalPersisted = null
         afterReadyJournalPersisted = null
         afterActivationCommitted = null
@@ -182,51 +190,51 @@ internal class ShopSyncRecoveryCoordinator(
             )
         }
 
-        if (!cleanupKnownStaging(journal.stagingDatabaseName)) {
-            return@withContext retryAfterFailure(
-                journal = journal,
-                code = "recovery_staging_cleanup_deferred",
-                keepActivatedPhase = false,
-                expectedRunId = journal.runId,
-                retainStagingDatabase = true
-            )
+        var resumedDb: AppDatabase? = null
+        var resumedCheckpoint: ShopSyncRecoveryCheckpoint? = null
+        val ownedName = journal.stagingDatabaseName?.takeIf {
+            journal.runId != null && it == "$STAGING_DATABASE_PREFIX${journal.runId}.db" &&
+                validatedStagingFile(it)?.exists() == true && journal.checkpointADigest != null
         }
-        if (!cleanupBoundedOrphanStaging()) {
-            return@withContext retryAfterFailure(
-                journal = journal,
-                code = "recovery_orphan_cleanup_deferred",
-                keepActivatedPhase = false,
-                expectedRunId = journal.runId,
-                retainStagingDatabase = false
-            )
+        if (ownedName != null) {
+            val candidate = openStagingDatabase(ownedName)
+            try {
+                val checkpoint = RecoveryPageProgress(candidate.openHelper.writableDatabase).checkpoint(journal)
+                validateRecoveryScopeIdentity(checkpoint.scope, accountId, currentDevice)
+                validateRecoveryCheckpointResourceBounds(checkpoint, resourceLimits)
+                resumedCheckpoint = checkpoint
+                resumedDb = candidate
+            } catch (_: Exception) {
+                candidate.close()
+            }
+        }
+        if (resumedDb == null && !cleanupKnownStaging(journal.stagingDatabaseName)) {
+            return@withContext retryAfterFailure(journal, "recovery_staging_cleanup_deferred", false,
+                journal.runId, retainStagingDatabase = true)
+        }
+        if (!cleanupBoundedOrphanStaging(excluding = ownedName.takeIf { resumedDb != null })) {
+            resumedDb?.close()
+            return@withContext retryAfterFailure(journal, "recovery_orphan_cleanup_deferred", false,
+                journal.runId, retainStagingDatabase = resumedDb != null)
         }
 
         val replaceConfirmed = journal.authorizationMode ==
             SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED
         if (!replaceConfirmed) {
-            val pending = activeRepository.getLocalDatabaseStatusSnapshot(
-                ownerUserId = accountId,
-                selectedShop = selectedShop
-            )
-            if (
-                pending.pendingLocalChanges > 0 ||
-                pending.syncEventOutboxPending > 0 ||
-                hasPendingWorkBeforeWholeStoreReplacement()
-            ) {
-                return@withContext retryAfterFailure(
-                    journal = journal,
-                    code = "recovery_local_pending",
-                    keepActivatedPhase = false,
-                    expectedRunId = journal.runId,
-                    retainStagingDatabase = false
-                )
+            val binding = activeDb.businessDataScopeBindingDao().get()?.toOwnerStoreScope()
+            val scopedOutbox = activeDb.syncEventOutboxDao().countPendingForScope(accountId, activeScope.storeId)
+            if (binding == null || Task126OwnerStoreGate.validate(binding, activeScope) != Task126OwnerStoreGateDecision.Allowed ||
+                activeDb.syncEventOutboxDao().countAll() != scopedOutbox) {
+                resumedDb?.close()
+                return@withContext retryAfterFailure(journal, "recovery_local_pending", false,
+                    expectedRunId = journal.runId, retainStagingDatabase = false)
             }
         }
-        val generationId = UUID.randomUUID().toString().lowercase()
+        val generationId = if (resumedDb != null) requireNotNull(journal.runId) else UUID.randomUUID().toString().lowercase()
         val stagingName = "$STAGING_DATABASE_PREFIX$generationId.db"
         val stagingFile = validatedStagingFile(stagingName)
             ?: return@withContext ShopSyncRecoveryResult.Rejected("recovery_staging_path_invalid")
-        var stagingDb: AppDatabase? = null
+        var stagingDb: AppDatabase? = resumedDb
         var activated = false
         try {
             coroutineContext.ensureActive()
@@ -235,7 +243,7 @@ internal class ShopSyncRecoveryCoordinator(
                 phase = SyncRecoveryJournalPhases.STAGING,
                 updatedAtMs = nowMs(),
                 nextRetryAtMs = null,
-                checkpointADigest = null,
+                checkpointADigest = resumedCheckpoint?.checkpointDigest,
                 checkpointBDigest = null,
                 stagingDatabaseName = stagingName
             )
@@ -266,7 +274,7 @@ internal class ShopSyncRecoveryCoordinator(
                     throw ShopSyncContractException("recovery_device_registration_denied")
                 }
             }
-            val checkpointA = fetchCheckpoint(accountId, shopId, currentDevice, null)
+            val checkpointA = resumedCheckpoint ?: fetchCheckpoint(accountId, shopId, currentDevice, null)
             if (checkpointA.integrity.totalViolationCount != 0L) {
                 throw ShopSyncContractException("recovery_remote_integrity_violation")
             }
@@ -284,13 +292,21 @@ internal class ShopSyncRecoveryCoordinator(
                 )
             )
 
-            stagingDb = Room.databaseBuilder(appContext, AppDatabase::class.java, stagingName)
-                .addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray())
-                .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
-                .build()
+            if (stagingDb == null) {
+                val created = openStagingDatabase(stagingName)
+                stagingDb = created
+                created.withTransaction {
+                    RecoveryPageProgress(created.openHelper.writableDatabase).initialize(
+                        requireOwnedJournal(generationId), checkpointA)
+                }
+            }
             val stagingRepository = DefaultInventoryRepository(stagingDb)
             enforceGenerationStorageBudget(stagingFile, activationReady = false)
             val transferBudget = RecoveryTransferBudget(resourceLimits)
+            val progress = RecoveryPageProgress(stagingDb.openHelper.writableDatabase)
+            for (domain in ShopSyncRowDomain.entries) {
+                progress.accepted(domain)?.let { transferBudget.restore(domain, it) }
+            }
             for (domain in ShopSyncRowDomain.entries) {
                 downloadDomain(
                     accountId = accountId,
@@ -393,7 +409,7 @@ internal class ShopSyncRecoveryCoordinator(
                 }
                 // Ricalcolato dentro lo stesso boundary che serializza il commit:
                 // un writer precedente non può rendere stale size/free-space.
-                enforceGenerationStorageBudget(stagingFile, activationReady = true)
+                enforceGenerationStorageBudget(stagingFile, activationReady = true, sameScopeOverlay = !replaceConfirmed)
                 activateAtomically(
                     accountId = accountId,
                     shopId = shopId,
@@ -442,7 +458,7 @@ internal class ShopSyncRecoveryCoordinator(
                 )
             }
             validateManifest(activeDb, generationId, publishedCheckpoint)
-            validatePhysicalSnapshot(activeDb, generationId, resourceLimits.historyPageRows)
+            validatePhysicalSnapshot(activeDb, generationId, resourceLimits.historyPageRows, localOverlay = !replaceConfirmed)
             if (!leaseStillValid(accountId, shopId, currentDevice)) {
                 throw ShopSyncContractException("recovery_lease_invalid_before_cleanup")
             }
@@ -483,18 +499,19 @@ internal class ShopSyncRecoveryCoordinator(
                     activeScope = activeScope,
                     deviceId = currentDevice
                 )
-                val cleanupComplete =
-                    durablyActivated || cleanupKnownStaging(stagingName)
+                val resumable = hasAcceptedRecoveryHeader(stagingName, latest)
+                val cleanupComplete = durablyActivated || resumable || cleanupKnownStaging(stagingName)
                 retryAfterFailure(
                     journal = latest,
                     code = "recovery_cancelled",
                     keepActivatedPhase = durablyActivated,
                     expectedRunId = generationId,
-                    retainStagingDatabase = !cleanupComplete || durablyActivated
+                    retainStagingDatabase = !cleanupComplete || durablyActivated || resumable
                 )
             }
             throw cancelled
         } catch (error: Exception) {
+            ShopSyncRecoveryTestHooks.onRecoveryFailure?.invoke(error)
             val contract = error as? ShopSyncContractException
             val code = contract?.code
                 ?: error.message?.takeIf { it.startsWith("recovery_") }
@@ -507,20 +524,25 @@ internal class ShopSyncRecoveryCoordinator(
                     "code=${contract?.code ?: ShopSyncRecoveryReasons.RECOVERY_FAILED} " +
                     "rpc=${contract?.rpcName ?: "none"} missingFields=$missingFields"
             )
-            var cleanupComplete = activated
-            if (!activated) {
-                stagingDb?.close()
-                stagingDb = null
-                cleanupComplete = cleanupKnownStaging(stagingName)
-            }
-            val latest = activeDb.syncRecoveryJournalDao().get()
-                ?: journal
+            stagingDb?.close()
+            stagingDb = null
+            val latest = activeDb.syncRecoveryJournalDao().get() ?: journal
+            val durablyActivated = activated || activationWasCommitted(
+                journal = latest,
+                runId = generationId,
+                activeScope = activeScope,
+                deviceId = currentDevice
+            )
+            // Invalid/expired protocol fences require a new A. Transport failures
+            // keep the accepted prefix; every retry still obtains a fresh B/C.
+            val resumable = !durablyActivated && contract == null && hasAcceptedRecoveryHeader(stagingName, latest)
+            val cleanupComplete = durablyActivated || resumable || cleanupKnownStaging(stagingName)
             val retry = retryAfterFailure(
                 journal = latest,
                 code = code,
-                keepActivatedPhase = activated,
+                keepActivatedPhase = durablyActivated,
                 expectedRunId = generationId,
-                retainStagingDatabase = !cleanupComplete || activated
+                retainStagingDatabase = !cleanupComplete || durablyActivated || resumable
             )
             if (code in SERVER_RESPONSE_BLOCKING_CODES) {
                 // Preserve the durable reason, but do not spend the current
@@ -589,7 +611,8 @@ internal class ShopSyncRecoveryCoordinator(
         }
         validateRecoveryScopeIdentity(persisted.scope, accountId, journal.deviceId)
         validateManifest(activeDb, baseline.generationId, persisted)
-        validatePhysicalSnapshot(activeDb, baseline.generationId, resourceLimits.historyPageRows)
+        validatePhysicalSnapshot(activeDb, baseline.generationId, resourceLimits.historyPageRows,
+            localOverlay = journal.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE)
         val marker = fetchConvergenceMarker(
             accountId = accountId,
             shopId = shopId,
@@ -1207,7 +1230,11 @@ internal class ShopSyncRecoveryCoordinator(
         }
     }
 
-    private fun enforceGenerationStorageBudget(stagingFile: File, activationReady: Boolean) {
+    private fun enforceGenerationStorageBudget(
+        stagingFile: File,
+        activationReady: Boolean,
+        sameScopeOverlay: Boolean = false
+    ) {
         val generationBytes = generationSizeBytes(stagingFile)
         if (generationBytes < 0L || generationBytes > resourceLimits.generationBytes) {
             throw ShopSyncContractException("recovery_generation_disk_budget_exceeded")
@@ -1219,11 +1246,18 @@ internal class ShopSyncRecoveryCoordinator(
                 throw ShopSyncContractException("recovery_active_database_path_invalid")
             }
             val activeBytes = activeGenerationSizeBytes(File(activePath))
-            requiredRecoveryActivationHeadroomBytes(
+            val transactionHeadroom = requiredRecoveryActivationHeadroomBytes(
                 stagingGenerationBytes = generationBytes,
                 activeGenerationBytes = activeBytes,
                 fixedHeadroomBytes = resourceLimits.activationHeadroomBytes
             )
+            if (sameScopeOverlay) {
+                // Source TEMP rows and old intent/ref projections may spill to
+                // disk in addition to the normal main rollback/WAL headroom.
+                checkedRecoveryAdd(transactionHeadroom,
+                    checkedRecoveryAdd(generationBytes, activeBytes, "recovery_activation_headroom_overflow"),
+                    "recovery_activation_headroom_overflow")
+            } else transactionHeadroom
         } else {
             resourceLimits.activationHeadroomBytes
         }
@@ -1247,8 +1281,11 @@ internal class ShopSyncRecoveryCoordinator(
         stagingFile: File,
         transferBudget: RecoveryTransferBudget
     ) {
-        var afterId: String? = null
-        var pages = 0
+        val progress = RecoveryPageProgress(stagingDb.openHelper.writableDatabase)
+        val accepted = progress.accepted(domain)
+        if (accepted?.complete == true) return
+        var afterId: String? = accepted?.afterId
+        var pages = accepted?.pages ?: 0L
         val pageLimit = resourceLimits.pageRows(domain)
         // Recovery pages are lower-bound live reads, not a historical `as of
         // A` snapshot. They can therefore legitimately contain rows from B
@@ -1258,7 +1295,7 @@ internal class ShopSyncRecoveryCoordinator(
         val maximumPages = resourceLimits.rows(domain) / pageLimit.toLong() + 2L
         do {
             coroutineContext.ensureActive()
-            if (pages.toLong() >= maximumPages) {
+            if (pages >= maximumPages) {
                 throw ShopSyncContractException("recovery_page_bound_exceeded")
             }
             if (!leaseStillValid(accountId, shopId, deviceId)) {
@@ -1290,6 +1327,7 @@ internal class ShopSyncRecoveryCoordinator(
             )
             val manifestRows = page.rows.toManifestRows(generationId, domain)
             transferBudget.recordRows(domain, manifestRows.size)
+            stagingDb.withTransaction {
             if (manifestRows.isNotEmpty()) {
                 stagingDb.syncRecoveryManifestDao().insertAll(manifestRows)
             }
@@ -1308,6 +1346,9 @@ internal class ShopSyncRecoveryCoordinator(
             }
             if (apply.skippedParentRows != 0 || apply.failedRows != 0 || apply.unsupportedRows != 0) {
                 throw ShopSyncContractException("recovery_stage_apply_incomplete")
+            }
+            ShopSyncRecoveryTestHooks.afterPageMaterializedBeforeCommit?.invoke(domain)
+            progress.accept(domain, page)
             }
             enforceGenerationStorageBudget(stagingFile, activationReady = false)
             pages++
@@ -1377,6 +1418,23 @@ internal class ShopSyncRecoveryCoordinator(
         stagingDb: AppDatabase,
         replaceConfirmed: Boolean
     ) {
+        val mainSql = activeDb.openHelper.writableDatabase
+        val sameScope = !replaceConfirmed
+        if (sameScope) {
+            val binding = activeDb.businessDataScopeBindingDao().get()?.toOwnerStoreScope()
+            if (binding == null || Task126OwnerStoreGate.validate(binding, activeScope) != Task126OwnerStoreGateDecision.Allowed) {
+                throw ShopSyncContractException("recovery_overlay_binding_mismatch")
+            }
+            if (activeDb.syncEventOutboxDao().countAll() !=
+                activeDb.syncEventOutboxDao().countPendingForScope(accountId, activeScope.storeId)) {
+                throw ShopSyncContractException("recovery_overlay_outbox_scope_mismatch")
+            }
+            val path = stagingDb.openHelper.readableDatabase.path
+                ?: throw ShopSyncContractException("recovery_overlay_staging_path_missing")
+            if (File(path).canonicalFile != validatedStagingFile(stagingName)?.canonicalFile) {
+                throw ShopSyncContractException("recovery_overlay_staging_path_invalid")
+            }
+        }
         activeDb.withTransaction {
             if (!leaseStillValid(accountId, shopId, deviceId)) {
                 throw ShopSyncContractException("recovery_lease_invalid_in_activation")
@@ -1400,26 +1458,37 @@ internal class ShopSyncRecoveryCoordinator(
             ) {
                 throw ShopSyncContractException("recovery_journal_cas_failed")
             }
-            if (!replaceConfirmed && hasPendingWorkBeforeWholeStoreReplacement()) {
-                throw ShopSyncContractException("recovery_local_pending_in_activation")
-            }
-
-            val mainSql = activeDb.openHelper.writableDatabase
             val stageSql = stagingDb.openHelper.readableDatabase
+            // Keep all reads/joins on the live Room writer without ATTACH, which
+            // Android disables WAL for and whose aliases are connection-local.
+            // Only transaction-local TEMP tables are added, streamed with one
+            // prepared insert per table; no durable schema or second store.
+            val sourceTables = if (sameScope) copyRecoverySourceToTemp(stageSql, mainSql) else emptyList()
+            val overlay = if (sameScope) SameScopeRecoveryOverlay(mainSql).also { it.capture() } else null
             BUSINESS_DELETE_ORDER.forEach { mainSql.execSQL("DELETE FROM `$it`") }
             BUSINESS_COPY_ORDER.forEach { spec ->
-                copyTable(stageSql, mainSql, spec)
+                if (overlay != null) overlay.copyRemoteTable(spec.table) else copyTable(stageSql, mainSql, spec)
                 ShopSyncRecoveryTestHooks.afterActiveTableCopied?.invoke(spec.table)
             }
-            mainSql.execSQL("DELETE FROM `pending_catalog_tombstones`")
-            mainSql.execSQL("DELETE FROM `sync_event_outbox`")
+            if (overlay != null) overlay.restorePending()
+            else {
+                mainSql.execSQL("DELETE FROM `pending_catalog_tombstones`")
+                mainSql.execSQL("DELETE FROM `sync_event_outbox`")
+            }
             mainSql.execSQL("DELETE FROM `sync_event_apply_status`")
             mainSql.execSQL("DELETE FROM `sync_event_watermarks`")
             mainSql.execSQL("DELETE FROM `business_data_scope_binding`")
             mainSql.execSQL("DELETE FROM `sync_recovery_baseline`")
             mainSql.execSQL("DELETE FROM `sync_recovery_manifest`")
-            copyTable(stageSql, mainSql, BASELINE_TABLE)
-            copyTable(stageSql, mainSql, MANIFEST_TABLE)
+            if (sameScope) {
+                for (spec in listOf(BASELINE_TABLE, MANIFEST_TABLE)) {
+                    val quoted = spec.columns.joinToString(",") { "`$it`" }
+                    mainSql.execSQL("INSERT INTO `${spec.table}` ($quoted) SELECT $quoted FROM temp.`mc_recovery_source_${spec.table}`")
+                }
+            } else {
+                copyTable(stageSql, mainSql, BASELINE_TABLE)
+                copyTable(stageSql, mainSql, MANIFEST_TABLE)
+            }
             ShopSyncRecoveryTestHooks.beforeActivationMetadata?.invoke()
             activeDb.businessDataScopeBindingDao().upsert(
                 BusinessDataScopeBinding.from(activeScope, nowMs())
@@ -1443,8 +1512,12 @@ internal class ShopSyncRecoveryCoordinator(
                     throw ShopSyncContractException("recovery_activation_foreign_key_violation")
                 }
             }
-            (BUSINESS_COPY_ORDER + BASELINE_TABLE + MANIFEST_TABLE).forEach { spec ->
-                if (queryCount(mainSql, spec.table) != queryCount(stageSql, spec.table)) {
+            (if (sameScope) listOf(BASELINE_TABLE, MANIFEST_TABLE) else
+                BUSINESS_COPY_ORDER + BASELINE_TABLE + MANIFEST_TABLE).forEach { spec ->
+                val sourceCount = if (sameScope) mainSql.query("SELECT COUNT(*) FROM temp.`mc_recovery_source_${spec.table}`").use { c ->
+                    c.moveToFirst(); c.getLong(0)
+                } else queryCount(stageSql, spec.table)
+                if (queryCount(mainSql, spec.table) != sourceCount) {
                     throw ShopSyncContractException("recovery_activation_count_mismatch_${spec.table}")
                 }
             }
@@ -1455,6 +1528,9 @@ internal class ShopSyncRecoveryCoordinator(
             if (!leaseStillValid(accountId, shopId, deviceId)) {
                 throw ShopSyncContractException("recovery_lease_invalid_before_commit")
             }
+            overlay?.verifyPreservedIntent()
+            overlay?.close()
+            sourceTables.asReversed().forEach { mainSql.execSQL("DROP TABLE `$it`") }
         }
     }
 
@@ -1510,8 +1586,13 @@ internal class ShopSyncRecoveryCoordinator(
             ) {
                 throw ShopSyncContractException("recovery_cleanup_cas_failed")
             }
-            if (hasPendingWorkBeforeWholeStoreReplacement()) {
+            if (journal.authorizationMode != SyncRecoveryAuthorizationModes.SAME_SCOPE &&
+                hasPendingWorkBeforeWholeStoreReplacement()) {
                 throw ShopSyncContractException("recovery_cleanup_pending_work")
+            }
+            if (activeDb.syncEventOutboxDao().countAll() !=
+                activeDb.syncEventOutboxDao().countPendingForScope(accountId, activeScope.storeId)) {
+                throw ShopSyncContractException("recovery_cleanup_outbox_scope_mismatch")
             }
             activeDb.syncRecoveryJournalDao().deleteAll()
             if (activeDb.syncRecoveryJournalDao().get() != null) {
@@ -1553,13 +1634,14 @@ internal class ShopSyncRecoveryCoordinator(
                             phase = if (keepActivatedPhase) {
                                 SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING
                             } else {
-                                SyncRecoveryJournalPhases.REQUIRED
+                                if (retainStagingDatabase && current.checkpointADigest != null)
+                                    SyncRecoveryJournalPhases.STAGING else SyncRecoveryJournalPhases.REQUIRED
                             },
                             reason = code,
                             attemptCount = nextAttempt,
                             updatedAtMs = nowMs(),
                             nextRetryAtMs = retryAt,
-                            checkpointADigest = checkpointADigest,
+                            checkpointADigest = checkpointADigest ?: current.checkpointADigest.takeIf { retainStagingDatabase },
                             checkpointBDigest = current.checkpointBDigest.takeIf {
                                 keepActivatedPhase
                             },
@@ -1631,6 +1713,21 @@ internal class ShopSyncRecoveryCoordinator(
         return current
     }
 
+    private fun openStagingDatabase(name: String): AppDatabase =
+        Room.databaseBuilder(appContext, AppDatabase::class.java, name)
+            .addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray())
+            .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
+            .build()
+
+    private fun hasAcceptedRecoveryHeader(name: String, journal: SyncRecoveryJournal): Boolean {
+        if (journal.stagingDatabaseName != name || validatedStagingFile(name)?.exists() != true) return false
+        val candidate = openStagingDatabase(name)
+        return try {
+            RecoveryPageProgress(candidate.openHelper.writableDatabase).checkpoint(journal)
+            true
+        } catch (_: Exception) { false } finally { candidate.close() }
+    }
+
     private fun cleanupKnownStaging(name: String?): Boolean {
         if (name == null) return true
         if (!isValidStagingName(name)) return false
@@ -1662,13 +1759,13 @@ internal class ShopSyncRecoveryCoordinator(
      * vengono mai toccati. Se il limite viene raggiunto, il journal resta
      * durevole e il retry successivo prosegue il cleanup senza loop stretto.
      */
-    private fun cleanupBoundedOrphanStaging(): Boolean {
-        val names = existingStagingDatabaseNames()
+    private fun cleanupBoundedOrphanStaging(excluding: String? = null): Boolean {
+        val names = existingStagingDatabaseNames().filter { it != excluding }
         var allDeleted = true
         names.take(MAX_ORPHAN_STAGING_CLEANUPS_PER_RUN).forEach { name ->
             if (!cleanupKnownStaging(name)) allDeleted = false
         }
-        return allDeleted && existingStagingDatabaseNames().isEmpty()
+        return allDeleted && existingStagingDatabaseNames().none { it != excluding }
     }
 
     private fun existingStagingDatabaseNames(): List<String> {
@@ -1904,8 +2001,14 @@ internal suspend fun validatePhysicalSnapshot(
     db: AppDatabase,
     generationId: String,
     historyPageRows: Int = DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS.historyPageRows,
-    activeStoreHistory: Boolean = false
+    activeStoreHistory: Boolean = false,
+    localOverlay: Boolean = false,
+    localAcknowledgements: Boolean = false
 ) {
+    val acknowledgedScope = if (localAcknowledgements) {
+        requireNotNull(db.businessDataScopeBindingDao().get()) to
+            requireNotNull(db.syncEventDeviceStateDao().get()).deviceId
+    } else null
     listOf(
         ShopSyncRowDomain.SUPPLIERS,
         ShopSyncRowDomain.CATEGORIES,
@@ -1920,7 +2023,11 @@ internal suspend fun validatePhysicalSnapshot(
             PHYSICAL_VERIFY_PAGE_SIZE
         }
         do {
-            val expected = if (domain == ShopSyncRowDomain.PRICES) {
+            val expected = if (localAcknowledgements) {
+                localAcknowledgedManifestPage(db, generationId, domain, afterId, pageSize)
+            } else if (localOverlay) {
+                cleanOverlayManifestPage(db, generationId, domain, afterId, pageSize)
+            } else if (domain == ShopSyncRowDomain.PRICES) {
                 materializablePriceManifestPage(db, generationId, afterId, pageSize)
             } else {
                 db.syncRecoveryManifestDao().pageActive(
@@ -1930,13 +2037,19 @@ internal suspend fun validatePhysicalSnapshot(
                     limit = pageSize
                 )
             }
-            val physical = readPhysicalPage(db, domain, afterId, pageSize, activeStoreHistory)
+            val physical = readPhysicalPage(db, domain, afterId, pageSize, activeStoreHistory,
+                localOverlay, localAcknowledgements)
             if (physical.size != expected.size) {
                 throw ShopSyncContractException(
                     "recovery_physical_count_mismatch_${domain.wireValue}"
                 )
             }
-            expected.zip(physical).forEach { (manifest, materialized) ->
+            expected.zip(physical).forEach body@ { (manifest, materialized) ->
+                if (manifest.domain == LOCAL_ACK_BODY_PREFIX + domain.wireValue) {
+                    val (binding, device) = requireNotNull(acknowledgedScope)
+                    validateLocalAcknowledgedMaterialization(binding, device, manifest, materialized)
+                    return@body
+                }
                 if (
                     manifest.remoteId != materialized.remoteId ||
                     manifest.payloadDigest == null ||
@@ -1955,6 +2068,90 @@ internal suspend fun validatePhysicalSnapshot(
             afterId = expected.lastOrNull()?.remoteId
         } while (expected.size == pageSize)
     }
+}
+
+/** Exempts only durable same-scope local intent; the complete canonical remote ledger remains unchanged. */
+private fun overlayPendingPredicate(domain: ShopSyncRowDomain, remoteId: String): String = when (domain) {
+    ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS -> {
+        val (table, entity) = when (domain) {
+            ShopSyncRowDomain.SUPPLIERS -> "supplier_remote_refs" to "SUPPLIER"
+            ShopSyncRowDomain.CATEGORIES -> "category_remote_refs" to "CATEGORY"
+            else -> "product_remote_refs" to "PRODUCT"
+        }
+        "EXISTS (SELECT 1 FROM $table lr WHERE lr.remoteId=$remoteId AND " +
+            "(lr.lastRemoteAppliedAt IS NULL OR lr.localChangeRevision<>lr.lastSyncedLocalRevision)) OR " +
+            "EXISTS (SELECT 1 FROM pending_catalog_tombstones lt WHERE lt.entityType='$entity' AND lt.remoteId=$remoteId)"
+    }
+    ShopSyncRowDomain.HISTORY -> "EXISTS (SELECT 1 FROM history_entry_remote_refs lr JOIN history_entries lh ON lh.uid=lr.historyEntryUid " +
+        "WHERE lr.remoteId=$remoteId AND (lr.lastRemoteAppliedAt IS NULL OR lr.localChangeRevision<>lr.lastSyncedLocalRevision OR lh.syncStatus<>'SYNCED_SUCCESSFULLY'))"
+    ShopSyncRowDomain.PRICES -> "EXISTS (SELECT 1 FROM sync_recovery_manifest lp JOIN pending_catalog_tombstones lt " +
+        "ON lt.entityType='PRODUCT' AND lt.remoteId=substr(lp.versionLine, instr(substr(lp.versionLine,instr(lp.versionLine,char(31))+1),char(31))+instr(lp.versionLine,char(31))+1,36) " +
+        "WHERE lp.domain='prices' AND lp.remoteId=$remoteId)"
+    ShopSyncRowDomain.IMAGES -> "0"
+}
+
+private suspend fun cleanOverlayManifestPage(
+    db: AppDatabase, generationId: String, domain: ShopSyncRowDomain, afterId: String?, limit: Int
+): List<SyncRecoveryManifestRow> {
+    val result = ArrayList<SyncRecoveryManifestRow>(limit)
+    var cursor = afterId
+    while (result.size < limit) {
+        coroutineContext.ensureActive()
+        val batchLimit = limit - result.size
+        val rows = if (domain == ShopSyncRowDomain.PRICES) {
+            materializablePriceManifestPage(db, generationId, cursor, batchLimit)
+        } else db.syncRecoveryManifestDao().pageActive(generationId, domain.wireValue, cursor, batchLimit)
+        if (rows.isEmpty()) break
+        val placeholders = rows.joinToString(",") { "?" }
+        val exempt = db.openHelper.readableDatabase.query(
+            "SELECT m.remoteId FROM sync_recovery_manifest m WHERE m.generationId=? AND m.domain=? AND m.remoteId IN ($placeholders) AND (${overlayPendingPredicate(domain, "m.remoteId")})",
+            (listOf(generationId, domain.wireValue) + rows.map { it.remoteId }).toTypedArray()
+        ).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
+        result += rows.filter { it.remoteId !in exempt }
+        cursor = rows.last().remoteId
+        if (rows.size < batchLimit) break
+    }
+    return result
+}
+
+/** Merge two bounded keyset pages; actual ACK proofs replace only their same-ID historical body. */
+private suspend fun localAcknowledgedManifestPage(
+    db: AppDatabase, generationId: String, domain: ShopSyncRowDomain, afterId: String?, limit: Int
+): List<SyncRecoveryManifestRow> {
+    val result = ArrayList<SyncRecoveryManifestRow>(limit)
+    var cursor = afterId
+    while (result.size < limit) {
+        coroutineContext.ensureActive()
+        val bound = limit - result.size
+        val canonical = if (domain == ShopSyncRowDomain.PRICES)
+            materializablePriceManifestPage(db, generationId, cursor, bound)
+            else db.syncRecoveryManifestDao().pageActive(generationId,domain.wireValue,cursor,bound)
+        val acknowledged = db.syncRecoveryManifestDao().pageActive(
+            generationId,LOCAL_ACK_BODY_PREFIX+domain.wireValue,cursor,bound)
+        val merged = (canonical + acknowledged).associateBy { it.remoteId }.values.sortedBy { it.remoteId }.take(bound)
+        if (merged.isEmpty()) break
+        val exempt = db.openHelper.readableDatabase.query(
+            "SELECT m.remoteId FROM sync_recovery_manifest m WHERE m.generationId=? AND m.domain IN (?,?) " +
+                "AND m.remoteId IN (${merged.joinToString(",") { "?" }}) AND (${overlayPendingPredicate(domain,"m.remoteId")})",
+            (listOf(generationId,domain.wireValue,LOCAL_ACK_BODY_PREFIX+domain.wireValue)+merged.map { it.remoteId }).toTypedArray()
+        ).use { c -> buildSet { while(c.moveToNext()) add(c.getString(0)) } }
+        result += merged.filter { it.remoteId !in exempt }
+        cursor=merged.last().remoteId
+        if (merged.size<bound) break
+    }
+    return result
+}
+
+private fun validateLocalAcknowledgedMaterialization(
+    binding: BusinessDataScopeBinding, device: String, proof: SyncRecoveryManifestRow, physical: PhysicalRecoveryRow
+) {
+    if (proof.versionLine.length>4096 || proof.idLine!=proof.remoteId || proof.remoteId!=physical.remoteId ||
+        proof.payloadDigest==null || proof.payloadDigest!=physical.localAckFingerprint)
+        throw ShopSyncContractException("local_ack_physical_body_mismatch")
+    val identity=try { Json.decodeFromString<LocalAcknowledgedBodyIdentity>(proof.versionLine) }
+        catch (_: Exception) { throw ShopSyncContractException("local_ack_identity_invalid") }
+    if(!identity.matches(binding,device) || identity.revision!=physical.acknowledgedRevision)
+        throw ShopSyncContractException("local_ack_scope_mismatch")
 }
 
 /**
@@ -2065,13 +2262,15 @@ private suspend fun readPhysicalPage(
     domain: ShopSyncRowDomain,
     afterId: String?,
     limit: Int,
-    activeStoreHistory: Boolean
+    activeStoreHistory: Boolean,
+    localOverlay: Boolean = false,
+    includeLocalAckFingerprints: Boolean = false
 ): List<PhysicalRecoveryRow> {
     if (domain == ShopSyncRowDomain.HISTORY) {
         val rows = if (activeStoreHistory) {
-            db.historyEntryDao().getRecoveryActivePhysicalPage(afterId, limit)
+            db.historyEntryDao().getRecoveryActivePhysicalPage(afterId, limit, onlyClean = localOverlay)
         } else {
-            db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit)
+            db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit, onlyClean = localOverlay)
         }
         return rows.map { row ->
             if (
@@ -2089,7 +2288,10 @@ private suspend fun readPhysicalPage(
                 history = HistoryPhysicalRecoveryState(
                     entry = row.entry,
                     sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
-                )
+                ),
+                localAckFingerprint = if (includeLocalAckFingerprints)
+                    historyPhysicalPayloadFingerprint(row.entry, row.remoteId) else null,
+                acknowledgedRevision = row.syncedRevision.toLong()
             )
         }
     }
@@ -2139,19 +2341,25 @@ private suspend fun readPhysicalPage(
     val remoteAlias = if (domain == ShopSyncRowDomain.PRICES) "pr" else "r"
     val scopedSql = buildString {
         append(sql)
-        if (afterId != null) append(" WHERE $remoteAlias.remoteId > ?")
+        val predicates = mutableListOf<String>()
+        if (afterId != null) predicates += "$remoteAlias.remoteId > ?"
+        if (localOverlay && domain != ShopSyncRowDomain.PRICES) {
+            predicates += "r.lastRemoteAppliedAt IS NOT NULL AND r.localChangeRevision=r.lastSyncedLocalRevision"
+        }
+        if (localOverlay) predicates += "NOT (${overlayPendingPredicate(domain, "$remoteAlias.remoteId")})"
+        if (predicates.isNotEmpty()) append(" WHERE ${predicates.joinToString(" AND ")}")
         append(" ORDER BY $remoteAlias.remoteId LIMIT ?")
     }
     return db.openHelper.readableDatabase.query(scopedSql, args).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
-                add(physicalRow(domain, cursor))
+                add(physicalRow(domain, cursor, includeLocalAckFingerprints))
             }
         }
     }
 }
 
-private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalRecoveryRow =
+private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor, includeLocalAckFingerprints: Boolean): PhysicalRecoveryRow =
     when (domain) {
         ShopSyncRowDomain.SUPPLIERS -> {
             requireCleanPhysicalRef(cursor, 3, 4)
@@ -2160,7 +2368,10 @@ private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalReco
             PhysicalRecoveryRow(
                 remoteId = remoteId,
                 payloadDigest = sha256(recoverySupplierPayloadFingerprint(cursor.getString(1))),
-                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
+                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f"),
+                localAckFingerprint = if (includeLocalAckFingerprints) fingerprintSupplierInbound(InventorySupplierRow(
+                    id=remoteId,ownerUserId="",name=cursor.getString(1),updatedAt=cursor.nullableString(2))) else null,
+                acknowledgedRevision = cursor.getLong(4)
             )
         }
         ShopSyncRowDomain.CATEGORIES -> {
@@ -2170,7 +2381,10 @@ private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalReco
             PhysicalRecoveryRow(
                 remoteId = remoteId,
                 payloadDigest = sha256(recoveryCategoryPayloadFingerprint(cursor.getString(1))),
-                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f")
+                versionLine = listOf(remoteId, updatedAt, "-").joinToString("\u001f"),
+                localAckFingerprint = if (includeLocalAckFingerprints) fingerprintCategoryInbound(InventoryCategoryRow(
+                    id=remoteId,ownerUserId="",name=cursor.getString(1),updatedAt=cursor.nullableString(2))) else null,
+                acknowledgedRevision = cursor.getLong(4)
             )
         }
         ShopSyncRowDomain.PRODUCTS -> {
@@ -2206,7 +2420,15 @@ private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalReco
                     supplierId ?: "-",
                     imageId ?: "-",
                     canonicalTimestamp(imageUpdatedAt)
-                ).joinToString("\u001f")
+                ).joinToString("\u001f"),
+                localAckFingerprint = if (includeLocalAckFingerprints) fingerprintProductInbound(InventoryProductRow(
+                    id=remoteId,ownerUserId="",barcode=cursor.getString(1).trim(),
+                    itemNumber=cursor.nullableString(2),productName=cursor.nullableString(3),
+                    secondProductName=cursor.nullableString(4),purchasePrice=cursor.nullableDouble(5),
+                    retailPrice=cursor.nullableDouble(6),stockQuantity=cursor.nullableDouble(7),
+                    primaryImageVersionId=imageId,primaryImageUpdatedAt=imageUpdatedAt,
+                    supplierId=supplierId,categoryId=categoryId,updatedAt=cursor.nullableString(12))) else null,
+                acknowledgedRevision = cursor.getLong(14)
             )
         }
         ShopSyncRowDomain.PRICES -> {
@@ -2224,7 +2446,12 @@ private fun physicalRow(domain: ShopSyncRowDomain, cursor: Cursor): PhysicalReco
                         note = cursor.nullableString(6),
                         createdAt = cursor.getString(7)
                     )
-                )
+                ),
+                localAckFingerprint = if (includeLocalAckFingerprints) localAcknowledgedPriceFingerprint(InventoryProductPriceRow(
+                    id=remoteId,ownerUserId="",productId=canonicalRecoveryEntityUuid(cursor.getString(1)),
+                    type=cursor.getString(2),price=cursor.getDouble(3),effectiveAt=cursor.getString(4),
+                    source=cursor.nullableString(5),note=cursor.nullableString(6),createdAt=cursor.getString(7))) else null,
+                acknowledgedRevision = 0L
             )
         }
         ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
@@ -2621,6 +2848,23 @@ private class RecoveryTransferBudget(
     private var totalRows = 0L
     private var tailTargetedCalls = 0
 
+    fun restore(domain: ShopSyncRowDomain, accepted: RecoveryPageProgress.Accepted) {
+        if (accepted.pages > limits.rows(domain) / limits.pageRows(domain).toLong() + 2L ||
+            accepted.bytes > limits.domainResponseBytes || accepted.rows > limits.rows(domain) ||
+            (domain == ShopSyncRowDomain.HISTORY && accepted.largestRowBytes > limits.historyRowResponseBytes)) {
+            throw ShopSyncContractException("recovery_resume_resource_exceeded")
+        }
+        val nextBytes = checkedRecoveryAdd(totalBytes, accepted.bytes, "recovery_resume_budget_overflow")
+        val nextRows = checkedRecoveryAdd(totalRows, accepted.rows, "recovery_resume_budget_overflow")
+        if (nextBytes > limits.totalResponseBytes || nextRows > limits.totalRows) {
+            throw ShopSyncContractException("recovery_resume_resource_exceeded")
+        }
+        domainBytes[domain] = accepted.bytes
+        domainRows[domain] = accepted.rows
+        totalBytes = nextBytes
+        totalRows = nextRows
+    }
+
     fun record(domain: ShopSyncRowDomain, pageBytes: Long, largestRowBytes: Long) {
         if (largestRowBytes < 0L) {
             throw ShopSyncContractException("recovery_row_response_size_invalid")
@@ -2785,8 +3029,15 @@ private fun validateHistoryPhysicalMaterialization(
     val state = physical.history
         ?: throw ShopSyncContractException("recovery_physical_history_state_missing")
     val entry = state.entry
-    val materializedFingerprint = SessionRemotePayload(
-        remoteId = physical.remoteId,
+    val materializedFingerprint = historyPhysicalPayloadFingerprint(entry, physical.remoteId)
+    if (materializedFingerprint != state.sourcePayloadFingerprint) {
+        throw ShopSyncContractException("recovery_physical_history_v2_payload_mismatch")
+    }
+}
+
+private fun historyPhysicalPayloadFingerprint(entry: HistoryEntry, remoteId: String): String =
+    SessionRemotePayload(
+        remoteId = remoteId,
         payloadVersion = SESSION_PAYLOAD_VERSION,
         displayName = entry.displayName,
         timestamp = entry.timestamp,
@@ -2801,10 +3052,6 @@ private fun validateHistoryPhysicalMaterialization(
         ),
         deletedAt = entry.deletedAt
     ).payloadFingerprint()
-    if (materializedFingerprint != state.sourcePayloadFingerprint) {
-        throw ShopSyncContractException("recovery_physical_history_v2_payload_mismatch")
-    }
-}
 
 private fun checkedRecoveryAdd(left: Long, right: Long, code: String): Long {
     if (left < 0L || right < 0L || left > Long.MAX_VALUE - right) {
@@ -2865,7 +3112,9 @@ private data class PhysicalRecoveryRow(
     val remoteId: String,
     val payloadDigest: String,
     val versionLine: String? = null,
-    val history: HistoryPhysicalRecoveryState? = null
+    val history: HistoryPhysicalRecoveryState? = null,
+    val localAckFingerprint: String? = null,
+    val acknowledgedRevision: Long? = null
 )
 
 private data class RecoveryTableSpec(val table: String, val columns: List<String>)
@@ -2970,6 +3219,55 @@ private fun copyTable(
             )
         }
     }
+}
+
+/** Validated staging rows become transaction-local sources for the existing overlay joins. */
+private fun copyRecoverySourceToTemp(
+    source: SupportSQLiteDatabase,
+    destination: SupportSQLiteDatabase
+): List<String> = (BUSINESS_COPY_ORDER + BASELINE_TABLE + MANIFEST_TABLE).map { spec ->
+    val target = "mc_recovery_source_${spec.table}"
+    val columns = spec.columns.joinToString(",") { "`$it`" }
+    val placeholders = spec.columns.joinToString(",") { "?" }
+    destination.execSQL("CREATE TEMP TABLE `$target` AS SELECT $columns FROM `${spec.table}` WHERE 0")
+    val expected = queryCount(source, spec.table)
+    var copied = 0L
+    destination.compileStatement("INSERT INTO `$target` ($columns) VALUES ($placeholders)").use { insert ->
+        source.query("SELECT $columns FROM `${spec.table}`").use { cursor ->
+            while (cursor.moveToNext()) {
+                insert.clearBindings()
+                spec.columns.indices.forEach { index ->
+                    when (val value = cursor.valueAt(index)) {
+                        null -> insert.bindNull(index + 1)
+                        is Long -> insert.bindLong(index + 1, value)
+                        is Double -> insert.bindDouble(index + 1, value)
+                        is String -> insert.bindString(index + 1, value)
+                        is ByteArray -> insert.bindBlob(index + 1, value)
+                        else -> throw ShopSyncContractException("recovery_cursor_type_unsupported")
+                    }
+                }
+                insert.executeInsert()
+                copied++
+            }
+        }
+    }
+    if (copied != expected || queryCount(destination, target) != expected) {
+        throw ShopSyncContractException("recovery_overlay_source_count_mismatch")
+    }
+    val uniqueColumns = when (spec.table) {
+        "history_entries" -> listOf("uid")
+        "supplier_remote_refs" -> listOf("id", "supplierId", "remoteId")
+        "category_remote_refs" -> listOf("id", "categoryId", "remoteId")
+        "product_remote_refs" -> listOf("id", "productId", "remoteId")
+        "product_price_remote_refs" -> listOf("id", "productPriceId", "remoteId")
+        "history_entry_remote_refs" -> listOf("id", "historyEntryUid", "remoteId")
+        "suppliers", "categories", "products", "product_prices" -> listOf("id")
+        else -> emptyList()
+    }
+    uniqueColumns.forEach { key ->
+        destination.execSQL("CREATE UNIQUE INDEX `${target}_$key` ON `$target` (`$key`)")
+    }
+    target
 }
 
 private fun Cursor.valueAt(index: Int): Any? = when (getType(index)) {

@@ -123,13 +123,17 @@ interface HistoryEntryDao {
         FROM history_entries h
         INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
         WHERE (:afterRemoteId IS NULL OR r.remoteId > :afterRemoteId)
+          AND (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
+               AND r.localChangeRevision = r.lastSyncedLocalRevision
+               AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
         ORDER BY r.remoteId
         LIMIT :limit
         """
     )
     suspend fun getRecoveryPhysicalPage(
         afterRemoteId: String?,
-        limit: Int
+        limit: Int,
+        onlyClean: Boolean = false
     ): List<HistoryRecoveryPhysicalRow>
 
     /** Active projection for an ordinary receipt; retained shadows are proved separately. */
@@ -144,13 +148,17 @@ interface HistoryEntryDao {
         INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
         WHERE h.deletedAt IS NULL
           AND (:afterRemoteId IS NULL OR r.remoteId > :afterRemoteId)
+          AND (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
+               AND r.localChangeRevision = r.lastSyncedLocalRevision
+               AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
         ORDER BY r.remoteId
         LIMIT :limit
         """
     )
     suspend fun getRecoveryActivePhysicalPage(
         afterRemoteId: String?,
-        limit: Int
+        limit: Int,
+        onlyClean: Boolean = false
     ): List<HistoryRecoveryPhysicalRow>
 
     @Query(

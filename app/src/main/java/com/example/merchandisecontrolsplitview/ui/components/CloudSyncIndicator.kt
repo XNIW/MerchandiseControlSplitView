@@ -58,19 +58,19 @@ fun CloudSyncIndicator(
     state: CatalogSyncProgressState,
     modifier: Modifier = Modifier
 ) {
-    var visible by remember { mutableStateOf(state.isBusy) }
-    LaunchedEffect(state.status, state.stage, state.current, state.total) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(state.status) {
         when (state.status) {
-            CatalogSyncStatus.RUNNING -> visible = true
-            CatalogSyncStatus.COMPLETED -> {
+            CatalogSyncStatus.RUNNING -> {
+                if (!visible) delay(700L)
                 visible = true
-                delay(2_200L)
+            }
+            CatalogSyncStatus.COMPLETED -> {
+                if (visible) delay(800L)
                 visible = false
             }
             CatalogSyncStatus.FAILED -> {
                 visible = true
-                delay(3_600L)
-                visible = false
             }
             CatalogSyncStatus.IDLE -> visible = false
         }
@@ -82,16 +82,7 @@ fun CloudSyncIndicator(
         exit = fadeOut(animationSpec = tween(durationMillis = 200)),
         modifier = modifier
     ) {
-        val infinite = rememberInfiniteTransition(label = "cloudSyncIndicatorRotation")
-        val angle by infinite.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 1100, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "cloudSyncIndicatorAngle"
-        )
+        val angle = if (state.status==CatalogSyncStatus.RUNNING && state.isBusy) runningSyncAngle() else 0f
         val containerColor = when (state.status) {
             CatalogSyncStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
             CatalogSyncStatus.COMPLETED -> MaterialTheme.colorScheme.secondaryContainer
@@ -167,6 +158,15 @@ fun CloudSyncIndicator(
             }
         }
     }
+}
+
+@Composable
+private fun runningSyncAngle(): Float {
+    val infinite=rememberInfiniteTransition(label="cloudSyncIndicatorRotation")
+    val angle by infinite.animateFloat(initialValue=0f,targetValue=360f,
+        animationSpec=infiniteRepeatable(animation=tween(1100,easing=LinearEasing),repeatMode=RepeatMode.Restart),
+        label="cloudSyncIndicatorAngle")
+    return angle
 }
 
 @Composable

@@ -21,8 +21,11 @@ private const val DEVICE_STATUS_CACHE_TTL_MS = 15_000L
 class DeviceInstallIdProvider(
     private val dao: SyncEventDeviceStateDao
 ) {
+    @Volatile var currentId: String? = null
+        private set
+
     suspend fun getOrCreate(): String {
-        dao.get()?.let { return it.deviceId }
+        dao.get()?.let { currentId = it.deviceId; return it.deviceId }
         val generated = java.util.UUID.randomUUID().toString()
         dao.insert(
             SyncEventDeviceState(
@@ -30,7 +33,7 @@ class DeviceInstallIdProvider(
                 createdAtMs = System.currentTimeMillis()
             )
         )
-        return dao.get()?.deviceId ?: generated
+        return (dao.get()?.deviceId ?: generated).also { currentId = it }
     }
 }
 
@@ -113,7 +116,7 @@ class ShopDeviceRegistrationRemoteDataSource(
                 .postgrest
                 .rpc("shop_device_status_current_owner", params)
                 .decodeAs<ShopDeviceStatusRpcResult>()
-                .toSnapshot()
+                .toSnapshot().copy(deviceIdentifier = installId)
         }.onFailure { error ->
             Log.i(
                 TAG,
@@ -164,7 +167,7 @@ class ShopDeviceRegistrationRemoteDataSource(
                 .postgrest
                 .rpc("shop_device_status_for_shop", params)
                 .decodeAs<ShopDeviceStatusRpcResult>()
-                .toSnapshot()
+                .toSnapshot().copy(deviceIdentifier = installId)
         }.onFailure { error ->
             Log.i(
                 TAG,
@@ -243,7 +246,8 @@ data class ShopDeviceAuthorizationSnapshot(
     val lastSeenAt: String?,
     val reasonCode: String,
     val recommendedAction: String,
-    val checkedAtMs: Long
+    val checkedAtMs: Long,
+    val deviceIdentifier: String? = null
 )
 
 class ShopDeviceAuthorizationBlockedException(
@@ -257,7 +261,8 @@ class ShopDeviceAuthorizationRepository(
     private val cacheTtlMs: Long = DEVICE_STATUS_CACHE_TTL_MS,
     private val clockMs: () -> Long = { System.currentTimeMillis() },
     private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
-        Task126UnmanagedBusinessDataScopeRuntimeGuard
+        Task126UnmanagedBusinessDataScopeRuntimeGuard,
+    private val onConfirmedAuthorization: (String?, ShopDeviceAuthorizationSnapshot) -> Unit = { _, _ -> }
 ) {
     private val snapshotCache = mutableMapOf<String?, ShopDeviceAuthorizationSnapshot>()
     private val statusCheckMutex = Mutex()
@@ -277,6 +282,15 @@ class ShopDeviceAuthorizationRepository(
         reason: String,
         force: Boolean = false,
         shopId: String? = null
+    ): Result<ShopDeviceAuthorizationSnapshot> =
+        businessDataScopeRuntimeGuard.withCurrentBusinessDataScopeFlight {
+            checkStatusInFlight(reason, force, shopId)
+        }
+
+    private suspend fun checkStatusInFlight(
+        reason: String,
+        force: Boolean,
+        shopId: String?
     ): Result<ShopDeviceAuthorizationSnapshot> {
         businessDataScopeRuntimeGuard.requireCurrentBusinessDataScope()
         val normalizedShopId = normalizeShopId(shopId)
@@ -298,6 +312,7 @@ class ShopDeviceAuthorizationRepository(
             remoteResult
                 .onSuccess { snapshot ->
                     cacheSnapshot(normalizedShopId, snapshot.copy(checkedAtMs = lockedNow))
+                    onConfirmedAuthorization(normalizedShopId, snapshot)
                 }
                 .recoverCatching { error ->
                     cachedActiveSnapshotForTransientCancellation(reason, error, lockedNow, lockedCached)

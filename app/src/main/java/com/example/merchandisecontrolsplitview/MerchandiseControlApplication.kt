@@ -425,7 +425,20 @@ class MerchandiseControlApplication : Application() {
     val shopDeviceAuthorizationRepository: ShopDeviceAuthorizationRepository by lazy {
         ShopDeviceAuthorizationRepository(
             remote = shopDeviceRegistrationRemoteDataSource,
-            businessDataScopeRuntimeGuard = catalogSyncStateTracker
+            businessDataScopeRuntimeGuard = catalogSyncStateTracker,
+            onConfirmedAuthorization = { shopId, snapshot ->
+                val owner = (authManager.state.value as? AuthState.SignedIn)?.userId
+                val device = snapshot.deviceIdentifier
+                if (owner != null && device != null) {
+                    shopContextRepository.recordDeviceAuthorization(owner, shopId, device, snapshot.status, snapshot.canWrite)
+                    val context = shopContextRepository.state.value
+                    if (context.ownerUserId == owner && context.activeShopId == shopId && !context.localAccessAllowed) {
+                        val previous = catalogSyncStateTracker.businessDataScopeState.value
+                        catalogSyncStateTracker.updateBusinessDataScopeState(previous.copy(
+                            localReadsAllowed = false, localWritesAllowed = false))
+                    }
+                }
+            }
         )
     }
 
@@ -437,7 +450,8 @@ class MerchandiseControlApplication : Application() {
             ),
             currentOwnerUserId = {
                 (authManager.state.value as? AuthState.SignedIn)?.userId
-            }
+            },
+            currentDeviceIdentifier = { deviceInstallIdProvider.currentId }
         )
     }
 
@@ -562,10 +576,19 @@ class MerchandiseControlApplication : Application() {
                     is AuthState.SignedIn -> {
                         cancelShopContextRecovery()
                         Log.i(TAG, "Auth: sessione attiva")
-                        catalogSyncStateTracker.updateBusinessDataScopeState(
-                            Task126BusinessDataScopeState.checking()
-                        )
+                        val previous = catalogSyncStateTracker.businessDataScopeState.value
+                        val preservedScope = previous.boundScope?.takeIf {
+                            previous.allowsLocalOperations && it.ownerHash == com.example.merchandisecontrolsplitview.data.task126OwnerHash(state.userId)
+                        }
+                        catalogSyncStateTracker.updateBusinessDataScopeState(previous.copy(
+                            status = Task126BusinessDataScopeStatus.CHECKING,
+                            localAccessScope = preservedScope))
                         suspendRemoteComponentsForBusinessScope()
+                        withContext(Dispatchers.IO) {
+                            deviceInstallIdProvider.getOrCreate()
+                            shopContextRepository.restoreLocalAuthorization(state.userId)
+                        }
+                        publishOfflineBusinessScope(shopContextRepository.state.value)
                         withContext(Dispatchers.IO) {
                             shopContextRepository.refresh(state.userId)
                         }
@@ -581,14 +604,7 @@ class MerchandiseControlApplication : Application() {
                         }
                         if (!currentShopContextAllowsSync(state.userId)) {
                             Log.w(TAG, "Shop context: sync cloud sospesa per errore linked-shops")
-                            if (!refreshedContext.syncAllowed) {
-                                catalogSyncStateTracker.updateBusinessDataScopeState(
-                                    Task126BusinessDataScopeState(
-                                        status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                                        errorCode = "shop_context_unavailable"
-                                    )
-                                )
-                            }
+                            publishOfflineBusinessScope(refreshedContext)
                             suspendRemoteComponentsForBusinessScope()
                             return@collect
                         }
@@ -607,6 +623,11 @@ class MerchandiseControlApplication : Application() {
                         )
                         suspendRemoteComponentsForBusinessScope()
                         shopContextRepository.clear()
+                        val localState = try { repository.resolveSignedOutBusinessDataScope() }
+                            catch (_: Exception) { Task126BusinessDataScopeState.checking() }
+                        if (authManager.state.value is AuthState.SignedOut) {
+                            catalogSyncStateTracker.updateBusinessDataScopeState(localState)
+                        }
                     }
                     is AuthState.ErrorRecoverable -> {
                         cancelShopContextRecovery()
@@ -639,17 +660,7 @@ class MerchandiseControlApplication : Application() {
                     return@collect
                 }
                 if (context.isLoading || !context.syncAllowed) {
-                    Log.w(TAG, "Shop context: sync cloud sospesa finche il contesto non torna valido")
-                    catalogSyncStateTracker.updateBusinessDataScopeState(
-                        if (context.isLoading) {
-                            Task126BusinessDataScopeState.checking()
-                        } else {
-                            Task126BusinessDataScopeState(
-                                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                                errorCode = "shop_context_unavailable"
-                            )
-                        }
-                    )
+                    publishOfflineBusinessScope(context)
                     suspendRemoteComponentsForBusinessScope()
                     return@collect
                 }
@@ -662,16 +673,35 @@ class MerchandiseControlApplication : Application() {
         }
     }
 
+    private suspend fun publishOfflineBusinessScope(context: com.example.merchandisecontrolsplitview.data.ShopContext) {
+        businessDataScopeMutex.withLock {
+            val signedIn = authManager.state.value as? AuthState.SignedIn ?: return@withLock
+            if (shopContextRepository.state.value != context || context.ownerUserId != signedIn.userId) return@withLock
+            val previous = catalogSyncStateTracker.businessDataScopeState.value
+            if (!context.localAccessAllowed) {
+                catalogSyncStateTracker.updateBusinessDataScopeState(previous.copy(
+                    status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, localAccessScope = null,
+                    errorCode = "shop_context_unavailable", localWritesAllowed = false, localReadsAllowed = false))
+                return@withLock
+            }
+            val activeScope = task126ActiveOwnerStoreScope(signedIn.userId, context.selectedShop)
+            val resolved = repository.resolveOfflineBusinessDataScope(activeScope, context.selectedShop?.canWrite != false)
+            if (authManager.state.value == signedIn && shopContextRepository.state.value == context) {
+                catalogSyncStateTracker.updateBusinessDataScopeState(resolved)
+            }
+        }
+    }
+
     private suspend fun alignBusinessDataScope(
         ownerUserId: String,
         selectedShop: com.example.merchandisecontrolsplitview.data.SelectedShop?
     ): Boolean = businessDataScopeMutex.withLock {
-        catalogSyncStateTracker.withBusinessDataScopeTransition {
+        val resolveScope: suspend () -> Boolean = resolveScope@ {
             if (!currentAuthAndShopMatch(ownerUserId, selectedShop)) {
                 catalogSyncStateTracker.updateBusinessDataScopeState(
                     Task126BusinessDataScopeState.checking()
                 )
-                return@withBusinessDataScopeTransition false
+                return@resolveScope false
             }
             val activeScope = task126ActiveOwnerStoreScope(ownerUserId, selectedShop)
             val legacyValue = shopDataScopePreferences.getString(KEY_LAST_BUSINESS_DATA_SCOPE, null)
@@ -691,9 +721,10 @@ class MerchandiseControlApplication : Application() {
                 catalogSyncStateTracker.updateBusinessDataScopeState(
                     Task126BusinessDataScopeState.checking()
                 )
-                return@withBusinessDataScopeTransition false
+                return@resolveScope false
             }
-            catalogSyncStateTracker.updateBusinessDataScopeState(state)
+            catalogSyncStateTracker.updateBusinessDataScopeState(state.copy(localWritesAllowed = selectedShop?.canWrite != false && shopContextRepository.state.value.localAccessAllowed,
+                localReadsAllowed = shopContextRepository.state.value.localAccessAllowed))
             if (legacyValue != null && legacyScope != null && state.boundScope != null) {
                 val removed = shopDataScopePreferences.edit()
                     .remove(KEY_LAST_BUSINESS_DATA_SCOPE)
@@ -708,6 +739,12 @@ class MerchandiseControlApplication : Application() {
             }
             allowsResolvedBusinessDataScope(state, activeScope)
         }
+        val previous = catalogSyncStateTracker.businessDataScopeState.value
+        val active = task126ActiveOwnerStoreScope(ownerUserId, selectedShop)
+        if (previous.allowsLocalOperations && previous.boundScope?.let {
+            Task126OwnerStoreGate.validate(it, active) == Task126OwnerStoreGateDecision.Allowed
+        } == true) resolveScope()
+        else catalogSyncStateTracker.withBusinessDataScopeTransition { resolveScope() }
     }
 
     private suspend fun activateRemoteComponentsForBoundScope(

@@ -100,6 +100,7 @@ fun DatabaseScreen(
 ) {
     val spacing = androidx.compose.material3.MaterialTheme.appSpacing
     val uiState by viewModel.uiState.collectAsState()
+    val lastProductSaveCloudConfirmed by viewModel.lastProductSaveCloudConfirmed.collectAsState()
     val exportUiState by viewModel.exportUiState.collectAsState()
     val filter by viewModel.filter.collectAsState()
     val appliedProductFilter by viewModel.appliedProductFilter.collectAsState()
@@ -247,6 +248,12 @@ fun DatabaseScreen(
 
             is UiState.Idle, is UiState.Loading -> Unit
         }
+    }
+
+    val cloudConfirmedMessage=stringResource(R.string.product_save_cloud_confirmed)
+    LaunchedEffect(lastProductSaveCloudConfirmed) {
+        if(lastProductSaveCloudConfirmed==true) snackbarHostState.showSnackbar(
+            message=cloudConfirmedMessage,withDismissAction=true,duration=SnackbarDuration.Short)
     }
 
     val storefrontImportVerifyLabel = stringResource(R.string.storefront_import_verify)

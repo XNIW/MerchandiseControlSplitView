@@ -56,6 +56,7 @@ data class InventoryProductRow(
     val deletedAt: String? = null
 )
 
+@Serializable
 data class InventoryProductPatch(
     val changedFields: Set<String>,
     val barcode: String? = null,
@@ -74,6 +75,7 @@ data class InventoryProductPatch(
 }
 
 /** Patch minimo per tombstone remoto (UPDATE `deleted_at` / `updated_at`). */
+@Serializable
 data class CatalogTombstonePatch(
     val id: String,
     val ownerUserId: String,
@@ -292,7 +294,7 @@ internal fun fingerprintProductRow(p: Product, supplierRemoteId: String?, catego
         }
     }
 
-internal fun fingerprintProductInbound(row: InventoryProductRow): String {
+internal fun fingerprintProductInboundLegacy(row: InventoryProductRow): String {
     val canonicalBarcode = CatalogTextCanonicalizer.barcode(row.barcode)
     val canonicalItemNumber = row.itemNumber
         ?.let(CatalogTextCanonicalizer::itemNumber)
@@ -331,4 +333,25 @@ internal fun fingerprintProductInbound(row: InventoryProductRow): String {
         append("|d:")
         append(row.deletedAt)
     }
+}
+
+/** Versioned, unambiguous local material identity. Uses the existing ref string column. */
+internal fun fingerprintProductInbound(row: InventoryProductRow): String {
+    fun text(value: String?): kotlinx.serialization.json.JsonElement =
+        value?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull
+    fun number(value: Double?): kotlinx.serialization.json.JsonElement =
+        value?.let { kotlinx.serialization.json.JsonPrimitive(it) } ?: kotlinx.serialization.json.JsonNull
+    val encoded = kotlinx.serialization.json.JsonArray(listOf(
+        text(CatalogTextCanonicalizer.barcode(row.barcode)),
+        text(row.itemNumber?.let(CatalogTextCanonicalizer::itemNumber)?.takeIf { it.isNotEmpty() }),
+        text(row.productName?.let { CatalogTextCanonicalizer.productName(it) }?.takeIf { it.isNotEmpty() }),
+        text(row.secondProductName?.let { CatalogTextCanonicalizer.secondProductName(it) }?.takeIf { it.isNotEmpty() }),
+        number(row.purchasePrice), number(row.retailPrice),
+        text(CatalogTextCanonicalizer.optionalRemoteId(row.supplierId)),
+        text(CatalogTextCanonicalizer.optionalRemoteId(row.categoryId)), number(row.stockQuantity ?: 0.0),
+        text(CatalogTextCanonicalizer.optionalRemoteId(row.primaryImageVersionId)),
+        text(row.primaryImageUpdatedAt), text(row.updatedAt), text(row.deletedAt)
+    )).toString()
+    return "product-base-v2:" + java.security.MessageDigest.getInstance("SHA-256")
+        .digest(encoded.toByteArray(Charsets.UTF_8)).joinToString("") { (it.toInt() and 255).toString(16).padStart(2, '0') }
 }

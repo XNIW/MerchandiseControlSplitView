@@ -290,7 +290,7 @@ class Task139ShopSyncRecoveryForceStopDeviceTest {
         POST_COMMIT("post-commit", SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING)
     }
 
-    private class EmptyRecoveryRemote : ShopSyncReadRemoteDataSource {
+    internal class EmptyRecoveryRemote : ShopSyncReadRemoteDataSource {
         override val isConfigured = true
         val checkpoint = emptyCheckpoint()
         var checkpointCalls = 0

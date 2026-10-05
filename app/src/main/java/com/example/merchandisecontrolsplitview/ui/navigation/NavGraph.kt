@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,9 +31,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -48,6 +52,9 @@ import androidx.navigation.compose.rememberNavController
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
+import com.example.merchandisecontrolsplitview.data.ShopContext
 import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.ui.components.CloudSyncIndicator
 import com.example.merchandisecontrolsplitview.ui.screens.*
@@ -63,8 +70,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun AppNavGraph() {
     val context = LocalContext.current
-    val navController = rememberNavController()
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     val app = context.applicationContext as? MerchandiseControlApplication
         ?: error("MerchandiseControlApplication non configurata nel Manifest")
@@ -85,6 +90,27 @@ fun AppNavGraph() {
 
     // Auth state (task 011): unica fonte di verita' per lo stato sessione.
     val authState by app.authManager.state.collectAsState()
+    AppNavGraphContent(
+        app, excelViewModel, dbViewModel, app.authManager.isEnabled, authState,
+        cloudSyncState, shopContext, businessDataScopeState
+    )
+}
+
+/** The production root; its dependencies can also be supplied by an isolated integrated test. */
+@Composable
+internal fun AppNavGraphContent(
+    app: MerchandiseControlApplication,
+    excelViewModel: ExcelViewModel,
+    dbViewModel: DatabaseViewModel,
+    authEnabled: Boolean,
+    authState: AuthState,
+    cloudSyncState: CatalogSyncProgressState,
+    shopContext: ShopContext,
+    businessDataScopeState: Task126BusinessDataScopeState
+) {
+    val context = LocalContext.current
+    val navController = rememberNavController()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val authScope = rememberCoroutineScope()
 
     val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
@@ -92,9 +118,12 @@ fun AppNavGraph() {
     val currentRoute = navBackStackEntry?.destination?.route
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
     val businessContentAllowed = businessContentAvailable(
-        authEnabled = app.authManager.isEnabled,
+        authEnabled = authEnabled,
         authState = authState,
-        status = businessDataScopeState.status
+        state = businessDataScopeState,
+        activeScope = (authState as? AuthState.SignedIn)?.takeIf {
+            shopContext.ownerUserId == it.userId && shopContext.localAccessAllowed
+        }?.let { task126ActiveOwnerStoreScope(it.userId, shopContext.selectedShop) }
     )
     val businessRouteBlocked = !businessContentAllowed && currentRoute != Screen.Options.route
     val showBottomBar = currentRootTab != null
@@ -127,7 +156,8 @@ fun AppNavGraph() {
         }
     }
 
-    LaunchedEffect(pendingImportAnalysisExitCleanup, currentRoute) {
+    LaunchedEffect(pendingImportAnalysisExitCleanup, currentRoute, businessContentAllowed) {
+        if (!businessContentAllowed) return@LaunchedEffect
         val cleanup = pendingImportAnalysisExitCleanup ?: return@LaunchedEffect
         if (importAnalysisExitCleanupApplied) return@LaunchedEffect
         if (currentRoute == null || currentRoute == Screen.ImportAnalysis.route) return@LaunchedEffect
@@ -160,7 +190,7 @@ fun AppNavGraph() {
     LaunchedEffect(businessRouteBlocked, businessDataScopeState.status, currentRoute) {
         if (
             businessRouteBlocked &&
-            currentRoute != null &&
+            currentRoute != null && currentRootTab == null &&
             businessDataScopeState.status != Task126BusinessDataScopeStatus.CHECKING
         ) {
             navController.navigate(Screen.Options.route) { launchSingleTop = true }
@@ -178,7 +208,6 @@ fun AppNavGraph() {
             if (showBottomBar) {
                 RootNavigationBar(
                     selectedTab = currentRootTab,
-                    businessContentAllowed = businessContentAllowed,
                     onTabSelected = { tab ->
                         if (tab.screen == Screen.History) {
                             navigateByGeneratedExitRequest(
@@ -217,6 +246,7 @@ fun AppNavGraph() {
                 )
         ) {
             composable(Screen.FilePicker.route) {
+                if (!businessContentAllowed) return@composable
                 FilePickerScreen(
                     contentPadding = innerPadding,
                     shopContext = shopContext,
@@ -251,6 +281,7 @@ fun AppNavGraph() {
             }
 
             composable(Screen.PreGenerate.route) {
+                if (!businessContentAllowed) return@composable
                 val dbUiState by dbViewModel.uiState.collectAsState()
                 PreGenerateScreen(
                     excelViewModel = excelViewModel,
@@ -284,6 +315,7 @@ fun AppNavGraph() {
                     }
                 )
             ) { backStackEntry ->
+                if (!businessContentAllowed) return@composable
                 val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
                 val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
                 val isManualEntry = backStackEntry.arguments?.getBoolean("isManualEntry") ?: false
@@ -340,6 +372,7 @@ fun AppNavGraph() {
             }
 
             composable(Screen.History.route) {
+                if (!businessContentAllowed) return@composable
                 val historyList by excelViewModel.historyDisplayEntries.collectAsState()
                 val historyActionMessage by excelViewModel.historyActionMessage
                 val currentHistoryFilter by excelViewModel.historyFilter.collectAsState()
@@ -379,6 +412,7 @@ fun AppNavGraph() {
             }
 
             composable(Screen.Database.route) {
+                if (!businessContentAllowed) return@composable
                 DatabaseScreen(
                     contentPadding = innerPadding,
                     viewModel = dbViewModel
@@ -412,7 +446,7 @@ fun AppNavGraph() {
                 OptionsScreen(
                     contentPadding = innerPadding,
                     authState = authState,
-                    authEnabled = app.authManager.isEnabled,
+                    authEnabled = authEnabled,
                     wechatAuthEnabled = app.authManager.isWeChatEnabled,
                     onSignIn = { activityContext ->
                         authScope.launch { app.authManager.signInWithGoogle(activityContext) }
@@ -432,7 +466,7 @@ fun AppNavGraph() {
                     },
                     businessScopeMismatchIdentity = mismatchDialogEligibility.identity,
                     canReplaceMismatchedLocalData = mismatchDialogEligibility.canReplace,
-                    catalogSyncUi = if (app.authManager.isEnabled) catalogSyncUi else null,
+                    catalogSyncUi = if (authEnabled) catalogSyncUi else null,
                     localDatabaseStatusUi = localDatabaseStatusUi
                 )
             }
@@ -446,6 +480,7 @@ fun AppNavGraph() {
                     }
                 )
             ) { importBackStackEntry ->
+                if (!businessContentAllowed) return@composable
                 val importOrigin = ImportNavOrigin.parse(
                     importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
                 )
@@ -607,24 +642,27 @@ fun AppNavGraph() {
         }
         if (businessRouteBlocked) {
             Surface(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag("root-business-placeholder"),
                 color = MaterialTheme.colorScheme.background
             ) {
-                if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator()
-                        Text(
-                            text = stringResource(R.string.business_scope_checking),
-                            modifier = Modifier.padding(top = 16.dp),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(innerPadding).padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING) CircularProgressIndicator()
+                    val message = when (businessDataScopeState.status) {
+                        Task126BusinessDataScopeStatus.CHECKING -> R.string.business_scope_checking
+                        Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND -> R.string.business_scope_unbound_review_message
+                        Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH -> R.string.business_scope_account_mismatch_message
+                        Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH -> R.string.business_scope_shop_mismatch_message
+                        Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH -> R.string.business_scope_schema_mismatch_message
+                        else -> R.string.business_scope_recoverable_error
                     }
+                    Text(stringResource(message), Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.material3.TextButton(onClick = {
+                        navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options })
+                    }) { Text(stringResource(R.string.business_scope_review_details)) }
                 }
             }
         }
@@ -640,12 +678,16 @@ private enum class ImportAnalysisExitCleanup {
 internal fun businessContentAvailable(
     authEnabled: Boolean,
     authState: AuthState,
-    status: Task126BusinessDataScopeStatus
+    state: com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState,
+    activeScope: com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope? = state.localAccessScope ?: state.boundScope
 ): Boolean {
-    if (!authEnabled || authState is AuthState.SignedOut) return true
-    if (authState !is AuthState.SignedIn) return false
-    return status == Task126BusinessDataScopeStatus.READY ||
-        status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
+    if (!authEnabled || authState is AuthState.SignedOut) return state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && state.boundScope == null
+    val signedIn = authState as? AuthState.SignedIn ?: return false
+    if (state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED || !state.allowsLocalOperations || activeScope == null) return false
+    val localScope = state.localAccessScope ?: state.boundScope ?: return false
+    return localScope.ownerHash == com.example.merchandisecontrolsplitview.data.task126OwnerHash(signedIn.userId) &&
+        com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGate.validate(localScope, activeScope) ==
+        com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGateDecision.Allowed
 }
 
 @Composable
@@ -782,9 +824,11 @@ private fun navigateToRootTab(
 @Composable
 private fun RootNavigationBar(
     selectedTab: RootTab?,
-    businessContentAllowed: Boolean,
     onTabSelected: (RootTab) -> Unit
 ) {
+    val minimumBarHeight=with(LocalDensity.current) {
+        48.dp + MaterialTheme.typography.labelMedium.lineHeight.toDp() * 2
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -798,13 +842,15 @@ private fun RootNavigationBar(
             color = MaterialTheme.colorScheme.surface
         ) {
             NavigationBar(
+                modifier = Modifier.heightIn(min=minimumBarHeight),
                 windowInsets = WindowInsets(0, 0, 0, 0),
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
             ) {
                 rootTabs.forEach { tab ->
                     NavigationBarItem(
+                        modifier = Modifier.testTag("root-tab-${tab.screen.route}"),
                         selected = selectedTab?.screen == tab.screen,
-                        enabled = businessContentAllowed || tab.screen == Screen.Options,
+                        enabled = true,
                         onClick = { onTabSelected(tab) },
                         icon = {
                             androidx.compose.material3.Icon(
@@ -812,7 +858,9 @@ private fun RootNavigationBar(
                                 contentDescription = stringResource(tab.labelRes)
                             )
                         },
-                        label = { androidx.compose.material3.Text(stringResource(tab.labelRes)) },
+                        label = { Text(stringResource(tab.labelRes),
+                            modifier=Modifier.fillMaxWidth().testTag("root-tab-label-${tab.screen.route}"),
+                            textAlign=TextAlign.Center) },
                         colors = NavigationBarItemDefaults.colors(
                             indicatorColor = MaterialTheme.colorScheme.primaryContainer
                         )

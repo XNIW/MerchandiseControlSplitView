@@ -363,6 +363,12 @@ class CatalogSyncStateTracker(
         businessDataScopeFlightGate.requireCurrentBusinessDataScope()
     }
 
+    override suspend fun <T> withLocalBusinessDataScopeFlight(block: suspend () -> T): T =
+        businessDataScopeFlightGate.withLocalBusinessDataScopeFlight(block)
+
+    override suspend fun requireCloudBusinessDataScope() =
+        businessDataScopeFlightGate.requireCloudBusinessDataScope()
+
     override fun captureBusinessDataScopeSignal(
         ownerUserId: String,
         shopId: String?

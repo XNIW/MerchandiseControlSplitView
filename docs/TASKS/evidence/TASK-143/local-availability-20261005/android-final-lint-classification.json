@@ -1,0 +1,16 @@
+{
+  "new_advisories": 5,
+  "source": "ShopContext.kt:343,347,358",
+  "ApplySharedPref": {
+    "count": 2,
+    "reason": "Confirmed authorization cache persistence/removal is intentionally synchronous before later reopen. Changing commit to apply would change this durable ordering."
+  },
+  "UseKtx": {
+    "count": 3,
+    "reason": "Native SharedPreferences.Editor keeps the existing storage implementation; device denial checks commit Boolean and must retain it. KTX is optional syntax advice, not a correctness/deprecation warning."
+  },
+  "lint_errors": 0,
+  "kotlin_deprecation_warnings": 0,
+  "production_or_tests_changed_after_v4": false,
+  "gate": "PASS with explicit lint advisory rationale allowed by repository execution protocol; exact-head CI remains pending."
+}

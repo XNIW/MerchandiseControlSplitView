@@ -22,6 +22,7 @@ import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -114,6 +115,8 @@ interface InventoryRepository {
     ): List<ProductWithDetails> = emptyList()
     /** True solo dopo che il bridge prodotto e' stato applicato almeno una volta al remoto. */
     suspend fun hasSyncedProductRemoteRef(productId: Long): Boolean = false
+    /** Confirmation of this current product and its price points, independent of other pending records. */
+    fun observeProductCloudConfirmed(productId: Long): Flow<Boolean> = kotlinx.coroutines.flow.flowOf(false)
     /** Identita' remote stabili e gia' riconciliate, mai barcode. */
     suspend fun getSyncedProductRemoteIds(productIds: List<Long>): Map<Long, String> = emptyMap()
     val remoteAppliedProductIds: Flow<Set<Long>>
@@ -589,7 +592,7 @@ class DefaultInventoryRepository(
      */
     private suspend fun <T> withLocalBusinessMutation(
         block: suspend () -> T
-    ): T = businessDataScopeRuntimeGuard.withCurrentBusinessDataScopeFlight {
+    ): T = businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
         requireCurrentBusinessDataScope()
         val result = block()
         requireCurrentBusinessDataScope()
@@ -599,6 +602,7 @@ class DefaultInventoryRepository(
     private suspend fun <T> businessScopedRemoteCall(
         block: suspend () -> Result<T>
     ): Result<T> {
+        businessDataScopeRuntimeGuard.requireCloudBusinessDataScope()
         requireCurrentBusinessDataScope()
         val result = block()
         result.exceptionOrNull()?.let { error ->
@@ -607,6 +611,103 @@ class DefaultInventoryRepository(
         requireCurrentBusinessDataScope()
         return result
     }
+
+    private val businessWriteOutbox by lazy {
+        BusinessWriteOutbox(db, ::requireCurrentBusinessDataScope, ::getOrCreateSyncEventDeviceId,
+            ::acknowledgeBusinessWrite) { it.isPostgrestUniqueViolationConflict() || it.isPostgrestForeignKeyViolationConflict() }
+    }
+
+    private suspend fun acknowledgeBusinessWrite(attempt: BusinessWriteAttempt) {
+        requireCurrentBusinessDataScope()
+        val now = System.currentTimeMillis()
+        for (sent in attempt.payload.revisions) {
+            val revision = sent.revision.toInt()
+            when (sent.domain) {
+                "SUPPLIER" -> supplierRemoteRefDao.getByRemoteId(sent.remoteId)?.let {
+                    if (it.lastSyncedLocalRevision <= revision) supplierRemoteRefDao.updateRemoteApplyState(
+                        it.supplierId,revision,now,requireNotNull(sent.fingerprint),sent.remoteUpdatedAt)
+                }
+                "CATEGORY" -> categoryRemoteRefDao.getByRemoteId(sent.remoteId)?.let {
+                    if (it.lastSyncedLocalRevision <= revision) categoryRemoteRefDao.updateRemoteApplyState(
+                        it.categoryId,revision,now,requireNotNull(sent.fingerprint),sent.remoteUpdatedAt)
+                }
+                "PRODUCT" -> productRemoteRefDao.getByRemoteId(sent.remoteId)?.let {
+                    productRemoteRefDao.updateRemoteApplyState(it.productId,revision,now,
+                        requireNotNull(sent.fingerprint),sent.remoteUpdatedAt)
+                }
+                "HISTORY" -> remoteRefDao.getByRemoteId(sent.remoteId)?.let {
+                    if (it.lastSyncedLocalRevision <= revision) {
+                        remoteRefDao.updateRemoteApplyState(it.historyEntryUid,revision,now,requireNotNull(sent.fingerprint))
+                        if (it.localChangeRevision == revision) historyDao.getByUid(it.historyEntryUid)?.let { row ->
+                            historyDao.update(row.copy(syncStatus=SyncStatus.SYNCED_SUCCESSFULLY))
+                        }
+                    }
+                }
+                "PRICE" -> {
+                    val localId = requireNotNull(sent.localPriceId)
+                    val row = attempt.payload.prices.single { it.id == sent.remoteId }
+                    // Price rows are immutable append records. Verify the logical identity before ACK.
+                    val matches = db.openHelper.readableDatabase.query(
+                        "SELECT 1 FROM product_prices p JOIN product_remote_refs r ON r.productId=p.productId " +
+                            "WHERE p.id=? AND r.remoteId=? AND p.type=? AND p.price=? AND p.effectiveAt=? " +
+                            "AND p.source IS ? AND p.note IS ? AND p.createdAt=?",
+                        arrayOf<Any?>(localId,row.productId,row.type,row.price,row.effectiveAt,row.source,row.note,row.createdAt)).use { it.moveToFirst() }
+                    require(matches) { "business_write_price_body_mismatch" }
+                    run {
+                        val existing = productPriceRemoteRefDao.getByProductPriceId(localId)
+                        require(existing == null || existing.remoteId == sent.remoteId) { "business_write_price_identity_mismatch" }
+                        productPriceRemoteRefDao.insert(ProductPriceRemoteRef(productPriceId=localId,remoteId=sent.remoteId))
+                    }
+                }
+                else -> error("business_write_revision_domain_invalid")
+            }
+        }
+        recordAcknowledgedLocalBodies(db, attempt)
+    }
+
+    private suspend fun sendCatalogBusinessWrite(remote: CatalogRemoteDataSource, attempt: BusinessWriteAttempt): Result<Unit> =
+        businessScopedRemoteCall {
+            when(attempt.payload.kind) {
+                "PRODUCTS" -> remote.upsertProducts(attempt.payload.products,attempt.shop)
+                "SUPPLIERS" -> remote.upsertSuppliers(attempt.payload.suppliers,attempt.shop)
+                "CATEGORIES" -> remote.upsertCategories(attempt.payload.categories,attempt.shop)
+                "PATCH" -> remote.patchProduct(requireNotNull(attempt.payload.patchId),attempt.owner,
+                    attempt.shop,requireNotNull(attempt.payload.patch))
+                else -> Result.failure(IllegalStateException("business_write_catalog_kind_invalid"))
+            }
+        }
+
+    private suspend fun productWriteRevision(product: Product, ref: ProductRemoteRef,
+        owner: String, shop: String?): BusinessWriteRevision {
+        val semantic = requireNotNull(buildProductPushRow(product,ref,owner,shop)).copy(
+            updatedAt=ref.remoteUpdatedAt, primaryImageVersionId=product.primaryImageVersionId,
+            primaryImageUpdatedAt=product.primaryImageUpdatedAt)
+        return BusinessWriteRevision("PRODUCT",ref.remoteId,ref.localChangeRevision.toLong(),
+            fingerprintProductInbound(semantic),ref.remoteUpdatedAt)
+    }
+
+    private suspend fun writeCatalogProducts(remote: CatalogRemoteDataSource, owner: String,
+        shop: String?, prepared: List<ProductPushCandidatePrepared>): Result<Unit> =
+        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("PRODUCTS",
+            products=prepared.map { it.row }, revisions=prepared.map {
+                productWriteRevision(it.product,it.ref,owner,shop)
+            })) { sendCatalogBusinessWrite(remote,it) }
+
+    private suspend fun writeSupplier(remote: CatalogRemoteDataSource, owner: String, shop: String?,
+        row: InventorySupplierRow, ref: SupplierRemoteRef): Result<Unit> =
+        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("SUPPLIERS",suppliers=listOf(row),
+            revisions=listOf(BusinessWriteRevision("SUPPLIER",row.id,ref.localChangeRevision.toLong(),
+                fingerprintSupplierInbound(row.copy(updatedAt=ref.remoteUpdatedAt)),ref.remoteUpdatedAt)))) {
+            sendCatalogBusinessWrite(remote,it)
+        }
+
+    private suspend fun writeCategory(remote: CatalogRemoteDataSource, owner: String, shop: String?,
+        row: InventoryCategoryRow, ref: CategoryRemoteRef): Result<Unit> =
+        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("CATEGORIES",categories=listOf(row),
+            revisions=listOf(BusinessWriteRevision("CATEGORY",row.id,ref.localChangeRevision.toLong(),
+                fingerprintCategoryInbound(row.copy(updatedAt=ref.remoteUpdatedAt)),ref.remoteUpdatedAt)))) {
+            sendCatalogBusinessWrite(remote,it)
+        }
 
     private fun historyTombstoneTimestamp(): String =
         LocalDateTime.now().format(tSFMT)
@@ -659,6 +760,9 @@ class DefaultInventoryRepository(
         withContext(Dispatchers.IO) {
             productRemoteRefDao.getByProductId(productId)?.lastRemoteAppliedAt != null
         }
+
+    override fun observeProductCloudConfirmed(productId: Long): Flow<Boolean> =
+        productRemoteRefDao.observeProductCloudConfirmed(productId)
     override suspend fun getSyncedProductRemoteIds(productIds: List<Long>): Map<Long, String> =
         withContext(Dispatchers.IO) {
             if (productIds.isEmpty()) emptyMap()
@@ -872,6 +976,7 @@ class DefaultInventoryRepository(
                             attemptCount = 0
                         )
                     )
+                    retireAcknowledgedPriceBodiesForProductDelete(db, product.id, rid)
                 }
                 productDao.delete(product)
             }
@@ -2780,11 +2885,16 @@ class DefaultInventoryRepository(
                 storeScope = activeScope.storeId
             )
             if (pendingTargetRecovery != null) {
+                val sameScope = storedBinding != null && boundScope != null &&
+                    Task126OwnerStoreGate.validate(boundScope, activeScope) == Task126OwnerStoreGateDecision.Allowed &&
+                    pendingTargetRecovery.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE
+                val localScope = boundScope?.takeIf { sameScope && hasStructurallyUsableLocalSnapshot(it) }
                 return@withTransaction Task126BusinessDataScopeState(
                     status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
                     boundScope = boundScope,
                     localSnapshot = snapshot,
-                    errorCode = "sync_recovery_required"
+                    errorCode = "sync_recovery_required",
+                    localAccessScope = localScope
                 )
             }
             when (val decision = Task126OwnerStoreGate.resolveBinding(boundScope, activeScope, snapshot)) {
@@ -2922,7 +3032,23 @@ class DefaultInventoryRepository(
                 storeScope = persisted.storeId
             )
             if (pendingRecovery == null) {
-                Task126BusinessDataScopeState.ready(persisted)
+                if (syncRecoveryJournalDao.get() != null) {
+                    Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                        boundScope=persisted,errorCode="sync_recovery_required")
+                } else if (hasStructurallyUsableLocalSnapshot(persisted)) {
+                    Task126BusinessDataScopeState.ready(persisted)
+                } else {
+                    val now = System.currentTimeMillis()
+                    syncRecoveryJournalDao.upsert(SyncRecoveryJournal(
+                        ownerHash=persisted.ownerHash,storeScope=persisted.storeId,
+                        shopId=shopIdFromStoreScope(persisted.storeId),
+                        deviceId=DeviceInstallIdProvider(syncEventDeviceStateDao).getOrCreate(),
+                        authorizationMode=SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                        phase=SyncRecoveryJournalPhases.REQUIRED,reason="local_snapshot_unavailable",
+                        blockingEventId=null,attemptCount=0,createdAtMs=now,updatedAtMs=now,nextRetryAtMs=now))
+                    Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                        boundScope=persisted,errorCode="sync_recovery_required",localReadsAllowed=false)
+                }
             } else {
                 Task126BusinessDataScopeState(
                     status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
@@ -2936,6 +3062,69 @@ class DefaultInventoryRepository(
                 errorCode = errorCode
             )
         }
+    }
+
+    /** Read-only resolution: never binds/adopts a store just because cloud is unavailable. */
+    internal suspend fun resolveOfflineBusinessDataScope(
+        activeScope: Task126OwnerStoreScope, canWrite: Boolean
+    ): Task126BusinessDataScopeState = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            val binding = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+            val snapshot = readLocalDatabaseStatusSnapshot(null, null)
+            if (binding == null) return@withTransaction Task126BusinessDataScopeState(
+                status = if (snapshot.isCompletelyEmptyForBinding) Task126BusinessDataScopeStatus.CHECKING
+                    else Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND, localSnapshot = snapshot)
+            val decision = Task126OwnerStoreGate.validate(binding, activeScope)
+            if (decision is Task126OwnerStoreGateDecision.Blocked) {
+                return@withTransaction blockedBusinessDataScopeState(decision.reason, binding, snapshot)
+            }
+            val journal = syncRecoveryJournalDao.get()
+            val eligibleJournal = journal == null || (journal.ownerHash == binding.ownerHash &&
+                journal.storeScope == binding.storeId && journal.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE)
+            val usable = eligibleJournal && hasStructurallyUsableLocalSnapshot(binding)
+            Task126BusinessDataScopeState(
+                status = Task126BusinessDataScopeStatus.CHECKING, boundScope = binding,
+                localSnapshot = snapshot, localAccessScope = binding.takeIf { usable },
+                localWritesAllowed = canWrite,
+                errorCode = if (usable) null else "local_snapshot_unavailable")
+        }
+    }
+
+    internal suspend fun resolveSignedOutBusinessDataScope(): Task126BusinessDataScopeState =
+        withContext(Dispatchers.IO) {
+            val binding = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+            if (binding == null) Task126BusinessDataScopeState.unmanagedAllowed()
+            else Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING, boundScope = binding)
+        }
+
+    /** Local provenance and structure survive legitimate offline edits; cloud body digests do not. */
+    private suspend fun hasStructurallyUsableLocalSnapshot(scope: Task126OwnerStoreScope): Boolean {
+        val sql = db.openHelper.readableDatabase
+        if (!sql.query("PRAGMA quick_check(1)").use { it.moveToFirst() && it.getString(0) == "ok" }) return false
+        if (sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() }) return false
+        val baseline = syncRecoveryBaselineDao.get() ?: return true
+        if (baseline.ownerHash != scope.ownerHash || baseline.storeScope != scope.storeId ||
+            shopIdFromStoreScope(scope.storeId)?.lowercase() != baseline.shopId.lowercase() ||
+            syncEventDeviceStateDao.get()?.deviceId != baseline.deviceId) return false
+        return try {
+            val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson)
+            if (checkpoint.scope.accountKey != scope.ownerHash || checkpoint.scope.deviceKey != task126OwnerHash(baseline.deviceId) ||
+                checkpoint.scope.kind != baseline.scopeKind || checkpoint.scope.key != baseline.scopeKey ||
+                checkpoint.shopId.lowercase() != baseline.shopId.lowercase() ||
+                checkpoint.syncEvents.verifiedBaselineId != checkpoint.syncEvents.maxId) return false
+            val watermarkValid = sql.query("SELECT ownerUserId, lastSyncEventId FROM sync_event_watermarks WHERE storeScope=?",
+                arrayOf(scope.storeId)).use { c ->
+                c.moveToFirst() && task126OwnerHash(c.getString(0)) == scope.ownerHash &&
+                    c.getLong(1).toString() == checkpoint.syncEvents.maxId && !c.moveToNext()
+            }
+            if (!watermarkValid) return false
+            validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
+            validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint)
+            validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
+                localOverlay=true, localAcknowledgements=true)
+            true
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { false }
     }
 
     private fun blockedBusinessDataScopeState(
@@ -3007,6 +3196,9 @@ class DefaultInventoryRepository(
             return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
         }
         try {
+            val replayedHistory = businessWriteOutbox.replay(ownerUserId,selectedShop?.shopId,setOf("HISTORY")) {
+                businessScopedRemoteCall { remote.upsertSessions(it.payload.history,it.shop) }
+            }
             val candidates = mutableListOf<HistorySessionPushCandidate>()
             val fullReconciliation = candidateUids == null
             val entries = if (fullReconciliation) {
@@ -3043,37 +3235,19 @@ class DefaultInventoryRepository(
                     )
                 )
             }
-            var uploaded = 0
-            val uploadedRemoteIds = mutableListOf<String>()
+            var uploaded = replayedHistory.sumOf { it.payload.revisions.size }
+            val uploadedRemoteIds = replayedHistory.flatMap { it.payload.revisions.map { r -> r.remoteId } }.toMutableList()
             for (chunk in candidates.chunked(SESSION_BACKUP_PUSH_CHUNK)) {
                 val rows = chunk.map {
                     it.payload.toSharedSheetSessionUpsertRow(ownerUserId, selectedShop?.shopId)
                 }
-                businessScopedRemoteCall {
-                    remote.upsertSessions(rows, selectedShop?.shopId)
+                businessWriteOutbox.execute(ownerUserId,selectedShop?.shopId,BusinessWritePayload("HISTORY",
+                    history=rows,revisions=chunk.map { BusinessWriteRevision("HISTORY",it.payload.remoteId,
+                        it.ref.localChangeRevision.toLong(),it.payload.payloadFingerprint()) })) {
+                    businessScopedRemoteCall { remote.upsertSessions(it.payload.history,it.shop) }
                 }.getOrElse { error ->
                     logHistorySessionPushFailure(chunk, error)
                     return@withContext Result.failure(error)
-                }
-                db.withTransaction {
-                    requireCurrentBusinessDataScope()
-                    for (c in chunk) {
-                        val fp = c.payload.payloadFingerprint()
-                        remoteRefDao.updateRemoteApplyState(
-                            uid = c.entry.uid,
-                            // Mark only the revision that produced the uploaded payload.
-                            // If the entry changed while the network call was in flight,
-                            // localChangeRevision remains ahead and the next push retries it.
-                            rev = c.ref.localChangeRevision,
-                            appliedAt = System.currentTimeMillis(),
-                            fingerprint = fp
-                        )
-                        val latestRef = remoteRefDao.getByHistoryEntryUid(c.entry.uid) ?: continue
-                        val latestEntry = historyDao.getByUid(c.entry.uid) ?: continue
-                        if (latestRef.localChangeRevision == c.ref.localChangeRevision) {
-                            historyDao.update(latestEntry.copy(syncStatus = SyncStatus.SYNCED_SUCCESSFULLY))
-                        }
-                    }
                 }
                 uploaded += chunk.size
                 uploadedRemoteIds += chunk.map { it.payload.remoteId }
@@ -3082,7 +3256,7 @@ class DefaultInventoryRepository(
                 HistorySessionBackupPushSummary(
                     uploaded = uploaded,
                     skippedAlreadySynced = skippedAlreadySynced,
-                    attempted = candidates.size,
+                    attempted = candidates.size + replayedHistory.sumOf { it.payload.revisions.size },
                     remoteIds = uploadedRemoteIds.distinct()
                 )
             )
@@ -5083,6 +5257,9 @@ class DefaultInventoryRepository(
                 // Update the full ledger first, so the same-generation parent proof sees the new product state.
                 for ((domain, rows) in window.rows) {
                     syncRecoveryManifestDao.upsertAll(rows.toManifestRows(capturedBaseline.generationId, domain))
+                    // The validated ordinary writer now owns the current remote body for these IDs.
+                    syncRecoveryManifestDao.deleteByRemoteIds(capturedBaseline.generationId,
+                        LOCAL_ACK_BODY_PREFIX + domain.wireValue, rows.ids())
                 }
                 window.removedImageProductIds.chunked(500).forEach { ids ->
                     syncRecoveryManifestDao.deleteByRemoteIds(capturedBaseline.generationId,
@@ -6046,6 +6223,21 @@ class DefaultInventoryRepository(
                 )
                 continue
             }
+            val persistedMetadata = runCatching {
+                syncEventJson.decodeFromString<JsonObject>(entry.metadataJson)
+            }.getOrNull()
+            if (persistedMetadata == null) {
+                requireCurrentBusinessDataScope()
+                syncEventOutboxDao.update(entry.copy(
+                    attemptCount = entry.attemptCount + 1,
+                    lastAttemptAtMs = System.currentTimeMillis(),
+                    lastErrorType = "invalid_persisted_metadata"
+                ))
+                retryFailed++
+                logSyncEventOutboxRetryEntry("rejected_invalid_metadata", entry,
+                    "invalid_persisted_metadata", entry.attemptCount + 1, 0)
+                continue
+            }
             val params = SyncEventRecordRpcParams(
                 domain = entry.domain,
                 eventType = entry.eventType,
@@ -6056,7 +6248,7 @@ class DefaultInventoryRepository(
                 sourceDeviceId = entry.sourceDeviceId,
                 batchId = entry.batchId,
                 clientEventId = entry.clientEventId,
-                metadata = buildJsonObject { put("task", "045") },
+                metadata = persistedMetadata,
                 shopId = shopIdFromStoreScope(entry.storeScope)
             )
             val result = businessScopedRemoteCall { remote.recordSyncEvent(params) }
@@ -6558,6 +6750,9 @@ class DefaultInventoryRepository(
         shopId: String? = null,
         requireProductSynced: Boolean = false
     ): ProductPricePushResult {
+        val replayedPrices = businessWriteOutbox.replay(ownerUserId,shopId,setOf("PRICES")) {
+            businessScopedRemoteCall { priceRemote.upsertProductPrices(it.payload.prices,it.shop) }
+        }
         val candidates = priceDao.getAllForCloudPush()
         val rows = if (requireProductSynced) {
             candidates.filter { row ->
@@ -6576,14 +6771,15 @@ class DefaultInventoryRepository(
                     "pricesEvaluated=${candidates.size} pricesPushed=0 requireProductSynced=$requireProductSynced " +
                     "batchSize=$PRODUCT_PRICE_PUSH_CHUNK batchCount=0 avgBatchMs=0"
             )
-            return ProductPricePushResult(count = 0, remoteIds = emptyList())
+            return ProductPricePushResult(count = replayedPrices.sumOf { it.payload.revisions.size },
+                remoteIds = replayedPrices.flatMap { it.payload.revisions.map { r -> r.remoteId } }.distinct())
         }
-        var pushed = 0
+        var pushed = replayedPrices.sumOf { it.payload.revisions.size }
         var processed = 0
         var batchCount = 0
         var totalBatchMs = 0L
         var skippedForeignKey = 0
-        val pushedRemoteIds = mutableListOf<String>()
+        val pushedRemoteIds = replayedPrices.flatMap { it.payload.revisions.map { r -> r.remoteId } }.toMutableList()
         for (chunk in rows.chunked(PRODUCT_PRICE_PUSH_CHUNK)) {
             val pairs = chunk.map { r ->
                 val rid = r.existingPriceRemoteId ?: java.util.UUID.randomUUID().toString()
@@ -6591,14 +6787,14 @@ class DefaultInventoryRepository(
             }
             val upsertRows = pairs.map { (r, rid) -> buildProductPricePushRow(r, rid, ownerUserId, shopId) }
             val batchStartedAt = System.currentTimeMillis()
-            val result = businessScopedRemoteCall {
-                priceRemote.upsertProductPrices(upsertRows, shopId)
+            val result = businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PRICES",
+                prices=upsertRows,revisions=pairs.map { (r,id) -> BusinessWriteRevision("PRICE",id,0,null,localPriceId=r.id) })) {
+                businessScopedRemoteCall { priceRemote.upsertProductPrices(it.payload.prices,it.shop) }
             }
             totalBatchMs += System.currentTimeMillis() - batchStartedAt
             batchCount++
             val firstError = result.exceptionOrNull()
             if (firstError == null) {
-                markProductPricePushApplied(pairs)
                 pushed += chunk.size
                 pushedRemoteIds += pairs.map { it.second }
                 processed += chunk.size
@@ -6610,14 +6806,14 @@ class DefaultInventoryRepository(
                 for ((r, rid) in pairs) {
                     val row = buildProductPricePushRow(r, rid, ownerUserId, shopId)
                     val singleStartedAt = System.currentTimeMillis()
-                    val single = businessScopedRemoteCall {
-                        priceRemote.upsertProductPrices(listOf(row), shopId)
+                    val single = businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PRICES",
+                        prices=listOf(row),revisions=listOf(BusinessWriteRevision("PRICE",rid,0,null,localPriceId=r.id)))) {
+                        businessScopedRemoteCall { priceRemote.upsertProductPrices(it.payload.prices,it.shop) }
                     }
                     totalBatchMs += System.currentTimeMillis() - singleStartedAt
                     batchCount++
                     val singleError = single.exceptionOrNull()
                     if (singleError == null) {
-                        markProductPricePushApplied(listOf(r to rid))
                         pushed++
                         pushedRemoteIds += rid
                     } else if (singleError.isPostgrestForeignKeyViolationConflict()) {
@@ -6682,21 +6878,6 @@ class DefaultInventoryRepository(
             note = row.note,
             createdAt = row.createdAt
         )
-
-    private suspend fun markProductPricePushApplied(
-        pairs: List<Pair<ProductPricePushRow, String>>
-    ) {
-        db.withTransaction {
-            requireCurrentBusinessDataScope()
-            for ((row, remoteId) in pairs) {
-                if (row.existingPriceRemoteId == null) {
-                    productPriceRemoteRefDao.insert(
-                        ProductPriceRemoteRef(productPriceId = row.id, remoteId = remoteId)
-                    )
-                }
-            }
-        }
-    }
 
     /**
      * Pull idempotente: dedup su `(productId,type,effectiveAt)` e su `remoteId`; nessun `insertIfChanged`;
@@ -6910,10 +7091,13 @@ class DefaultInventoryRepository(
         progressReporter: CatalogSyncProgressReporter,
         shopId: String?
     ): CatalogEntityPushResult {
-        var n = 0
+        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("SUPPLIERS")) {
+            sendCatalogBusinessWrite(remote,it)
+        }
+        var n = replayed.sumOf { it.payload.revisions.size }
         var dirty = 0
         var skippedAlreadySynced = 0
-        val pushedRemoteIds = mutableListOf<String>()
+        val pushedRemoteIds = replayed.flatMap { it.payload.revisions.map { r -> r.remoteId } }.toMutableList()
         val supplierTotal = supplierDao.count()
         val candidates = supplierDao.getCatalogPushCandidates()
         progressReporter.onProgress(
@@ -6955,10 +7139,13 @@ class DefaultInventoryRepository(
         progressReporter: CatalogSyncProgressReporter,
         shopId: String?
     ): CatalogEntityPushResult {
-        var n = 0
+        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("CATEGORIES")) {
+            sendCatalogBusinessWrite(remote,it)
+        }
+        var n = replayed.sumOf { it.payload.revisions.size }
         var dirty = 0
         var skippedAlreadySynced = 0
-        val pushedRemoteIds = mutableListOf<String>()
+        val pushedRemoteIds = replayed.flatMap { it.payload.revisions.map { r -> r.remoteId } }.toMutableList()
         val categoryTotal = categoryDao.count()
         val candidates = categoryDao.getCatalogPushCandidates()
         progressReporter.onProgress(
@@ -7001,6 +7188,9 @@ class DefaultInventoryRepository(
         shopId: String?,
         allowCreatingDependencyRefs: Boolean = true
     ): CatalogEntityPushResult {
+        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("PRODUCTS","PATCH")) {
+            sendCatalogBusinessWrite(remote,it)
+        }
         var dirty = 0
         var skippedMissingDependencyRef = 0
         var skippedAlreadySynced = 0
@@ -7008,6 +7198,8 @@ class DefaultInventoryRepository(
         val candidates = productDao.getCatalogPushCandidates()
         val prepared = mutableListOf<ProductPushCandidatePrepared>()
         val accumulator = ProductPushBatchAccumulator()
+        accumulator.pushed += replayed.sumOf { it.payload.revisions.size }
+        accumulator.remoteIds += replayed.flatMap { it.payload.revisions.map { r -> r.remoteId } }
         progressReporter.onProgress(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 0, total = candidates.size)
         )
@@ -7030,17 +7222,13 @@ class DefaultInventoryRepository(
                         skippedMissingDependencyRef++
                     } else if (!patch.isEmpty) {
                         val startedAt = System.currentTimeMillis()
-                        businessScopedRemoteCall {
-                            remote.patchProduct(
-                                CatalogTextCanonicalizer.remoteId(ref.remoteId),
-                                CatalogTextCanonicalizer.remoteId(ownerUserId),
-                                CatalogTextCanonicalizer.optionalRemoteId(shopId),
-                                patch
-                            )
+                        businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PATCH",
+                            patchId=CatalogTextCanonicalizer.remoteId(ref.remoteId),patch=patch,
+                            revisions=listOf(productWriteRevision(productForPush,ref,ownerUserId,shopId)))) {
+                            sendCatalogBusinessWrite(remote,it)
                         }.getOrThrow()
                         accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
                         accumulator.batchCount++
-                        markProductPatchApplied(productForPush.id, ref, patch)
                         accumulator.pushed++
                         accumulator.remoteIds += ref.remoteId
                     }
@@ -7206,14 +7394,11 @@ class DefaultInventoryRepository(
         }
 
         val startedAt = System.currentTimeMillis()
-        val first = businessScopedRemoteCall {
-            remote.upsertProducts(batch.map { it.row }, shopId)
-        }
+        val first = writeCatalogProducts(remote,ownerUserId,shopId,batch)
         accumulator.totalBatchMs += System.currentTimeMillis() - startedAt
         accumulator.batchCount++
         val error = first.exceptionOrNull()
         if (error == null) {
-            markProductPushBatchApplied(batch)
             accumulator.pushed += batch.size
             accumulator.completed += batch.size
             accumulator.remoteIds += batch.map { it.row.id }
@@ -7221,6 +7406,8 @@ class DefaultInventoryRepository(
             return
         }
         if (error is CancellationException) throw error
+        // An ambiguous response retains the original whole batch for exact replay.
+        if (!error.isPostgrestUniqueViolationConflict() && !error.isPostgrestForeignKeyViolationConflict()) throw error
 
         val fallbackSize = nextProductPushFallbackSize(batch.size)
         if (fallbackSize <= 1) {
@@ -7314,22 +7501,6 @@ class DefaultInventoryRepository(
                 ?: prepared.ref.remoteId
         }
         reportProductPushProgress(progressReporter, accumulator.completed, total)
-    }
-
-    private suspend fun markProductPushBatchApplied(batch: List<ProductPushCandidatePrepared>) {
-        val appliedAt = System.currentTimeMillis()
-        db.withTransaction {
-            requireCurrentBusinessDataScope()
-            for (prepared in batch) {
-                productRemoteRefDao.updateRemoteApplyState(
-                    prepared.product.id,
-                    prepared.ref.localChangeRevision,
-                    appliedAt,
-                    fingerprintProductInbound(prepared.row),
-                    prepared.row.updatedAt
-                )
-            }
-        }
     }
 
     private fun nextProductPushFallbackSize(size: Int): Int = when {
@@ -7491,10 +7662,9 @@ class DefaultInventoryRepository(
         shopId: String?
     ): Boolean {
         val row = buildSupplierPushRow(supplier, ref, ownerUserId, shopId)
-        val first = businessScopedRemoteCall { remote.upsertSuppliers(listOf(row), shopId) }
+        val first = writeSupplier(remote,ownerUserId,shopId,row,ref)
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
-            markSupplierPushApplied(supplier.id, ref, row)
             return true
         }
         if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
@@ -7505,8 +7675,7 @@ class DefaultInventoryRepository(
         if (!supplierNeedsPush(correctedRef)) return false
 
         val retryRow = buildSupplierPushRow(supplier, correctedRef, ownerUserId, shopId)
-        businessScopedRemoteCall { remote.upsertSuppliers(listOf(retryRow), shopId) }.getOrThrow()
-        markSupplierPushApplied(supplier.id, correctedRef, retryRow)
+        writeSupplier(remote,ownerUserId,shopId,retryRow,correctedRef).getOrThrow()
         return true
     }
 
@@ -7519,10 +7688,9 @@ class DefaultInventoryRepository(
         shopId: String?
     ): Boolean {
         val row = buildCategoryPushRow(category, ref, ownerUserId, shopId)
-        val first = businessScopedRemoteCall { remote.upsertCategories(listOf(row), shopId) }
+        val first = writeCategory(remote,ownerUserId,shopId,row,ref)
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
-            markCategoryPushApplied(category.id, ref, row)
             return true
         }
         if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
@@ -7533,8 +7701,7 @@ class DefaultInventoryRepository(
         if (!categoryNeedsPush(correctedRef)) return false
 
         val retryRow = buildCategoryPushRow(category, correctedRef, ownerUserId, shopId)
-        businessScopedRemoteCall { remote.upsertCategories(listOf(retryRow), shopId) }.getOrThrow()
-        markCategoryPushApplied(category.id, correctedRef, retryRow)
+        writeCategory(remote,ownerUserId,shopId,retryRow,correctedRef).getOrThrow()
         return true
     }
 
@@ -7549,10 +7716,9 @@ class DefaultInventoryRepository(
     ): Boolean {
         val row = buildProductPushRow(product, ref, ownerUserId, shopId, allowCreatingDependencyRefs)
             ?: return false
-        val first = businessScopedRemoteCall { remote.upsertProducts(listOf(row), shopId) }
+        val first = writeCatalogProducts(remote,ownerUserId,shopId,listOf(ProductPushCandidatePrepared(product,ref,row)))
         val firstError = first.exceptionOrNull()
         if (firstError == null) {
-            markProductPushApplied(product.id, ref, row)
             return true
         }
         if (!firstError.isPostgrestUniqueViolationConflict()) throw firstError
@@ -7564,89 +7730,9 @@ class DefaultInventoryRepository(
 
         val retryRow = buildProductPushRow(product, correctedRef, ownerUserId, shopId, allowCreatingDependencyRefs)
             ?: return false
-        businessScopedRemoteCall { remote.upsertProducts(listOf(retryRow), shopId) }.getOrThrow()
-        markProductPushApplied(product.id, correctedRef, retryRow)
+        writeCatalogProducts(remote,ownerUserId,shopId,listOf(ProductPushCandidatePrepared(product,correctedRef,retryRow))).getOrThrow()
         return true
     }
-
-    private suspend fun markSupplierPushApplied(
-        supplierId: Long,
-        ref: SupplierRemoteRef,
-        row: InventorySupplierRow
-    ) {
-        requireCurrentBusinessDataScope()
-        supplierRemoteRefDao.updateRemoteApplyState(
-            supplierId,
-            ref.localChangeRevision,
-            System.currentTimeMillis(),
-            fingerprintSupplierInbound(row),
-            row.updatedAt
-        )
-    }
-
-    private suspend fun markCategoryPushApplied(
-        categoryId: Long,
-        ref: CategoryRemoteRef,
-        row: InventoryCategoryRow
-    ) {
-        requireCurrentBusinessDataScope()
-        categoryRemoteRefDao.updateRemoteApplyState(
-            categoryId,
-            ref.localChangeRevision,
-            System.currentTimeMillis(),
-            fingerprintCategoryInbound(row),
-            row.updatedAt
-        )
-    }
-
-    private suspend fun markProductPushApplied(
-        productId: Long,
-        ref: ProductRemoteRef,
-        row: InventoryProductRow
-    ) {
-        requireCurrentBusinessDataScope()
-        productRemoteRefDao.updateRemoteApplyState(
-            productId,
-            ref.localChangeRevision,
-            System.currentTimeMillis(),
-            fingerprintProductInbound(row),
-            row.updatedAt
-        )
-    }
-
-    private suspend fun markProductPatchApplied(
-        productId: Long,
-        ref: ProductRemoteRef,
-        patch: InventoryProductPatch
-    ) {
-        requireCurrentBusinessDataScope()
-        productRemoteRefDao.updateRemoteApplyState(
-            productId,
-            ref.localChangeRevision,
-            System.currentTimeMillis(),
-            fingerprintProductPatch(ref.lastRemotePayloadFingerprint, patch),
-            null
-        )
-    }
-
-    private fun fingerprintProductPatch(base: String?, patch: InventoryProductPatch): String =
-        buildString {
-            append("patch:")
-            append(base.orEmpty())
-            append('|')
-            append(patch.changedFields.sorted().joinToString(","))
-            append('|')
-            if (patch.includes("barcode")) append("barcode=").append(patch.barcode)
-            if (patch.includes("itemnumber")) append("itemNumber=").append(patch.itemNumber)
-            if (patch.includes("productname")) append("productName=").append(patch.productName)
-            if (patch.includes("secondproductname")) append("secondProductName=").append(patch.secondProductName)
-            if (patch.includes("purchaseprice")) append("purchasePrice=").append(patch.purchasePrice)
-            if (patch.includes("retailprice")) append("retailPrice=").append(patch.retailPrice)
-            if (patch.includes("supplier")) append("supplierId=").append(patch.supplierId)
-            if (patch.includes("category")) append("categoryId=").append(patch.categoryId)
-            if (patch.includes("stockquantity")) append("stockQuantity=").append(patch.stockQuantity)
-            if (patch.includes("tombstone")) append("deletedAt=").append(patch.deletedAt)
-        }
 
     private suspend fun reconcileSupplierBridgeAfterUniqueConflict(
         remote: CatalogRemoteDataSource,

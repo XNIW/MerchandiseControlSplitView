@@ -149,8 +149,9 @@ interface SyncRecoveryManifestDao {
 
     /**
      * Il tail V6 sostituisce soltanto le righe toccate nello staging isolato.
-     * Non viene mai invocato sul manifest della generazione attiva: la sua
-     * pubblicazione resta nel singolo commit di activation del coordinator.
+     * I domini remoti attivi cambiano soltanto nei writer fenced ordinari.
+     * I domini local-ack-body-v1 separati conservano prove locali del corpo
+     * effettivamente confermato, senza cambiare il ledger canonico remoto.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(rows: List<SyncRecoveryManifestRow>)

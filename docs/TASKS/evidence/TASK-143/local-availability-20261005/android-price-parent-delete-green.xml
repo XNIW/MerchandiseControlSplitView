@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-05T18:09:31.849Z" hostname="MindeMacBook-Pro.local" time="3.458">
+  <properties/>
+  <testcase name="143 parent delete cannot retire a corrupted acknowledged price proof" classname="com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest" time="3.147"/>
+  <testcase name="143 new price ACK then scoped parent delete remains qualified after reopen" classname="com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest" time="0.095"/>
+  <testcase name="143 raw parent cascade after new price ACK remains corruption after reopen" classname="com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest" time="0.078"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
