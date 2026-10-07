@@ -208,6 +208,54 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-07 UTC, sincronizzazione reale del test double-confirm
+
+**Stato FIX,non DONE.** La prima CI del supplemento documentale PR20 (`37556423441`,checkout9ed esatto) è FAIL:1176ID=1168PASS/1FAIL/7sameSKIP. UnicoFAIL `DatabaseViewModelTest.importProducts ignores double confirm while apply is already running`,0.063s,riga2004:MockK `applyImport was not called`. Gli altri1175stati e cinque testV2 coincidono con main4b; assemble/lint PASS. Originale XML `8ffb3d7f56ef064d89efda1128f94fc838a4ec930e084ea651b48102671a2248`,verifica `786fed0bc231973ff656f5cc3c99d762f81a477653297bed407d510eb5e38da5`; nessun rerun per ottenere verde.
+
+**File modificati:**
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt` — il test attende l'ingresso effettivo nel mock applyImport su IO prima del secondo confirm; gate rilasciato in finally e terminale Success(previewId) atteso con helper/budget esistenti.
+- Questo task — solo la presente voce Execution.
+
+**Causa e fix:** MainDispatcherRule controlla soltanto Main con UnconfinedTestDispatcher; `DatabaseViewModel.importProducts` usa `withContext(Dispatchers.IO)` reale. `advanceUntilIdle` e l'async del metodo void non attestavano l'ingresso del worker. La barriera viene completata dentro coAnswers prima di gate.await; il secondo confirm è così verificato durante l'apply effettivamente iniziato. `applyImport exactly1` e `insertHistoryEntry exactly0`,tutti61ID,gli altri60metodi e il resto del file sono invariati. Nessuna nuova sleep/timeout/dipendenza o modifica alla produzione.
+
+**Check obbligatori:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle assembleDebug | ESEGUITO | Unico comando keyless offline,exit0; app task UP-TO-DATE. APK keyless NON installabile,nessun device toccato. |
+| Lint | ESEGUITO |44warning legacy/0errori,XML fd29c629e5d50ad797407362fbdbff8094fe9ada087b8127120825de81f9ed1c byte-identico al precedente localeV2. |
+| Warning nuovi | ESEGUITO |0warning/errori Kotlin; solo warning JVM CDS preesistente. |
+| Coerenza con planning | ESEGUITO |Correzione CA10 del singolo FAIL concreto,oracoli preservati,produzione e scope invariati. |
+| Criteri di accettazione | ESEGUITO locale / NON ESEGUITO CI finale |61/61PASS,0FAIL/ERROR/SKIP incluso double-confirm; nuova CI exact-SHA da completare prima del merge. |
+
+**Baseline TASK004:** suite JVM/Robolectric DatabaseViewModelTest completa61/61PASS; non test UI. RED ufficiale CI prepatch conservato,GREEN locale singolo senza loop. Receipt `2e30b4aa18ff54c2bfbc95bcbae4ed6f8afbfdfee977280e18180e9f34afeb28`,XMLGREEN `3d579668fc2ea7b36813d51bdf0b46f5bc38f500ad30425cd5c8f188301f9ec3`. Gate01:38:50→01:39:56Z,66.31s,exit0/PGassente/0segnali;289input e governance preservati. Test finaleSHA `e5c34ed3c4b786eb2895aa919ef6aee28599fce7331cbab26b79871f5f068e5e`; entrambi reviewer indipendenti APPROVED_STATIC sul finale,nessun finding bloccante.
+
+**Handoff:** produzione app/build identica4b e APK4c già installato: test/documentazione non richiedono nuovo proper o reinstallazione. La semantica esistente Applying→Error e un'eventuale terza conferma sono distinte dal FAIL osservato; nessuna duplicazione/perdita provata,nessun cambio produttivo inferito. CA07live/CA09/chiusura globale restano aperti. iOS full033 è ora1513PASS/36sameSKIP/0FAIL con16UI PASS; B storico resta NON_REPRODUCED,build/proper/CI/install iOS separati.
+
+### Esecuzione — 2026-10-07 UTC, CI finale ordinaria, installazione preservativa e concorrenza strumentale
+
+**Stato FIX; non DONE.** Questo supplemento documenta evidenze effettive successive alla PR19; nessuna modifica a Kotlin, risorse, build, logica di recovery o autorità. La PR19 osservativa è integrata normalmente in main `4b4171fc25025ed4952ac482e96dfb46ba559460`; il tree di produzione coincide con il candidato `b20d5d44` verificato. Il checkout primario è aggiornato con fast-forward; tre modifiche preesistenti, configurazione privata, MASTER e index sono preservati.
+
+**File modificato:** questo task, soltanto la presente voce Execution.
+
+**Azioni/evidenze:**
+1. CI PR `37552595103` e main `37553939907` SUCCESS su checkout esatti. Originali XML verificati:76file,1176 casi Debug unici,1169 PASS/0 FAIL/7 SKIP; stessi ID/stati PR/main e cinque nuove regressioni PASS. I sei gruppi locali544 sono inclusi esattamente; nessuna esecuzione Release osservata. Lint CI59warning legacy/disponibilità dipendenze,0errori e nessuna issue nel file di produzione modificato.
+2. ProperTEST main4b PASS: otto campi DEX/tipi/valori autorizzati e certificato identici al predecessore;171input pubblici, config/profile/dirty/hash-stat preservati. APK `4c248cf4a0ce5a9809b5962ae0e17f093f560f507462ed76321c857550f4818a`; receipt `234ac36e02f3e16554ff02df14d12dd771768c64e4ef748dff267f980cb52b1f`.
+3. Aggiornamento in-place `install -r` del nuovo APK riuscito sul target primario qualificato. Dopo la sola quiescenza di manutenzione,19tabelle hanno count/digest tipizzato identici; DB/WAL/SHM e preferenze hanno hash/stat identici prima/dopo. Copie DB private eliminate,nessuna credenziale o riga grezza conservata. Receipt `bb3a69f4456082aae7ec8d2c0803dc7d880c86313ab13b01fec7411a6978d6fb`. Launch/input/E2E NOT_RUN; nessun claim READY.
+4. Il gap runtime della classe esistente `CatalogAutoSyncConcurrencyTest` è ora verificato su NUOVO AVD sintetico API35,keyless,seriale5586. Runner ufficiale `AndroidJUnitRunner`,unica instrumentation: classe richiesta con quattro punti e `OK (4 tests)`,exit0,3.282s runner. Quattro nomi attesi da sorgente separati dagli stati individuali non emessi dal formato pretty; nessun record per-method inventato. Rawlog `f4e2cf5074600ab16fd9b61b0d9d81d20ffb97373ebbd91ab8c3913103829816`; adjudication `f493b0c04b945f5fcc50ce92912618194862518093946e08500674185de737c4`.
+5. Primo bootstrap AVD NOT_RUN,0test per transitorio device-offline prima di install; receipt originale preservata. Nel tentativo eseguito il solo nuovo AVD e tutti i gruppi propri sono rimossi;288pin source/build e task/master/HEAD invariati. Nessun accesso5554,reset/restart server globale o input alternativo sul primario. Parser originale NOT_PASS non confuso con failure applicativa: richiedeva eventi raw non emessi da `-w`; adjudication separata sul log ufficiale salvato,nessun rerun per arricchire output.
+6. Validatore stretto di produzione eseguito una volta su copia privata consistente corrente: `STRICT_RECEIPT_MATCH`,schema22,pending/outboxzero/catalogclean. Receipt `748499f6d73ae166ead0ba21ee06385b8821b47973dbc0626c2a6c099b29079d`; copia e adapter temporaneo rimossi. Prova locale corrente,non marker remoto/READY né attribuzione retroattiva del journal20:18.
+
+**Check obbligatori del presente delta documentale:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle / Lint / warning nuovi | N/A | Solo Execution markdown; build/lint/CI effettivi del codice4b documentati sopra. |
+| Coerenza con planning | ESEGUITO | Soltanto evidenza TASK143,nessun cambiamento funzionale o scope aggiunto. |
+| Criteri di accettazione | ESEGUITO parziale / NON ESEGUITO finale | CA10: gap classe4 strumentale chiuso; CA07 autenticato,CA09 finale,CA12 chiusura globale restano aperti. |
+
+**Baseline TASK004:** nessun nuovo codice; suite JVM6/544 e CI1176 sopra,distinte dai quattro test strumentali Android effettivamente eseguiti.
+
+**Incertezze / handoff:** il nuovo APK è installato ma la UI primaria resta NON ESEGUIBILE sotto il problema CUA `noWindowsAvailable`; non aggirato con ADB/monkey/amstart. Nessuna nuova convergenza Android↔iOS/backend,misura PSS/dataset popolato/import-export UI o performance live. Il logger V2 è osservativo; il gate4 verifica concorrenza/scope sintetici,non il logger o RPC reali. iOS è separato: correzione A commit033 locale approvata,nuovo B70 CI originale ancora in analisi; full/build/proper/integration finali non dedotti. Il mandato globale resta aperto.
+
 ### Esecuzione — 2026-10-03 UTC — ordinary marker failure, RED/GREEN e gate combinato
 
 **File modificati:**
