@@ -262,11 +262,14 @@ class HistorySessionPushCoordinator(
                     }
                     durationMs = measureTimeMillis {
                         if (fullReconciliation) {
-                            bootstrap = if (selectedShop == null) {
+                            val inbound = if (selectedShop == null) {
                                 repository.bootstrapHistorySessionsFromRemote(remote)
                             } else {
                                 repository.bootstrapHistorySessionsFromRemote(remote, selectedShop)
-                            }.getOrThrow()
+                            }
+                            if (inbound.exceptionOrNull() !is CanonicalCatalogInboundRequired) {
+                                bootstrap = inbound.getOrThrow()
+                            }
                             val pending = repository.getPendingHistorySessionPushUids().toSet()
                             pendingSize = pending.size
                             pendingUidSample = pending.take(LOG_SAMPLE_LIMIT).joinToString(",")

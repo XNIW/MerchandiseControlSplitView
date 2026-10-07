@@ -688,6 +688,7 @@ class CatalogAutoSyncCoordinator(
         }
         var ok = false
         var scopeChanged = false
+        var canonicalInboundDeferred = false
         val startedAt = System.currentTimeMillis()
         try {
             syncStateTracker.withBusinessDataScopeFlight(auth.userId, selectedShop) {
@@ -730,6 +731,9 @@ class CatalogAutoSyncCoordinator(
                 schedulePush("local_catalog_commit_after_bootstrap")
                 scheduleSyncEventDrain("bootstrap_completed")
             }
+        } catch (_: CanonicalCatalogInboundRequired) {
+            canonicalInboundDeferred = true
+            logger("cycle=catalog_bootstrap outcome=canonical_deferred reason=$reason")
         } catch (_: Task126BusinessDataScopeChangedException) {
             scopeChanged = true
             logger("cycle=catalog_bootstrap outcome=skip reason=business_scope_changed_during_remote")
@@ -745,10 +749,22 @@ class CatalogAutoSyncCoordinator(
         } finally {
             if (!scopeChanged) {
                 syncStateTracker.update(
-                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                    when {
+                        canonicalInboundDeferred -> CatalogSyncProgressState.idle()
+                        ok -> CatalogSyncProgressState.completed()
+                        else -> CatalogSyncProgressState.failed()
+                    }
                 )
             }
             syncStateTracker.finish(CatalogSyncFlightOwner.BOOTSTRAP)
+        }
+        if (canonicalInboundDeferred && !scopeChanged && authFlow.value == auth &&
+            selectedShopProvider() == selectedShop && businessDataScopeStillAllows(auth.userId, selectedShop)) {
+            runSyncEventDrainCycle("canonical_bootstrap")
+            if (authFlow.value == auth && selectedShopProvider() == selectedShop &&
+                businessDataScopeStillAllows(auth.userId, selectedShop)) {
+                runPushCycle("local_catalog_commit_after_bootstrap")
+            }
         }
     }
 

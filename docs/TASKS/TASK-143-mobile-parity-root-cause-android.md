@@ -208,6 +208,29 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-07 UTC — receipt ACK e ownership inbound canonica
+
+**Stato FIX, non DONE.** Due difetti distinti riprodotti su Room file-backed: il vero typed SupplierCreate ACK cambia la cardinalità fisica senza riscrivere checkpoint A; il legacy bootstrap completo può potare righe pulite possedute da A. Il secondo meccanismo è coerente con la sequenza runtime READY→catalog_prune→bootstrap_ok→receipt mismatch conservata dal coordinatore. Il test ACK non attribuisce le righe mancanti live.
+
+**File modificati:** `ShopSyncRecoveryCoordinator.kt` valida il conteggio attivo sul medesimo keyset ACK strict della prova fisica; `InventoryRepository.kt` protegge catalogo, prezzi e History prima del fetch e nella transazione di apply; `CatalogAutoSyncCoordinator.kt` rilascia BOOTSTRAP, drena con il percorso esistente e risveglia il push locale già presente; `CatalogSyncViewModel.kt` e `HistorySessionPushCoordinator.kt` conservano outbound e risultati effettivi, errori originali e pending distinto da successo. Tre file test esistenti ricevono solo aggiunte: `ShopSyncRecoveryCoordinatorTest`, `CatalogSyncViewModelTest`, `HistorySessionPushCoordinatorTest`. Nessun cambio schema, dipendenza, endpoint o firma pubblica.
+
+**RED→GREEN:** ACK reale `c8ab6b26`; legacy prune producer `7204a537`; consumer automatico invariato sulla vecchia produzione `10b5d74d`; errore catalogo più History defer `05e3621f`; lavoro durabile precedente senza RAM tickle `04d8bb0d`. Il producer legacy conserva il vecchio getOrThrow: non è relabelled GREEN dopo il typed defer. I due finding della review finale hanno correzioni e regressioni dedicate. La nuova regressione durabile ha corretto la sola cattura progress-release prima del readback sospendibile: il corpo finale non è byte-identico al primo RED; replay separato `9acd22ac` usa lo stesso metodo finale e solo Coordinator senza wakeup, fallisce esclusivamente DURABLE_PUSH_DESIRED, quindi restore `f3767428` e GREEN14 `677a83bf`. Tutti i setup/compile/timeout e FAIL precedenti restano storici.
+
+Guard owner/shop/device/lease, ACK body/identity, digest canonici, dirty/orphan/tamper, tombstone, revoca e CAS restano strict; A non viene riscritto. A apparso durante catalogo/prezzi/History fetch è ricontrollato nella medesima Room transaction del vero apply. NoA mantiene il bootstrap completo; autorità invalida non cade nel legacy. La review SAME finale APPROVED sul source d975 non ha finding residui; freeze115363f0 lega gli stessi19 hash ai RED/GREEN effettivi.
+
+**Check obbligatori:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | Canonico offline `test assembleDebug lint assembleDebugAndroidTest`, exit0; APK keyless non installato. |
+| Lint | ESEGUITO | 44 Warning/0 Error locali, identità/severity/message/file/molteplicità uguali alla baseline d0 fd29c629. |
+| Warning nuovi | ESEGUITO | 0 diagnostici Kotlin e 0 issue lint nuovi/cambiati; nessuna suppression aggiunta. |
+| Coerenza planning | ESEGUITO | CA07/CA10; RED reali prima delle patch; minimo routing e push esistenti, nessun engine nuovo. |
+| Criteri interessati | ESEGUITO locale / NON ESEGUITO runtime finale | Mirati14P; full Debug1219=1212P/7sameSKIP/0F, tutti1207ID/stati vecchi più12 nuovi. androidTest compilati, non eseguiti in questa lane. Release JVM NOT_OBSERVED. CA07live/CA09 e chiusura globale restano aperti. |
+
+**Baseline TASK004:** full JVM/Robolectric comprende repository, DatabaseViewModel, ExcelViewModel, import/history e sync; non è Compose/Espresso né convergenza business per-record. Ricevuta canonica finale originale `5a33b5377501` conserva FAIL del checker sulla sola mtime del report lint: Gradle ha eseguito le tre analisi, con partial/model originali fresh conservati, e ha riutilizzato il report44 byte-identico come UP-TO-DATE. Adjudication separata `4c770930` verifica20controlli; nessun rerun/cache delete/cambio del comparatore finale. Source19 congelati; Task/MASTER/HEAD/index/status preservati durante i gate. Il canonico storico a56/9d5d mantiene il FAIL del checker che pretendeva XML Release non prodotti: adjudication05fe3964 qualifica Debug1217 reale/ReleaseNOT_OBSERVED; non è il gate del source finale. Target08 è SETUP_NOT_RUN0case (snapshot ometteva androidTest), corretto solo l’inventario nel target09.
+
+**INCERTEZZA:** nuovo candidato non ancora installato né verificato per convergenza live. CI exact commit, merge/mainCI, properTEST/FF/install e per-record restano lane separate. Evidenze: `native-residuals-continuation-20261007-01/android-ack-cardinality-canonical-routing-final-candidate-v4`, `android-ack-cardinality-routing-targeted-09`, `android-ack-cardinality-routing-canonical-02`.
+
 ### Esecuzione — 2026-10-07 UTC, sincronizzazione reale del test double-confirm
 
 **Stato FIX,non DONE.** La prima CI del supplemento documentale PR20 (`37556423441`,checkout9ed esatto) è FAIL:1176ID=1168PASS/1FAIL/7sameSKIP. UnicoFAIL `DatabaseViewModelTest.importProducts ignores double confirm while apply is already running`,0.063s,riga2004:MockK `applyImport was not called`. Gli altri1175stati e cinque testV2 coincidono con main4b; assemble/lint PASS. Originale XML `8ffb3d7f56ef064d89efda1128f94fc838a4ec930e084ea651b48102671a2248`,verifica `786fed0bc231973ff656f5cc3c99d762f81a477653297bed407d510eb5e38da5`; nessun rerun per ottenere verde.
@@ -1174,6 +1197,10 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Fix — 2026-10-07 UTC — cardinalità ACK e inbound canonical-owned
+
+La receipt attiva conta solo il keyset canonico più ACK same-generation già validati dalla prova fisica strict; non accetta righe pulite arbitrarie. Guard prefetch e CAS al commit escludono legacy catalogo/prezzi/History sotto A. Il consumer automatico rilascia BOOTSTRAP prima del drain e del bounded push locale già esistente, così gli intent durabili non dipendono da un segnale RAM. Full manual e History preservano outbound, contatori ed errori effettivi: un errore catalogo non diventa un defer con summary nulla; pending non aggiorna last-success/completed. Tutti gli assert/budget originali e gli ID precedenti restano invariati.
+
 ### Fix — 2026-10-07 UTC — disponibilità locale e prove ordinarie
 
 Applicati i tre delta riprodotti descritti nella nuova Execution: preservazione delle capacità locali qualificate durante recovery cloud e completamento; distinzione del marker A→B dal vero no-work; vincolo di generazione nella deroga prezzi pendenti. Dinieghi espliciti, cutover forte, prova fisica/CAS, ACK e marker recovery strict restano protetti. Review e gate locali finali approvati/passati; nessun DONE globale o successo live dedotto.
@@ -1403,6 +1430,10 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff — 2026-10-07 UTC — ACK/cardinalità e routing finale
+
+Task resta FIX. Set Debug1207→1219: tutti gli ID/stati originali e7skip preservati,12 test aggiuntivi PASS. RED, setup FAIL, target07 e checker FAIL storico restano immutabili. Review finale e gate locali PASS; commit selettivo solo8Kotlin e queste3insertions owned. Executor I unico watcher/acquisitore della futura PR CI; root unico owner merge/mainCI/properTEST/FF/install e runtime per-record. Nessun reset dati/backend/schema/dependency/auth. La prova ACK non attribuisce il pruning live; pending/cancel/error non sono successo o readiness.
 
 ### Handoff aggiornato — 2026-10-07 UTC — freeze recovery/A→B/prezzi
 

@@ -11,6 +11,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CanonicalCatalogInboundRequired
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRepository
+import com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGate
+import com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGateDecision
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
@@ -1151,6 +1156,7 @@ class CatalogSyncViewModel(
             }
             busy.value = true
             val startedAt = startSyncProgress("manual_refresh", CatalogSyncStage.REALIGN)
+            val previousError = lastErrorKind.value
             lastErrorKind.value = null
             lastHistorySessionSyncSummary.value = null
             var logCatalogOk = false
@@ -1159,6 +1165,7 @@ class CatalogSyncViewModel(
             var logFailureClassification: SyncErrorClassification? = null
             var logPendingAfter = false
             var recoveryRequired = false
+            var ordinaryPending = false
             var logHistoryIssues = 0
             var logHistorySyncDurationMs: Long? = null
             var logHistoryFailureClassification: SyncErrorClassification? = null
@@ -1166,32 +1173,76 @@ class CatalogSyncViewModel(
             try {
                 withBusinessDataScopeFlight(auth.userId, selectedShop) {
                 try {
-                val catalogResult = syncCatalogRepository(auth.userId, selectedShop)
+                var catalogResult = syncCatalogRepository(auth.userId, selectedShop)
                     .throwIfBusinessDataScopeChanged()
+                var canonicalInbound = catalogResult.exceptionOrNull() as? CanonicalCatalogInboundRequired
                 setSyncProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_HISTORY))
                 val historyStartedAt = System.currentTimeMillis()
                 val historySessionOutcome = try {
-                    runHistorySessionCloudRefresh(auth.userId, selectedShop)
+                    runHistorySessionCloudRefresh(auth.userId, selectedShop, canonicalInbound != null)
                 } finally {
                     logHistorySyncDurationMs = System.currentTimeMillis() - historyStartedAt
                 }
                 historySessionOutcome?.failure?.let { error ->
                     if (error is Task126BusinessDataScopeChangedException) throw error
                 }
-                logHistoryIssues = historySessionOutcome?.issueCount ?: 0
-                logHistoryFailureClassification = historySessionOutcome?.failure?.let(SyncErrorClassifier::classify)
+                if (catalogResult.isSuccess && historySessionOutcome?.failure is CanonicalCatalogInboundRequired && canonicalInbound == null) {
+                    canonicalInbound = CanonicalCatalogInboundRequired(catalogResult.getOrNull())
+                }
+                if (canonicalInbound != null) {
+                    val outbound = requireNotNull(canonicalInbound.outbound)
+                    val canonicalEvents = syncEventRemote
+                    catalogResult = if (canonicalEvents == null) Result.failure(canonicalInbound)
+                    else autoSyncRepository?.drainSyncEventsFromRemote(
+                        remote = remote, priceRemote = priceRemote, syncEventRemote = canonicalEvents,
+                        sessionRemote = sessionRemote, ownerUserId = auth.userId, selectedShop = selectedShop,
+                        progressReporter = CatalogSyncProgressReporter { setSyncProgress(it) }
+                    )?.map { drained ->
+                        drained.copy(pushedSuppliers = drained.pushedSuppliers + outbound.pushedSuppliers,
+                            pushedCategories = drained.pushedCategories + outbound.pushedCategories,
+                            pushedProducts = drained.pushedProducts + outbound.pushedProducts,
+                            pulledSuppliers = drained.pulledSuppliers + outbound.pulledSuppliers,
+                            pulledCategories = drained.pulledCategories + outbound.pulledCategories,
+                            pulledProducts = drained.pulledProducts + outbound.pulledProducts,
+                            pushedProductPrices = drained.pushedProductPrices + outbound.pushedProductPrices,
+                            pulledProductPrices = drained.pulledProductPrices + outbound.pulledProductPrices,
+                            deferredProductPricesNoProductRef = maxOf(drained.deferredProductPricesNoProductRef, outbound.deferredProductPricesNoProductRef),
+                            skippedProductPricesPullNoProductRef = drained.skippedProductPricesPullNoProductRef + outbound.skippedProductPricesPullNoProductRef,
+                            fullCatalogFetch = drained.fullCatalogFetch || outbound.fullCatalogFetch,
+                            fullPriceFetch = drained.fullPriceFetch || outbound.fullPriceFetch,
+                            remoteProductIdsRequested = drained.remoteProductIdsRequested + outbound.remoteProductIdsRequested,
+                            remoteProductsFetched = drained.remoteProductsFetched + outbound.remoteProductsFetched,
+                            remotePriceIdsRequested = drained.remotePriceIdsRequested + outbound.remotePriceIdsRequested,
+                            remotePricesFetched = drained.remotePricesFetched + outbound.remotePricesFetched,
+                            remoteActiveSuppliers = if (outbound.fullCatalogFetch) outbound.remoteActiveSuppliers else drained.remoteActiveSuppliers,
+                            remoteActiveCategories = if (outbound.fullCatalogFetch) outbound.remoteActiveCategories else drained.remoteActiveCategories,
+                            remoteActiveProducts = if (outbound.fullCatalogFetch) outbound.remoteActiveProducts else drained.remoteActiveProducts,
+                            prunedSuppliers = drained.prunedSuppliers + outbound.prunedSuppliers,
+                            prunedCategories = drained.prunedCategories + outbound.prunedCategories,
+                            prunedProducts = drained.prunedProducts + outbound.prunedProducts,
+                            priceSyncFailed = drained.priceSyncFailed || outbound.priceSyncFailed)
+                    } ?: Result.failure(canonicalInbound)
+                    catalogResult.throwIfBusinessDataScopeChanged()
+                }
+                val effectiveHistoryOutcome = historySessionOutcome?.takeUnless {
+                    it.failure is CanonicalCatalogInboundRequired
+                } ?: historySessionOutcome?.copy(failure = null)
+                logHistoryIssues = effectiveHistoryOutcome?.issueCount ?: 0
+                logHistoryFailureClassification = effectiveHistoryOutcome?.failure?.let(SyncErrorClassifier::classify)
                 catalogResult.fold(
                     onSuccess = { summary ->
                         logSummary = summary
                         recoveryRequired = summary.manualFullSyncRequired
-                        logCatalogOk = !recoveryRequired
+                        ordinaryPending = summary.syncEventsOrdinaryPending
+                        logCatalogOk = !recoveryRequired && !ordinaryPending && summary.syncEventsSkippedDirtyLocal == 0
                         publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
-                        if (!recoveryRequired) {
+                        if (logCatalogOk) {
                             lastSuccessAt.value = System.currentTimeMillis()
                         }
                         val err = when {
-                            historySessionOutcome?.hasIssues == true -> ErrorKind.HistorySessionsIncomplete
+                            effectiveHistoryOutcome?.hasIssues == true -> ErrorKind.HistorySessionsIncomplete
                             summary.priceSyncFailed -> ErrorKind.CatalogOkPricesIncomplete
+                            ordinaryPending -> previousError
                             else -> null
                         }
                         lastErrorKind.value = err
@@ -1215,7 +1266,8 @@ class CatalogSyncViewModel(
                 busy.value = false
                 incrementalDetailSurface.value = CatalogIncrementalDetailSurface.OTHER
                 val ok = logCatalogOk && logErr == null && !recoveryRequired
-                finishSyncProgress(ok, startedAt)
+                finishSyncProgress(ok, startedAt, ordinaryPending && !recoveryRequired &&
+                    logSummary?.syncEventsSkippedDirtyLocal == 0 && logSummary?.priceSyncFailed != true && logHistoryIssues == 0)
                 val pendingBreakdown: CatalogCloudPendingBreakdown? =
                     try {
                         repository.getCatalogCloudPendingBreakdown()
@@ -1255,16 +1307,8 @@ class CatalogSyncViewModel(
                 }
                 }
                 if (recoveryRequired) {
-                    syncStateTracker?.withBusinessDataScopeTransition {
-                        val previousScope = syncStateTracker.businessDataScopeState.value.boundScope
-                        syncStateTracker.updateBusinessDataScopeState(
-                            Task126BusinessDataScopeState(
-                                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                                boundScope = previousScope,
-                                errorCode = "sync_recovery_required"
-                            )
-                        )
-                    }
+                    if (!publishManualRecoveryRequiredScope(auth, selectedShop))
+                        throw Task126BusinessDataScopeChangedException()
                     logSummary?.let { summary ->
                         publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
                     }
@@ -1485,8 +1529,10 @@ class CatalogSyncViewModel(
         automaticSessionBootstrapScopeKey = scopeKey
         busy.value = true
         val startedAt = startSyncProgress("automatic_session_bootstrap", CatalogSyncStage.SYNC_HISTORY)
+        val previousError = lastErrorKind.value
         lastErrorKind.value = null
         var ok = false
+        var canonicalInboundDeferred = false
         try {
             withBusinessDataScopeFlight(auth.userId, selectedShop) scopeFlight@{
             try {
@@ -1500,6 +1546,11 @@ class CatalogSyncViewModel(
                 automaticSessionBootstrapScopeKey = null
                 return@scopeFlight
             }
+            if (outcome.failure is CanonicalCatalogInboundRequired) {
+                canonicalInboundDeferred = true
+                lastErrorKind.value = previousError
+                return@scopeFlight
+            }
             ok = !outcome.hasIssues
             if (outcome.hasIssues) {
                 lastErrorKind.value = outcome.failure
@@ -1511,7 +1562,7 @@ class CatalogSyncViewModel(
             }
         } finally {
             busy.value = false
-            finishSyncProgress(ok, startedAt)
+            finishSyncProgress(ok, startedAt, canonicalInboundDeferred)
             syncStateTracker?.finish(CatalogSyncFlightOwner.BOOTSTRAP)
             }
             }
@@ -1525,17 +1576,43 @@ class CatalogSyncViewModel(
         }
     }
 
+    private suspend fun publishManualRecoveryRequiredScope(auth: AuthState.SignedIn, selectedShop: SelectedShop?): Boolean {
+        val tracker = syncStateTracker ?: return true
+        return tracker.resolveAndPublishBusinessDataScope(stillAuthorized = {
+            authFlow.value == auth && currentSelectedShop() == selectedShop &&
+                tracker.allowsBusinessDataScope(auth.userId, selectedShop)
+        }, resolve = { previous ->
+            val resolved = try {
+                (repository as? Task126BusinessDataScopeRepository)?.resolveBusinessDataScope(
+                    task126ActiveOwnerStoreScope(auth.userId, selectedShop))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+            val localScope = (resolved?.localAccessScope ?: resolved?.boundScope?.takeIf {
+                resolved.status == Task126BusinessDataScopeStatus.READY && resolved.allowsLocalOperations
+            })?.takeIf { Task126OwnerStoreGate.validate(it, task126ActiveOwnerStoreScope(auth.userId, selectedShop)) ==
+                Task126OwnerStoreGateDecision.Allowed }
+            (resolved ?: previous).copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                localAccessScope = localScope, errorCode = "sync_recovery_required",
+                localReadsAllowed = previous.localReadsAllowed && resolved?.localReadsAllowed != false,
+                localWritesAllowed = previous.localWritesAllowed && selectedShop?.canWrite != false &&
+                    resolved?.localWritesAllowed != false)
+        })
+    }
+
     private suspend fun runHistorySessionCloudRefresh(
         ownerUserId: String,
-        selectedShop: SelectedShop?
+        selectedShop: SelectedShop?,
+        canonicalInbound: Boolean = false
     ): HistorySessionCloudOutcome? {
         if (!sessionRemote.isConfigured) return null
         return sessionFlightOwner.withSessionFlight(SessionCloudFlightOwner.Refresh) {
             if (!businessDataScopeStillAllows(ownerUserId, selectedShop)) {
                 return@withSessionFlight null
             }
-            val bootstrapOutcome = runHistorySessionBootstrap(selectedShop)
-            if (bootstrapOutcome.bootstrap == null) return@withSessionFlight bootstrapOutcome
+            val bootstrapOutcome = if (canonicalInbound) HistorySessionCloudOutcome(null, null, null)
+                else runHistorySessionBootstrap(selectedShop)
+            val canonicalRequired = bootstrapOutcome.failure is CanonicalCatalogInboundRequired
+            if (!canonicalInbound && !canonicalRequired && bootstrapOutcome.bootstrap == null) return@withSessionFlight bootstrapOutcome
             if (!businessDataScopeStillAllows(ownerUserId, selectedShop)) {
                 return@withSessionFlight bootstrapOutcome
             }
@@ -1551,10 +1628,11 @@ class CatalogSyncViewModel(
             val outcome = HistorySessionCloudOutcome(
                 bootstrap = bootstrapOutcome.bootstrap,
                 push = push.getOrNull(),
-                failure = push.exceptionOrNull()
+                failure = push.exceptionOrNull() ?: bootstrapOutcome.failure
             )
             lastHistorySessionSyncSummary.value =
-                outcome.toUiSummary(pendingCount = readPendingHistorySessionCount())
+                outcome.copy(failure = outcome.failure.takeUnless { it is CanonicalCatalogInboundRequired })
+                    .toUiSummary(pendingCount = readPendingHistorySessionCount())
             outcome
         }
     }
@@ -1575,8 +1653,10 @@ class CatalogSyncViewModel(
             push = null,
             failure = bootstrap.exceptionOrNull()
         )
-        lastHistorySessionSyncSummary.value =
-            outcome.toUiSummary(pendingCount = readPendingHistorySessionCount())
+        if (outcome.failure !is CanonicalCatalogInboundRequired) {
+            lastHistorySessionSyncSummary.value =
+                outcome.toUiSummary(pendingCount = readPendingHistorySessionCount())
+        }
         return outcome
     }
 

@@ -68,6 +68,29 @@ class HistorySessionPushCoordinatorTest {
     }
 
     @Test
+    fun canonicalInboundDeferralPreservesActualHistoryOutboundPush() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val owner = "00000000-0000-4000-8000-000000000143"
+        val logs = mutableListOf<String>()
+        coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returns Result.failure(CanonicalCatalogInboundRequired())
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(143L)
+        coEvery { repository.pushHistorySessionsToRemote(any(), owner, setOf(143L)) } returns
+            Result.success(HistorySessionBackupPushSummary(uploaded = 1, skippedAlreadySynced = 0, attempted = 1))
+        val coordinator = HistorySessionPushCoordinator(repository = repository,
+            remote = FakeConfiguredSessionRemote040(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(owner, "history@example.test")),
+            flightOwner = SessionCloudSessionFlightOwner(), scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE, logger = logs::add)
+        try {
+            coordinator.runPushCycle("login_fresh_tick")
+            coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
+            coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), owner, setOf(143L)) }
+            assertTrue(logs.any { it.contains("cycle=push outcome=ok") && it.contains("sessionsUploaded=1") })
+            assertTrue(logs.none { it.contains("bootstrapInserted=") || it.contains("outcome=fail") })
+        } finally { coordinator.shutdown() }
+    }
+
+    @Test
     fun `132 login fresh tick bootstraps but skips history push when no pending sessions`() = runTest {
         val repository = mockk<InventoryRepository>()
         val logs = mutableListOf<String>()

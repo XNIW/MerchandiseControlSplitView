@@ -1819,8 +1819,8 @@ internal suspend fun validateShopSyncActiveReceipt(
 ) {
     validateHistoryTombstoneShadows(db, generationId)
     validateShopSyncCanonicalReceipt(db, generationId, checkpoint)
-    validateStagingDatabase(db, generationId, checkpoint, activeStoreHistory = true)
-    validatePhysicalSnapshot(db, generationId, activeStoreHistory = true)
+    validateStagingDatabase(db, generationId, checkpoint, activeStoreHistory = true, localAcknowledgements = true)
+    validatePhysicalSnapshot(db, generationId, activeStoreHistory = true, localAcknowledgements = true)
 }
 
 private data class HistoryTombstoneShadow(val uid: Long, val remoteId: String, val deletedAt: String)
@@ -2469,7 +2469,8 @@ internal suspend fun validateStagingDatabase(
     stagingDb: AppDatabase,
     generationId: String,
     checkpoint: ShopSyncRecoveryCheckpoint,
-    activeStoreHistory: Boolean = false
+    activeStoreHistory: Boolean = false,
+    localAcknowledgements: Boolean = false
 ) {
     val sql = stagingDb.openHelper.readableDatabase
     requirePragmaOk(sql, "PRAGMA integrity_check")
@@ -2485,17 +2486,35 @@ internal suspend fun validateStagingDatabase(
             it.getLong(0)
         }
     } else 0L
+    // A is immutable; a real same-generation ACK may already add a clean C body.
+    // Count the same bounded canonical+ACK keyset used by the strict body proof below.
+    suspend fun expectedCount(domain: ShopSyncRowDomain, canonicalCount: Long): Long {
+        if (!localAcknowledgements) return canonicalCount
+        var count = 0L
+        var afterId: String? = null
+        do {
+            val rows = localAcknowledgedManifestPage(stagingDb, generationId, domain, afterId, PHYSICAL_VERIFY_PAGE_SIZE)
+            count = Math.addExact(count, rows.size.toLong())
+            afterId = rows.lastOrNull()?.remoteId
+        } while (rows.size == PHYSICAL_VERIFY_PAGE_SIZE)
+        return count
+    }
+    val suppliers = expectedCount(ShopSyncRowDomain.SUPPLIERS, checkpoint.catalog.suppliers.activeCount)
+    val categories = expectedCount(ShopSyncRowDomain.CATEGORIES, checkpoint.catalog.categories.activeCount)
+    val products = expectedCount(ShopSyncRowDomain.PRODUCTS, checkpoint.catalog.products.activeCount)
+    val prices = expectedCount(ShopSyncRowDomain.PRICES, materializedPriceCount)
+    val history = Math.addExact(expectedCount(ShopSyncRowDomain.HISTORY, checkpoint.history.activeCount), historyShadowCount)
     val expectedCounts = mapOf(
-        "suppliers" to checkpoint.catalog.suppliers.activeCount,
-        "categories" to checkpoint.catalog.categories.activeCount,
-        "products" to checkpoint.catalog.products.activeCount,
-        "product_prices" to materializedPriceCount,
-        "history_entries" to Math.addExact(checkpoint.history.activeCount, historyShadowCount),
-        "supplier_remote_refs" to checkpoint.catalog.suppliers.activeCount,
-        "category_remote_refs" to checkpoint.catalog.categories.activeCount,
-        "product_remote_refs" to checkpoint.catalog.products.activeCount,
-        "product_price_remote_refs" to materializedPriceCount,
-        "history_entry_remote_refs" to Math.addExact(checkpoint.history.activeCount, historyShadowCount)
+        "suppliers" to suppliers,
+        "categories" to categories,
+        "products" to products,
+        "product_prices" to prices,
+        "history_entries" to history,
+        "supplier_remote_refs" to suppliers,
+        "category_remote_refs" to categories,
+        "product_remote_refs" to products,
+        "product_price_remote_refs" to prices,
+        "history_entry_remote_refs" to history
     )
     expectedCounts.forEach { (table, expected) ->
         if (queryCount(sql, table) != expected) {

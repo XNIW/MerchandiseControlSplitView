@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.viewmodel
 import android.app.Application
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CanonicalCatalogInboundRequired
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
 import com.example.merchandisecontrolsplitview.data.CatalogIncrementalRemoteContract044A
 import com.example.merchandisecontrolsplitview.data.CatalogCloudPendingBreakdown
@@ -1396,6 +1397,122 @@ class CatalogSyncViewModelTest {
             assertEquals("OTHER", field("incrementalDetailSurface").toString())
             assertEquals(CatalogSyncStage.IDLE, tracker.state.value.stage)
         } finally { collect.cancel() }
+    }
+
+    @Test
+    fun canonicalHistoryBootstrapDefersWithoutErrorOrFalseCompletion() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val tracker = CatalogSyncStateTracker()
+        coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returns Result.failure(CanonicalCatalogInboundRequired())
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        val viewModel = CatalogSyncViewModel(application = app, repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(OWNER_VM_021, "canonical@example.test")),
+            syncStateTracker = tracker)
+        val collect = launch { viewModel.uiState.collect {} }
+        try {
+            advanceUntilIdle()
+            coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
+            assertEquals(CatalogSyncStage.IDLE, tracker.state.value.stage)
+            assertNull(tracker.lastOutcome.value)
+            assertNull(viewModel.uiState.value.sessionDetail)
+            assertFalse(tracker.isSyncing.value)
+        } finally { collect.cancel() }
+    }
+
+    @Test
+    fun canonicalHistoryDeferralNeverReplacesOriginalCatalogFailureOrPublishesSuccess() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val auto = mockk<CatalogAutoSyncRepository>()
+        val tracker = CatalogSyncStateTracker()
+        coEvery { repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021) } returns
+            Result.failure(IOException("actual catalog network failure"))
+        coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returnsMany listOf(
+            Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0)),
+            Result.failure(CanonicalCatalogInboundRequired()))
+        coEvery { repository.pushHistorySessionsToRemote(any(), OWNER_VM_021) } returns
+            Result.success(HistorySessionBackupPushSummary(0, 0))
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns true
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val viewModel = CatalogSyncViewModel(application = app, repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(OWNER_VM_021, "catalog-failure@example.test")),
+            autoSyncRepository = auto, syncStateTracker = tracker)
+        val collect = launch { viewModel.uiState.collect {} }
+        fun field(name: String): Any? = viewModel.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            .get(viewModel).let { (it as kotlinx.coroutines.flow.StateFlow<*>).value }
+        try {
+            advanceUntilIdle()
+            val previousSuccess = field("lastSuccessAt")
+            viewModel.refreshCatalog()
+            advanceUntilIdle()
+            coVerify(exactly = 1) { repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021) }
+            coVerify(exactly = 2) { repository.bootstrapHistorySessionsFromRemote(any()) }
+            coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), OWNER_VM_021) }
+            coVerify(exactly = 0) { auto.drainSyncEventsFromRemote(any(), any(), any(), any(), any(), any(), any()) }
+            assertEquals("CATALOG_FAILURE_DESIRED", "Offline", field("lastErrorKind").toString())
+            assertEquals(previousSuccess, field("lastSuccessAt"))
+            assertNull(tracker.lastOutcome.value)
+            assertEquals(com.example.merchandisecontrolsplitview.data.CatalogSyncStatus.FAILED, tracker.state.value.status)
+            assertFalse(tracker.isSyncing.value)
+            assertEquals(true, field("pendingHint"))
+        } finally { collect.cancel() }
+    }
+
+    @Test
+    fun canonicalFullRefreshPreservesOutboundAndNeverPublishesOrdinaryPendingAsSuccess() = runTest {
+        for (mode in listOf("pending", "history-error", "complete")) {
+            val repository = mockk<InventoryRepository>()
+            val auto = mockk<CatalogAutoSyncRepository>()
+            val events = mockk<SyncEventRemoteDataSource>()
+            val tracker = CatalogSyncStateTracker()
+            every { events.isConfigured } returns true
+            val outbound = CatalogSyncSummary(2, 3, 4, 0, 0, 0, pushedProductPrices = 5)
+            val drained = CatalogSyncSummary(0, 0, 0, 0, 0, 0,
+                syncEventsOrdinaryPending = mode != "complete", syncEventsWatermarkBefore = 42,
+                syncEventsWatermarkAfter = 42, syncEventsAvailable = true)
+            coEvery { repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021) } returns
+                Result.failure(CanonicalCatalogInboundRequired(outbound))
+            coEvery { repository.bootstrapHistorySessionsFromRemote(any()) } returns
+                Result.success(RemoteSessionBatchResult(0, 0, 0, 0, 0))
+            coEvery { repository.pushHistorySessionsToRemote(any(), OWNER_VM_021) } returns
+                if (mode == "history-error") Result.failure(IOException("actual History push failed"))
+                else Result.success(HistorySessionBackupPushSummary(1, 0))
+            coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+            coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+            coEvery { auto.drainSyncEventsFromRemote(any(), any(), events, OWNER_VM_021, any(), any(), null) } returns Result.success(drained)
+            val viewModel = CatalogSyncViewModel(application = app, repository = repository,
+                remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+                priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(),
+                authFlow = MutableStateFlow(AuthState.SignedIn(OWNER_VM_021, "canonical@example.test")),
+                autoSyncRepository = auto, syncEventRemote = events, syncStateTracker = tracker)
+            val collect = launch { viewModel.uiState.collect {} }
+            fun field(name: String): Any? = viewModel.javaClass.getDeclaredField(name).apply { isAccessible = true }
+                .get(viewModel).let { (it as kotlinx.coroutines.flow.StateFlow<*>).value }
+            try {
+                advanceUntilIdle()
+                val previousSuccess = field("lastSuccessAt")
+                viewModel.refreshCatalog()
+                advanceUntilIdle()
+                coVerify(exactly = 1) { repository.syncCatalogWithRemote(any(), any(), OWNER_VM_021) }
+                coVerify(exactly = 1) { repository.bootstrapHistorySessionsFromRemote(any()) }
+                coVerify(exactly = 1) { repository.pushHistorySessionsToRemote(any(), OWNER_VM_021) }
+                coVerify(exactly = 1) { auto.drainSyncEventsFromRemote(any(), any(), events, OWNER_VM_021, any(), any(), null) }
+                if (mode == "complete") {
+                    assertEquals(5, tracker.lastOutcome.value?.summary?.pushedProductPrices)
+                    assertEquals(2, tracker.lastOutcome.value?.summary?.pushedSuppliers)
+                    assertEquals(CatalogSyncStage.COMPLETED, tracker.state.value.stage)
+                } else {
+                    assertEquals(previousSuccess, field("lastSuccessAt"))
+                    assertNull(tracker.lastOutcome.value)
+                    assertEquals(if (mode == "pending") com.example.merchandisecontrolsplitview.data.CatalogSyncStatus.IDLE
+                        else com.example.merchandisecontrolsplitview.data.CatalogSyncStatus.FAILED, tracker.state.value.status)
+                }
+                assertFalse(tracker.isSyncing.value)
+            } finally { collect.cancel() }
+        }
     }
 
     @Test
