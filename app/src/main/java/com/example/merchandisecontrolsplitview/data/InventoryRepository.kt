@@ -4973,6 +4973,7 @@ class DefaultInventoryRepository(
                     val reader = checkNotNull(shopSyncReadRemoteDataSource) {
                         "shop_sync_reader_unavailable"
                     }
+                    var markerError = OrdinaryProofErrorCode.NONE
                     val marker = try {
                         businessScopedRemoteCall {
                             reader.convergenceMarker(
@@ -4997,12 +4998,16 @@ class DefaultInventoryRepository(
                         ) {
                             throw failure
                         }
+                        markerError = OrdinaryProofErrorCode.fromFailure(failure)
+                        Log.w(TAG, "ordinary_convergence_proof branch=no_work stage=marker_error " +
+                            "errorCode=${markerError.wireValue}")
                         null
                     }
                     // With no new captured window, the existing A receipt must still
                     // prove the complete physical store. A ready server marker alone
                     // cannot conceal local corruption or publish no-work.
                     var localReceiptProved = false
+                    var localError = OrdinaryProofErrorCode.NONE
                     val captured = verifiedShopBaselineEntity
                     val baseline = verifiedShopBaseline
                     if (captured != null && baseline != null) {
@@ -5029,10 +5034,15 @@ class DefaultInventoryRepository(
                             skippedDirty += deferred.pendingCount
                         } catch (failure: ShopSyncContractException) {
                             if (failure.code == "ordinary_captured_publication_changed") throw failure
+                            localError = OrdinaryProofErrorCode.fromFailure(failure)
+                            Log.w(TAG, "ordinary_convergence_proof branch=no_work stage=local_receipt_error " +
+                                "errorCode=${localError.wireValue}")
                         }
                     }
+                    var markerProof = OrdinaryMarkerProof.NOT_EVALUATED
                     if (skippedDirty == 0 && (!localReceiptProved ||
-                        !markerProvesNoWorkAgainstBaseline(marker, verifiedShopBaseline, watermark))) {
+                        markerProofAgainstBaseline(marker, verifiedShopBaseline, watermark)
+                            .also { markerProof = it } != OrdinaryMarkerProof.PROVED)) {
                         try {
                             db.withTransaction {
                                 requireCurrentBusinessDataScope()
@@ -5049,6 +5059,13 @@ class DefaultInventoryRepository(
                                     deviceId = deviceId, reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
                                 )
                             }
+                            // The journal transaction committed; deferred/stale attempts stay silent.
+                            val markerEvaluated = markerProof != OrdinaryMarkerProof.NOT_EVALUATED
+                            Log.w(TAG, "ordinary_convergence_proof branch=no_work stage=recovery_required " +
+                                "localReceipt=$localReceiptProved markerEvaluated=$markerEvaluated " +
+                                "markerResult=${if (markerEvaluated) "false" else "not_evaluated"} " +
+                                "firstFalse=${if (localReceiptProved) markerProof.wireValue else "local_receipt"} " +
+                                "markerError=${markerError.wireValue} localError=${localError.wireValue}")
                             gapDetected = true
                             manualFullSyncRequired = true
                         } catch (deferred: OrdinaryShopSyncDeferred) {
@@ -5330,6 +5347,10 @@ class DefaultInventoryRepository(
             } catch (deferred: OrdinaryShopSyncDeferred) {
                 return result(dirty = deferred.pendingCount)
             }
+            val diagnosticCode = OrdinaryProofErrorCode.fromFailure(failure)
+            Log.w(TAG, "ordinary_convergence_proof branch=incremental_window stage=recovery_required " +
+                "errorCode=${diagnosticCode.wireValue} initialProofComplete=$initialProofComplete " +
+                "eventsPresent=${events.isNotEmpty()}")
             return result(manual = true, tooLarge = bound)
         }
     }
@@ -6141,28 +6162,184 @@ class DefaultInventoryRepository(
         SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
     )
 
-    private fun markerProvesNoWorkAgainstBaseline(
+    private enum class OrdinaryMarkerProof {
+        NOT_EVALUATED, PROVED, BASELINE_ABSENT, MARKER_ABSENT, STATUS_NOT_READY,
+        SERVER_NOT_ELIGIBLE, SHOP_MISMATCH, SCOPE_MISMATCH, MAX_ID_MISMATCH,
+        VERIFIED_BASELINE_MISMATCH, DOMAIN_MAX_IDS_MISMATCH, CHECKPOINT_DIGEST_MISMATCH,
+        FULL_RECOVERY_REQUIRED, CATALOG_MISMATCH, PRICES_MISMATCH, HISTORY_MISMATCH,
+        IMAGES_MISMATCH, INTEGRITY_VIOLATION;
+
+        val wireValue: String get() = name.lowercase(Locale.ROOT)
+    }
+
+    /** Same short-circuit order as the original Boolean proof; no additional reads. */
+    private fun markerProofAgainstBaseline(
         marker: ShopSyncConvergenceMarker?,
         baseline: ShopSyncRecoveryCheckpoint?,
         watermark: Long
-    ): Boolean {
-        val expected = baseline ?: return false
+    ): OrdinaryMarkerProof {
+        val expected = baseline ?: return OrdinaryMarkerProof.BASELINE_ABSENT
         val expectedWatermark = watermark.toString()
-        return marker != null &&
-            marker.status == "ready" &&
-            marker.serverNoWorkEligible &&
-            marker.shopId == expected.shopId &&
-            marker.scope == expected.scope &&
-            marker.syncEvents.maxId == expectedWatermark &&
-            marker.syncEvents.verifiedBaselineId == expectedWatermark &&
-            marker.syncEvents.domainMaxIds == expected.syncEvents.domainMaxIds &&
-            marker.checkpointDigest == expected.checkpointDigest &&
-            !marker.syncEvents.requiresFullRecovery &&
-            marker.catalog == expected.catalog &&
-            marker.prices == expected.prices &&
-            marker.history == expected.history &&
-            marker.images == expected.images &&
-            marker.integrity.totalViolationCount == 0L
+        return when {
+            marker == null -> OrdinaryMarkerProof.MARKER_ABSENT
+            marker.status != "ready" -> OrdinaryMarkerProof.STATUS_NOT_READY
+            !marker.serverNoWorkEligible -> OrdinaryMarkerProof.SERVER_NOT_ELIGIBLE
+            marker.shopId != expected.shopId -> OrdinaryMarkerProof.SHOP_MISMATCH
+            marker.scope != expected.scope -> OrdinaryMarkerProof.SCOPE_MISMATCH
+            marker.syncEvents.maxId != expectedWatermark -> OrdinaryMarkerProof.MAX_ID_MISMATCH
+            marker.syncEvents.verifiedBaselineId != expectedWatermark -> OrdinaryMarkerProof.VERIFIED_BASELINE_MISMATCH
+            marker.syncEvents.domainMaxIds != expected.syncEvents.domainMaxIds -> OrdinaryMarkerProof.DOMAIN_MAX_IDS_MISMATCH
+            marker.checkpointDigest != expected.checkpointDigest -> OrdinaryMarkerProof.CHECKPOINT_DIGEST_MISMATCH
+            marker.syncEvents.requiresFullRecovery -> OrdinaryMarkerProof.FULL_RECOVERY_REQUIRED
+            marker.catalog != expected.catalog -> OrdinaryMarkerProof.CATALOG_MISMATCH
+            marker.prices != expected.prices -> OrdinaryMarkerProof.PRICES_MISMATCH
+            marker.history != expected.history -> OrdinaryMarkerProof.HISTORY_MISMATCH
+            marker.images != expected.images -> OrdinaryMarkerProof.IMAGES_MISMATCH
+            marker.integrity.totalViolationCount != 0L -> OrdinaryMarkerProof.INTEGRITY_VIOLATION
+            else -> OrdinaryMarkerProof.PROVED
+        }
+    }
+
+    /** Exact closed codes only: arbitrary exception codes/messages never enter the log. */
+    private enum class OrdinaryProofErrorCode {
+        NONE, OTHER_CONTRACT, OTHER_EXCEPTION, ILLEGAL_STATE, ILLEGAL_ARGUMENT, SQLITE, SERIALIZATION,
+        BASELINE_SCOPE_CONTEXT_MISMATCH, BASELINE_SCOPE_KEY_MISMATCH,
+        BLOCKING_EVENT_ID_INVALID, CATALOG_DIGEST_INVALID,
+        CHECKPOINT_COUNT_INVALID, CHECKPOINT_COUNT_OVERFLOW_CATEGORIES,
+        CHECKPOINT_COUNT_OVERFLOW_HISTORY, CHECKPOINT_COUNT_OVERFLOW_IMAGES,
+        CHECKPOINT_COUNT_OVERFLOW_PRICES, CHECKPOINT_COUNT_OVERFLOW_PRODUCTS,
+        CHECKPOINT_COUNT_OVERFLOW_SUPPLIERS, CHECKPOINT_DIGEST_INVALID,
+        CHECKPOINT_INTEGRITY_BLOCKED, CHECKPOINT_INVALID_BASELINE,
+        CHECKPOINT_NOT_READY, CHECKPOINT_RESOURCE_EXCEEDED,
+        CHECKPOINT_ROW_BUDGET_EXCEEDED_CATEGORIES, CHECKPOINT_ROW_BUDGET_EXCEEDED_HISTORY,
+        CHECKPOINT_ROW_BUDGET_EXCEEDED_IMAGES, CHECKPOINT_ROW_BUDGET_EXCEEDED_PRICES,
+        CHECKPOINT_ROW_BUDGET_EXCEEDED_PRODUCTS, CHECKPOINT_ROW_BUDGET_EXCEEDED_SUPPLIERS,
+        CHECKPOINT_STATUS_UNSUPPORTED, CHECKPOINT_TOTAL_COUNT_OVERFLOW,
+        CHECKPOINT_TOTAL_ROW_BUDGET_EXCEEDED, CHECKPOINT_TRACE_BODY_REPLAY,
+        CHECKPOINT_TRACE_REJECTED, CHECKPOINT_TRACE_STALE,
+        CONVERGENCE_MARKER_BASELINE_MISMATCH, CONVERGENCE_MARKER_INTEGRITY_VIOLATION,
+        CONVERGENCE_MARKER_NOT_ELIGIBLE, DEVICE_IDENTITY_INVALID,
+        DEVICE_KEY_INVALID, DOMAIN_EVENT_MAX_AFTER_GLOBAL,
+        DOMAIN_EVENT_MAX_ID_INVALID, DOMAIN_EVENT_MAX_IDS_INVALID,
+        EVENT_AS_OF_MAX_ID_MISMATCH, EVENT_BOOTSTRAP_FENCE_MISSING,
+        EVENT_CURSOR_INVALID, EVENT_CURSOR_NOT_INCREASING,
+        EVENT_CURSOR_STALLED, EVENT_DOMAIN_MAX_AFTER_AS_OF,
+        EVENT_DOMAIN_MAX_IDS_INVALID, EVENT_LIMIT_INVALID,
+        EVENT_LIMIT_MISMATCH, EVENT_MAX_BEFORE_BASELINE,
+        EVENT_MAX_ID_INVALID, EVENT_MAX_ID_NONCANONICAL,
+        EVENT_MAX_ID_OVERFLOW, EVENT_SCOPE_FENCE_MISSING,
+        EVENT_SCOPE_MAX_BEFORE_AS_OF, EVENT_TERMINAL_CURSOR_PRESENT,
+        EVENT_TIMESTAMP_INVALID, EXPECTED_BASELINE_SCOPE_KEY_MISSING,
+        HISTORY_OWNER_MISSING, HISTORY_ROW_RESPONSE_BUDGET_EXCEEDED,
+        HISTORY_ROW_RESPONSE_SIZE_INVALID, ID_SET_DIGEST_INVALID,
+        IDENTITY_DIGEST_INVALID, INTEGRITY_COUNT_INVALID,
+        LEGACY_OWNER_KEY_INVALID, LEGACY_OWNER_KEY_MISSING,
+        LOCAL_ACK_IDENTITY_INVALID, LOCAL_ACK_PHYSICAL_BODY_MISMATCH,
+        LOCAL_ACK_SCOPE_MISMATCH, MARKER_CATALOG_DIGEST_INVALID,
+        MARKER_CHECKPOINT_DIGEST_INVALID, MARKER_DIGEST_INVALID,
+        MARKER_INTEGRITY_BLOCKED, MARKER_INVALID_BASELINE,
+        MARKER_PRODUCT_IDENTITY_DIGEST_INVALID, MARKER_PRODUCT_IDENTITY_DIGEST_MISSING,
+        MARKER_RESOURCE_EXCEEDED, MARKER_STATUS_UNSUPPORTED,
+        ORDINARY_CANONICAL_RECEIPT_INVALID, ORDINARY_CAPTURED_PUBLICATION_CHANGED,
+        ORDINARY_CHECKPOINT_SCOPE_MISMATCH, ORDINARY_DOMAIN_FENCE_INVALID,
+        ORDINARY_DOMAIN_FENCE_MISSING, ORDINARY_EVENT_CURSOR_INVALID,
+        ORDINARY_EVENT_FENCE_CHANGED, ORDINARY_EVENT_ORDER_INVALID,
+        ORDINARY_EVENT_WINDOW_INCOMPLETE, ORDINARY_HISTORY_SHADOW_MANIFEST_INVALID,
+        ORDINARY_HISTORY_SHADOW_MANIFEST_MISSING, ORDINARY_HISTORY_SHADOW_REF_INVALID,
+        ORDINARY_HISTORY_SHADOW_TOMBSTONE_INVALID, ORDINARY_IMAGE_PRODUCT_MISMATCH,
+        ORDINARY_IMAGE_PRODUCT_MISSING, ORDINARY_MAPPER_APPLY_FAILED,
+        ORDINARY_PREPARED_WINDOW_BOUND_EXCEEDED, ORDINARY_TARGETED_DOMAIN_MISMATCH,
+        ORDINARY_TARGETED_FENCE_CHANGED, ORDINARY_TARGETED_MATERIAL_CHANGED,
+        ORDINARY_TARGETED_MISSING_REMOTE, PAGE_CURSOR_NOT_INCREASING,
+        PAGE_CURSOR_STALLED, PAGE_DOMAIN_EVENT_MAX_ID_MISMATCH,
+        PAGE_DOMAIN_EVENT_REGRESSED, PAGE_DOMAIN_FENCE_AFTER_EVENT_FENCE,
+        PAGE_DOMAIN_FENCE_MISSING, PAGE_DOMAIN_MISMATCH,
+        PAGE_DOMAIN_SCOPE_MISMATCH, PAGE_EVENT_FENCE_MISSING,
+        PAGE_LIMIT_INVALID, PAGE_LIMIT_MISMATCH,
+        PAGE_NEXT_CURSOR_MISSING, PAGE_OVERFULL,
+        PAGE_SCOPE_EVENT_REGRESSED, PAGE_SCOPE_FENCE_MISSING,
+        PAGE_SNAPSHOT_EVENT_MAX_ID_MISMATCH, PAGE_TERMINAL_CURSOR_PRESENT,
+        PRODUCT_IDENTITY_DIGEST_INVALID, PRODUCT_IDENTITY_DIGEST_MISSING,
+        RECOVERY_ACTIVATION_HEADROOM_SIZE_INVALID, RECOVERY_CATALOG_DIGEST_MISMATCH,
+        RECOVERY_CONVERGENCE_MARKER_MISMATCH, RECOVERY_COUNT_MISSING,
+        RECOVERY_CURSOR_TYPE_UNSUPPORTED, RECOVERY_DOMAIN_RESPONSE_BUDGET_EXCEEDED,
+        RECOVERY_ENTITY_ID_INVALID, RECOVERY_HISTORY_MANIFEST_INVALID,
+        RECOVERY_HISTORY_MANIFEST_PAYLOAD_VERSION_INVALID, RECOVERY_IMAGE_MANIFEST_INVALID,
+        RECOVERY_IMAGE_METADATA_INVALID, RECOVERY_IMAGE_PRODUCT_INVALID,
+        RECOVERY_IMAGE_PRODUCT_STATE_MISMATCH, RECOVERY_IMAGE_SET_INCOMPLETE,
+        RECOVERY_IMAGE_STATUS_INVALID, RECOVERY_INTEGRITY_CHECK_FAILED,
+        RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_CATEGORIES, RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_HISTORY,
+        RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_IMAGES, RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_PRICES,
+        RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_PRODUCTS, RECOVERY_LIVE_ROW_BUDGET_EXCEEDED_SUPPLIERS,
+        RECOVERY_LIVE_ROW_COUNT_INVALID, RECOVERY_LIVE_TOTAL_ROW_BUDGET_EXCEEDED,
+        RECOVERY_MANIFEST_DIGEST_MISMATCH_CATEGORIES, RECOVERY_MANIFEST_DIGEST_MISMATCH_HISTORY,
+        RECOVERY_MANIFEST_DIGEST_MISMATCH_IMAGES, RECOVERY_MANIFEST_DIGEST_MISMATCH_PRICES,
+        RECOVERY_MANIFEST_DIGEST_MISMATCH_PRODUCTS, RECOVERY_MANIFEST_DIGEST_MISMATCH_SUPPLIERS,
+        RECOVERY_MARKER_CHECKPOINT_DIGEST_INVALID, RECOVERY_OVERLAY_SOURCE_COUNT_MISMATCH,
+        RECOVERY_PAGE_RESPONSE_BUDGET_EXCEEDED, RECOVERY_PHYSICAL_COUNT_MISMATCH_CATEGORIES,
+        RECOVERY_PHYSICAL_COUNT_MISMATCH_HISTORY, RECOVERY_PHYSICAL_COUNT_MISMATCH_IMAGES,
+        RECOVERY_PHYSICAL_COUNT_MISMATCH_PRICES, RECOVERY_PHYSICAL_COUNT_MISMATCH_PRODUCTS,
+        RECOVERY_PHYSICAL_COUNT_MISMATCH_SUPPLIERS, RECOVERY_PHYSICAL_DIGEST_MISMATCH_CATEGORIES,
+        RECOVERY_PHYSICAL_DIGEST_MISMATCH_HISTORY, RECOVERY_PHYSICAL_DIGEST_MISMATCH_IMAGES,
+        RECOVERY_PHYSICAL_DIGEST_MISMATCH_PRICES, RECOVERY_PHYSICAL_DIGEST_MISMATCH_PRODUCTS,
+        RECOVERY_PHYSICAL_DIGEST_MISMATCH_SUPPLIERS, RECOVERY_PHYSICAL_DOMAIN_INVALID,
+        RECOVERY_PHYSICAL_HISTORY_DIRTY, RECOVERY_PHYSICAL_HISTORY_STATE_MISSING,
+        RECOVERY_PHYSICAL_HISTORY_V2_PAYLOAD_MISMATCH, RECOVERY_PHYSICAL_REF_DIRTY,
+        RECOVERY_PRICE_CANONICAL_INVALID, RECOVERY_PRICE_CANONICAL_MISSING,
+        RECOVERY_PRICE_PARENT_LOOKUP_BOUND_EXCEEDED, RECOVERY_PRICE_PARENT_MANIFEST_INVALID,
+        RECOVERY_PRICE_PARENT_MANIFEST_MISSING, RECOVERY_PRICE_TYPE_INVALID,
+        RECOVERY_PRIMARY_IMAGE_INVALID, RECOVERY_PRODUCT_MANIFEST_INVALID,
+        RECOVERY_PRODUCT_TOMBSTONE_REFERENCE_INVALID, RECOVERY_RESUME_RESOURCE_EXCEEDED,
+        RECOVERY_ROW_RESPONSE_SIZE_INVALID, RECOVERY_SCOPE_IDENTITY_KEY_MISMATCH,
+        RECOVERY_STAGING_FOREIGN_KEY_VIOLATION, RECOVERY_STAGING_TABLE_COUNT_MISMATCH_CATEGORIES,
+        RECOVERY_STAGING_TABLE_COUNT_MISMATCH_CATEGORY_REMOTE_REFS, RECOVERY_STAGING_TABLE_COUNT_MISMATCH_HISTORY_ENTRIES,
+        RECOVERY_STAGING_TABLE_COUNT_MISMATCH_HISTORY_ENTRY_REMOTE_REFS, RECOVERY_STAGING_TABLE_COUNT_MISMATCH_PRODUCT_PRICE_REMOTE_REFS,
+        RECOVERY_STAGING_TABLE_COUNT_MISMATCH_PRODUCT_PRICES, RECOVERY_STAGING_TABLE_COUNT_MISMATCH_PRODUCT_REMOTE_REFS,
+        RECOVERY_STAGING_TABLE_COUNT_MISMATCH_PRODUCTS, RECOVERY_STAGING_TABLE_COUNT_MISMATCH_SUPPLIER_REMOTE_REFS,
+        RECOVERY_STAGING_TABLE_COUNT_MISMATCH_SUPPLIERS, RECOVERY_TAIL_DOMAIN_FENCE_MISSING,
+        RECOVERY_TAIL_EVENT_ORDER_INVALID, RECOVERY_TAIL_EVENT_RESPONSE_BUDGET_EXCEEDED,
+        RECOVERY_TAIL_EVENT_UNSAFE, RECOVERY_TAIL_PAGE_CONTRACT_MISMATCH,
+        RECOVERY_TAIL_TARGETED_CALL_BOUND_EXCEEDED, RECOVERY_TAIL_TARGETED_CONTRACT_MISMATCH,
+        RECOVERY_TAIL_TARGETED_ROW_SCOPE_MISMATCH, RECOVERY_TAIL_TOTAL_RESPONSE_BUDGET_EXCEEDED,
+        RECOVERY_TIMESTAMP_INVALID, RECOVERY_TOTAL_RESPONSE_BUDGET_EXCEEDED,
+        RECOVERY_UUID_INVALID, RESPONSE_SHOP_ID_INVALID,
+        RESPONSE_SHOP_MISMATCH, ROW_COMPOUND_SCOPE_MISMATCH,
+        ROW_LEGACY_SCOPE_MISMATCH, ROW_SCOPE_KIND_UNSUPPORTED,
+        ROW_SHOP_SCOPE_MISMATCH, RPC_RESPONSE_BUDGET_EXCEEDED,
+        RPC_RESPONSE_INVALID, RPC_RESPONSE_JSON_DEPTH_BUDGET_EXCEEDED,
+        RPC_RESPONSE_JSON_SCALAR_BUDGET_EXCEEDED, RPC_RESPONSE_JSON_STRING_BUDGET_EXCEEDED,
+        RPC_RESPONSE_JSON_TOKEN_BUDGET_EXCEEDED, RPC_RESPONSE_LIMIT_INVALID,
+        RPC_RESPONSE_MISSING_FIELDS, SCHEMA_VERSION_MISMATCH,
+        SCOPE_ACCOUNT_IDENTITY_MISMATCH, SCOPE_ACCOUNT_KEY_INVALID,
+        SCOPE_ACCOUNT_KEY_MISSING, SCOPE_CHANGED,
+        SCOPE_DEVICE_IDENTITY_MISMATCH, SCOPE_HISTORY_KIND_MISSING,
+        SCOPE_HISTORY_KIND_UNSUPPORTED, SCOPE_KEY_INVALID,
+        SCOPE_KIND_UNSUPPORTED, SCOPE_LEGACY_KEY_UNEXPECTED,
+        SHOP_SYNC_CLIENT_MISSING, SHOP_SYNC_RPC_JSON_INVALID,
+        TARGETED_DOMAIN_EVENT_MAX_ID_MISMATCH, TARGETED_DOMAIN_EVENT_REGRESSED,
+        TARGETED_DOMAIN_SCOPE_MISMATCH, TARGETED_ENVELOPE_MISMATCH,
+        TARGETED_EVENT_MAX_ID_MISMATCH, TARGETED_IDS_COUNT_INVALID,
+        TARGETED_IDS_DUPLICATE, TARGETED_PARTITION_INVALID,
+        TARGETED_SCOPE_EVENT_REGRESSED, VERIFIED_BASELINE_ID_INVALID,
+        VERIFIED_BASELINE_ID_MISMATCH, VERSION_DIGEST_INVALID;
+
+        val wireValue: String get() = name.lowercase(Locale.ROOT)
+
+        companion object {
+            private val contractCodes = entries.filterNot {
+                it in setOf(NONE, OTHER_CONTRACT, OTHER_EXCEPTION, ILLEGAL_STATE, ILLEGAL_ARGUMENT, SQLITE, SERIALIZATION)
+            }.associateBy { it.wireValue }
+
+            fun fromFailure(failure: Exception): OrdinaryProofErrorCode = when (failure) {
+                is ShopSyncContractException -> contractCodes[failure.code] ?: OTHER_CONTRACT
+                is android.database.sqlite.SQLiteException -> SQLITE
+                // SerializationException is an IllegalArgumentException: keep the specific category first.
+                is kotlinx.serialization.SerializationException -> SERIALIZATION
+                is IllegalArgumentException -> ILLEGAL_ARGUMENT
+                is IllegalStateException -> ILLEGAL_STATE
+                else -> OTHER_EXCEPTION
+            }
+        }
     }
 
     private fun syncRecoveryRetryDelayMs(attempt: Int): Long {

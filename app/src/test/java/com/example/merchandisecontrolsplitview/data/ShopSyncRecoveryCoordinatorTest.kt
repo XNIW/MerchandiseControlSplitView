@@ -33,6 +33,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -4664,6 +4665,216 @@ class ShopSyncRecoveryCoordinatorTest {
             assertEquals(fullPages, remote.pageCalls)
         }
     }
+
+    @Test
+    fun ordinaryProofDiagnosticMarkerErrorsAreClosedAndNeverLogPayload() = runTest {
+        val privateValue = "private-marker-body-DO-NOT-LOG"
+        val failures = listOf(
+            ShopSyncContractException("shop_sync_rpc_json_invalid") to "shop_sync_rpc_json_invalid",
+            ShopSyncContractException("recovery_manifest_digest_mismatch_products\n$privateValue") to "other_contract",
+            IllegalStateException("recovery_$privateValue") to "illegal_state",
+            IllegalArgumentException(privateValue) to "illegal_argument",
+            android.database.sqlite.SQLiteException(privateValue) to "sqlite",
+            SerializationException(privateValue) to "serialization",
+            Exception(privateValue) to "other_exception"
+        )
+        for ((failure, expectedCode) in failures) {
+            resetOrdinaryDiagnosticFixture()
+            seedOldMismatchGeneration()
+            val baseline = recoverAndReopenZeroOrdinaryFixture()
+            val before = ordinaryMarkerApplicationRows()
+            val source = OrdinaryFencedReadFixture(remote)
+            var markerCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                    markerCalls++
+                    return Result.failure(failure)
+                }
+            }
+            ShadowLog.clear()
+
+            val summary = drainOrdinary(reader).getOrThrow()
+
+            assertTrue(summary.manualFullSyncRequired)
+            assertEquals(1, markerCalls)
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+                ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+            assertEquals(listOf(
+                "ordinary_convergence_proof branch=no_work stage=marker_error errorCode=$expectedCode",
+                "ordinary_convergence_proof branch=no_work stage=recovery_required localReceipt=true " +
+                    "markerEvaluated=true markerResult=false firstFalse=marker_absent markerError=$expectedCode localError=none"
+            ), ordinaryProofDiagnosticMessages())
+            assertFalse(ordinaryProofDiagnosticMessages().joinToString().contains(privateValue))
+        }
+    }
+
+    @Test
+    fun ordinaryProofDiagnosticKeepsFirstFalseMarkerPredicateOrder() = runTest {
+        for ((status, eligible, expectedPredicate) in listOf(
+            Triple("not-ready-private-status", false, "status_not_ready"),
+            Triple("ready", false, "server_not_eligible"),
+            Triple("ready", true, "shop_mismatch")
+        )) {
+            resetOrdinaryDiagnosticFixture()
+            seedOldMismatchGeneration()
+            val baseline = recoverAndReopenZeroOrdinaryFixture()
+            val source = OrdinaryFencedReadFixture(remote)
+            var markerCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                    markerCalls++
+                    return source.convergenceMarker(context).map {
+                        it.copy(status = status, serverNoWorkEligible = eligible, shopId = OLD_ACCOUNT,
+                            checkpointDigest = "private-digest-DO-NOT-LOG")
+                    }
+                }
+            }
+            ShadowLog.clear()
+
+            val summary = drainOrdinary(reader).getOrThrow()
+
+            assertTrue(summary.manualFullSyncRequired)
+            assertEquals(1, markerCalls)
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertEquals(listOf("ordinary_convergence_proof branch=no_work stage=recovery_required localReceipt=true " +
+                "markerEvaluated=true markerResult=false firstFalse=$expectedPredicate markerError=none localError=none"),
+                ordinaryProofDiagnosticMessages())
+        }
+    }
+
+    @Test
+    fun ordinaryProofDiagnosticLocalFailureSkipsMarkerPredicateAndLatchedReentry() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        db.openHelper.writableDatabase.execSQL("UPDATE product_prices SET price = price + 0.5")
+        val before = ordinaryMarkerApplicationRows()
+        val source = OrdinaryFencedReadFixture(remote)
+        var markerCalls = 0
+        val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                markerCalls++
+                return source.convergenceMarker(context).map { it.copy(status = "private-status", shopId = OLD_ACCOUNT) }
+            }
+        }
+        ShadowLog.clear()
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertTrue(summary.manualFullSyncRequired)
+        assertEquals(1, markerCalls)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+            ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+        val expected = listOf(
+            "ordinary_convergence_proof branch=no_work stage=local_receipt_error errorCode=recovery_physical_digest_mismatch_prices",
+            "ordinary_convergence_proof branch=no_work stage=recovery_required localReceipt=false " +
+                "markerEvaluated=false markerResult=not_evaluated firstFalse=local_receipt " +
+                "markerError=none localError=recovery_physical_digest_mismatch_prices"
+        )
+        assertEquals(expected, ordinaryProofDiagnosticMessages())
+        drainOrdinary(reader)
+        assertEquals("Existing recovery latch must not trigger an extra marker request", 1, markerCalls)
+        assertEquals(expected, ordinaryProofDiagnosticMessages())
+    }
+
+    @Test
+    fun ordinaryProofDiagnosticSeparatesIncrementalFailureBeforeAndAfterEvents() = runTest {
+        for (beforeEvents in listOf(true, false)) {
+            resetOrdinaryDiagnosticFixture()
+            seedOldMismatchGeneration()
+            recoverAndReopenOrdinaryFixture(targetFixture())
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            prepareOrdinaryCatalogDelta()
+            if (beforeEvents) db.openHelper.writableDatabase.execSQL(
+                "UPDATE sync_recovery_manifest SET versionLine = versionLine || 'tampered' WHERE domain = 'prices'")
+            val before = ordinaryMarkerApplicationRows()
+            val source = OrdinaryFencedReadFixture(remote)
+            var markerCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                    markerCalls++
+                    return source.convergenceMarker(context).map { it.copy(shopId = OLD_ACCOUNT) }
+                }
+            }
+            ShadowLog.clear()
+
+            val summary = drainOrdinary(reader).getOrThrow()
+
+            assertTrue(summary.manualFullSyncRequired)
+            assertEquals(if (beforeEvents) 0 else 1, markerCalls)
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+                ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+            assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+            val expectedCode = if (beforeEvents) "recovery_manifest_digest_mismatch_prices" else "recovery_convergence_marker_mismatch"
+            assertEquals(listOf("ordinary_convergence_proof branch=incremental_window stage=recovery_required " +
+                "errorCode=$expectedCode initialProofComplete=${!beforeEvents} eventsPresent=${!beforeEvents}"),
+                ordinaryProofDiagnosticMessages())
+        }
+    }
+
+    @Test
+    fun ordinaryProofDiagnosticDoesNotReportUncommittedIncrementalLatch() = runTest {
+        for (publicationChanged in listOf(false, true)) {
+            resetOrdinaryDiagnosticFixture()
+            seedOldMismatchGeneration()
+            recoverAndReopenOrdinaryFixture(targetFixture())
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            prepareOrdinaryCatalogDelta()
+            val source = OrdinaryFencedReadFixture(remote)
+            var pageCalls = 0
+            val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> {
+                    val page = source.eventPage(context, afterId, limit)
+                    pageCalls++
+                    // Local work/publication changes while the existing remote page is in flight.
+                    // Canonical A then fails before events are accepted, but the latch must not commit.
+                    db.openHelper.writableDatabase.execSQL(
+                        "UPDATE sync_recovery_manifest SET versionLine = versionLine || 'tampered' WHERE domain = 'prices'")
+                    db.openHelper.writableDatabase.execSQL(if (publicationChanged)
+                        "DELETE FROM sync_event_watermarks"
+                    else "UPDATE product_remote_refs SET localChangeRevision = localChangeRevision + 1")
+                    return page
+                }
+            }
+            ShadowLog.clear()
+
+            val outcome = drainOrdinary(reader)
+
+            assertEquals(1, pageCalls)
+            if (publicationChanged) {
+                assertTrue(outcome.isFailure)
+                assertEquals("ordinary_captured_publication_changed",
+                    (outcome.exceptionOrNull() as? ShopSyncContractException)?.code)
+            } else {
+                val summary = outcome.getOrThrow()
+                assertTrue(summary.syncEventsSkippedDirtyLocal > 0)
+                assertFalse(summary.manualFullSyncRequired)
+            }
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertTrue("A deferred or rejected transaction must not report a committed recovery latch",
+                ordinaryProofDiagnosticMessages().isEmpty())
+        }
+    }
+
+    private fun resetOrdinaryDiagnosticFixture() {
+        db.close()
+        app.deleteDatabase(ACTIVE_DATABASE)
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+    }
+
+    private fun ordinaryProofDiagnosticMessages(): List<String> =
+        ShadowLog.getLogsForTag("CatalogCloudSync")
+            .filter { it.msg.startsWith("ordinary_convergence_proof ") }
+            .map {
+                assertNull("Diagnostic must never attach an exception/stack", it.throwable)
+                it.msg
+            }
 
     private suspend fun assertNoEventMarkerTransientPreservesActivatedZero(transportFailure: Exception) {
         seedOldMismatchGeneration()

@@ -1031,6 +1031,55 @@ Manifest persistito [`evidence/TASK-143/android-test-manifest.json`](evidence/TA
 - CA01/02/03/04/05/06/08/11/12 conservano i limiti della voce05:27 e della matrice del report; CA10 aggiorna soltanto i quattro instrumentation da compilati a eseguiti.
 - Non ripetere RED/GREEN immutati né indebolire guard/timeout. Chiudere nuova CI/merge normalmente; poi runtime autenticato ancora da verificare. TASK resta FIX.
 
+### Esecuzione — 2026-10-07 UTC — osservabilità minima della prova ordinaria, V2
+
+**Perimetro e stato:** mandato umano diretto sezioni 6/8, delegato dal coordinatore al solo worktree isolato, baseline `b0ba75bcbe5b2f69d8790e809cb6e3b4d3b00693`. TASK-143 resta **FIX**. Questa aggiunta registra osservabilità e test locali; non modifica Planning, MASTER, comportamento recovery, journal, retry, sync, API o dipendenze. Checkout primario e dati/installazione autenticata preservati.
+
+**File modificati:**
+- `app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt` — log nel tag esistente `CatalogCloudSync`, con rami `no_work` / `incremental_window`, codici chiusi e prima condizione falsa; nessun identificativo, digest, payload, messaggio arbitrario, classe arbitraria o stack. Le due conferme `stage=recovery_required` sono emesse soltanto dopo il successo della transazione journal. Gli errori marker/local receipt restano registrati al punto di errore.
+- `app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt` — cinque regressioni additive con Room reale e baseline attivata/riaperta, privacy, ordine della prima condizione falsa, singola valutazione, short-circuit e rientro già bloccato, finestra prima/dopo eventi, assenza di conferma latch su defer/publication failure.
+- Questo task, sola Execution — risultati, limiti e handoff. Nessuna modifica UI/UX.
+
+**Azioni eseguite:**
+1. Prima patch: quattro test nuovi **4 FAIL/0 ERROR/0 SKIP**, dopo la preparazione Room reale, poi **4 PASS** sulla V1. Conservati log/XML originali, senza sostituire evidenze precedenti.
+2. Gate V1: sei classi, **543 test = 542 PASS/1 SKIP**, build/lint PASS. Review successiva ha individuato due conferme log precedenti al commit e categorie non-contract troppo generiche. Due regressioni contro V1: **2 FAIL/0 ERROR/0 SKIP**, rispettivamente falso log di latch e tipo IllegalState perso. V1 rimane storica e non finale.
+3. V2 sposta soltanto le due conferme dopo il commit e mantiene categorie chiuse `illegal_state`, `illegal_argument`, `sqlite`, `serialization`, `other_exception`; un codice contract sconosciuto resta `other_contract`. Test con istanze reali per tutte le categorie, incluso Serialization prima del suo supertipo IllegalArgument e un codice sconosciuto contenente payload. Cancellation, rethrow, guard, transazioni e ordine/numero delle query/RPC restano invariati. `localReceipt=false` mantiene il marker predicate **NOT_EVALUATED**, senza valutazione aggiuntiva.
+4. Correzione numerica documentale: la baseline corrente Recovery contiene **137 test**, non 116. Il vecchio campo V1 con etichetta116 resta immutabile; l'inversione del blocco additivo e dell'import ripristina l'intero file originale, inclusi i137 metodi/helper/assert. V2 contiene **142 = 137+5**, senza indebolire test precedenti.
+5. Gate finale V2 unico: **00:25:29.262402 → 00:28:34.351290 UTC, 185,089 s, exit0**. Comando offline con JBR Android Studio, SDK esistente, `--no-daemon --max-workers=1 -Pkotlin.compiler.execution.strategy=in-process testDebugUnitTest`, sei selettori di classe sotto elencati, `assembleDebug lint --console=plain`. Sorgenti congelate durante tutto il gate; processo Gradle proprio14037 assente al controllo finale. `local.properties` assente, otto variabili di profilo escluse: build ordinaria **KEYLESS / NONDEPLOYABLE**, non un nuovo APK TEST approvato.
+
+**Risultati JVM/Robolectric finali:**
+
+| Classe | Totale | PASS | FAIL/ERROR | SKIP |
+| --- | ---: | ---: | ---: | ---: |
+| ShopSyncRecoveryCoordinatorTest | 142 | 142 | 0/0 | 0 |
+| DefaultInventoryRepositoryTest | 222 | 221 | 0/0 | 1 |
+| DatabaseViewModelTest | 61 | 61 | 0/0 | 0 |
+| ExcelViewModelTest | 52 | 52 | 0/0 | 0 |
+| CatalogAutoSyncCoordinatorTest | 39 | 39 | 0/0 | 0 |
+| SupabaseShopSyncReadRemoteDataSourceTest | 28 | 28 | 0/0 | 0 |
+| **Totale** | **544** | **543** | **0/0** | **1** |
+
+Lo SKIP è esattamente `DefaultInventoryRepositoryTest.wechat 004 real local Supabase fixture converges through production incremental apply`: assumption `WECHAT_004_LOCAL_E2E_FIXTURE is required for the real local gate`, opt-in non attivato e fixture protetta non letta. Già condizionale nelle evidenze precedenti; non è PASS né prova live. Tutti i cinque nuovi ID diagnostici sono PASS.
+
+**Check obbligatori:**
+
+| Check | Stato | Note |
+| --- | --- | --- |
+| Build Gradle | ✅ ESEGUITO | `assembleDebug` finale exit0; solo build ordinaria keyless, non TEST installabile. |
+| Lint | ✅ ESEGUITO | 44 Warning, 0 Error/Fatal; report V2 byte-identico a V1. |
+| Warning nuovi | ✅ ESEGUITO | 0 nuove firme lint, 0 warning/error Kotlin/deprecation. Rispetto al report pre-run salvato (59 Warning), 15 soli suggerimenti versione assenti offline:14 GradleDependency +1 AndroidGradlePluginVersion. Nessun upgrade, suppression o fix warning dichiarato. Avviso JVM CDS separato dai warning sorgente. |
+| Coerenza con planning | ✅ ESEGUITO | Osservabilità minima autorizzata; short-circuit, business e guard invariati; MASTER e prefix Planning preservati. |
+| Criteri di accettazione | ✅ ESEGUITO per il delta locale; ❌ NON ESEGUITO per acceptance live | Privacy, prima condizione falsa, singola valutazione e conferma post-commit provate dai cinque test. Nessuna nuova prova auth/READY/convergenza/business o chiusura globale. |
+
+**Baseline regressione TASK-004:** eseguite integralmente le tre classi Repository/DatabaseViewModel/ExcelViewModel più Recovery/AutoSync/reader pertinenti. Sono test unitari/Robolectric JVM, non UI Compose. Suite globale non ripetuta su aree immutate. Il coordinatore ha verificato che gli instrumentation esistenti DAO/ACK/cutover e lease/scope non coprono emissione/redazione dei log: nessun nuovo AVD né instrumentation non pertinente. Collaudo business primario separato **NON ESEGUITO** in questo pass.
+
+**Evidenze:** directory esterna `MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/android-ordinary-proof-observability-20261007`; [receipt finale](/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/android-ordinary-proof-observability-20261007/final-v2-local-receipt.json), SHA256 `ad7eb58a3e595b202ddebfbf9c8773c093b57af30fbb97b0095772f7aed467b7`. Manifest sei XML `3745bca14cd0b1142ab3c682fc380fd8c499c10ba6e1daac369e87efad35f475`; confronto lint `10ee6358c57326a1f1246cff2abc8200b3a84079e82e4c894cdf83fa2e48c11f`. Report lint finale `fd29c629e5d50ad797407362fbdbff8094fe9ada087b8127120825de81f9ed1c`, pre-run `8e898277aa14376517bb282c5f6e97679785ff53e4d02e3210da0e084597f2f6`: confronto completo attributi/location, non solo conteggi; baseline salvata, non rieseguita. Freeze V2 `db99907ad281a67ebedff4cb3d574b8a53831e0913c529e1ada57bd6a136587c`, patch completa `07dc6f1f3b1513f5fa0a397879e663d86389c35b309381321b0860ea933bd070`, delta review V1→V2 `3411496cf032097652c485c708943066474f13f125669ec46c70405f7365f3b1`.
+
+**Incertezze e handoff:**
+- Il journal live già persistito non identifica univocamente il ramo storico e può impedire il rientro nei nuovi log. Il residuo riportato dal coordinatore alle20:18 resta **branch UNKNOWN**, journal **STAGING**; questa nota non è una nuova lettura del dispositivo. Nessuna cancellazione/reset/forzatura del journal o di READY autorizzata/eseguita; nuove osservazioni richiedono un percorso naturale e scope del coordinatore.
+- Whitelist verificata sul perimetro corrente, non esaustiva per ogni futuro codice. `shop_sync_reader_unavailable` precede i catch osservati; `targeted_ids_empty`/`targeted_chunk_fence_changed` appartengono al helper legacy non chiamato dalla finestra canonica; `sync_event_domain_fence_missing` è anticipato dal controllo exact delle tre chiavi e dal mapping enum esaustivo. Un `ordinary_outbox_scope_mismatch` persistente rilancia nella pendingCheck del latch prima della conferma post-commit; se comparisse tra i controlli, l'error log locale userebbe `other_contract`. Nessuna normale conversione/latch con discriminante persa accertata in questa verifica statica; nessuna estensione preventiva della whitelist.
+- Root/coordinatore gestisce review, Git/CI e futura build TEST con confronto profilo/hash/firma rispetto alla baseline autorizzata. La build ordinaria locale non incorpora una prova GitSHA/profilo TEST. Nessun nuovo package aggiuntivo, device, installazione, backend, lettura auth/sessione, harness Excel o accettazione per-record in questo pass. TASK resta FIX.
+
 ## Review
 
 Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
