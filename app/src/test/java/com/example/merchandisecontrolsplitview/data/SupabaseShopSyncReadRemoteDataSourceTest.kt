@@ -530,6 +530,74 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
     }
 
     @Test
+    fun ordinaryAdvancedMarkerIsValidHintAcrossNonconsecutiveCanonicalIds() = runTest {
+        for ((baseline, maximum) in listOf("42" to "49", "9007199254740993" to "9007199254741007")) {
+            val raw = advancedMarkerJson(maximum, baseline)
+            val invoker = RecordingInvoker { _, _ -> raw }
+            val result = SupabaseShopSyncReadRemoteDataSource(invoker).convergenceMarker(
+                context(expectedScope = scope(), baseline = baseline, baselineScopeKey = scope().key))
+            assertTrue(result.exceptionOrNull()?.toString(), result.isSuccess)
+            val marker = result.getOrThrow()
+            assertFalse(marker.serverNoWorkEligible)
+            assertEquals(maximum, marker.syncEvents.maxId)
+            assertEquals(baseline, marker.syncEvents.verifiedBaselineId)
+            assertEquals(baseline, invoker.calls.single().second.getValue("p_verified_baseline_id").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun ordinaryAdvancedMarkerRejectsMalformedIdentityScanAndMaterial() = runTest {
+        val valid = advancedMarkerJson()
+        fun event(key: String, value: kotlinx.serialization.json.JsonElement?) = JsonObject(valid + ("syncEvents" to
+            JsonObject(valid.getValue("syncEvents").jsonObject.toMutableMap().apply {
+                if (value == null) remove(key) else put(key, value)
+            })))
+        val cases = linkedMapOf(
+            "missing scan" to event("scanComplete", null),
+            "incomplete scan" to event("scanComplete", JsonPrimitive(false)),
+            "wrong inspection limit" to event("inspectionLimit", JsonPrimitive(10001)),
+            "missing count" to event("inspectedCount", null),
+            "negative count" to event("inspectedCount", JsonPrimitive(-1)),
+            "over scan bound" to event("inspectedCount", JsonPrimitive(10001)),
+            "blocking" to event("blockingCount", JsonPrimitive(1)),
+            "blocking id" to event("oldestBlockingId", JsonPrimitive("45")),
+            "requires full" to event("requiresFullRecovery", JsonPrimitive(true)),
+            "baseline mismatch" to event("verifiedBaselineId", JsonPrimitive("41")),
+            "maximum regressed" to event("maxId", JsonPrimitive("41")),
+            "contradictory eligible" to JsonObject(valid + ("serverNoWorkEligible" to JsonPrimitive(true))),
+            "digest malformed" to JsonObject(valid + ("markerDigest" to JsonPrimitive("bad"))),
+            "integrity" to JsonObject(valid + ("integrity" to parseObject("{\"totalViolationCount\":1}"))),
+            "wrong shop" to JsonObject(valid + ("shopId" to JsonPrimitive("99999999-9999-4999-8999-999999999999"))),
+            "foreign account" to JsonObject(valid + ("scope" to parseObject(scopeJson(scope(accountKey = "a".repeat(64)))))),
+            "foreign device" to JsonObject(valid + ("scope" to parseObject(scopeJson(scope(deviceKey = "b".repeat(64))))))
+        )
+        for ((label, raw) in cases) {
+            val result = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> raw }).convergenceMarker(
+                context(expectedScope = scope(), baseline = "42", baselineScopeKey = scope().key))
+            assertTrue(label, result.exceptionOrNull() is ShopSyncContractException)
+        }
+        val catalog = valid.getValue("catalog").jsonObject
+        for ((label, product) in listOf(
+            "missing identity" to JsonObject(catalog.getValue("products").jsonObject - "identityDigest"),
+            "negative count" to JsonObject(catalog.getValue("products").jsonObject + ("activeCount" to JsonPrimitive(-1))),
+            "over resource count" to JsonObject(catalog.getValue("products").jsonObject + ("activeCount" to JsonPrimitive(100001)))
+        )) {
+            val raw = JsonObject(valid + ("catalog" to JsonObject(catalog + ("products" to product))))
+            val result = SupabaseShopSyncReadRemoteDataSource(RecordingInvoker { _, _ -> raw }).convergenceMarker(
+                context(expectedScope = scope(), baseline = "42", baselineScopeKey = scope().key))
+            assertTrue(label, result.exceptionOrNull() is ShopSyncContractException)
+        }
+    }
+
+    private fun advancedMarkerJson(maximum: String = "49", baseline: String = "42"): JsonObject {
+        val raw = markerJson(maximum, baseline)
+        val events = raw.getValue("syncEvents").jsonObject
+        return JsonObject(raw + ("serverNoWorkEligible" to JsonPrimitive(false)) + ("syncEvents" to JsonObject(events + mapOf(
+            "inspectionLimit" to JsonPrimitive(10000), "inspectedCount" to JsonPrimitive(1),
+            "scanComplete" to JsonPrimitive(true), "blockingCount" to JsonPrimitive(0)))))
+    }
+
+    @Test
     fun `v6 checkpoint and marker send canonical baseline and opaque scope key`() = runTest {
         val invoker = RecordingInvoker { function, _ ->
             when (function) {

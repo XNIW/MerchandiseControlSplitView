@@ -1357,6 +1357,48 @@ class CatalogSyncViewModelTest {
     }
 
     @Test
+    fun ordinaryAdvancedManualAndTrackerOutcomesNeverPromoteLastSuccess() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val auto = mockk<CatalogAutoSyncRepository>()
+        val eventRemote = mockk<SyncEventRemoteDataSource>()
+        val tracker = CatalogSyncStateTracker()
+        every { eventRemote.isConfigured } returns true
+        val pending = CatalogSyncSummary(0, 0, 0, 0, 0, 0, syncEventsOrdinaryPending = true,
+            incrementalRemoteSubsetVerifiable = false,
+            incrementalRemoteNotVerifiableReason = CatalogIncrementalRemoteContract044A.INCREMENTAL_SUBSET_NOT_VERIFIABLE_CODES)
+        coEvery { auto.syncCatalogQuickWithEvents(any(), any(), eventRemote, OWNER_VM_021, any()) } returns Result.success(pending)
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getCatalogCloudPendingBreakdown() } returns emptyViewModelPendingBreakdown()
+        val viewModel = CatalogSyncViewModel(application = app, repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)), priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow(AuthState.SignedIn(OWNER_VM_021, "pending@example.test")),
+            autoSyncRepository = auto, syncEventRemote = eventRemote, syncStateTracker = tracker)
+        val collect = launch { viewModel.uiState.collect {} }
+        fun field(name: String): Any? = viewModel.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            .get(viewModel).let { (it as kotlinx.coroutines.flow.StateFlow<*>).value }
+        try {
+            advanceUntilIdle()
+            val confirmed = CatalogSyncSummary(0, 0, 0, 1, 1, 1)
+            tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, confirmed)
+            advanceUntilIdle()
+            val previousSuccess = field("lastSuccessAt")
+            assertTrue(previousSuccess is Long)
+            tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, pending)
+            advanceUntilIdle()
+            assertEquals(previousSuccess, field("lastSuccessAt"))
+            assertEquals(confirmed, field("lastCatalogSyncSummary"))
+            viewModel.syncCatalogQuick()
+            advanceUntilIdle()
+            coVerify(exactly = 1) { auto.syncCatalogQuickWithEvents(any(), any(), eventRemote, OWNER_VM_021, any()) }
+            assertEquals(previousSuccess, field("lastSuccessAt"))
+            assertEquals(confirmed, field("lastCatalogSyncSummary"))
+            assertEquals("OTHER", field("incrementalDetailSurface").toString())
+            assertEquals(CatalogSyncStage.IDLE, tracker.state.value.stage)
+        } finally { collect.cancel() }
+    }
+
+    @Test
     fun `139 manual quick sync requests recovery once after releasing manual flight`() = runTest {
         val repository = mockk<InventoryRepository>()
         val autoRepository = mockk<CatalogAutoSyncRepository>()

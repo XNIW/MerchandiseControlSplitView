@@ -1128,11 +1128,56 @@ Lo SKIP è esattamente `DefaultInventoryRepositoryTest.wechat 004 real local Sup
 - Whitelist verificata sul perimetro corrente, non esaustiva per ogni futuro codice. `shop_sync_reader_unavailable` precede i catch osservati; `targeted_ids_empty`/`targeted_chunk_fence_changed` appartengono al helper legacy non chiamato dalla finestra canonica; `sync_event_domain_fence_missing` è anticipato dal controllo exact delle tre chiavi e dal mapping enum esaustivo. Un `ordinary_outbox_scope_mismatch` persistente rilancia nella pendingCheck del latch prima della conferma post-commit; se comparisse tra i controlli, l'error log locale userebbe `other_contract`. Nessuna normale conversione/latch con discriminante persa accertata in questa verifica statica; nessuna estensione preventiva della whitelist.
 - Root/coordinatore gestisce review, Git/CI e futura build TEST con confronto profilo/hash/firma rispetto alla baseline autorizzata. La build ordinaria locale non incorpora una prova GitSHA/profilo TEST. Nessun nuovo package aggiuntivo, device, installazione, backend, lettura auth/sessione, harness Excel o accettazione per-record in questo pass. TASK resta FIX.
 
+### Esecuzione — 2026-10-07 UTC — recovery locale, marker avanzato e prezzo nella generazione corrente
+
+**Perimetro:** nuovo mandato utente di completamento, baseline remota verificata `bb203bae149a76ccfd28cfff35dd62ef406bafc7`, branch isolato `codex/android-recovery-local-capabilities`. Stato **FIX**, nessuna modifica a MASTER/Planning, dipendenze, schema o configurazione. Nessun accesso al device primario, profilo privato o backend. Le evidenze seguenti sono locali; non attribuiscono ai nuovi difetti la causa storica del dispositivo autenticato.
+
+**File modificati:**
+- `MerchandiseControlApplication.kt`, `data/CatalogAutoSyncCoordinator.kt`, `data/CatalogSyncStateTracker.kt`, `data/Task126BusinessDataScopeRuntimeGuard.kt` — pubblicazione della recovery cloud conservando soltanto capacità locali qualificate dal repository corrente e dall'autorità effettiva; nessuna seconda cancellazione globale dopo il vero cutover. Controlli di generazione/scope/cancellazione conservati; riscoperta della coda durevole dopo il completamento attraverso il coordinatore esistente.
+- `data/ShopSyncContractModels.kt`, `data/SupabaseShopSyncReadRemoteDataSource.kt`, `data/InventoryCatalogRemoteRows.kt`, `data/InventoryRepository.kt`, `viewmodel/CatalogSyncViewModel.kt` e tracker/coordinatore sopra — marker valido B>A classificato come lavoro ordinario pendente dopo prova fisica A e CAS. Un solo successore dopo rilascio della flight, nuove verifiche di autorità/rete/foreground; nessuna receipt B, pubblicazione watermark, recovery o falso successo dal solo hint. Campi di scansione nullable richiesti dal solo nuovo ramo; confronto strict del marker recovery invariato.
+- `data/ShopSyncRecoveryCoordinator.kt` — predicato prezzi vincolato alla generazione manifest corrente nelle due query attese e nella query fisica; generazione fisica passata con bind, nessuna nuova query, cache, migrazione o indice.
+- Sei classi JVM/Robolectric (`ShopSyncRecoveryCoordinatorTest`, `Task126BusinessDataScopeRuntimeGuardTest`, `DefaultInventoryRepositoryTest`, `SupabaseShopSyncReadRemoteDataSourceTest`, `CatalogAutoSyncCoordinatorTest`, `CatalogSyncViewModelTest`) — 31 casi additivi: recovery/capacità/Save/coda, decoder e successore A→B, corruzione mascherata da generazione estranea e piano SQL reale.
+- `androidTest/.../LocalAvailabilityRootDeviceTest.kt` — due casi additivi coordinator→tracker→repository file-backed riaperto→root Compose reale. Tab, ricerca, scroll, editor, focus, draft e Save restano utilizzabili mentre la recovery è trattenuta. Nessun redesign UI.
+
+**Azioni e prove:**
+1. RED reale su entrambi i trigger `catalog_push`/`sync_events_drain` e Save in volo; due RED strumentali sul placeholder root. Correzione selettiva senza alterare la transizione forte del cutover. Review V1 ha rilevato il resolver READY senza journal per history legacy: RED mirato e latch cloud `ERROR_RECOVERABLE` preservato in V3. Dinieghi correnti/espliciti non diventano permessi.
+2. Completamento/coda: il primo verde aveva una fixture con PURCHASE senza bridge e price remote che rifiutava l'ACK. Predicati effettivi `productAck=1`, bridge mancante e tentativo PRICES hanno isolato la fixture. Corretto soltanto il remote controllato, mantenuta l'asserzione di conferma strict; rieseguito il RED RPC-non-raggiunta con il solo inverse della riscoperta e poi **229/229 PASS** sullo stesso test corretto. Il precedente FAIL non è stato cancellato o rivendicato come successo.
+3. A→B: RED del decoder e del repository con A realmente attivata/riaperta; **265/265 PASS** nelle quattro classi coinvolte, inclusi 14 nuovi casi e 20 varianti raw negative. B>A resta un hint, non una prova del contenuto B; i digest del codec sono validati nel formato previsto, non ricomputati crittograficamente. Scope, identità, integrità, scansione, budget, pending locale e CAS restano fail-closed.
+4. Prezzi: RED Room effettivo dimostra che un manifest di una generazione estranea può mascherare la corruzione del prezzo corrente. Fix privato generation-bound, quindi **164/164 PASS** Recovery. Il primo verde aveva un solo FAIL nel matcher del testo EXPLAIN: la query era già `SEARCH ... PRIMARY KEY (generationId/domain/remoteId)`. Corretto solo il matcher per le forme SQLite equivalenti, mantenendo rifiuto di `SCAN lp`; nessuna regressione produttiva attribuita a quel FAIL. Nessun claim di latenza sul device o diagnosi della CPU live.
+5. Review indipendenti source: recovery V3, A→B e delta prezzo approvati; freeze finale 17 code/test `eee2e5ccf81a720dc4f4a243defe74f088d139556f8d69c0a4435c919faa306e`, patch `52121ee1a50e6279f2a2f2dc90e1cde98b71ebf5e47b80b2777f588d28779fca`. Il freeze annotava il mirato ancora in corso; il successivo risultato è una ricevuta separata, senza riscrivere lo snapshot.
+
+**Check obbligatori finali (stesso codice congelato):**
+| Check | Stato | Evidenza / limite |
+|---|---|---|
+| Build Gradle | ✅ ESEGUITO | Unico comando JBR offline `test assembleDebug lint assembleDebugAndroidTest`, 19:34:31–19:37:21 UTC, exit 0; 90 task, 17 eseguiti/73 up-to-date. |
+| Lint | ✅ ESEGUITO | Report fresco `fd29c629e5d50ad797407362fbdbff8094fe9ada087b8127120825de81f9ed1c`, byte-identico al precedente: 44 warning, 0 errori. Nessun aggiornamento/soppressione introdotto. |
+| Warning nuovi | ✅ ESEGUITO | 0 diagnostiche Kotlin; 0 nuove issue lint per uguaglianza byte. Diff check PASS; scansione limitata del diff aggiunto per firme credenziali ad alta confidenza: 0 match, non scanner esaustivo. |
+| Baseline TASK-004 | ✅ ESEGUITO | 76 XML freschi, **1207 = 1200 PASS + 7 SKIP**, 0 FAIL/ERROR. `test` ha prodotto debug, nessun testRelease XML e nessun PASS Release dedotto. |
+| Root Compose su AVD | ✅ ESEGUITO | Cinque metodi originali/additivi, ciascuno statusCode 0, `OK (5 tests)`, runner ufficiale: 47,7 s. Nuovo AVD API35 `Codex_LocalRecoveryFinal_20261007`, solo seriale5590, poi SIGTERM del solo PG proprio/assenza verificata ed eliminazione AVD. |
+| Coerenza con planning | ✅ ESEGUITO | Delta limitato ai difetti riprodotti e al mandato di completamento; MASTER e prefisso Planning immutati. |
+| Criteri di accettazione | ❌ NON ESEGUITO integralmente | Prove locali CA07/CA10 e controlli adiacenti eseguiti. ProperTEST, collaudo autenticato, parità per-record/CA09, CI del nuovo commit e accettazione globale restano separati e pendenti. |
+
+**Baseline e limiti:** DefaultInventoryRepository223 (222 PASS/1 SKIP), DatabaseViewModel61, ExcelViewModel52, Recovery164, guard11, AutoSync41, reader30 e CatalogSyncVM32 compresi nel full. I sette SKIP sono fixture Supabase locale, realtime live, benchmark opt-in, tre harness Excel sospesi e workbook opzionale; non contano come PASS. Questi sono test JVM/Robolectric, distinti dai cinque test UI strumentali. Il pacchetto del gate è KEYLESS (`49219f8ceb0cfbe0d348664dcbbbcd615fe2fab09b4ca89a48b6836ca58457e6`), utilizzato soltanto sul nuovo AVD sintetico; non è una distribuzione ProperTEST né autorizza installazione primaria. Test APK `3ea508f4f34ab4ff02d65504379f8e7badd95fead51d7fe7e44e130cfc8a61d7`. Nessun nuovo login, reset, clear journal, installazione primaria, SQL/RPC live o prova di READY business.
+
+**Evidenze persistenti:** base esterna `/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/operational-completion-20261003/resumed-executor/`:
+- `android-recovery-latch-and-queue-green-20261007-02/receipt.json` SHA `bf4d597d3733ec2d2369a1d981b21c7442a204eee08f5534ddf13140d784d160`;
+- `android-no-work-advanced-regression-20261007-01/receipt.json` SHA `032a88766af2918fd07c4946184b4f2353482f38c74e176e6cb07ac72c7dbfeb`;
+- `android-price-generation-green-20261007-02/receipt.json` SHA `c852f750eb19254124743ce919cd460db8015315fe3cd2cbd832021853d068ec`;
+- `android-recovery-advanced-price-canonical-20261007-01/receipt.json` SHA `62af4e032855f19ef4464c1b912525049e20f9eae3c95cb45b8e057d5f0c0498`; manifest per classe/caso/skip/lint `test-lint-manifest.json` SHA `33072de2db60b965a181b5743adb70ff13e22f2f6647c74ccf533a6521534dc9`;
+- `android-recovery-advanced-price-root-device-20261007-01/receipt.json` SHA `0795010d46b88065b53a2ccbb793c353e78c3ab8f1022381c09b8cf56587b23e` con comando effettivo, cinque nomi emessi, log e cleanup. Tutti i pin sorgenti/config erano invariati durante i job.
+
+**Incertezze / handoff:** nessun difetto residuo trovato nei gate locali; causalità dello stato storico del primario non dedotta dalle fixture. ProperTEST richiede confronto separato di profilo, firma e sorgenti; merge solo dopo CI del vero SHA e coordinamento del parent. TASK resta FIX.
+
 ## Review
 
 Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
 
 ## Fix
+
+### Fix — 2026-10-07 UTC — disponibilità locale e prove ordinarie
+
+Applicati i tre delta riprodotti descritti nella nuova Execution: preservazione delle capacità locali qualificate durante recovery cloud e completamento; distinzione del marker A→B dal vero no-work; vincolo di generazione nella deroga prezzi pendenti. Dinieghi espliciti, cutover forte, prova fisica/CAS, ACK e marker recovery strict restano protetti. Review e gate locali finali approvati/passati; nessun DONE globale o successo live dedotto.
+
 
 ### Esecuzione / Fix — 2026-10-05 — disponibilità locale e root reale Android
 
@@ -1358,6 +1403,11 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff aggiornato — 2026-10-07 UTC — freeze recovery/A→B/prezzi
+
+Questa voce descrive il batch corrente sulla baseline `bb203bae`; gli snapshot datati precedenti restano storici. Sorgente 17 file congelato, full1207/1200 PASS/7 SKIP e root Compose5 PASS; ricevute e limiti in Execution. Sono autorizzati staging selettivo dei soli 17 code/test e di questo Task, commit/push/PR normale; parent coordina CI exact-SHA, merge e ProperTEST sul profilo autorizzato. La copia KEYLESS del gate non è il candidato autenticato. Nessun altro writer o job locale attivo; primaria e configurazioni private intatte. Master/Planning immutati, task FIX e accettazione globale ancora aperta.
+
 
 ### CURRENT — 2026-10-03 UTC — checkpoint source264 portato, gate locali actual, Git/live pendenti
 

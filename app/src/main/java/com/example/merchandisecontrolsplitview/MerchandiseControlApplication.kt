@@ -1542,7 +1542,10 @@ class MerchandiseControlApplication : Application() {
                             }
                             val waitMs = (journal.nextRetryAtMs ?: 0L) - System.currentTimeMillis()
                             if (waitMs > 0L) delay(waitMs)
-                            if (catalogSyncStateTracker.networkAvailable.value == false) {
+                            if (catalogSyncStateTracker.networkAvailable.value == false ||
+                                shopContextRepository.state.value != context ||
+                                !currentAuthAndShopMatch(signedIn.userId, selectedShop)
+                            ) {
                                 return@withLock
                             }
                             attemptsInCurrentWindow += 1
@@ -1585,21 +1588,38 @@ class MerchandiseControlApplication : Application() {
         activeScope: Task126OwnerStoreScope
     ) {
         val activation = businessDataScopeMutex.withLock {
-            catalogSyncStateTracker.withBusinessDataScopeTransition {
-                if (!currentAuthAndShopMatch(signedIn.userId, selectedShop)) {
-                    catalogSyncStateTracker.updateBusinessDataScopeState(
-                        Task126BusinessDataScopeState.checking()
+            val context = shopContextRepository.state.value
+            val published = catalogSyncStateTracker.resolveAndPublishBusinessDataScope(
+                stillAuthorized = {
+                    currentAuthAndShopMatch(signedIn.userId, selectedShop) &&
+                        shopContextRepository.state.value == context
+                },
+                resolve = { previous ->
+                    val resolved = repository.resolveBusinessDataScope(activeScope)
+                    resolved.copy(
+                        localWritesAllowed = previous.localWritesAllowed && resolved.localWritesAllowed &&
+                            context.localAccessAllowed && context.selectedShop?.canWrite != false,
+                        localReadsAllowed = previous.localReadsAllowed && resolved.localReadsAllowed && context.localAccessAllowed
                     )
-                    return@withBusinessDataScopeTransition null
                 }
-                val resolved = withContext(Dispatchers.IO) {
-                    repository.resolveBusinessDataScope(activeScope)
-                }
-                catalogSyncStateTracker.updateBusinessDataScopeState(resolved)
-                signedIn.takeIf { allowsResolvedBusinessDataScope(resolved, activeScope) }
+            )
+            signedIn.takeIf {
+                published && allowsResolvedBusinessDataScope(catalogSyncStateTracker.businessDataScopeState.value, activeScope)
             }
         }
-        activation?.let { activateRemoteComponentsForBoundScope(it, "sync_recovery_complete") }
+        activation?.let {
+            activateRemoteComponentsForBoundScope(it, "sync_recovery_complete")
+            val context = shopContextRepository.state.value
+            if (currentAuthAndShopMatch(it.userId, selectedShop) && context.localAccessAllowed &&
+                context.selectedShop?.canWrite != false &&
+                catalogSyncStateTracker.businessDataScopeState.value.localWritesAllowed &&
+                catalogSyncStateTracker.allowsBusinessDataScope(it.userId, selectedShop)
+            ) {
+                // Recovery may outlive the original Save tickle (or the process).
+                // The existing push path rechecks the durable queue and current scope.
+                catalogAutoSyncCoordinator.onLocalCatalogChanged()
+            }
+        }
     }
 
     private fun cancelBusinessRecovery() {

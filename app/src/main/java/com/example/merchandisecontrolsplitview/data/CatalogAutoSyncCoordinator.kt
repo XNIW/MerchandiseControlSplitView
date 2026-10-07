@@ -452,6 +452,8 @@ class CatalogAutoSyncCoordinator(
         var ok = false
         var scopeChanged = false
         var recoveryRequired = false
+        var ordinaryPending = false
+        var priceSyncFailed = false
         var dirtyLocalBlocked = false
         var recoverySummary: CatalogSyncSummary? = null
         val startedAt = System.currentTimeMillis()
@@ -512,15 +514,18 @@ class CatalogAutoSyncCoordinator(
                 lastLocalPushCompletedAtMs = System.currentTimeMillis()
                 val s = summary
                 recoveryRequired = s?.manualFullSyncRequired == true
+                ordinaryPending = s?.syncEventsOrdinaryPending == true
+                priceSyncFailed = s?.priceSyncFailed == true
                 dirtyLocalBlocked = (s?.syncEventsSkippedDirtyLocal ?: 0) > 0
                 recoverySummary = s.takeIf { recoveryRequired }
-                ok = !recoveryRequired && !dirtyLocalBlocked
+                ok = !recoveryRequired && !dirtyLocalBlocked && !ordinaryPending
                 s?.let {
                     syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
                 }
                 val cycleOutcome = when {
                     recoveryRequired -> "blocked_recovery_required"
                     dirtyLocalBlocked -> "blocked_dirty_local"
+                    ordinaryPending -> "ordinary_pending"
                     else -> "ok"
                 }
                 logger(
@@ -537,20 +542,13 @@ class CatalogAutoSyncCoordinator(
                         "syncEventOutboxPending=${s?.syncEventOutboxPending ?: 0} " +
                         "priceSyncFailed=${s?.priceSyncFailed ?: false}"
                 )
-                if (!recoveryRequired && !dirtyLocalBlocked) {
+                if (!recoveryRequired && !dirtyLocalBlocked && !ordinaryPending) {
                     scheduleSyncEventDrain("local_push_completed")
                 }
             }
             if (recoveryRequired) {
-                syncStateTracker.withBusinessDataScopeTransition {
-                    val previousScope = syncStateTracker.businessDataScopeState.value.boundScope
-                    syncStateTracker.updateBusinessDataScopeState(
-                        Task126BusinessDataScopeState(
-                            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                            boundScope = previousScope,
-                            errorCode = "sync_recovery_required"
-                        )
-                    )
+                if (!publishRecoveryRequiredScope(auth, selectedShop)) {
+                    throw Task126BusinessDataScopeChangedException()
                 }
                 recoverySummary?.let {
                     syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
@@ -582,10 +580,19 @@ class CatalogAutoSyncCoordinator(
         } finally {
             if (!scopeChanged) {
                 syncStateTracker.update(
-                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                    when {
+                        ordinaryPending && !recoveryRequired && !dirtyLocalBlocked && !priceSyncFailed -> CatalogSyncProgressState.idle()
+                        ok -> CatalogSyncProgressState.completed()
+                        else -> CatalogSyncProgressState.failed()
+                    }
                 )
             }
             syncStateTracker.finish(CatalogSyncFlightOwner.AUTO_PUSH)
+        }
+        if (ordinaryPending && !scopeChanged && !recoveryRequired && !dirtyLocalBlocked &&
+            authFlow.value == auth && selectedShopProvider() == selectedShop
+        ) {
+            runSyncEventDrainCycle("remote_advanced", allowAdvanceSuccessor = false)
         }
     }
 
@@ -767,7 +774,45 @@ class CatalogAutoSyncCoordinator(
         return (LOCAL_PUSH_BOOTSTRAP_QUIET_MS - elapsed).coerceAtLeast(0L)
     }
 
-    internal suspend fun runSyncEventDrainCycle(reason: String) {
+    private suspend fun publishRecoveryRequiredScope(
+        auth: AuthState.SignedIn,
+        selectedShop: SelectedShop?
+    ): Boolean = syncStateTracker.resolveAndPublishBusinessDataScope(
+        stillAuthorized = {
+            authFlow.value == auth && selectedShopProvider() == selectedShop &&
+                syncStateTracker.allowsBusinessDataScope(auth.userId, selectedShop)
+        },
+        resolve = { previous ->
+            // The production repository validates binding, journal authorization,
+            // current generation/receipt and physical local overlays. A bound scope
+            // by itself is never a local access grant.
+            val resolved = try {
+                (repository as? Task126BusinessDataScopeRepository)?.resolveBusinessDataScope(
+                    task126ActiveOwnerStoreScope(auth.userId, selectedShop))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            val qualifiedLocalScope = (resolved?.localAccessScope ?: resolved?.boundScope?.takeIf {
+                resolved.status == Task126BusinessDataScopeStatus.READY && resolved.allowsLocalOperations
+            })?.takeIf {
+                Task126OwnerStoreGate.validate(it, task126ActiveOwnerStoreScope(auth.userId, selectedShop)) ==
+                    Task126OwnerStoreGateDecision.Allowed
+            }
+            // Some legacy event denials have an apply-status but no recovery journal.
+            // A locally valid store cannot turn manualFullSyncRequired into cloud READY.
+            (resolved ?: previous).copy(
+                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                localAccessScope = qualifiedLocalScope, errorCode = "sync_recovery_required",
+                localReadsAllowed = previous.localReadsAllowed && (resolved?.localReadsAllowed != false),
+                localWritesAllowed = previous.localWritesAllowed && selectedShop?.canWrite != false &&
+                    (resolved?.localWritesAllowed != false)
+            )
+        }
+    )
+
+    internal suspend fun runSyncEventDrainCycle(reason: String, allowAdvanceSuccessor: Boolean = true) {
         val auth = authFlow.value
         if (auth !is AuthState.SignedIn) {
             logger("cycle=sync_events_drain outcome=skip reason=no_auth")
@@ -810,7 +855,7 @@ class CatalogAutoSyncCoordinator(
                 "cycle=sync_events_drain outcome=queued_after_busy " +
                     "reason=sync_busy originalReason=$reason"
             )
-            scheduleSyncEventDrainAfterBusy(reason)
+            if (allowAdvanceSuccessor) scheduleSyncEventDrainAfterBusy(reason)
             return
         }
         if (!ensureDeviceActiveForReservedSync(
@@ -827,6 +872,8 @@ class CatalogAutoSyncCoordinator(
         var ok = false
         var scopeChanged = false
         var recoveryRequired = false
+        var ordinaryPending = false
+        var priceSyncFailed = false
         var dirtyLocalBlocked = false
         var recoverySummary: CatalogSyncSummary? = null
         val startedAt = System.currentTimeMillis()
@@ -849,15 +896,18 @@ class CatalogAutoSyncCoordinator(
                 }
                 val s = summary
                 recoveryRequired = s?.manualFullSyncRequired == true
+                ordinaryPending = s?.syncEventsOrdinaryPending == true
+                priceSyncFailed = s?.priceSyncFailed == true
                 dirtyLocalBlocked = (s?.syncEventsSkippedDirtyLocal ?: 0) > 0
                 recoverySummary = s.takeIf { recoveryRequired }
-                ok = !recoveryRequired && !dirtyLocalBlocked
+                ok = !recoveryRequired && !dirtyLocalBlocked && !ordinaryPending
                 s?.let {
                     syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
                 }
                 val cycleOutcome = when {
                     recoveryRequired -> "blocked_recovery_required"
                     dirtyLocalBlocked -> "blocked_dirty_local"
+                    ordinaryPending -> "ordinary_pending"
                     else -> "ok"
                 }
                 logger(
@@ -879,15 +929,8 @@ class CatalogAutoSyncCoordinator(
             }
             foregroundSyncEventFailureCount = 0
             if (recoveryRequired) {
-                syncStateTracker.withBusinessDataScopeTransition {
-                    val previousScope = syncStateTracker.businessDataScopeState.value.boundScope
-                    syncStateTracker.updateBusinessDataScopeState(
-                        Task126BusinessDataScopeState(
-                            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                            boundScope = previousScope,
-                            errorCode = "sync_recovery_required"
-                        )
-                    )
+                if (!publishRecoveryRequiredScope(auth, selectedShop)) {
+                    throw Task126BusinessDataScopeChangedException()
                 }
                 recoverySummary?.let {
                     syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
@@ -912,10 +955,19 @@ class CatalogAutoSyncCoordinator(
         } finally {
             if (!scopeChanged) {
                 syncStateTracker.update(
-                    if (ok) CatalogSyncProgressState.completed() else CatalogSyncProgressState.failed()
+                    when {
+                        ordinaryPending && !recoveryRequired && !dirtyLocalBlocked && !priceSyncFailed -> CatalogSyncProgressState.idle()
+                        ok -> CatalogSyncProgressState.completed()
+                        else -> CatalogSyncProgressState.failed()
+                    }
                 )
             }
             syncStateTracker.finish(CatalogSyncFlightOwner.SYNC_EVENTS)
+        }
+        if (ordinaryPending && !scopeChanged && !recoveryRequired && !dirtyLocalBlocked && allowAdvanceSuccessor &&
+            authFlow.value == auth && selectedShopProvider() == selectedShop
+        ) {
+            runSyncEventDrainCycle("remote_advanced", allowAdvanceSuccessor = false)
         }
     }
 

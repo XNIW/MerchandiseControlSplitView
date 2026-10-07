@@ -23,6 +23,63 @@ import org.robolectric.annotation.Config
 class CatalogAutoSyncCoordinatorTest {
 
     @Test
+    fun ordinaryAdvancedWindowGetsOnlyOneFreshSuccessorAfterEitherFlight() = runTest {
+        for (push in listOf(false, true)) {
+            val pending = emptySummary().copy(syncEventsOrdinaryPending = true)
+            val repository = FakeCatalogAutoSyncRepository043().apply {
+                shouldBootstrap = false; nextQuickSummary = pending; nextDrainSummary = pending
+            }
+            val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+            val confirmed = emptySummary(pulledProducts = 7)
+            tracker.publishSummary(USER_ID, CatalogSyncFlightOwner.SYNC_EVENTS, confirmed)
+            val coordinator = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote043(), FakePriceRemote043(),
+                syncEventRemote = FakeSyncEventRemote043(),
+                authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "synthetic@example.test")),
+                selectedShopProvider = { selectedShop(SHOP_ID) }, syncStateTracker = tracker,
+                scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+            try {
+                if (push) coordinator.runPushCycle("local_commit") else coordinator.runSyncEventDrainCycle("test")
+                assertEquals(if (push) 1 else 0, repository.quickWithEventsCalls)
+                assertEquals(if (push) 1 else 2, repository.drainCalls)
+                assertEquals(confirmed, tracker.lastOutcome.value?.summary)
+                assertEquals(CatalogSyncStage.IDLE, tracker.state.value.stage)
+                advanceTimeBy(1_000); runCurrent()
+                assertEquals("pending successor must yield rather than rearm retries", if (push) 1 else 2, repository.drainCalls)
+                assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+                tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            } finally { coordinator.shutdown() }
+        }
+    }
+
+    @Test
+    fun ordinaryAdvancedSuccessorRechecksNetworkBackgroundAndOwner() = runTest {
+        for (gate in listOf("network", "background", "logout", "account")) {
+            val repository = FakeCatalogAutoSyncRepository043().apply {
+                shouldBootstrap = false; nextDrainSummary = emptySummary().copy(syncEventsOrdinaryPending = true)
+            }
+            val tracker = CatalogSyncStateTracker().apply { updateNetworkAvailability(true) }
+            val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(USER_ID, "synthetic@example.test"))
+            val coordinator = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote043(), FakePriceRemote043(),
+                syncEventRemote = FakeSyncEventRemote043(), authFlow = auth,
+                selectedShopProvider = { selectedShop(SHOP_ID) }, syncStateTracker = tracker,
+                scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+            repository.afterDrain = {
+                when (gate) {
+                    "network" -> tracker.updateNetworkAvailability(false)
+                    "background" -> coordinator.onAppBackground()
+                    "logout" -> auth.value = AuthState.SignedOut
+                    "account" -> auth.value = AuthState.SignedIn("another-account", "other@example.test")
+                }
+            }
+            try {
+                coordinator.runSyncEventDrainCycle("test")
+                assertEquals(gate, 1, repository.drainCalls)
+                assertEquals(null, tracker.lastOutcome.value)
+            } finally { coordinator.shutdown() }
+        }
+    }
+
+    @Test
     fun `efficiency busy local push retries do not request device status`() = runTest {
         assertBusyCycleAvoidsDeviceRequests("catalog_push")
     }
@@ -1283,6 +1340,7 @@ class CatalogAutoSyncCoordinatorTest {
         var failQuickOnce: Throwable? = null
         var failDrain: Throwable? = null
         var clearPendingOnPush = false
+        var afterDrain: () -> Unit = {}
 
         override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = shouldBootstrap
 
@@ -1330,6 +1388,7 @@ class CatalogAutoSyncCoordinatorTest {
             drainCalls++
             progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN))
             failDrain?.let { return Result.failure(it) }
+            afterDrain()
             return Result.success(nextDrainSummary)
         }
 

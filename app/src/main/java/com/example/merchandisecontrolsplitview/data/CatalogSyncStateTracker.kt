@@ -309,12 +309,20 @@ class CatalogSyncStateTracker(
         source: CatalogSyncFlightOwner,
         summary: CatalogSyncSummary
     ) {
+        if (summary.syncEventsOrdinaryPending && !summary.priceSyncFailed) return
         _lastOutcome.value = CatalogSyncOutcomeState(
             ownerUserId = ownerUserId,
             source = source,
             summary = summary
         )
     }
+
+    internal suspend fun resolveAndPublishBusinessDataScope(
+        stillAuthorized: () -> Boolean,
+        resolve: suspend (Task126BusinessDataScopeState) -> Task126BusinessDataScopeState
+    ): Boolean = businessDataScopeFlightGate.publishIfScopeUnchanged(
+        stillAuthorized, resolve, ::updateBusinessDataScopeState
+    )
 
     fun updateBusinessDataScopeState(next: Task126BusinessDataScopeState) {
         val previous = _businessDataScopeState.value

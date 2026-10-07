@@ -564,17 +564,8 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
             shopId = marker.shopId,
             scope = marker.scope
         )
-        if (marker.status != SHOP_SYNC_READY_STATUS || !marker.serverNoWorkEligible) {
-            contractFailure("convergence_marker_not_eligible")
-        }
+        if (marker.status != SHOP_SYNC_READY_STATUS) contractFailure("convergence_marker_not_eligible")
         validateEventCheckpoint(marker.syncEvents, context.verifiedBaselineId)
-        if (marker.syncEvents.maxId != canonicalEventId(
-                context.verifiedBaselineId,
-                "verified_baseline_id_invalid"
-            )
-        ) {
-            contractFailure("convergence_marker_baseline_mismatch")
-        }
         if (marker.integrity.totalViolationCount != 0L) {
             contractFailure("convergence_marker_integrity_violation")
         }
@@ -593,6 +584,23 @@ class SupabaseShopSyncReadRemoteDataSource internal constructor(
             contractFailure("marker_product_identity_digest_missing")
         }
         validateDigest(marker.catalog.products.identityDigest, "marker_product_identity_digest_invalid")
+        val advanced = parseShopSyncMaxEventId(marker.syncEvents.maxId) > parseShopSyncMaxEventId(context.verifiedBaselineId)
+        if (advanced) {
+            if (!marker.hasCompleteOrdinaryAdvanceScan()) contractFailure("convergence_marker_not_eligible")
+            var total = 0L
+            val domains = listOf(marker.catalog.suppliers, marker.catalog.categories, marker.catalog.products,
+                marker.prices, marker.history, marker.images)
+            ShopSyncRowDomain.entries.zip(domains).forEach { (domain, value) ->
+                if (value.activeCount > Long.MAX_VALUE - value.tombstoneCount) contractFailure("checkpoint_count_overflow")
+                val rows = value.activeCount + value.tombstoneCount
+                if (rows > resourceLimits.rows(domain)) contractFailure("checkpoint_row_budget_exceeded_${domain.wireValue}")
+                if (total > Long.MAX_VALUE - rows) contractFailure("checkpoint_total_count_overflow")
+                total += rows
+                if (total > resourceLimits.totalRows) contractFailure("checkpoint_total_row_budget_exceeded")
+            }
+        } else if (!marker.serverNoWorkEligible) {
+            contractFailure("convergence_marker_not_eligible")
+        }
     }
 
     private fun validateEventCheckpoint(

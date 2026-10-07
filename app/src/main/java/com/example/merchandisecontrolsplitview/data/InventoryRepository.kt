@@ -457,6 +457,7 @@ class DefaultInventoryRepository(
         val tooLarge: Boolean,
         val gapDetected: Boolean,
         val manualFullSyncRequired: Boolean,
+        val ordinaryPending: Boolean = false,
         val skippedProtectedLocalCommit: Int = 0,
         val remoteAppliedProductIds: Set<Long> = emptySet()
     )
@@ -3871,7 +3872,8 @@ class DefaultInventoryRepository(
                     targetedHistoryFetched = drain.targetedHistoryFetched,
                     remoteUpdatesApplied = drain.remoteUpdatesApplied,
                     remoteHistoryUpdatesApplied = drain.remoteHistoryUpdatesApplied,
-                    manualFullSyncRequired = drain.manualFullSyncRequired
+                    manualFullSyncRequired = drain.manualFullSyncRequired,
+                    syncEventsOrdinaryPending = drain.ordinaryPending
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -4014,7 +4016,8 @@ class DefaultInventoryRepository(
                     targetedHistoryFetched = drain.targetedHistoryFetched,
                     remoteUpdatesApplied = drain.remoteUpdatesApplied,
                     remoteHistoryUpdatesApplied = drain.remoteHistoryUpdatesApplied,
-                    manualFullSyncRequired = drain.manualFullSyncRequired
+                    manualFullSyncRequired = drain.manualFullSyncRequired,
+                    syncEventsOrdinaryPending = drain.ordinaryPending
                 )
             )
         } catch (cancelled: CancellationException) {
@@ -4407,6 +4410,7 @@ class DefaultInventoryRepository(
         var tooLarge = false
         var gapDetected = false
         var manualFullSyncRequired = false
+        var ordinaryPending = false
         var skippedProtectedLocalCommit = 0
         val remoteAppliedProductIds = linkedSetOf<Long>()
         var iterations = 0
@@ -5007,6 +5011,7 @@ class DefaultInventoryRepository(
                     // prove the complete physical store. A ready server marker alone
                     // cannot conceal local corruption or publish no-work.
                     var localReceiptProved = false
+                    var advancedTooLarge = false
                     var localError = OrdinaryProofErrorCode.NONE
                     val captured = verifiedShopBaselineEntity
                     val baseline = verifiedShopBaseline
@@ -5024,6 +5029,10 @@ class DefaultInventoryRepository(
                                 val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
                                 if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
                                 validateShopSyncActiveReceipt(db, captured.generationId, baseline)
+                                if (markerIsOrdinaryAdvanceFrom(marker, baseline, watermark)) {
+                                    advancedTooLarge = requireNotNull(marker?.syncEvents?.inspectedCount) > SHOP_SYNC_ORDINARY_MAX_EVENTS
+                                    ordinaryPending = !advancedTooLarge
+                                }
                                 coroutineContext.ensureActive()
                                 requireCurrentBusinessDataScope()
                             }
@@ -5040,7 +5049,7 @@ class DefaultInventoryRepository(
                         }
                     }
                     var markerProof = OrdinaryMarkerProof.NOT_EVALUATED
-                    if (skippedDirty == 0 && (!localReceiptProved ||
+                    if (skippedDirty == 0 && !ordinaryPending && (!localReceiptProved ||
                         markerProofAgainstBaseline(marker, verifiedShopBaseline, watermark)
                             .also { markerProof = it } != OrdinaryMarkerProof.PROVED)) {
                         try {
@@ -5056,7 +5065,8 @@ class DefaultInventoryRepository(
                                 if (pending > 0) throw OrdinaryShopSyncDeferred(pending)
                                 recordShopSyncRecoveryRequiredWithoutEvent(
                                     ownerUserId = ownerUserId, storeScope = storeScope, shopId = shopId,
-                                    deviceId = deviceId, reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
+                                    deviceId = deviceId, reason = if (advancedTooLarge) SyncEventApplyStatusReasons.DRAIN_LIMIT_REACHED
+                                        else SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED
                                 )
                             }
                             // The journal transaction committed; deferred/stale attempts stay silent.
@@ -5068,6 +5078,7 @@ class DefaultInventoryRepository(
                                 "markerError=${markerError.wireValue} localError=${localError.wireValue}")
                             gapDetected = true
                             manualFullSyncRequired = true
+                            tooLarge = tooLarge || advancedTooLarge
                         } catch (deferred: OrdinaryShopSyncDeferred) {
                             skippedDirty += deferred.pendingCount
                         }
@@ -5090,6 +5101,7 @@ class DefaultInventoryRepository(
             tooLarge = tooLarge,
             gapDetected = gapDetected,
             manualFullSyncRequired = manualFullSyncRequired,
+            ordinaryPending = ordinaryPending,
             skippedProtectedLocalCommit = skippedProtectedLocalCommit,
             remoteAppliedProductIds = remoteAppliedProductIds
         )
@@ -6173,6 +6185,21 @@ class DefaultInventoryRepository(
     }
 
     /** Same short-circuit order as the original Boolean proof; no additional reads. */
+    private fun markerIsOrdinaryAdvanceFrom(
+        marker: ShopSyncConvergenceMarker?, baseline: ShopSyncRecoveryCheckpoint, watermark: Long
+    ): Boolean {
+        if (marker == null || marker.schemaVersion != "shop-sync-convergence-marker-v1" || marker.status != "ready" ||
+            marker.shopId != baseline.shopId || marker.scope != baseline.scope ||
+            marker.syncEvents.verifiedBaselineId != watermark.toString() || !marker.hasCompleteOrdinaryAdvanceScan()) return false
+        val maximum = runCatching { parseShopSyncMaxEventId(marker.syncEvents.maxId) }.getOrNull() ?: return false
+        if (maximum <= watermark || marker.syncEvents.domainMaxIds.keys != baseline.syncEvents.domainMaxIds.keys) return false
+        return marker.syncEvents.domainMaxIds.all { (domain, value) ->
+            val current = runCatching { parseShopSyncMaxEventId(value) }.getOrNull()
+            val previous = runCatching { parseShopSyncMaxEventId(baseline.syncEvents.domainMaxIds.getValue(domain)) }.getOrNull()
+            current != null && previous != null && current in previous..maximum
+        }
+    }
+
     private fun markerProofAgainstBaseline(
         marker: ShopSyncConvergenceMarker?,
         baseline: ShopSyncRecoveryCheckpoint?,

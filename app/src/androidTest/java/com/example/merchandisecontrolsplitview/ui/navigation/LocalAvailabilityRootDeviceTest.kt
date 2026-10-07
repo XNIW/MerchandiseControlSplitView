@@ -66,6 +66,120 @@ class LocalAvailabilityRootDeviceTest {
         ShopSyncRecoveryTestHooks.reset()
     }
 
+    @Test fun ordinaryEventDrainRecoveryKeepsActualRootDraftAndSaveAvailable() =
+        ordinaryRecoveryKeepsActualRootAvailable(push = false)
+
+    @Test fun ordinaryCatalogPushRecoveryKeepsActualRootDraftAndSaveAvailable() =
+        ordinaryRecoveryKeepsActualRootAvailable(push = true)
+
+    private fun ordinaryRecoveryKeepsActualRootAvailable(push: Boolean) {
+        context.deleteDatabase(DB_NAME)
+        val first = openDatabase().also { database = it }
+        val empty = Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote()
+        runBlocking {
+            val initial = DefaultInventoryRepository(first)
+            first.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+            first.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+            assertTrue(coordinator(first, initial, empty).recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+            assertNull(first.syncRecoveryJournalDao().get())
+            val baseline = requireNotNull(first.syncRecoveryBaselineDao().get())
+            validateShopSyncActiveReceipt(first, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+            repeat(30) { i -> initial.addProduct(Product(barcode = "ROOT-%03d".format(i),
+                productName = "Local product %03d".format(i), purchasePrice = 10.0, retailPrice = 20.0)) }
+        }
+        first.close()
+        val db = openDatabase().also { database = it }
+        val tracker = CatalogSyncStateTracker(runBlocking { DefaultInventoryRepository(db).resolveBusinessDataScope(ownerScope()) })
+        assertTrue(tracker.businessDataScopeState.value.allowsCloudSync)
+        tracker.updateNetworkAvailability(true)
+        val ordinary = object : ShopSyncReadRemoteDataSource by empty {
+            override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> =
+                empty.checkpoint(context).map { it.copy(syncEvents = it.syncEvents.copy(requiresFullRecovery = true)) }
+        }
+        val repository = DefaultInventoryRepository(db, tracker, ordinary)
+        val entered = CompletableDeferred<Unit>()
+        val held = object : ShopSyncReadRemoteDataSource by empty {
+            override suspend fun recoveryPage(context: ShopSyncRpcContext, domain: ShopSyncRowDomain,
+                afterId: String?, limit: Int): Result<ShopSyncRecoveryPage> {
+                if (domain == ShopSyncRowDomain.PRODUCTS) { entered.complete(Unit); release.await() }
+                return empty.recoveryPage(context, domain, afterId, limit)
+            }
+        }
+        val events = object : SyncEventRemoteDataSource {
+            override val isConfigured = true
+            override suspend fun checkCapabilities(ownerUserId: String) =
+                Result.success(SyncEventRemoteCapabilities(true, true, true))
+            override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams) = Result.success(
+                SyncEventRemoteRow(id = 43L, ownerUserId = OWNER, shopId = SHOP, storeId = params.storeId,
+                    domain = params.domain, eventType = params.eventType, sourceDeviceId = params.sourceDeviceId,
+                    clientEventId = params.clientEventId, changedCount = params.changedCount,
+                    entityIds = params.entityIds, createdAt = "2026-07-21T12:00:00Z"))
+            override suspend fun fetchSyncEventsAfter(ownerUserId: String, storeId: String?, afterId: Long, limit: Long) =
+                Result.success(emptyList<SyncEventRemoteRow>())
+        }
+        val device = object : ShopDeviceRegistrationRemote {
+            override val isConfigured = true
+            override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> =
+                error("already registered device expected")
+            override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> =
+                error("scoped device check expected")
+            override suspend fun shopDeviceStatusForShop(shopId: String, reason: String): Result<ShopDeviceAuthorizationSnapshot> {
+                assertEquals(SHOP, shopId)
+                return Result.success(ShopDeviceAuthorizationSnapshot("active", "success", true,
+                    "2026-07-21T11:00:00Z", "2026-07-21T11:00:00Z", "active", "allow", 1L))
+            }
+        }
+        var recovery: Deferred<ShopSyncRecoveryResult>? = null
+        auto = CatalogAutoSyncCoordinator(repository, RootCatalogRemote(), RootPriceRemote(),
+            syncEventRemote = events,
+            deviceAuthorization = ShopDeviceAuthorizationRepository(device, businessDataScopeRuntimeGuard = tracker),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedIn(OWNER, "root@example.invalid")),
+            selectedShopProvider = ::shop, syncStateTracker = tracker, scope = scope, debounceMs = Long.MAX_VALUE,
+            onRecoveryRequired = { recovery = scope.async { coordinator(db, repository, held, tracker).recover(OWNER, shop(), ownerScope()) } })
+        lateinit var databaseVM: DatabaseViewModel
+        lateinit var excelVM: ExcelViewModel
+        compose.runOnUiThread {
+            databaseVM = DatabaseViewModel(app, repository); store.put("database", databaseVM)
+            excelVM = ExcelViewModel(app, repository); store.put("excel", excelVM)
+        }
+        compose.setContent {
+            val business by tracker.businessDataScopeState.collectAsState()
+            val progress by tracker.state.collectAsState()
+            MerchandiseControlTheme(darkTheme = false) {
+                AppNavGraphContent(app, excelVM, databaseVM, true, AuthState.SignedIn(OWNER, "root@example.invalid"),
+                    progress, ShopContext(OWNER, emptyList(), shop(), syncAllowed = true, localAccessAllowed = true), business)
+            }
+        }
+        compose.onNodeWithTag("root-tab-databaseScreen").performClick()
+        compose.onNodeWithTag("database-search").performTextReplacement("ROOT-")
+        compose.onNodeWithTag("database-product-list").performScrollToNode(hasText("ROOT-024", substring = true))
+        val beforeScroll = scrollValue()
+        compose.onNodeWithText("ROOT-024", substring = true).performClick()
+        compose.onNodeWithTag("product-editor-name").performScrollTo().performClick().performTextReplacement("Draft across ordinary recovery")
+        try {
+            runBlocking {
+                if (push) auto!!.runPushCycle("local_commit") else auto!!.runSyncEventDrainCycle("root_held_recovery")
+                withTimeout(15_000) { entered.await() }
+            }
+            assertNotNull(runBlocking { db.syncRecoveryJournalDao().get() })
+            assertFalse(requireNotNull(recovery).isCompleted)
+            compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
+            compose.onNodeWithTag("root-tab-databaseScreen").assertIsSelected().assertIsEnabled()
+            compose.onNodeWithText("Draft across ordinary recovery").assertExists()
+            compose.onNodeWithTag("product-editor-name").assertIsFocused()
+            assertEquals("ROOT-", databaseVM.filter.value)
+            assertEquals(beforeScroll, scrollValue(), 0f)
+            compose.onNodeWithTag("product-editor-save").assertIsEnabled().performClick()
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("task141.edit.dialog-root").fetchSemanticsNodes().isEmpty() }
+            assertEquals("Draft across ordinary recovery", runBlocking { repository.findProductByBarcode("ROOT-024") }?.productName)
+            assertFalse(release.isCompleted)
+        } finally {
+            recovery?.cancel()
+            release.complete(Unit)
+            runBlocking { recovery?.join() }
+        }
+    }
+
     @Test fun actualEmptyFirstBootstrapShellIsNavigableBeforeRecoveryRelease() {
         clearEvidence("android-root-empty-held-options.png","android-root-empty-activated.png")
         context.deleteDatabase(DB_NAME)
