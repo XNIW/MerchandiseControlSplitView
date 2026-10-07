@@ -999,6 +999,10 @@ class CatalogSyncViewModel(
     private fun currentSelectedShop() = shopContextFlow?.value?.selectedShop
 
     private suspend fun applyTrackerOutcome(outcome: CatalogSyncOutcomeState) {
+        if (outcome.summary.syncEventsOrdinaryPending) {
+            if (outcome.summary.priceSyncFailed) lastErrorKind.value = ErrorKind.CatalogOkPricesIncomplete
+            return
+        }
         lastCatalogSyncSummary.value = outcome.summary
         lastSuccessAt.value = System.currentTimeMillis()
         lastErrorKind.value = if (outcome.summary.priceSyncFailed) {
@@ -1032,9 +1036,11 @@ class CatalogSyncViewModel(
         }
     }
 
-    private fun finishSyncProgress(ok: Boolean, startedAt: Long) {
+    private fun finishSyncProgress(ok: Boolean, startedAt: Long, ordinaryPending: Boolean = false) {
         val durationMs = System.currentTimeMillis() - startedAt
-        val finalProgress = if (ok) {
+        val finalProgress = if (ordinaryPending) {
+            CatalogSyncProgressState.idle()
+        } else if (ok) {
             CatalogSyncProgressState.completed()
         } else {
             CatalogSyncProgressState.failed()
@@ -1086,6 +1092,7 @@ class CatalogSyncViewModel(
         source: CatalogSyncFlightOwner,
         summary: CatalogSyncSummary
     ) {
+        if (summary.syncEventsOrdinaryPending) return
         val tracker = syncStateTracker
         if (tracker != null) {
             tracker.publishSummary(ownerUserId, source, summary)
@@ -1317,6 +1324,7 @@ class CatalogSyncViewModel(
             }
             busy.value = true
             val startedAt = startSyncProgress("manual_quick_sync", CatalogSyncStage.PUSH_PRODUCTS)
+            val previousError = lastErrorKind.value
             lastErrorKind.value = null
             var ok = false
             var logSummary: CatalogSyncSummary? = null
@@ -1324,6 +1332,7 @@ class CatalogSyncViewModel(
             var logFailureClassification: SyncErrorClassification? = null
             var logPendingAfter = false
             var recoveryRequired = false
+            var ordinaryPending = false
             var requestRecoveryAfterManualFlight = false
             try {
                 withBusinessDataScopeFlight(auth.userId, selectedShop) {
@@ -1377,20 +1386,21 @@ class CatalogSyncViewModel(
                     onSuccess = { summary ->
                         logSummary = summary
                         recoveryRequired = summary.manualFullSyncRequired
+                        ordinaryPending = summary.syncEventsOrdinaryPending
                         publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
-                        incrementalDetailSurface.value = if (recoveryRequired) {
+                        incrementalDetailSurface.value = if (recoveryRequired || ordinaryPending) {
                             CatalogIncrementalDetailSurface.OTHER
                         } else {
                             CatalogIncrementalDetailSurface.AFTER_QUICK_SUCCESS
                         }
-                        val err = if (summary.priceSyncFailed) ErrorKind.CatalogOkPricesIncomplete else null
+                        val err = if (summary.priceSyncFailed) ErrorKind.CatalogOkPricesIncomplete else if (ordinaryPending) previousError else null
                         lastErrorKind.value = err
                         logErr = err
                         val pendingAfter = repository.hasCatalogCloudPendingWorkInclusive()
                         pendingHint.value = pendingAfter
                         logPendingAfter = pendingAfter
                         ok = err == null &&
-                            !recoveryRequired &&
+                            !recoveryRequired && !ordinaryPending &&
                             summary.syncEventsSkippedDirtyLocal == 0
                     },
                     onFailure = { e ->
@@ -1407,7 +1417,7 @@ class CatalogSyncViewModel(
                 )
             } finally {
                 busy.value = false
-                finishSyncProgress(ok, startedAt)
+                finishSyncProgress(ok, startedAt, ordinaryPending && !recoveryRequired && logSummary?.priceSyncFailed != true)
                 Log.i(
                     TAG,
                     "quick_sync ok=$ok errKind=$logErr errCategory=${logFailureClassification?.category} " +

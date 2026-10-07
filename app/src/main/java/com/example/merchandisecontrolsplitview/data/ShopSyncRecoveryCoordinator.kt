@@ -2037,7 +2037,7 @@ internal suspend fun validatePhysicalSnapshot(
                     limit = pageSize
                 )
             }
-            val physical = readPhysicalPage(db, domain, afterId, pageSize, activeStoreHistory,
+            val physical = readPhysicalPage(db, generationId, domain, afterId, pageSize, activeStoreHistory,
                 localOverlay, localAcknowledgements)
             if (physical.size != expected.size) {
                 throw ShopSyncContractException(
@@ -2071,7 +2071,7 @@ internal suspend fun validatePhysicalSnapshot(
 }
 
 /** Exempts only durable same-scope local intent; the complete canonical remote ledger remains unchanged. */
-private fun overlayPendingPredicate(domain: ShopSyncRowDomain, remoteId: String): String = when (domain) {
+private fun overlayPendingPredicate(domain: ShopSyncRowDomain, remoteId: String, generationSql: String): String = when (domain) {
     ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS -> {
         val (table, entity) = when (domain) {
             ShopSyncRowDomain.SUPPLIERS -> "supplier_remote_refs" to "SUPPLIER"
@@ -2086,7 +2086,7 @@ private fun overlayPendingPredicate(domain: ShopSyncRowDomain, remoteId: String)
         "WHERE lr.remoteId=$remoteId AND (lr.lastRemoteAppliedAt IS NULL OR lr.localChangeRevision<>lr.lastSyncedLocalRevision OR lh.syncStatus<>'SYNCED_SUCCESSFULLY'))"
     ShopSyncRowDomain.PRICES -> "EXISTS (SELECT 1 FROM sync_recovery_manifest lp JOIN pending_catalog_tombstones lt " +
         "ON lt.entityType='PRODUCT' AND lt.remoteId=substr(lp.versionLine, instr(substr(lp.versionLine,instr(lp.versionLine,char(31))+1),char(31))+instr(lp.versionLine,char(31))+1,36) " +
-        "WHERE lp.domain='prices' AND lp.remoteId=$remoteId)"
+        "WHERE lp.generationId=$generationSql AND lp.domain='prices' AND lp.remoteId=$remoteId)"
     ShopSyncRowDomain.IMAGES -> "0"
 }
 
@@ -2104,7 +2104,7 @@ private suspend fun cleanOverlayManifestPage(
         if (rows.isEmpty()) break
         val placeholders = rows.joinToString(",") { "?" }
         val exempt = db.openHelper.readableDatabase.query(
-            "SELECT m.remoteId FROM sync_recovery_manifest m WHERE m.generationId=? AND m.domain=? AND m.remoteId IN ($placeholders) AND (${overlayPendingPredicate(domain, "m.remoteId")})",
+            "SELECT m.remoteId FROM sync_recovery_manifest m WHERE m.generationId=? AND m.domain=? AND m.remoteId IN ($placeholders) AND (${overlayPendingPredicate(domain, "m.remoteId", "m.generationId")})",
             (listOf(generationId, domain.wireValue) + rows.map { it.remoteId }).toTypedArray()
         ).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
         result += rows.filter { it.remoteId !in exempt }
@@ -2132,7 +2132,7 @@ private suspend fun localAcknowledgedManifestPage(
         if (merged.isEmpty()) break
         val exempt = db.openHelper.readableDatabase.query(
             "SELECT m.remoteId FROM sync_recovery_manifest m WHERE m.generationId=? AND m.domain IN (?,?) " +
-                "AND m.remoteId IN (${merged.joinToString(",") { "?" }}) AND (${overlayPendingPredicate(domain,"m.remoteId")})",
+                "AND m.remoteId IN (${merged.joinToString(",") { "?" }}) AND (${overlayPendingPredicate(domain, "m.remoteId", "m.generationId")})",
             (listOf(generationId,domain.wireValue,LOCAL_ACK_BODY_PREFIX+domain.wireValue)+merged.map { it.remoteId }).toTypedArray()
         ).use { c -> buildSet { while(c.moveToNext()) add(c.getString(0)) } }
         result += merged.filter { it.remoteId !in exempt }
@@ -2259,6 +2259,7 @@ private suspend fun materializablePriceCount(db: AppDatabase, generationId: Stri
 
 private suspend fun readPhysicalPage(
     db: AppDatabase,
+    generationId: String,
     domain: ShopSyncRowDomain,
     afterId: String?,
     limit: Int,
@@ -2333,11 +2334,11 @@ private suspend fun readPhysicalPage(
         ShopSyncRowDomain.HISTORY, ShopSyncRowDomain.IMAGES ->
             throw ShopSyncContractException("recovery_physical_domain_invalid")
     }
-    val args: Array<out Any> = if (afterId == null) {
-        arrayOf<Any>(limit)
-    } else {
-        arrayOf<Any>(afterId, limit)
-    }
+    val args = buildList<Any> {
+        if (afterId != null) add(afterId)
+        if (localOverlay && domain == ShopSyncRowDomain.PRICES) add(generationId)
+        add(limit)
+    }.toTypedArray()
     val remoteAlias = if (domain == ShopSyncRowDomain.PRICES) "pr" else "r"
     val scopedSql = buildString {
         append(sql)
@@ -2346,7 +2347,7 @@ private suspend fun readPhysicalPage(
         if (localOverlay && domain != ShopSyncRowDomain.PRICES) {
             predicates += "r.lastRemoteAppliedAt IS NOT NULL AND r.localChangeRevision=r.lastSyncedLocalRevision"
         }
-        if (localOverlay) predicates += "NOT (${overlayPendingPredicate(domain, "$remoteAlias.remoteId")})"
+        if (localOverlay) predicates += "NOT (${overlayPendingPredicate(domain, "$remoteAlias.remoteId", "?")})"
         if (predicates.isNotEmpty()) append(" WHERE ${predicates.joinToString(" AND ")}")
         append(" ORDER BY $remoteAlias.remoteId LIMIT ?")
     }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
@@ -145,6 +146,32 @@ internal class Task126BusinessDataScopeFlightGate(
         synchronized(lock) {
             !transitioning && activeFlights.isEmpty() && generation == stamp.generation
         }
+
+    /** Requalify the same local generation without cancelling its admitted local writers.
+     * Real scope changes/activation still use the strong transition below. Both epochs
+     * fence authority ABA while the repository read suspends.
+     */
+    internal suspend fun publishIfScopeUnchanged(
+        stillAuthorized: () -> Boolean,
+        resolve: suspend (Task126BusinessDataScopeState) -> Task126BusinessDataScopeState,
+        publish: (Task126BusinessDataScopeState) -> Unit
+    ): Boolean {
+        check(currentCoroutineContext()[Task126BusinessDataScopeLeaseContext] == null)
+        return transitionMutex.withLock {
+            val captured = synchronized(lock) { Triple(generation, localGeneration, state) }
+            if (!stillAuthorized()) return@withLock false
+            val next = resolve(captured.third)
+            currentCoroutineContext().ensureActive()
+            synchronized(lock) {
+                if (generation != captured.first || localGeneration != captured.second ||
+                    state != captured.third || !stillAuthorized()) false
+                else {
+                    publish(next)
+                    true
+                }
+            }
+        }
+    }
 
     fun updateState(next: Task126BusinessDataScopeState) {
         val toCancel = synchronized(lock) {

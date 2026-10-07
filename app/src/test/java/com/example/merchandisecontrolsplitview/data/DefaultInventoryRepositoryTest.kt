@@ -7335,6 +7335,46 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun recoveryRequiredLegacyHistoryWithoutJournalStillBlocksCloudAdmission() = runTest {
+        val owner = "00000000-0000-4000-8000-000000001147"
+        val sessionId = "00000000-0000-4000-8000-000000001148"
+        val scope = task126ActiveOwnerStoreScope(owner, null)
+        db.businessDataScopeBindingDao().upsert(BusinessDataScopeBinding.from(scope, 1L))
+        repository.addProduct(Product(barcode = "legacy-local", productName = "Existing local product"))
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(scope))
+        tracker.updateNetworkAvailability(true)
+        assertEquals(Task126BusinessDataScopeStatus.READY, tracker.businessDataScopeState.value.status)
+        repository = DefaultInventoryRepository(db, tracker)
+        val events = FakeSyncEventRemote().apply {
+            externalEvents += SyncEventRemoteRow(id = 1144L, ownerUserId = owner,
+                domain = SyncEventDomains.HISTORY, eventType = SyncEventTypes.HISTORY_CHANGED,
+                sourceDeviceId = "other-device", changedCount = 1,
+                entityIds = SyncEventEntityIds(sessionIds = listOf(sessionId)), createdAt = "2026-07-06T10:00:00Z")
+        }
+        val sessions = FakeSessionBackupRemote023(records = listOf(SharedSheetSessionRecord(
+            remoteId = sessionId, payloadVersion = 99, displayName = "Unsupported", timestamp = "2026-07-06 10:00:00",
+            supplier = "Supplier", category = "Category", isManualEntry = false,
+            data = listOf(listOf("barcode", "quantity")), ownerUserId = owner, updatedAt = "2026-07-06T10:00:00Z")))
+        val triggers = mutableListOf<String>()
+        val auto = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+            syncEventRemote = events, sessionRemote = sessions,
+            authFlow = kotlinx.coroutines.flow.MutableStateFlow<AuthState>(AuthState.SignedIn(owner, null)),
+            syncStateTracker = tracker, scope = backgroundScope, debounceMs = Long.MAX_VALUE,
+            onRecoveryRequired = { triggers += it })
+        try {
+            auto.runPushCycle("local_commit")
+            assertEquals(listOf("catalog_push"), triggers)
+            assertEquals(SyncEventApplyStatusReasons.UNSUPPORTED_PAYLOAD_VERSION,
+                db.syncEventApplyStatusDao().get(owner, "", 1144L)?.reason)
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertTrue(requireNotNull(tracker.lastOutcome.value).summary.manualFullSyncRequired)
+            assertEquals(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, tracker.businessDataScopeState.value.status)
+            assertEquals("sync_recovery_required", tracker.businessDataScopeState.value.errorCode)
+            assertFalse(tracker.allowsBusinessDataScope(owner, null))
+        } finally { auto.shutdown() }
+    }
+
+    @Test
     fun `139 drain blocks unsupported targeted history payload without advancing watermark`() =
         runTest {
             val owner = "00000000-0000-4000-8000-000000001147"

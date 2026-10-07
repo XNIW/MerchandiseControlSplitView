@@ -229,6 +229,8 @@ data class CatalogSyncSummary(
     val remoteUpdatesApplied: Int = 0,
     val remoteHistoryUpdatesApplied: Int = 0,
     val manualFullSyncRequired: Boolean = false,
+    /** A is proved, but a later remote window remains. Not a no-work receipt or sync success. */
+    val syncEventsOrdinaryPending: Boolean = false,
     /** TASK-114: righe attive nel bundle remoto dell'ultimo full catalog pull. */
     val remoteActiveSuppliers: Int = 0,
     val remoteActiveCategories: Int = 0,

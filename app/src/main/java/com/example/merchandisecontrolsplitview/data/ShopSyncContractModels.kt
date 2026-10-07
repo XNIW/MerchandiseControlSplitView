@@ -177,7 +177,12 @@ data class ShopSyncEventCheckpoint(
     val requiresFullRecovery: Boolean = true,
     val domainMaxIds: Map<String, String> = emptyMap(),
     val oldestBlockingId: String? = null,
-    val newestBlockingId: String? = null
+    val newestBlockingId: String? = null,
+    // Optional on old receipts; absence never authorizes an advanced ordinary hint.
+    val inspectionLimit: Int? = null,
+    val inspectedCount: Long? = null,
+    val scanComplete: Boolean? = null,
+    val blockingCount: Long? = null
 )
 
 @Serializable
@@ -403,3 +408,10 @@ class ShopSyncContractException(
     val rpcName: String? = null,
     val missingFields: List<String> = emptyList()
 ) : IllegalStateException(code)
+
+/** A validated suffix hint, never a convergence receipt or authority to publish B. */
+internal fun ShopSyncConvergenceMarker.hasCompleteOrdinaryAdvanceScan(): Boolean =
+    !serverNoWorkEligible && !syncEvents.requiresFullRecovery && integrity.totalViolationCount == 0L &&
+        syncEvents.inspectionLimit == 10_000 && syncEvents.scanComplete == true &&
+        syncEvents.inspectedCount?.let { it in 1L..10_000L } == true &&
+        syncEvents.blockingCount == 0L && syncEvents.oldestBlockingId == null && syncEvents.newestBlockingId == null
