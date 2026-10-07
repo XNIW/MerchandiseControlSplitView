@@ -351,6 +351,10 @@ internal data class ShopSyncRecoveryStageApplyResult(
     val unsupportedRows: Int = 0
 )
 
+/** Internal handoff: a checkpoint-owned store must use the existing fenced event drain. */
+internal class CanonicalCatalogInboundRequired(val outbound: CatalogSyncSummary? = null) :
+    IllegalStateException("canonical_catalog_inbound_required")
+
 class DefaultInventoryRepository(
     private val db: AppDatabase,
     private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
@@ -3281,12 +3285,16 @@ class DefaultInventoryRepository(
             return@withContext Result.failure(IllegalStateException("Session backup remote non configurato"))
         }
         try {
+            db.withTransaction { requireLegacyCatalogInboundAllowed(selectedShop?.shopId) }
             val records = businessScopedRemoteCall {
                 remote.fetchAllSessionsForOwner(selectedShop?.shopId)
             }
                 .getOrElse { return@withContext Result.failure(it) }
             val payloads = records.map { it.toSessionRemotePayload() }
-            val result = applyRemoteSessionPayloadBatch(payloads)
+            val result = db.withTransaction {
+                requireLegacyCatalogInboundAllowed(selectedShop?.shopId)
+                applyRemoteSessionPayloadBatch(payloads)
+            }
             Log.i(
                 "HistorySessionSyncV2",
                 "cycle=pull_apply outcome=ok inserted=${result.inserted} updated=${result.updated} " +
@@ -3393,7 +3401,11 @@ class DefaultInventoryRepository(
         val shopId = CatalogTextCanonicalizer.optionalRemoteId(selectedShop?.shopId)
         val phaseDurationsMs = linkedMapOf<CatalogSyncStage, Long>()
         try {
-            val recoveryCache = CatalogConflictRecoveryCache()
+            val canonicalOwned = try {
+                db.withTransaction { requireLegacyCatalogInboundAllowed(shopId) }
+                false
+            } catch (_: CanonicalCatalogInboundRequired) { true }
+            val recoveryCache = CatalogConflictRecoveryCache(allowRemoteFetch = !canonicalOwned)
             val deferredPrices = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
                 progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
                 drainPendingCatalogTombstones(remote, canonicalOwnerUserId, shopId)
@@ -3404,7 +3416,7 @@ class DefaultInventoryRepository(
                 // il bridge locale al remoteId esistente — altrimenti `ensureXxxRefForPush`
                 // genererebbe UUID nuovi che violano gli UNIQUE parziali `(owner_user_id, lower(name))`
                 // / `(owner_user_id, barcode)` WHERE deleted_at IS NULL → 23505 / HTTP 409.
-                realignCatalogBridgesIfNeeded(remote, recoveryCache, shopId)
+                if (!canonicalOwned) realignCatalogBridgesIfNeeded(remote, recoveryCache, shopId)
                 deferred
             }
             val pushedSuppliers = measureCatalogSyncPhase(CatalogSyncStage.PUSH_SUPPLIERS, phaseDurationsMs) {
@@ -3444,10 +3456,13 @@ class DefaultInventoryRepository(
             var prunedSuppliers = 0
             var prunedCategories = 0
             var prunedProducts = 0
-            var completeCatalogSnapshot = true
+            var completeCatalogSnapshot = false
+            var canonicalInbound: CanonicalCatalogInboundRequired? = null
             val remoteAppliedProductIds = linkedSetOf<Long>()
             measureCatalogSyncPhase(CatalogSyncStage.PULL_CATALOG, phaseDurationsMs) {
-                val counts = pullCatalogFromRemote(remote, progressReporter, shopId)
+                val counts = try { pullCatalogFromRemote(remote, progressReporter, shopId) }
+                catch (required: CanonicalCatalogInboundRequired) { canonicalInbound = required; null }
+                if (counts != null) {
                 pulledSuppliers = counts.suppliers
                 pulledCategories = counts.categories
                 pulledProducts = counts.products
@@ -3460,6 +3475,7 @@ class DefaultInventoryRepository(
                 prunedProducts = counts.prunedProducts
                 completeCatalogSnapshot = counts.completeSnapshot
                 remoteAppliedProductIds += counts.appliedProductIds
+                }
             }
             var pushedPrices = 0
             var pulledPrices = 0
@@ -3469,17 +3485,24 @@ class DefaultInventoryRepository(
             if (priceRemote.isConfigured) {
                 try {
                     measureCatalogSyncPhase(CatalogSyncStage.SYNC_PRICES, phaseDurationsMs) {
-                        progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.SYNC_PRICES_PULL))
-                        val pullOutcome = pullProductPricesFromRemote(
-                            priceRemote = priceRemote,
-                            progressReporter = progressReporter,
-                            useFullRemoteFetch = true,
-                            shopId = shopId
-                        )
-                        pulledPrices = pullOutcome.pulled
-                        skippedPullPrices = pullOutcome.skippedNoLocalProduct
-                        remotePriceRowsEvaluated = pullOutcome.remoteRowsEvaluated
-                        remoteAppliedProductIds += pullOutcome.appliedProductIds
+                        progressReporter.onProgress(CatalogSyncProgressState.running(
+                            if (canonicalInbound == null) CatalogSyncStage.SYNC_PRICES_PULL else CatalogSyncStage.SYNC_PRICES_PUSH))
+                        if (canonicalInbound == null) {
+                            try {
+                                val pullOutcome = pullProductPricesFromRemote(
+                                    priceRemote = priceRemote,
+                                    progressReporter = progressReporter,
+                                    useFullRemoteFetch = true,
+                                    shopId = shopId
+                                )
+                                pulledPrices = pullOutcome.pulled
+                                skippedPullPrices = pullOutcome.skippedNoLocalProduct
+                                remotePriceRowsEvaluated = pullOutcome.remoteRowsEvaluated
+                                remoteAppliedProductIds += pullOutcome.appliedProductIds
+                            } catch (required: CanonicalCatalogInboundRequired) {
+                                canonicalInbound = required
+                            }
+                        }
                         pushedPrices = pushProductPricesToRemote(
                             priceRemote,
                             canonicalOwnerUserId,
@@ -3489,6 +3512,8 @@ class DefaultInventoryRepository(
                     }
                 } catch (e: CancellationException) {
                     throw e
+                } catch (contract: ShopSyncContractException) {
+                    throw contract
                 } catch (t: Throwable) {
                     logSyncTransportFailure("price_sync", t)
                     priceSyncFailed = true
@@ -3500,8 +3525,7 @@ class DefaultInventoryRepository(
                 priceSyncFailed = priceSyncFailed
             )
             notifyRemoteProductCatalogApplied(remoteAppliedProductIds)
-            Result.success(
-                CatalogSyncSummary(
+            val summary = CatalogSyncSummary(
                     pushedSuppliers = pushedSuppliers.count,
                     pushedCategories = pushedCategories.count,
                     pushedProducts = pushedProducts.count,
@@ -3514,7 +3538,7 @@ class DefaultInventoryRepository(
                     skippedProductPricesPullNoProductRef = skippedPullPrices,
                     priceSyncFailed = priceSyncFailed,
                     fullCatalogFetch = completeCatalogSnapshot,
-                    fullPriceFetch = priceRemote.isConfigured,
+                    fullPriceFetch = priceRemote.isConfigured && canonicalInbound == null,
                     remoteProductIdsRequested = remoteProductRowsInBundle,
                     remoteProductsFetched = remoteProductRowsInBundle,
                     remotePriceIdsRequested = remotePriceRowsEvaluated,
@@ -3528,7 +3552,8 @@ class DefaultInventoryRepository(
                     prunedCategories = prunedCategories,
                     prunedProducts = prunedProducts
                 )
-            )
+            if (canonicalInbound != null) throw CanonicalCatalogInboundRequired(summary)
+            Result.success(summary)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -4064,6 +4089,10 @@ class DefaultInventoryRepository(
                     }
                 } catch (e: CancellationException) {
                     throw e
+                } catch (required: CanonicalCatalogInboundRequired) {
+                    throw required
+                } catch (contract: ShopSyncContractException) {
+                    throw contract
                 } catch (t: Throwable) {
                     logSyncTransportFailure("bootstrap_price_pull", t)
                     priceSyncFailed = true
@@ -4151,22 +4180,60 @@ class DefaultInventoryRepository(
         }
     }
 
+    private suspend fun requireLegacyCatalogInboundAllowed(shopId: String?) {
+        requireCurrentBusinessDataScope()
+        val baseline = syncRecoveryBaselineDao.get() ?: return
+        val binding = businessDataScopeBindingDao.get()
+            ?: throw ShopSyncContractException("canonical_catalog_binding_missing")
+        val device = syncEventDeviceStateDao.get()
+            ?: throw ShopSyncContractException("canonical_catalog_device_missing")
+        val lease = coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease
+        if (shopId == null || binding.ownerHash != baseline.ownerHash || binding.storeId != baseline.storeScope ||
+            shopId.lowercase() != baseline.shopId.lowercase() || device.deviceId != baseline.deviceId ||
+            (lease != null && !lease.unmanaged && (lease.boundScope == null ||
+                Task126OwnerStoreGate.validate(binding.toOwnerStoreScope(), lease.boundScope) !=
+                    Task126OwnerStoreGateDecision.Allowed))) {
+            throw ShopSyncContractException("canonical_catalog_scope_mismatch")
+        }
+        val watermark = db.openHelper.readableDatabase.query(
+            "SELECT ownerUserId,lastSyncEventId FROM sync_event_watermarks WHERE storeScope=? LIMIT 2",
+            arrayOf(baseline.storeScope)).use { c ->
+            if (!c.moveToFirst()) throw ShopSyncContractException("canonical_catalog_watermark_missing")
+            val row = SyncEventWatermark(c.getString(0), baseline.storeScope, c.getLong(1))
+            if (c.moveToNext() || task126OwnerHash(row.ownerUserId) != binding.ownerHash)
+                throw ShopSyncContractException("canonical_catalog_watermark_scope_mismatch")
+            row
+        }
+        val checkpoint = shopSyncBaselineForEventDrain(watermark.ownerUserId, baseline.storeScope,
+            shopId, device.deviceId, watermark.lastSyncEventId, baseline, watermark)
+            ?: throw ShopSyncContractException("canonical_catalog_baseline_invalid")
+        validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint)
+        requireCurrentBusinessDataScope()
+        throw CanonicalCatalogInboundRequired()
+    }
+
     private suspend fun pullCatalogFromRemote(
         remote: CatalogRemoteDataSource,
         progressReporter: CatalogSyncProgressReporter,
         shopId: String?
     ): CatalogPullApplyCounts {
         progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.PULL_CATALOG))
+        db.withTransaction { requireLegacyCatalogInboundAllowed(shopId) }
         val fetchStartedAt = System.currentTimeMillis()
         val bundle = businessScopedRemoteCall { remote.fetchCatalog(shopId) }.getOrThrow()
         val fetchMs = System.currentTimeMillis() - fetchStartedAt
         val applyStartedAt = System.currentTimeMillis()
-        val applyCounts = applyCatalogBundleInbound(bundle)
-        val pruneCounts = if (bundle.isCompleteSnapshot) {
-            reconcileLocalCatalogAfterInboundPull(bundle)
-        } else {
-            Log.i(TAG, "catalog_prune skipped reason=scoped_catalog_snapshot")
-            CatalogPruneCounts()
+        val (applyCounts, pruneCounts) = db.withTransaction {
+            // A can be published while fetch is suspended. Never apply or prune across that fence.
+            requireLegacyCatalogInboundAllowed(shopId)
+            val applied = applyCatalogBundleInbound(bundle)
+            val pruned = if (bundle.isCompleteSnapshot) {
+                reconcileLocalCatalogAfterInboundPull(bundle)
+            } else {
+                Log.i(TAG, "catalog_prune skipped reason=scoped_catalog_snapshot")
+                CatalogPruneCounts()
+            }
+            applied to pruned
         }
         val applyMs = System.currentTimeMillis() - applyStartedAt
         val remoteActiveSuppliers = bundle.suppliers.count { it.deletedAt.isNullOrBlank() }
@@ -7101,19 +7168,23 @@ class DefaultInventoryRepository(
         val appliedProductIds = linkedSetOf<Long>()
 
         while (true) {
+            db.withTransaction { requireLegacyCatalogInboundAllowed(shopId) }
             val page = businessScopedRemoteCall {
                 priceRemote.fetchProductPricesPage(lastRemoteId, INVENTORY_REMOTE_PAGE_SIZE, shopId)
             }.getOrThrow()
-            if (page.isEmpty()) break
+            val pageResult = db.withTransaction {
+                requireLegacyCatalogInboundAllowed(shopId)
+                if (page.isEmpty()) null else applyProductPriceRows(
+                    page,
+                    progressReporter,
+                    stage = CatalogSyncStage.SYNC_PRICES_PULL,
+                    processedBefore = remoteRowsEvaluated,
+                    totalRows = null
+                )
+            }
+            if (pageResult == null) break
 
             pageCount++
-            val pageResult = applyProductPriceRows(
-                page,
-                progressReporter,
-                stage = CatalogSyncStage.SYNC_PRICES_PULL,
-                processedBefore = remoteRowsEvaluated,
-                totalRows = null
-            )
             pulled += pageResult.pulled
             skippedNoLocalProduct += pageResult.skippedNoLocalProduct
             remoteRowsEvaluated += pageResult.remoteRowsEvaluated
