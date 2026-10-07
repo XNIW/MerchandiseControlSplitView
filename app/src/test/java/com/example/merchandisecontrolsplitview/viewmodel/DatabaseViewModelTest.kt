@@ -1977,8 +1977,10 @@ class DatabaseViewModelTest {
     @Test
     fun `importProducts ignores double confirm while apply is already running`() = runTest {
         val previewId = preparePreview()
+        val applyEntered = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         coEvery { repository.applyImport(any()) } coAnswers {
+            applyEntered.complete(Unit)
             gate.await()
             ImportApplyResult.Success
         }
@@ -1993,18 +1995,24 @@ class DatabaseViewModelTest {
         }
         advanceUntilIdle()
 
-        viewModel.importProducts(
-            previewId = previewId,
-            newProducts = listOf(sampleProduct(barcode = "66667778", productName = "Second")),
-            updatedProducts = emptyList(),
-            context = app
-        )
-        advanceUntilIdle()
+        try {
+            // applyImport runs on real Dispatchers.IO, outside the test scheduler.
+            applyEntered.await()
+            viewModel.importProducts(
+                previewId = previewId,
+                newProducts = listOf(sampleProduct(barcode = "66667778", productName = "Second")),
+                updatedProducts = emptyList(),
+                context = app
+            )
+            advanceUntilIdle()
 
-        coVerify(exactly = 1) { repository.applyImport(any()) }
-        coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
-        gate.complete(Unit)
+            coVerify(exactly = 1) { repository.applyImport(any()) }
+            coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
+        } finally {
+            gate.complete(Unit)
+        }
         firstApply.await()
+        waitForCondition { viewModel.importFlowState.value == ImportFlowState.Success(previewId) }
         advanceUntilIdle()
     }
 

@@ -208,6 +208,29 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-07 UTC, sincronizzazione reale del test double-confirm
+
+**Stato FIX,non DONE.** La prima CI del supplemento documentale PR20 (`37556423441`,checkout9ed esatto) è FAIL:1176ID=1168PASS/1FAIL/7sameSKIP. UnicoFAIL `DatabaseViewModelTest.importProducts ignores double confirm while apply is already running`,0.063s,riga2004:MockK `applyImport was not called`. Gli altri1175stati e cinque testV2 coincidono con main4b; assemble/lint PASS. Originale XML `8ffb3d7f56ef064d89efda1128f94fc838a4ec930e084ea651b48102671a2248`,verifica `786fed0bc231973ff656f5cc3c99d762f81a477653297bed407d510eb5e38da5`; nessun rerun per ottenere verde.
+
+**File modificati:**
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/DatabaseViewModelTest.kt` — il test attende l'ingresso effettivo nel mock applyImport su IO prima del secondo confirm; gate rilasciato in finally e terminale Success(previewId) atteso con helper/budget esistenti.
+- Questo task — solo la presente voce Execution.
+
+**Causa e fix:** MainDispatcherRule controlla soltanto Main con UnconfinedTestDispatcher; `DatabaseViewModel.importProducts` usa `withContext(Dispatchers.IO)` reale. `advanceUntilIdle` e l'async del metodo void non attestavano l'ingresso del worker. La barriera viene completata dentro coAnswers prima di gate.await; il secondo confirm è così verificato durante l'apply effettivamente iniziato. `applyImport exactly1` e `insertHistoryEntry exactly0`,tutti61ID,gli altri60metodi e il resto del file sono invariati. Nessuna nuova sleep/timeout/dipendenza o modifica alla produzione.
+
+**Check obbligatori:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle assembleDebug | ESEGUITO | Unico comando keyless offline,exit0; app task UP-TO-DATE. APK keyless NON installabile,nessun device toccato. |
+| Lint | ESEGUITO |44warning legacy/0errori,XML fd29c629e5d50ad797407362fbdbff8094fe9ada087b8127120825de81f9ed1c byte-identico al precedente localeV2. |
+| Warning nuovi | ESEGUITO |0warning/errori Kotlin; solo warning JVM CDS preesistente. |
+| Coerenza con planning | ESEGUITO |Correzione CA10 del singolo FAIL concreto,oracoli preservati,produzione e scope invariati. |
+| Criteri di accettazione | ESEGUITO locale / NON ESEGUITO CI finale |61/61PASS,0FAIL/ERROR/SKIP incluso double-confirm; nuova CI exact-SHA da completare prima del merge. |
+
+**Baseline TASK004:** suite JVM/Robolectric DatabaseViewModelTest completa61/61PASS; non test UI. RED ufficiale CI prepatch conservato,GREEN locale singolo senza loop. Receipt `2e30b4aa18ff54c2bfbc95bcbae4ed6f8afbfdfee977280e18180e9f34afeb28`,XMLGREEN `3d579668fc2ea7b36813d51bdf0b46f5bc38f500ad30425cd5c8f188301f9ec3`. Gate01:38:50→01:39:56Z,66.31s,exit0/PGassente/0segnali;289input e governance preservati. Test finaleSHA `e5c34ed3c4b786eb2895aa919ef6aee28599fce7331cbab26b79871f5f068e5e`; entrambi reviewer indipendenti APPROVED_STATIC sul finale,nessun finding bloccante.
+
+**Handoff:** produzione app/build identica4b e APK4c già installato: test/documentazione non richiedono nuovo proper o reinstallazione. La semantica esistente Applying→Error e un'eventuale terza conferma sono distinte dal FAIL osservato; nessuna duplicazione/perdita provata,nessun cambio produttivo inferito. CA07live/CA09/chiusura globale restano aperti. iOS full033 è ora1513PASS/36sameSKIP/0FAIL con16UI PASS; B storico resta NON_REPRODUCED,build/proper/CI/install iOS separati.
+
 ### Esecuzione — 2026-10-07 UTC, CI finale ordinaria, installazione preservativa e concorrenza strumentale
 
 **Stato FIX; non DONE.** Questo supplemento documenta evidenze effettive successive alla PR19; nessuna modifica a Kotlin, risorse, build, logica di recovery o autorità. La PR19 osservativa è integrata normalmente in main `4b4171fc25025ed4952ac482e96dfb46ba559460`; il tree di produzione coincide con il candidato `b20d5d44` verificato. Il checkout primario è aggiornato con fast-forward; tre modifiche preesistenti, configurazione privata, MASTER e index sono preservati.
