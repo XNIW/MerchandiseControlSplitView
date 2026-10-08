@@ -208,6 +208,54 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-08 UTC — banner sync e intestazione Database, RED e fix minimo
+
+**File modificati:**
+- `ui/navigation/NavGraph.kt` — Column stabile con indicatore misurato sopra il Box del NavHost; stessa istanza/callsite della navigazione e stessi innerPadding/bottomBar.
+- `ui/components/CloudSyncIndicator.kt` — soli margini top/end12dp spostati dentro AnimatedVisibility, per non riservare altezza durante hidden/delay.
+- `app/src/androidTest/java/com/example/merchandisecontrolsplitview/ui/navigation/LocalAvailabilityRootDeviceTest.kt` — un solo test additivo `actualBusySyncBannerDoesNotOverlapDatabaseHeaderInFourLocales`; i cinque metodi originali e tutti gli helper sono byte-invariati.
+- Questo task, sola Execution — difetto visuale osservato, intenzione UX e verifiche ancora da eseguire.
+
+**Azioni eseguite:**
+1. Letti MASTER, Task143 attivo/FIX, protocollo e addendum utente dell'8 ottobre. Le quattro schermate reali it/es/zh/en del coordinatore mostrano il banner sopra titolo e azioni import/export; non sono una prova di esecuzione del nuovo test.
+2. Verificato il percorso produttivo: `NavGraph` sovrappone `CloudSyncIndicator` in `TopEnd` al `NavHost`, senza spazio riservato per il `DatabaseRootHeader`. Nessuna modifica di produzione prima del RED effettivo.
+3. Preparata una sola regressione Compose sul root reale: recovery/activation e receipt Room reali tramite fixture esistente, viewport360dp, quattro lingue e fontScale1.0/1.6. Il test attende la visibilità del banner, misura intersezioni con titolo e due target cliccabili, raccoglie tutti gli otto casi e conserva query/tab; nessun grant locale fabbricato o backend reale.
+4. **UI/UX intenzionale inizialmente proposta e applicata solo dopo RED A02:** riservare spazio al banner nel layout senza ricreare il NavHost al cambio di stato, così da lasciare leggibili e utilizzabili titolo e azioni preservando tab, ricerca, bozza e focus. Il root eseguirà RED e successivi gate sul solo AVD sintetico isolato5590; primaria5554 intatta da questa lane.
+
+**Tentativo ufficiale A01 — setup fallito, NON RED:** il runner AndroidJUnitRunner del coordinatore ha terminato con status-2 e `IllegalStateException: No ActivityResultRegistryOwner was provided via LocalActivityResultRegistryOwner` in `FilePickerScreen.kt:68`, prima delle misure banner/header. Il contesto localizzato del nuovo test perdeva il lookup dell’Activity host. Corretto esclusivamente quel setup: cattura di `LocalActivityResultRegistryOwner.current` prima del provider localizzato e propagazione esplicita dello stesso owner. Nessun cambiamento produttivo, geometrico o alle asserzioni; cinque test/helper originali invariati. Log originale `android-sync-banner-header-red-device-01/instrumentation.log` preservato; cleanup owner conclusa alle20:10:23UTC, senza accesso alla primaria. La nuova coppia APK e il RED A02 sono ancora da eseguire.
+
+**RED effettivo A02 e patch:** il secondo runner ufficiale termina alle20:14:16.600506UTC con l’assert finale `Busy banner occludes the actual Database header`:24 intersezioni (titolo/import/export in ciascuna delle8 configurazioni). I guard precedenti su query/tab passano. Receipt `android-sync-banner-header-red-device-02/receipt.json` SHA `663b319e76b354af30e4c2064fa362af9d8022e907afa62ce9cd2f9eb5342106`, sorgenti invariati e cleanup AVD/processi qualificata dal coordinatore. **Export visuale parziale:** sei file hanno prefisso PNG ma soltanto cinque sono completi e validati; it1.6 è troncato (15872 byte), es1.0/es1.6 non sono stati recuperati (offline/not found). `visual-export-validation.json` separa questi limiti dalla geometria ufficiale che attraversa tutte le8 configurazioni; nessun claim di QA visuale completa. Questo è il RED del difetto; A01 resta un errore di setup distinto.
+
+Dopo il RED, applicata la sola correzione layout in due file: Column sempre presente, banner primo slot e Box del NavHost con peso1 nello spazio restante. Il NavHost e tutto il suo body sono byte-invariati; non è introdotta alcuna key/branch per ricrearlo, né stato di altezza o callback onSizeChanged. I margini del banner vivono nel contenuto animato: durante fade-out lo spazio resta riservato, poi torna a zero; delay700/800ms, fade150/200ms, testo/status e bottomPadding invariati. Test finale SHA `7c7c8b54e7996abf62da510288c072c40c32da86fc52b429daa01323c8a891a4` identico al RED. GREEN e review del delta stabile ancora da eseguire.
+
+**GREEN geometrico e nuovo rilievo visuale sullo stesso banner:** la classe ufficiale6 metodi passa alle20:25:32.248465UTC, receipt `android-sync-banner-header-green-device-01/receipt.json` SHA `7c97ea2d136b01eda476b5c6e62f24f2869f51b12eaee322f08f3d23a230da77`; sorgente invariato e cleanup owner qualificato. Tutti8 PNG sono completi e validati (`visual-export-validation.json` SHA `6ca446ced4633abdf76b09154d3f5be2ea12704c2eaa4fe44ecb8de7907bf23f`). L'occlusione dell'header è risolta. La lettura dei quattro PNG font1.6 rileva però taglio del dettaglio LocalReady e prima lettera stage spagnolo visivamente assente; font1.0 completo. Le risorse contengono le frasi intere; detail è limitato a maxLines1. La causa precisa del taglio iniziale spagnolo resta da misurare, non dedotta dal solo raster.
+
+Su richiesta del coordinatore, aggiunto soltanto al medesimo nuovo metodo un oracolo TextLayoutResult per stage/detail in tutte8 configurazioni: nessun hasVisualOverflow e rettangolo del testo non ritagliato contenuto nel banner. Tutte24 verifiche geometriche/query/tab e i5 test/helper originali sono preservati. Questo nuovo RED è motivato dalla review visuale concreta; non è un rerun della stessa verifica superata. Produzione ferma sul fix geometrico, nuova correzione testo NON applicata prima del RED. Le etichette tab a font grande preesistenti restano un rilievo separato fuori da questo delta.
+
+**RED testo effettivo e correzione minima:** il runner ufficiale successivo fallisce nell'assert finale `Busy banner text must be complete and contained`, dopo il PASS dell'oracolo geometrico:15 overflow stage/detail nelle8 configurazioni, dettagli width/height nel log. Il risultato include overflow misurati anche a font1.0 che la lettura visiva precedente non aveva rilevato. Receipt `android-sync-banner-text-red-device-01/receipt.json` SHA `6a144294e1420807c8222285c6f4e8b2f59408c82dada3d5469406dde9681c1b`, release20:33:52.680334UTC, sorgenti invariati e cleanup owner conclusa. Gli8 PNG sono stati recuperati; qualificazione visuale finale distinta dal RED geometrico/testo.
+
+Solo dopo questo RED, `CloudSyncIndicator` vincola la Column al resto della Row dopo icona/spazio, assegna ai due Text la larghezza disponibile e rimuove i limiti maxLines1/2 per consentire il wrapping completo del copy. Non cambiano testi, stile/font, stato, API, ritardi o animazioni. NavGraph resta quello del GREEN geometrico. Test SHA `ff838b1370b1d34639262b319b62a059742a28f2b322c1105fd2b1c85e8e8556` immutato; GREEN testo, verifica visuale finale e review C sono ancora pendenti. Le etichette dei tab restano separate e non modificate.
+
+**Risultati finali locali del banner — 2026-10-08 UTC:** il gate canonico sul sorgente finale termina exit0, source unchanged, dalle20:41:03.828298 alle20:43:59.119005UTC, gruppo91575 assente e nessun segnale/timeout. Receipt `android-sync-banner-text-final-gates-01/receipt.json` SHA `1d6e3cf4eab53bccc90f0ca1c977b3f68fc05ff7fec368c8acee469e103de445`:76 XML,1244 casi unici =1237 PASS+7 SKIP preesistenti,0 FAIL/ERROR; ID/stati e motivi skip esatti. Build/lint/androidTest compile passano;44 warning lint/0 errori, nessuna firma nuova/rimossa, nessun diagnostico compiler nuovo. Coppia KEYLESS app `c3634e4d`/test `a913d554` del gate sintetico, non ProperTEST e nessuna nuova installazione primaria da questa lane.
+
+La classe Compose completa6 metodi passa sul solo AVD posseduto isolato5584, dalle20:44:33.272467 alle20:46:24.521891UTC; cleanup AVD/processi conclusa e sorgente preservato. Receipt `android-sync-banner-text-green-device-01/receipt.json` SHA `1b5cc00f9289ab6a1573b889c0477b19142b51da478ec2bd8cad6cb16f8e1cf1`. Il test finale `ff838b13` e tutti5 test/helper originali restano invariati rispetto al RED testo: geometria e completezza/contenimento dei due testi passano nelle8 configurazioni.
+
+Otto PNG completi CRC/raster (`visual-export-validation.json` SHA `ea69fcfda96ccc4a98eea81f508fe4673a6cf41677b16389a16c702458a37419`), tutti visionati dal root. Il primo readback della vista ridimensionata di ES1.6 era errato: l'originale corrente, hash `23dcaa4112019af3465eea1589f75651103ec7c46077d0b962b4e2192ce38a05`, mostra la A iniziale e il copy completi. Adjudication `visual-adjudication-original-resolution.json` SHA `3ef3e1679d6b4bb3160fec21e8ce2d2b2b9c6891a4ffc3396c96927760cba869` conserva la review errata `14e0dc17` come storica e qualifica **PASS visuale del solo banner in tutte8 le configurazioni**. Nessuna nuova modifica/oracolo/rerun per quel falso allarme; CircleShape invariato. Il coordinatore C ha approvato separatamente i delta geometrico e testo. I limiti visuali preesistenti delle etichette tab restano un residuo UX globale separato, non nascosto né corretto in questo batch.
+
+**Check obbligatori:**
+
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | ESEGUITO | Gate canonico finale exit0, assembleDebug e androidTest compile; coppia KEYLESS sintetica qualificata separatamente da ProperTEST. |
+| Lint | ESEGUITO | 44 warning/0 errori, nessuna firma nuova/rimossa rispetto alla baseline effettiva. |
+| Warning nuovi | ESEGUITO | Nessun diagnostico compiler nuovo; nessuna suppression/dipendenza aggiunta. |
+| Coerenza planning | ESEGUITO | CA06/CA10 e addendum UX; due file layout, un test additivo e questo log, RED→fix minimo senza cambi business/API. |
+| Criteri interessati | ESEGUITO locale / NON ESEGUITO globale | Full1244 e Compose6 PASS/7 skip JVM invariati;8 PNG banner PASS. Non equivale ad accettazione autenticata/cross-platform né chiude i residui UX globali/iOS. |
+
+**Baseline TASK004:** suite JVM/Robolectric completa finale, comprese repository, DatabaseViewModel, ExcelViewModel, import/export/history:1244 casi,1237 PASS e7 SKIP opt-in preesistenti con motivi invariati, nessun harness sospeso attivato. Separatamente i6 test Compose reali sul dispositivo isolato; nessuna equivalenza con backend/autenticazione primaria.
+
+**Incertezze / Handoff:** geometria, wrapping e visuale del banner verificati sul sorgente finale; recensioni C approvate. Nessuna produzione o test modificata dopo i gate. Restano separati etichette tab preesistenti, QA globale, accettazione autenticata/cross-platform e lane iOS. Stato FIX, non DONE; root integra selettivamente i4 file e gestisce CI/ProperTEST/primaria. MASTER, Planning e altri log invariati.
+
 ### Esecuzione — 2026-10-08 UTC — contratto V6 e correzione bounded degli intent storici
 
 **Stato FIX, non DONE.** Il contratto deployed acquisito read-only rifiuta shop più legacy store, metadata producer non consentiti, chiavi di altri domini anche vuote e prezzi senza l'esatto insieme dei parent. Le nuove prove usano repository Room, typed ACK, wrapper DeviceGuarded e adapter Supabase reali; nessun backend o dato primario è modificato.
@@ -1228,6 +1276,18 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Fix — 2026-10-08 UTC — verifica finale del banner
+
+Chiuso localmente il batch geometria/testo: RED24 intersezioni→GREEN, poi RED15 overflow→GREEN6 e8 PNG validi/visione originale PASS. Gate finale1244=1237PASS+7sameSKIP,44 lint/0nuovi. Il falso allarme ES1.6 della vista ridimensionata è adjudicato sullo stesso PNG originale, senza patch della forma né rerun. Sorgenti/test finali invariati; review C approvate, task FIX e accettazione globale aperta. Le righe «pendenti» nelle note di preparazione sottostanti descrivono quei momenti storici.
+
+### Fix — 2026-10-08 UTC — testo completo nel banner sync
+
+Dopo il RED additivo effettivo (15 overflow TextLayoutResult su8 configurazioni, geometria header già PASS), Column e Text ricevono la larghezza residua della Row e il copy può andare a capo senza maxLines1/2. Oracolo ff838 invariato; nessun cambio a stato/timing/API o agli altri flussi. Nuovo GREEN e visuale finale pendenti.
+
+### Fix — 2026-10-08 UTC — spazio riservato al banner sync
+
+Dopo il RED Compose A02 (24 intersezioni su8 configurazioni), il banner occupa il proprio spazio misurato sopra un NavHost stabile. Margini dentro AnimatedVisibility; stato/tempi/copy e padding inferiore invariati. Nessun dato, auth, permesso o gate di disponibilità modificato. Oracolo e cinque test originali intatti; build/GREEN6/review ancora pendenti, task FIX.
+
 ### Fix — 2026-10-08 UTC — wire shop V6 e unica correzione storica
 
 Il wire shop normalizza solo l'alias legacy uguale allo shop e gli envelope Android riconosciuti; contraddizioni, metadata sconosciuti e IDs non vuoti fuori dominio restano fail-closed. I parent dei prezzi sono derivati bounded sotto autorità corrente; changed_count conta solo i prezzi. Il fallback realmente unscoped conserva body/opID originali e non richiede parent bridge. Intent storici non vengono divisi o relabelled. L'eccezione5→6 richiede plain PayloadValidation, producer completo, owner/shop/device e baseline/ACK/body same-generation, tutti verificati prima del claim atomico; errore/cancel conserva6 e impedisce un nuovo tentativo. Il tag durabile delle nuove failure V6 le esclude da questa eccezione. Nessuna modifica di max retry ordinario, schema, UI, timeout o guard cloud.
@@ -1465,6 +1525,10 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff — 2026-10-08 UTC — banner sync verificato, writer rilasciato
+
+Delta finale sui soli NavGraph, CloudSyncIndicator, LocalAvailabilityRootDeviceTest e questo Task: NavHost stabile/spazio misurato, wrapping del copy, unico test additivo con cinque originali/helper preservati. Full1244, Compose6,8 PNG e review C qualificati in Execution. Nessun sorgente/test cambiato dopo GREEN; root mantiene proprietà di Git/CI/ProperTEST e input/installazione primaria. Non dichiarati DONE, nuova acceptance autenticata o chiusura dei residui tab/iOS/QA globale.
 
 ### Handoff — 2026-10-08 UTC — candidato V6 in attesa dei gate finali
 

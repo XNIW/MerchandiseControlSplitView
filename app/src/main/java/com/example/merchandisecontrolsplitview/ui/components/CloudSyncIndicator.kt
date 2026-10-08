@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -110,6 +111,8 @@ fun CloudSyncIndicator(
         val indicatorDescription = stringResource(R.string.cloud_sync_indicator_status_cd, stageMessage)
         Surface(
             modifier = Modifier
+                // Keep the margin inside visibility so hidden/delayed state reserves no space.
+                .padding(top = 12.dp, end = 12.dp)
                 .widthIn(max = 300.dp)
                 .semantics { contentDescription = indicatorDescription },
             shape = CircleShape,
@@ -139,19 +142,19 @@ fun CloudSyncIndicator(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = stageMessage,
+                        modifier = Modifier.fillMaxWidth(),
                         style = MaterialTheme.typography.labelMedium,
-                        color = contentColor,
-                        maxLines = 2
+                        color = contentColor
                     )
                     catalogSyncDetailMessage(state)?.let { detail ->
                         Text(
                             text = detail,
+                            modifier = Modifier.fillMaxWidth(),
                             style = MaterialTheme.typography.labelSmall,
-                            color = contentColor,
-                            maxLines = 1
+                            color = contentColor
                         )
                     }
                 }
