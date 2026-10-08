@@ -21,6 +21,7 @@ import com.example.merchandisecontrolsplitview.data.CHECKPOINT_TRACE_VALUE
 import com.example.merchandisecontrolsplitview.data.CHECKPOINT_TRACE_TIMEOUT_MS
 import io.github.jan.supabase.auth.status.SessionStatus
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -157,6 +158,8 @@ class MerchandiseControlApplication : Application() {
     private val businessRecoveryLock = Any()
     private val businessRecoveryExecutionMutex = Mutex()
     private var businessRecoveryJob: Job? = null
+    // Diagnostic-only state: unused, capturing, consumed. Never coordinates business work.
+    private val localThreadSnapshotState = AtomicInteger(0)
     private var checkpointTraceConsumed = false
     private var checkpointTraceReservation: Any? = null
 
@@ -1216,6 +1219,148 @@ class MerchandiseControlApplication : Application() {
             generationStable = generationCurrent, businessGenerationQuiet = quiet,
             recoveryIdle = oneUseAndRecovery.second, scopeMutexIdle = !businessDataScopeMutex.isLocked,
             shopRecoveryIdle = shopIdle, oneUseUnconsumed = oneUseAndRecovery.first)
+    }
+
+    internal enum class LocalThreadSnapshotOutcome {
+        CAPTURED, BLOCKED_RELEASE, BLOCKED_NOT_WARM, BLOCKED_CONFLICT, BLOCKED_TEST_TARGET,
+        BLOCKED_ACTIVE, BLOCKED_USED, UNAVAILABLE
+    }
+
+    /** Memory-only: no auth, database, recovery state, business lock or diagnostic RPC access. */
+    internal suspend fun reportLocalThreadSnapshot(
+        warmForeground: Boolean, isActivityResumed: () -> Boolean, conflictingIntent: Boolean
+    ): LocalThreadSnapshotOutcome {
+        if (!BuildConfig.DEBUG) return LocalThreadSnapshotOutcome.BLOCKED_RELEASE
+        fun report(outcome: LocalThreadSnapshotOutcome): LocalThreadSnapshotOutcome {
+            Log.i("Task143LocalThreads", "outcome=${outcome.name} pid=${android.os.Process.myPid()} " +
+                "uptimeMs=${SystemClock.uptimeMillis()}")
+            return outcome
+        }
+        if (conflictingIntent) return report(LocalThreadSnapshotOutcome.BLOCKED_CONFLICT)
+        if (!warmForeground || !isActivityResumed()) return report(LocalThreadSnapshotOutcome.BLOCKED_NOT_WARM)
+        val targetDigest = MessageDigest.getInstance("SHA-256")
+            .digest(BuildConfig.SUPABASE_URL.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+        if (targetDigest != CHECKPOINT_TRACE_TEST_URL_SHA256) {
+            return report(LocalThreadSnapshotOutcome.BLOCKED_TEST_TARGET)
+        }
+        if (!localThreadSnapshotState.compareAndSet(0, 1)) {
+            return report(if (localThreadSnapshotState.get() == 1) LocalThreadSnapshotOutcome.BLOCKED_ACTIVE
+                else LocalThreadSnapshotOutcome.BLOCKED_USED)
+        }
+        try {
+            return withContext(Dispatchers.Default) {
+                currentCoroutineContext().ensureActive()
+                if (!isActivityResumed()) return@withContext report(LocalThreadSnapshotOutcome.BLOCKED_NOT_WARM)
+                // One acquisition, not an atomic multi-thread snapshot or a debugger suspension.
+                val capturedAt = SystemClock.uptimeMillis()
+                val stacks = Thread.getAllStackTraces()
+                formatLocalThreadSnapshot(stacks, localThreadId(android.os.Looper.getMainLooper().thread),
+                    android.os.Process.myPid(), capturedAt).forEach { Log.i("Task143LocalThreads", it) }
+                LocalThreadSnapshotOutcome.CAPTURED
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return report(LocalThreadSnapshotOutcome.UNAVAILABLE)
+        } finally {
+            localThreadSnapshotState.set(2)
+        }
+    }
+
+    // Android 31–35 requires the legacy ID accessor; threadId() is available from API 36.
+    @Suppress("DEPRECATION")
+    private fun localThreadId(thread: Thread): Long =
+        if (android.os.Build.VERSION.SDK_INT >= 36) thread.threadId() else thread.id
+
+    /** Same export predicate used by the reporter; all unlisted symbols and filenames are omitted. */
+    internal fun formatLocalThreadSnapshot(
+        stacks: Map<Thread, Array<StackTraceElement>>, mainThreadId: Long, pid: Int, capturedAtMs: Long
+    ): List<String> {
+        val roots = setOf(
+            "java.lang.Thread", "java.lang.Object", "java.util.concurrent.locks.LockSupport",
+            "java.util.concurrent.locks.AbstractQueuedSynchronizer", "java.util.concurrent.FutureTask",
+            "java.util.concurrent.ThreadPoolExecutor", "android.os.Looper", "android.os.MessageQueue",
+            "android.os.Handler", "android.database.sqlite.SQLiteConnectionPool", "android.database.sqlite.SQLiteSession",
+            "android.database.sqlite.SQLiteConnection", "android.database.sqlite.SQLiteDatabase",
+            "android.database.sqlite.SQLiteQuery", "android.database.sqlite.SQLiteCursor",
+            "androidx.sqlite.db.framework.FrameworkSQLiteDatabase", "androidx.sqlite.db.framework.FrameworkSQLiteStatement",
+            "androidx.room.RoomDatabase", "androidx.room.RoomDatabaseKt", "androidx.room.TransactionExecutor",
+            "androidx.room.util.DBUtil", "androidx.room.util.DBUtilKt", "androidx.room.util.DBUtil__DBUtil_androidKt",
+            "androidx.room.util.DBUtil__DBUtilKt", "androidx.room.coroutines.PassthroughConnectionPool",
+            "androidx.room.coroutines.ConnectionPoolImpl", "androidx.room.coroutines.PooledConnectionImpl",
+            "androidx.room.paging.CommonLimitOffsetImpl", "androidx.room.paging.LimitOffsetPagingSource",
+            "androidx.room.paging.util.RoomPagingUtilKt", "androidx.paging.PageFetcherSnapshot",
+            "androidx.paging.PageFetcher", "androidx.paging.PagingDataPresenter",
+            "kotlinx.coroutines.BlockingCoroutine", "kotlinx.coroutines.EventLoopImplBase",
+            "kotlinx.coroutines.BuildersKt", "kotlinx.coroutines.BuildersKt__Builders_commonKt",
+            "kotlinx.coroutines.BuildersKt__BuildersKt", "kotlinx.coroutines.DispatchedTask",
+            "kotlinx.coroutines.scheduling.CoroutineScheduler", "kotlinx.coroutines.sync.MutexImpl",
+            "kotlinx.coroutines.sync.SemaphoreImpl", "kotlinx.coroutines.CancellableContinuationImpl",
+            "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository",
+            "com.example.merchandisecontrolsplitview.data.ProductDao_Impl",
+            "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinator",
+            "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorKt",
+            "com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel"
+        )
+        val methods = setOf(
+            "wait", "sleep", "park", "parkNanos", "get", "await", "acquire", "acquireSharedInterruptibly",
+            "runWorker", "getTask", "run", "invoke", "invokeSuspend", "resumeWith", "<init>",
+            "waitForConnection", "acquireConnection", "beginTransaction", "beginTransactionUnchecked",
+            "endTransaction", "query", "rawQuery", "rawQueryWithFactory", "execute", "executeForCursorWindow",
+            "nativeExecuteForCursorWindow", "fillWindow", "useConnection", "withTransaction",
+            "withTransactionContext", "startTransactionCoroutine", "compatTransactionCoroutineExecute",
+            "performSuspending", "internalPerform", "queryItemCount", "queryDatabase", "load", "initialLoad",
+            "nonInitialLoad", "joinBlocking", "processNextEvent", "loop", "loopOnce", "next", "nativePollOnce",
+            "lock", "lockSuspend", "dispatchMessage", "drainSyncEventsFromRemote", "drainSyncEventsInternal",
+            "drainVerifiedShopSyncWindow", "ordinaryShopSyncPendingCount", "requireCurrentBusinessDataScope",
+            "getProductsWithDetailsPaged", "getAllWithDetailsPaged", "getAllWithDetailsPagedForProductIds",
+            "convertRows", "validateShopSyncActiveReceipt", "validateShopSyncCanonicalReceipt",
+            "validateManifest", "validateRelationalManifest", "validateStagingDatabase", "validatePhysicalSnapshot",
+            "localAcknowledgedManifestPage", "materializablePriceCount", "readPhysicalPage", "requirePragmaOk", "queryCount"
+        )
+        val lines = mutableListOf<String>()
+        var bytes = 0
+        var emittedThreads = 0
+        var emittedFrames = 0
+        var omittedFrames = 0
+        var truncated = false
+        fun append(line: String): Boolean {
+            val size = line.length + 1 // Export grammar is ASCII; reserve space for the fixed summary.
+            if (bytes + size > 65_536 - 512) { truncated = true; return false }
+            lines += line
+            bytes += size
+            return true
+        }
+        append("stage=BEGIN pid=$pid uptimeMs=$capturedAtMs temporal=PER_THREAD_NOT_ATOMIC " +
+            "suspendedCaller=NOT_GUARANTEED capturedThreads=${stacks.size}")
+        for ((thread, frames) in stacks.entries.sortedBy { localThreadId(it.key) }) {
+            if (emittedThreads >= 128) { truncated = true; break }
+            val kind = when {
+                localThreadId(thread) == mainThreadId -> "MAIN"
+                frames.any { it.className.startsWith("android.database.sqlite.") } -> "SQLITE"
+                frames.any { it.className.startsWith("androidx.room.") } -> "ROOM"
+                frames.any { it.className.startsWith("androidx.paging.") } -> "PAGING"
+                frames.any { it.className.startsWith("kotlinx.coroutines.") } -> "COROUTINE"
+                else -> "OTHER"
+            }
+            if (!append("thread=$emittedThreads threadId=${localThreadId(thread)} state=${thread.state.name} kind=$kind")) break
+            emittedThreads++
+            if (frames.size > 48) truncated = true
+            for ((depth, frame) in frames.take(48).withIndex()) {
+                val className = frame.className
+                val allowedClass = className.length <= 200 && roots.any { root ->
+                    className == root || className.startsWith(root + "$" ) &&
+                        className.substring(root.length + 1).all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '_' || it == '$' }
+                }
+                if (!allowedClass || frame.methodName !in methods) { omittedFrames++; continue }
+                if (!append("frame=${emittedThreads - 1}:$depth class=$className method=${frame.methodName} " +
+                        "line=${frame.lineNumber} native=${frame.isNativeMethod}")) break
+                emittedFrames++
+            }
+        }
+        lines += "outcome=CAPTURED end=true emittedThreads=$emittedThreads emittedFrames=$emittedFrames " +
+            "omittedFrames=$omittedFrames capturedFrames=${stacks.values.sumOf { it.size }} truncated=$truncated capBytes=65536"
+        return lines
     }
 
     internal suspend fun reportCheckpointReadiness(

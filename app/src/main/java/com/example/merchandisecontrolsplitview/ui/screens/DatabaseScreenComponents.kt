@@ -207,8 +207,7 @@ internal fun DatabaseRootHeader(
                     onClick = { onTabSelected(tab) },
                     text = {
                         Text(
-                            text = stringResource(tab.labelRes()),
-                            maxLines = 1
+                            text = stringResource(tab.labelRes())
                         )
                     }
                 )

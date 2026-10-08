@@ -940,6 +940,72 @@ class MerchandiseControlApplicationTest {
         }
     }
 
+    @Test
+    fun `local thread snapshot denial does not query Room or reserve business recovery`() = runBlocking {
+        val queryCount = AtomicInteger()
+        withTraceDatabase(onQuery = { queryCount.incrementAndGet() }) { app, db ->
+            val mutex = privateApplicationField<Mutex>(app, "businessRecoveryExecutionMutex")
+            val owner = Any()
+            assertTrue(mutex.tryLock(owner))
+            try {
+                assertEquals(MerchandiseControlApplication.LocalThreadSnapshotOutcome.BLOCKED_NOT_WARM,
+                    app.reportLocalThreadSnapshot(false, { true }, false))
+                assertEquals(MerchandiseControlApplication.LocalThreadSnapshotOutcome.BLOCKED_CONFLICT,
+                    app.reportLocalThreadSnapshot(true, { true }, true))
+                assertEquals(MerchandiseControlApplication.LocalThreadSnapshotOutcome.BLOCKED_TEST_TARGET,
+                    app.reportLocalThreadSnapshot(true, { true }, false))
+                assertEquals(0, queryCount.get())
+                assertFalse(db.isOpen)
+                assertTrue(mutex.holdsLock(owner))
+                assertFalse(privateApplicationField<Boolean>(app, "checkpointTraceConsumed"))
+                assertNull(privateApplicationField<Any?>(app, "checkpointTraceReservation"))
+                assertEquals(0, privateApplicationField<AtomicInteger>(app, "localThreadSnapshotState").get())
+            } finally { mutex.unlock(owner) }
+        }
+    }
+
+    @Test
+    fun `local thread snapshot exports only technical allowed symbols without names files or unknown payloads`() {
+        val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val thread = Thread("SECRET_THREAD_NAME owner@example.invalid")
+        val frames = arrayOf(
+            StackTraceElement("android.database.sqlite.SQLiteConnectionPool", "waitForConnection", "SECRET_FILE", 42),
+            StackTraceElement("android.database.sqlite.SQLiteConnection", "nativeExecuteForCursorWindow", "SECRET_NATIVE", -2),
+            StackTraceElement("android.database.sqlite.SQLiteConnectionPool", "SECRET_METHOD", "SECRET_FILE", 43),
+            StackTraceElement("android.database.sqlite.SQLiteConnectionPoolSECRET_CLASS", "query", "SECRET_FILE", 44),
+            StackTraceElement("com.example.foreign.SECRET_CLASS", "invokeSuspend", "SECRET_FILE", 45)
+        )
+        val lines = app.formatLocalThreadSnapshot(mapOf(thread to frames), -1, 123, 456)
+        val output = lines.joinToString("\n")
+        assertTrue(output.contains("class=android.database.sqlite.SQLiteConnectionPool method=waitForConnection line=42 native=false"))
+        assertTrue(output.contains("method=nativeExecuteForCursorWindow line=-2 native=true"))
+        assertTrue(output.contains("kind=SQLITE"))
+        assertTrue(output.contains("omittedFrames=3"))
+        assertTrue(output.contains("emittedFrames=2"))
+        assertTrue(output.contains("temporal=PER_THREAD_NOT_ATOMIC"))
+        assertFalse(output.contains("SECRET"))
+        assertFalse(output.contains("owner@example.invalid"))
+        assertTrue(lines.last().contains("outcome=CAPTURED end=true"))
+    }
+
+    @Test
+    fun `local thread snapshot bounds exported bytes thread and frame counts and declares truncation`() {
+        val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val frames = Array(60) {
+            StackTraceElement("com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository",
+                "drainVerifiedShopSyncWindow", "unused", 123)
+        }
+        val stacks = (0 until 130).associate { Thread("UNEXPORTED_$it") to frames }
+        val lines = app.formatLocalThreadSnapshot(stacks, -1, 123, 456)
+        assertTrue(lines.sumOf { it.encodeToByteArray().size + 1 } <= 65_536)
+        assertTrue(lines.count { it.startsWith("thread=") } <= 128)
+        assertTrue(lines.filter { it.startsWith("frame=") }.all { it.substringAfter(':').substringBefore(' ').toInt() < 48 })
+        assertTrue(lines.last().contains("truncated=true"))
+        assertTrue(lines.first().contains("capturedThreads=130"))
+        assertTrue(lines.last().contains("capturedFrames=7800"))
+        assertFalse(lines.any { it.contains("UNEXPORTED") || it.contains("unused") })
+    }
+
     private fun readinessMemoryFixture() = MerchandiseControlApplication.CheckpointReadinessSnapshot(
         MerchandiseControlApplication.CheckpointReadinessOutcome.SNAPSHOT_INCOMPLETE,
         activityWarm = true, activityResumed = true, traceObserverIdle = true,
