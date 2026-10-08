@@ -7077,6 +7077,40 @@ private fun mixedRetainedPriceFixture(): RecoveryFixture {
     )
 }
 
+/** Reuses the real empty recovery/activation path before tests create actual typed ACK bodies. */
+internal suspend fun activateEmptyV6EventRecoveryFixture(
+    context: android.content.Context, db: AppDatabase, owner: String, shop: SelectedShop
+): ShopSyncRecoveryCheckpoint {
+    val device = db.syncEventDeviceStateDao().get()?.deviceId ?: "00000000-0000-4000-8000-000000000807".also {
+        db.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId=it, createdAtMs=1L))
+    }
+    val scope = task126ActiveOwnerStoreScope(owner, shop)
+    val empty = emptyTargetFixture()
+    val checkpoint = empty.checkpoint.copy(shopId=shop.shopId,
+        scope=empty.checkpoint.scope.copy(accountKey=testSha256(owner), deviceKey=testSha256(device)),
+        syncEvents=empty.checkpoint.syncEvents.copy(maxId="0", verifiedBaselineId="0",
+            domainMaxIds=empty.checkpoint.syncEvents.domainMaxIds.mapValues { "0" }))
+    val reader = RecoveryRemoteFixture(empty.copy(checkpoint=checkpoint)).apply { emptyTailConfigured=true }
+    db.syncRecoveryJournalDao().upsert(SyncRecoveryJournal(ownerHash=scope.ownerHash, storeScope=scope.storeId,
+        shopId=shop.shopId, deviceId=device, authorizationMode=SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED,
+        phase=SyncRecoveryJournalPhases.REQUIRED, reason=SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED,
+        blockingEventId=null, attemptCount=0, createdAtMs=1L, updatedAtMs=1L, nextRetryAtMs=1L))
+    val repository = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource=reader)
+    val recovered = ShopSyncRecoveryCoordinator(context,db,repository,reader,
+        registerDeviceForRecovery={ Result.success(ShopDeviceRegistrationResult(ok=true,code="success",shopId=it)) },
+        scopeStillValid={ account, selected -> account==owner && selected==shop.shopId },
+        activationBoundary={ it() }, availableStorageBytes={ Long.MAX_VALUE })
+        .recover(owner,shop,scope)
+    assertTrue(recovered.toString(), recovered is ShopSyncRecoveryResult.Activated)
+    assertNull(db.syncRecoveryJournalDao().get())
+    val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+    val actual = decodeRecoveryCheckpointJson(baseline.checkpointJson)
+    validateShopSyncActiveReceipt(db,baseline.generationId,actual)
+    assertEquals("0",actual.syncEvents.verifiedBaselineId)
+    assertEquals(0L,db.syncEventWatermarkDao().get(owner,scope.storeId)?.lastSyncEventId)
+    return actual
+}
+
 private fun emptyTargetFixture(): RecoveryFixture {
     val base = targetFixture().checkpoint
     val empty = checkpointDomain(ids = emptyList(), versions = emptyList())

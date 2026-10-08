@@ -185,6 +185,8 @@ class DeviceGuardedSyncEventRemoteDataSource(
     private val delegate: SyncEventRemoteDataSource,
     private val authorization: ShopDeviceAuthorizationRepository
 ) : SyncEventRemoteDataSource {
+    internal val usesCanonicalShopV6Boundary: Boolean get() = delegate is SupabaseSyncEventRemoteDataSource
+
     override val isConfigured: Boolean get() = delegate.isConfigured
 
     override suspend fun checkCapabilities(ownerUserId: String): Result<SyncEventRemoteCapabilities> =

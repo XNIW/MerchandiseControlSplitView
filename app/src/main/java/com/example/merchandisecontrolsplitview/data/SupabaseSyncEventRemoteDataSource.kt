@@ -7,6 +7,12 @@ import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 
@@ -61,10 +67,27 @@ class SupabaseSyncEventRemoteDataSource private constructor(
         }
 
     override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
-        val strictPayload = Json.encodeToJsonElement(
-            SyncEventRecordRpcParams.serializer(),
-            params
-        ) as JsonObject
+        // The repository's shop UUID alias is not a legacy store authority in V6.
+        // A contradictory shop/store pair remains rejected by the strict RPC.
+        val strictParams = params.copy(
+            storeId = if (params.shopId != null && params.storeId == params.shopId) null else params.storeId,
+            metadata = canonicalAndroidEventMetadata(params)
+        )
+        val serialized = Json.encodeToJsonElement(SyncEventRecordRpcParams.serializer(), strictParams) as JsonObject
+        val allowedKeys = when (params.domain) {
+            SyncEventDomains.CATALOG -> setOf("supplier_ids", "category_ids", "product_ids")
+            SyncEventDomains.PRICES -> setOf("price_ids", "product_ids")
+            SyncEventDomains.HISTORY -> setOf("session_ids")
+            else -> emptySet()
+        }
+        val serializedIds = serialized["p_entity_ids"] as? JsonObject
+        // The shared DTO emits all five arrays. Only empty unrelated arrays may be omitted.
+        // Nonempty unexpected content stays intact for the strict RPC to reject.
+        val strictPayload = if (serializedIds != null && allowedKeys.isNotEmpty()) {
+            JsonObject(serialized + ("p_entity_ids" to JsonObject(serializedIds.filter { (key, value) ->
+                key in allowedKeys || value !is JsonArray || value.isNotEmpty()
+            })))
+        } else serialized
         val strictResult = invokeRpc(STRICT_SYNC_EVENT_RPC, strictPayload)
         val strictError = strictResult.exceptionOrNull()
         val result = if (
@@ -74,7 +97,8 @@ class SupabaseSyncEventRemoteDataSource private constructor(
         ) {
             invokeRpc(
                 LEGACY_SYNC_EVENT_RPC,
-                JsonObject(strictPayload.filterKeys { it != "p_shop_id" })
+                JsonObject((Json.encodeToJsonElement(SyncEventRecordRpcParams.serializer(), params) as JsonObject)
+                    .filterKeys { it != "p_shop_id" })
             )
         } else {
             strictResult
@@ -91,6 +115,26 @@ class SupabaseSyncEventRemoteDataSource private constructor(
             )
         }
         return result
+    }
+
+    private fun canonicalAndroidEventMetadata(params: SyncEventRecordRpcParams): JsonObject {
+        val metadata = params.metadata
+        fun field(key: String) = metadata[key] as? JsonPrimitive
+        val repositoryEnvelope = params.source == "android" &&
+            params.domain in setOf(SyncEventDomains.CATALOG, SyncEventDomains.PRICES) &&
+            metadata.keys == setOf("task", "source", "chunk_index", "chunk_count", "entity_ids_compacted") &&
+            field("task")?.let { it.isString && it.content == "045" } == true &&
+            field("source")?.let { it.isString && it.content == "android_repository" } == true &&
+            field("entity_ids_compacted")?.let { !it.isString && it.booleanOrNull == false } == true
+        val historyEnvelope = params.source == "android_history_session_push" && params.domain == SyncEventDomains.HISTORY &&
+            metadata.keys == setOf("task", "chunk_index", "chunk_count") &&
+            field("task")?.let { it.isString && it.content == "139" } == true
+        val index = field("chunk_index")?.takeUnless { it.isString }?.intOrNull
+        val count = field("chunk_count")?.takeUnless { it.isString }?.intOrNull
+        if ((!repositoryEnvelope && !historyEnvelope) || index == null || count == null ||
+            index !in 0..100000 || count !in 1..100000 || index >= count) return metadata
+        // Persisted intent remains unchanged. This is only its recognized, redacted V6 envelope.
+        return buildJsonObject { put("source", "android"); put("chunk_index", index); put("chunk_count", count) }
     }
 
     override suspend fun fetchSyncEventsAfter(
