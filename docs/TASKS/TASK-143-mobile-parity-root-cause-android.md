@@ -208,6 +208,37 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-08 UTC — contratto V6 e correzione bounded degli intent storici
+
+**Stato FIX, non DONE.** Il contratto deployed acquisito read-only rifiuta shop più legacy store, metadata producer non consentiti, chiavi di altri domini anche vuote e prezzi senza l'esatto insieme dei parent. Le nuove prove usano repository Room, typed ACK, wrapper DeviceGuarded e adapter Supabase reali; nessun backend o dato primario è modificato.
+
+**File modificati:**
+- `InventoryRepository.kt` — envelope prezzi/parent sotto shop, split dei nuovi operation ID entro limite JSONB, separazione changed/tombstone e unica correzione storica autorizzata con proof corrente più CAS5→6.
+- `SupabaseSyncEventRemoteDataSource.kt` — normalizzazione chiusa del solo wire V6; fallback legacy usa i parametri originali.
+- `SyncEventModels.kt` — sola query DAO bounded per selezionare i candidati retry storici; conteggi primari e chunk per dominio preesistenti invariati.
+- `DeviceAuthorizationRemoteGuards.kt` — capability interna del delegate Supabase corretto; guard cloud invariato.
+- `DefaultInventoryRepositoryTest.kt`, `SyncEventReadBoundaryTest.kt`, `HistorySessionPushCoordinatorTest.kt` —25 nuovi casi e regressioni dei wire effettivi, dei guard preclaim e del fallback legacy.
+- `ShopSyncRecoveryCoordinatorTest.kt` — helper test-only che riusa activation/reopen canonici reali prima degli ACK, senza baseline/proof sintetici.
+
+**RED→GREEN:** i FAIL desired scope/metadata/DI/domain/parent/mixed/History e il limite250 restano immutabili. Legacy RED03 `ed1c6a25` riproduce parent aggiunto al body legacy e fallback assente senza bridge; il fixture finale conserva l'ordine effettivo degli ACK, eliminando solo il sorting incidentale. Il caso finale205+205 discrimina JSON compatto16021 byte da testo JSONB PostgreSQL16432 byte. Setup/compile FAIL precedenti restano distinti da RED.
+
+**Check obbligatori:**
+
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | Gate canonico `assembleDebug lint testDebugUnitTest`, exit0/BUILD SUCCESSFUL; APK keyless `389e10e7` non distribuibile, non installato. |
+| Lint | ESEGUITO | 44 Warning/0 Error; report fresh e byte-identico alla baseline `fd29c629`, 0 issue nuovi/cambiati. |
+| Warning nuovi | ESEGUITO | 0 diagnostici compiler nuovi, 0 warning Kotlin; nessuna suppression aggiunta. Le sole due righe CDS OpenJDK restano diagnostici della JVM. |
+| Coerenza planning | ESEGUITO sul delta mirato | CA07/CA10;25 casi nuovi su flussi reali locali, nessuna API pubblica/schema/dipendenza. |
+| Criteri interessati | ESEGUITO locale / NON ESEGUITO runtime finale | GREEN03 `560ac22e`:275=274PASS/1skip preesistente/0FAIL. Canonico finale `8917cb02`:76 XML fresh/1244=1237PASS/7sameSKIP/0FAIL, tutti1219 ID/stati e reason skip baseline esatti,25 nuovi PASS. Release JVM NOT_OBSERVED; androidTest non richiesti in questo gate. |
+
+**Baseline TASK004:** suite completa JVM/Robolectric eseguita, comprendente repository, DatabaseViewModel, ExcelViewModel, import/history e sync. I tre mirati completi precedono il canonico; tutti25 nuovi casi sono PASS negli XML originali (`c5ce87f5`). Non è Compose/Espresso né convergenza business live. Source538 tracked esatto attraverso il gate, con source23/carry15/8dirty, Task/MASTER/HEAD/index/status preservati. Entry17:35:42.893986Z, release17:38:53.533933Z entro deadline18:05:42.893986Z; PG7655 chiuso, ownGroupRemaining=[] e nessuna cleanup forzata.
+
+Review indipendente finale delta v3→v4 APPROVED, nessun finding residuo; entrambi i P2 precedenti sono corretti. Tutti422 metodi @Test originali restano byte-identici (readback `950a8024`). **Limiti di copertura:** i due witness repository legacy sono fresh-only; il retry persistito legacy è qualificato dalla review statica. Il reject oversize persistito prima del CAS non ha un witness dedicato. **INCERTEZZA:** CI exact-commit, ProperTEST, installazione preservativa e verifica runtime finale NOT_RUN per questo nuovo candidato. I due intent live non hanno consumato il sesto tentativo; eleggibilità e commit remoto devono essere osservati dopo integrazione e installazione normale. Freeze sorgenti v4 `eb49faa8`, patch/inversa offline exact; nessun successo backend assunto dal fake contrattuale.
+
+**Evidenze finali:** `native-residuals-continuation-20261007-01/resume-20261008-android-v6-final-gates-actual-01/receipt.json` SHA `8917cb02021660d300f6c24c76b2241c4e737ac2dabc8f8a48cfc14d890dd797`; `actual-case-id-status.json` SHA `950b3261bd187cf85860a417bd591fe9b43b5ce1c37edea9ccb13837ab59084e`; `actual-xml-manifest.json` SHA `3caf716774690b23881a37e3f92482bbf4455a48b7ee6866a9c1132f8c6bd6f5`; `actual-skip-details.json` SHA `a6bf9945b818abeb8ab3ac66a767443968a58dabe8755c32352d8a03f9bc0dc0`; `gradle.log` SHA `c068c55781b12165685b26a22dcdaee3e0bc15be46511d0bfc0be4f3ba1f462b`; `lint-results-debug.xml` SHA `fd29c629e5d50ad797407362fbdbff8094fe9ada087b8127120825de81f9ed1c`. Il report lint è fresh, non adjudicato da reuse.
+
+
 ### Esecuzione — 2026-10-07 UTC — receipt ACK e ownership inbound canonica
 
 **Stato FIX, non DONE.** Due difetti distinti riprodotti su Room file-backed: il vero typed SupplierCreate ACK cambia la cardinalità fisica senza riscrivere checkpoint A; il legacy bootstrap completo può potare righe pulite possedute da A. Il secondo meccanismo è coerente con la sequenza runtime READY→catalog_prune→bootstrap_ok→receipt mismatch conservata dal coordinatore. Il test ACK non attribuisce le righe mancanti live.
@@ -1197,6 +1228,10 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Fix — 2026-10-08 UTC — wire shop V6 e unica correzione storica
+
+Il wire shop normalizza solo l'alias legacy uguale allo shop e gli envelope Android riconosciuti; contraddizioni, metadata sconosciuti e IDs non vuoti fuori dominio restano fail-closed. I parent dei prezzi sono derivati bounded sotto autorità corrente; changed_count conta solo i prezzi. Il fallback realmente unscoped conserva body/opID originali e non richiede parent bridge. Intent storici non vengono divisi o relabelled. L'eccezione5→6 richiede plain PayloadValidation, producer completo, owner/shop/device e baseline/ACK/body same-generation, tutti verificati prima del claim atomico; errore/cancel conserva6 e impedisce un nuovo tentativo. Il tag durabile delle nuove failure V6 le esclude da questa eccezione. Nessuna modifica di max retry ordinario, schema, UI, timeout o guard cloud.
+
 ### Fix — 2026-10-07 UTC — cardinalità ACK e inbound canonical-owned
 
 La receipt attiva conta solo il keyset canonico più ACK same-generation già validati dalla prova fisica strict; non accetta righe pulite arbitrarie. Guard prefetch e CAS al commit escludono legacy catalogo/prezzi/History sotto A. Il consumer automatico rilascia BOOTSTRAP prima del drain e del bounded push locale già esistente, così gli intent durabili non dipendono da un segnale RAM. Full manual e History preservano outbound, contatori ed errori effettivi: un errore catalogo non diventa un defer con summary nulla; pending non aggiorna last-success/completed. Tutti gli assert/budget originali e gli ID precedenti restano invariati.
@@ -1430,6 +1465,10 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff — 2026-10-08 UTC — candidato V6 in attesa dei gate finali
+
+Task resta FIX. GREEN03 chiuso17:19:50.857142Z; canonico finale `8917cb02` chiuso17:38:53.533933Z, PG7655 assente. FullDebug1244=1237PASS/7sameSKIP/0FAIL, assembleDebug/lint PASS,44 warning baseline esatti e0 nuovi diagnostici. Source v4 immutabile e review finale APPROVED senza finding. CI/ProperTEST/install e runtime per-record NOT_RUN per questo candidato; integrare solo le ricevute reali delle rispettive lane. I limiti fresh-only legacy e oversize persistito senza witness dedicato restano dichiarati; nessun ulteriore test richiesto dalla review. Root coordina compilerlane, integrazione/ProperTEST/install e live; nessun reset outbox o sesto tentativo da questa lane. Conservare tutti i RED e setupFAIL e il body originale degli intent, distinguendo normalizzazione wire e prova contrattuale locale dalla prova live.
 
 ### Handoff — 2026-10-07 UTC — ACK/cardinalità e routing finale
 

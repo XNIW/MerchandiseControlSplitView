@@ -16,12 +16,47 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistorySessionPushCoordinatorTest {
+
+    @Test
+    fun actualHistoryCoordinatorUsesAcceptedGuardedV6WireMetadata() = runTest {
+        val repository = mockk<InventoryRepository>()
+        val outbox = mockk<SyncEventOutboxDao>()
+        val owner = "00000000-0000-4000-8000-000000000856"
+        val shop = selectedShop("00000000-0000-4000-8000-000000000857")
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop.shopId) { function, payload ->
+            assertEquals("record_sync_event_v6", function)
+            calls += payload
+            deployedV6ShopEventContract(owner, payload)
+        }
+        coEvery { repository.getPendingHistorySessionPushUids() } returns listOf(856L)
+        coEvery { repository.pushHistorySessionsToRemote(any(), owner, setOf(856L), shop) } returns
+            Result.success(HistorySessionBackupPushSummary(uploaded = 1, skippedAlreadySynced = 0,
+                attempted = 1, remoteIds = listOf("00000000-0000-4000-8000-000000000858")))
+        coEvery { outbox.insert(any()) } returns 1L
+        val coordinator = HistorySessionPushCoordinator(repository = repository,
+            remote = FakeConfiguredSessionRemote040(), syncEventRemote = events, syncEventOutboxDao = outbox,
+            authFlow = MutableStateFlow(AuthState.SignedIn(owner, "fixture@example.test")),
+            selectedShopProvider = { shop }, flightOwner = SessionCloudSessionFlightOwner(),
+            scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+        try {
+            coordinator.runPushCycle("debounce_fired")
+            assertTrue(calls.isNotEmpty())
+            assertTrue("actual History task139 metadata must meet the deployed allowlist",
+                calls.all { deployedV6MetadataIsRedacted(it.getValue("p_metadata").jsonObject) })
+            assertEquals(1, calls.size)
+            assertEquals(setOf("session_ids"), calls.single().getValue("p_entity_ids").jsonObject.keys)
+            coVerify(exactly = 0) { outbox.insert(any()) }
+        } finally { coordinator.shutdown() }
+    }
 
     @Test
     fun `114 default history auto push debounce stays within near realtime budget`() {

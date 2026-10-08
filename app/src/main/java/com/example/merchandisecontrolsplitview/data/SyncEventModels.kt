@@ -451,6 +451,17 @@ interface SyncEventOutboxDao {
         limit: Int
     ): List<SyncEventOutboxEntry>
 
+    @Query("""
+        SELECT * FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId AND storeScope = :storeScope
+          AND attemptCount = :maxAttempts AND lastErrorType = 'PayloadValidation'
+          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
+        ORDER BY createdAtMs ASC, id ASC LIMIT :limit
+    """)
+    suspend fun listShopScopeCorrectionCandidates(
+        ownerUserId: String, storeScope: String, maxAttempts: Int, limit: Int
+    ): List<SyncEventOutboxEntry>
+
     @Query("SELECT COUNT(*) FROM sync_event_outbox WHERE ownerUserId = :ownerUserId")
     suspend fun countPending(ownerUserId: String): Int
 

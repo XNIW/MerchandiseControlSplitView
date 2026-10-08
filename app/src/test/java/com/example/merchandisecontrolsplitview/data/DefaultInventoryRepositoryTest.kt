@@ -1,6 +1,15 @@
 package com.example.merchandisecontrolsplitview.data
 
 import android.content.Context
+import io.ktor.client.call.HttpClientCall
+import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.request.HttpRequest
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.Url
+import io.mockk.every
+import io.mockk.mockk
 import androidx.room.Room
 import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.util.CatalogTextField
@@ -22,7 +31,14 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -5829,6 +5845,631 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
+    fun shopScopedFreshEventsUseOnlyShopScopeOnActualV6Wire() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000801"
+        val shop = "00000000-0000-4000-8000-000000000802"
+        repository.addProduct(Product(barcode = "v6-fresh", productName = "V6 Fresh", purchasePrice = 4.0, retailPrice = 6.0))
+        val calls = mutableListOf<JsonObject>()
+        val events = SupabaseSyncEventRemoteDataSource { function, payload ->
+            assertEquals("record_sync_event_v6", function)
+            calls += payload
+            deployedV6ShopEventContract(owner, payload)
+        }
+        val remote = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016()
+
+        val summary = repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(setOf(SyncEventDomains.CATALOG, SyncEventDomains.PRICES), calls.map { it.getValue("p_domain").jsonPrimitive.content }.toSet())
+        assertTrue(calls.all { it.getValue("p_shop_id").jsonPrimitive.content == shop })
+        assertTrue(calls.all { Json.decodeFromJsonElement<SyncEventRecordRpcParams>(it).let { p -> SyncEventContract.hasCompletePrimaryIds(p.domain, p.changedCount, requireNotNull(p.entityIds)) } })
+        assertEquals("validated shop events must publish without a legacy store scope", 0, summary.syncEventOutboxPending)
+        assertTrue(calls.all { it["p_store_id"] == null || it["p_store_id"] == JsonNull })
+    }
+
+    @Test
+    fun shopScopedPersistedRetryUsesOnlyShopScopeOnActualV6Wire() = runTest {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val name = "v6-shop-event-retry.db"
+        val owner = "00000000-0000-4000-8000-000000000803"
+        val shop = "00000000-0000-4000-8000-000000000804"
+        db.close()
+        context.deleteDatabase(name)
+        db = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
+        try {
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.addProduct(Product(barcode = "v6-retry", productName = "V6 Retry", purchasePrice = 4.0, retailPrice = 6.0))
+            val initialCalls = mutableListOf<JsonObject>()
+            val unavailable = SupabaseSyncEventRemoteDataSource { function, payload ->
+                assertEquals("record_sync_event_v6", function)
+                initialCalls += payload
+                Result.failure(IOException("offline"))
+            }
+            repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(), RecordingPriceRemote016(), unavailable, owner,
+                progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            val queued = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, queued.size)
+            assertTrue(queued.all { it.storeScope == "shop:$shop" && it.attemptCount == 0 })
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
+            assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val retryCalls = mutableListOf<JsonObject>()
+            val events = SupabaseSyncEventRemoteDataSource { function, payload ->
+                assertEquals("record_sync_event_v6", function)
+                retryCalls += payload
+                deployedV6ShopEventContract(owner, payload)
+            }
+
+            val summary = repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false), events, owner,
+                progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+
+            assertEquals(initialCalls, retryCalls)
+            assertEquals(queued.map { it.clientEventId }, retryCalls.map { it.getValue("p_client_event_id").jsonPrimitive.content })
+            assertEquals("persisted shop retries must publish under their original operation IDs", 2, summary.syncEventOutboxRetried)
+            assertEquals(0, summary.syncEventOutboxPending)
+            assertTrue(retryCalls.all { it["p_store_id"] == null || it["p_store_id"] == JsonNull })
+        } finally {
+            db.close()
+            context.deleteDatabase(name)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    @Test
+    fun actualV6WireUsesOnlyKeysPermittedByEachDomain() = runTest {
+        val calls = mutableListOf<JsonObject>()
+        val events = SupabaseSyncEventRemoteDataSource { _, payload ->
+            calls += payload
+            Result.success(v6AcceptedWireRow("00000000-0000-4000-8000-000000000850", payload))
+        }
+        val id = "00000000-0000-4000-8000-000000000851"
+        val cases = listOf(
+            Triple(SyncEventDomains.CATALOG, SyncEventTypes.CATALOG_CHANGED, SyncEventEntityIds(productIds = listOf(id))),
+            Triple(SyncEventDomains.PRICES, SyncEventTypes.PRICES_CHANGED, SyncEventEntityIds(priceIds = listOf(id), productIds = listOf(id))),
+            Triple(SyncEventDomains.HISTORY, SyncEventTypes.HISTORY_CHANGED, SyncEventEntityIds(sessionIds = listOf(id)))
+        )
+        for ((domain, type, ids) in cases) {
+            events.recordSyncEvent(SyncEventRecordRpcParams(domain, type, 1, ids,
+                source = "android", sourceDeviceId = id, batchId = id, clientEventId = "$domain-fixture")).getOrThrow()
+        }
+        val allowed = listOf(setOf("supplier_ids", "category_ids", "product_ids"),
+            setOf("price_ids", "product_ids"), setOf("session_ids"))
+        calls.forEachIndexed { index, wire ->
+            assertTrue("V6 rejects even empty keys outside the actual domain", wire.getValue("p_entity_ids").jsonObject.keys.all { it in allowed[index] })
+        }
+    }
+
+    @Test
+    fun actualGuardedV6PriceEventsCarryTheirExactAcknowledgedProductParents() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000852"
+        val shop = "00000000-0000-4000-8000-000000000853"
+        repeat(2) { repository.addProduct(Product(barcode = "v6-parent-$it", productName = "Parent $it", purchasePrice = 4.0, retailPrice = 6.0)) }
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop) { _, payload -> calls += payload; Result.success(v6AcceptedWireRow(owner, payload)) }
+        val prices = RecordingPriceRemote016()
+        val summary = repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(), prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+        assertEquals(4, summary.pushedProductPrices)
+        val sent = Json.decodeFromJsonElement<SyncEventRecordRpcParams>(calls.single { it.getValue("p_domain").jsonPrimitive.content == SyncEventDomains.PRICES })
+        val acknowledged = prices.upsertBatches.flatten().associateBy { it.id }
+        val entityIds = requireNotNull(sent.entityIds)
+        assertEquals(acknowledged.keys, entityIds.priceIds.toSet())
+        assertEquals("secondary parents must match the actual typed price ACKs", acknowledged.values.map { it.productId }.toSet(), entityIds.productIds.toSet())
+        assertEquals("parents do not increase changed_count", entityIds.priceIds.size, sent.changedCount)
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+    }
+
+    @Test
+    fun actualGuardedV6Chunks251PricesWithOnlyTheirExactParentsAndPrimaryCounts() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000856"
+        val shop = "00000000-0000-4000-8000-000000000857"
+        repeat(126) { repository.addProduct(Product(barcode="v6-chunk-$it", productName="Chunk $it", purchasePrice=4.0,
+            retailPrice=if (it < 125) 6.0 else null)) }
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop) { _, payload -> calls += payload; deployedV6ShopEventContract(owner,payload) }
+        val prices = RecordingPriceRemote016()
+        val summary = repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(),prices,events,owner,
+            CatalogSyncProgressReporter { },selectedShop=selectedShop(shop)).getOrThrow()
+        val acknowledged = prices.upsertBatches.flatten().associateBy { it.id }
+        assertEquals(251,summary.pushedProductPrices)
+        val wires = calls.map { Json.decodeFromJsonElement<SyncEventRecordRpcParams>(it) }.filter { it.domain==SyncEventDomains.PRICES }
+        assertEquals(listOf(250,1),wires.map { it.changedCount })
+        assertEquals(acknowledged.keys,wires.flatMap { requireNotNull(it.entityIds).priceIds }.toSet())
+        for (wire in wires) {
+            val ids = requireNotNull(wire.entityIds)
+            assertEquals(ids.priceIds.size,wire.changedCount)
+            assertEquals(ids.priceIds.map { acknowledged.getValue(it).productId }.toSet(),ids.productIds.toSet())
+        }
+        assertEquals(0,db.syncEventOutboxDao().countAll())
+    }
+
+    @Test
+    fun actualGuardedV6PriceChunksStayWithinTheDeployedJsonbByteLimit() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000858"
+        val shop = "00000000-0000-4000-8000-000000000859"
+        repeat(205) { repository.addProduct(Product(barcode="v6-byte-$it",productName="Byte $it",purchasePrice=4.0)) }
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop) { _,payload -> calls+=payload;deployedV6ShopEventContract(owner,payload) }
+        val prices = RecordingPriceRemote016()
+        val summary = repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(),prices,events,owner,
+            CatalogSyncProgressReporter { },selectedShop=selectedShop(shop)).getOrThrow()
+        val acknowledged = prices.upsertBatches.flatten().associateBy { it.id }
+        assertEquals(205,summary.pushedProductPrices)
+        val unsplit = kotlinx.serialization.json.buildJsonObject {
+            put("price_ids", JsonArray(acknowledged.keys.map(::JsonPrimitive)))
+            put("product_ids", JsonArray(acknowledged.values.map { JsonPrimitive(it.productId) }))
+        }
+        assertTrue("compact JSON alone fits this distinguishing boundary", unsplit.toString().toByteArray(Charsets.UTF_8).size <= 16_384)
+        assertTrue("PostgreSQL JSONB text exceeds the deployed boundary", deployedV6EntityJsonbTextSize(unsplit) > 16_384)
+        val wires = calls.filter { it.getValue("p_domain").jsonPrimitive.content==SyncEventDomains.PRICES }
+        assertEquals(2,wires.size)
+        assertEquals(205,wires.sumOf { Json.decodeFromJsonElement<SyncEventRecordRpcParams>(it).changedCount })
+        for (wire in wires) {
+            assertTrue(deployedV6EntityEnvelopeIsComplete(wire))
+            val ids = requireNotNull(Json.decodeFromJsonElement<SyncEventRecordRpcParams>(wire).entityIds)
+            assertEquals(ids.priceIds.map { acknowledged.getValue(it).productId }.toSet(),ids.productIds.toSet())
+        }
+        assertEquals(acknowledged.keys,wires.flatMap { requireNotNull(Json.decodeFromJsonElement<SyncEventRecordRpcParams>(it).entityIds).priceIds }.toSet())
+        assertEquals(0,db.syncEventOutboxDao().countAll())
+    }
+
+    @Test
+    fun actualRepositoryLegacyPriceFallbackRetainsItsOriginalEnvelope() = runTest {
+        assertLegacyV6PriceFallback(parentMissing=false)
+    }
+
+    @Test
+    fun actualRepositoryLegacyPriceFallbackDoesNotRequireAParentBridge() = runTest {
+        assertLegacyV6PriceFallback(parentMissing=true)
+    }
+
+    private suspend fun assertLegacyV6PriceFallback(parentMissing: Boolean) {
+        val owner = "00000000-0000-4000-8000-000000000860"
+        repository.addProduct(Product(barcode="legacy-price",productName="Legacy price",purchasePrice=4.0,retailPrice=6.0))
+        val calls = mutableListOf<Pair<String,JsonObject>>()
+        val events = SupabaseSyncEventRemoteDataSource { name,payload ->
+            calls+=name to payload
+            if (name=="record_sync_event_v6") {
+                if (parentMissing && payload.getValue("p_domain").jsonPrimitive.content==SyncEventDomains.CATALOG)
+                    db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs")
+                Result.failure(SyncEventRpcCodedException("PGRST202"))
+            } else Result.success(v6AcceptedWireRow(owner,payload))
+        }
+        val prices=RecordingPriceRemote016()
+        val result=repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(),prices,events,owner,
+            CatalogSyncProgressReporter { },selectedShop=null)
+        // The writer completes before the intentionally forbidden unscoped direct read boundary.
+        assertEquals("sync_event_direct_read_forbidden",(result.exceptionOrNull() as? ShopSyncContractException)?.code)
+        val actual = calls.filter { it.first=="record_sync_event" && it.second.getValue("p_domain").jsonPrimitive.content==SyncEventDomains.PRICES }
+        assertEquals("a truly unscoped legacy price event must reach the unchanged fallback",1,actual.size)
+        val wire = actual.single().second
+        val params=Json.decodeFromJsonElement<SyncEventRecordRpcParams>(wire)
+        val ids=SyncEventEntityIds(priceIds=prices.upsertBatches.flatten().map { it.id }.distinct())
+        assertEquals(2,ids.priceIds.size)
+        assertEquals(ids,params.entityIds)
+        val fingerprint=listOf("","","",ids.priceIds.sorted().joinToString(","),"").joinToString("|").hashCode().toUInt().toString(16)
+        assertEquals("android-${params.batchId}-prices-prices_changed-0-$fingerprint",params.clientEventId)
+        val metadata=kotlinx.serialization.json.buildJsonObject {
+            put("task",JsonPrimitive("045"));put("source",JsonPrimitive("android_repository"))
+            put("chunk_index",JsonPrimitive(0));put("chunk_count",JsonPrimitive(1));put("entity_ids_compacted",JsonPrimitive(false))
+        }
+        val expected=params.copy(entityIds=ids,metadata=metadata,shopId=null,storeId=null,changedCount=2)
+        val original=Json.encodeToJsonElement(SyncEventRecordRpcParams.serializer(),expected).jsonObject
+        assertEquals(JsonObject(original.filterKeys { it!="p_shop_id" }),wire)
+        assertEquals(0,db.syncEventOutboxDao().countAll())
+    }
+
+    @Test
+    fun actualGuardedV6SeparatesLiveChangesFromAcknowledgedCatalogTombstones() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000854"
+        val shop = "00000000-0000-4000-8000-000000000855"
+        val supplier = requireNotNull(repository.addSupplier("V6 old supplier"))
+        val catalog = FakeCatalogRemote016()
+        repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), FakeSyncEventRemote(), owner,
+            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+        val deletedId = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id)).remoteId
+        repository.deleteCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, CatalogDeleteStrategy.DeleteIfUnused)
+        repository.addProduct(Product(barcode = "v6-mixed", productName = "Live product"))
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop) { _, payload -> calls += payload; Result.success(v6AcceptedWireRow(owner, payload)) }
+        repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), events, owner,
+            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+        assertEquals(listOf(deletedId), catalog.supplierTombstones.map { it.id })
+        val sent = calls.map { Json.decodeFromJsonElement<SyncEventRecordRpcParams>(it) }.filter { it.domain == SyncEventDomains.CATALOG }
+        assertEquals("changed and tombstone are distinct deployed operations", setOf(SyncEventTypes.CATALOG_CHANGED, SyncEventTypes.CATALOG_TOMBSTONE), sent.map { it.eventType }.toSet())
+        assertEquals(listOf(deletedId), requireNotNull(sent.single { it.eventType == SyncEventTypes.CATALOG_TOMBSTONE }.entityIds).supplierIds)
+        assertTrue(requireNotNull(sent.single { it.eventType == SyncEventTypes.CATALOG_CHANGED }.entityIds).supplierIds.isEmpty())
+        assertEquals(0, db.syncEventOutboxDao().countAll())
+    }
+
+    @Test
+    fun actualDeviceGuardedV6FreshEventsMeetDeployedMetadataContract() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000901"
+        val shop = "00000000-0000-4000-8000-000000000902"
+        repository.addProduct(Product(barcode = "v6-guarded", productName = "V6 Guarded", purchasePrice = 4.0, retailPrice = 6.0))
+        val calls = mutableListOf<JsonObject>()
+        val events = guardedV6Events(shop) { function, payload ->
+            assertEquals("record_sync_event_v6", function)
+            calls += payload
+            deployedV6ShopEventContract(owner, payload)
+        }
+        val summary = repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(), RecordingPriceRemote016(), events, owner,
+            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+        assertEquals(1, summary.pushedProducts)
+        assertEquals(2, calls.size)
+        assertTrue(calls.all { it["p_store_id"] == null || it["p_store_id"] == JsonNull })
+        assertEquals("actual guarded V6 must accept recognized Android producer metadata", 0, summary.syncEventOutboxPending)
+        assertTrue(calls.all { deployedV6MetadataIsRedacted(it.getValue("p_metadata").jsonObject) })
+    }
+
+    @Test
+    fun actualDeviceGuardedV6RepairsOldPersistedEventsUnderTheSameOperationIDs() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop, tracker) { _, payload ->
+                calls += payload
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val summary = tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            }
+            assertEquals("the production wrapper must expose the corrected V6 route", 2, summary.syncEventOutboxRetried)
+            assertEquals(queued.map { it.clientEventId }, calls.map { it.getValue("p_client_event_id").jsonPrimitive.content })
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            assertTrue(calls.all { deployedV6MetadataIsRedacted(it.getValue("p_metadata").jsonObject) })
+        }
+    }
+
+    @Test
+    fun shopScopedExhaustedProducerEventsGetOneCorrectionAttemptAfterReopen() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            val calls = mutableListOf<JsonObject>()
+            val events = SupabaseSyncEventRemoteDataSource { _, payload ->
+                calls += payload
+                val row = queued.single { it.clientEventId == payload.getValue("p_client_event_id").jsonPrimitive.content }
+                assertEquals(row.copy(attemptCount = 6), db.syncEventOutboxDao().getById(row.id))
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val summary = tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            }
+            assertEquals("two exhausted producer rows need one corrected publication", 2, summary.syncEventOutboxRetried)
+            assertEquals(queued.map { it.clientEventId }, calls.map { it.getValue("p_client_event_id").jsonPrimitive.content })
+            assertTrue(calls.all { it["p_store_id"] == null || it["p_store_id"] == JsonNull })
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+        }
+    }
+
+    @Test
+    fun exhaustedShopCorrectionFailureOrCancellationNeverReopensRetryBudget() = runTest {
+        for (cancel in listOf(false, true)) withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            var calls = 0
+            val events = SupabaseSyncEventRemoteDataSource { _, _ ->
+                calls++
+                Result.failure(if (cancel) CancellationException("cancelled") else v6BadRequest())
+            }
+            val result = runCatching { tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            } }
+            assertEquals(if (cancel) 1 else 2, calls)
+            assertEquals(cancel, result.exceptionOrNull() is CancellationException)
+            val after = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(queued.map { it.clientEventId }, after.map { it.clientEventId })
+            assertEquals(if (cancel) listOf(6, 5) else listOf(6, 6), after.map { it.attemptCount })
+            val acknowledged = mutableListOf<JsonObject>()
+            val success = SupabaseSyncEventRemoteDataSource { _, payload -> acknowledged += payload; deployedV6ShopEventContract(owner, payload) }
+            tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), success, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            }
+            assertEquals(if (cancel) 1 else 0, acknowledged.size)
+            assertTrue(db.syncEventOutboxDao().listPending(owner, 10).all { it.attemptCount == 6 })
+        }
+    }
+
+    @Test
+    fun futurePostfixPayloadValidationAtMaxNeverGetsLegacyCorrectionAttempt() = runTest {
+        withExhaustedV6ShopEvents(legacyFormat = false) { owner, shop, tracker, queued ->
+            var calls = 0
+            val events = SupabaseSyncEventRemoteDataSource { _, payload -> calls++; deployedV6ShopEventContract(owner, payload) }
+            tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            }
+            assertEquals("post-fix validation failures must keep the ordinary maximum", 0, calls)
+            assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
+        }
+    }
+
+    @Test
+    fun exhaustedShopCorrectionRejectsForeignMalformedAndOtherProducerRows() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            queued.forEach { db.syncEventOutboxDao().update(it.copy(attemptCount = 6)) }
+            val base = queued.first()
+            val invalid = listOf<(SyncEventOutboxEntry) -> SyncEventOutboxEntry>(
+                { it.copy(ownerUserId = "00000000-0000-4000-8000-000000000811") },
+                { it.copy(storeScope = "shop:00000000-0000-4000-8000-000000000812") },
+                { it.copy(sourceDeviceId = "00000000-0000-4000-8000-000000000813") },
+                { it.copy(sourceDeviceId = null) },
+                { it.copy(source = "other") },
+                { it.copy(lastErrorType = SyncErrorCategory.NetworkOfflineOrTimeout.name) },
+                { it.copy(attemptCount = 6) },
+                { it.copy(entityIdsJson = "invalid") },
+                { it.copy(metadataJson = "{}") },
+                { it.copy(changedCount = 251) },
+                { it.copy(eventType = "LOCAL_BUSINESS_WRITE_V1") }
+            )
+            invalid.forEachIndexed { index, change ->
+                val batch = "00000000-0000-4000-8000-${(820 + index).toString().padStart(12, '0')}"
+                db.syncEventOutboxDao().insert(change(base.copy(id = 0, batchId = batch,
+                    clientEventId = base.clientEventId.replace(requireNotNull(base.batchId), batch))))
+            }
+            val before = db.syncEventOutboxDao().listPending(owner, 30)
+            var calls = 0
+            val events = SupabaseSyncEventRemoteDataSource { _, _ -> calls++; error("ineligible row sent") }
+            val result = tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop))
+            }
+            assertEquals("ordinary_outbox_scope_mismatch", (result.exceptionOrNull() as? ShopSyncContractException)?.code)
+            assertEquals(0, calls)
+            assertEquals(before, db.syncEventOutboxDao().listPending(owner, 30))
+        }
+    }
+
+    @Test
+    fun exhaustedShopCorrectionRequiresTheCorrectedV6Writer() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            val events = FakeSyncEventRemote()
+            tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            }
+            assertTrue(events.recordedParams.isEmpty())
+            assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
+        }
+    }
+
+    @Test
+    fun concurrentExhaustedShopCorrectionClaimsEachOperationOnlyOnce() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val calls = mutableListOf<String>()
+            val events = SupabaseSyncEventRemoteDataSource { _, payload ->
+                calls += payload.getValue("p_client_event_id").jsonPrimitive.content
+                if (calls.size == 1) { entered.complete(Unit); release.await() }
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val first = async { tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            } }
+            try {
+                entered.await()
+                val second = tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                    DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader, businessDataScopeRuntimeGuard = tracker)
+                        .drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                            progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+                }
+                release.complete(Unit)
+                assertEquals(2, first.await().syncEventOutboxRetried + second.syncEventOutboxRetried)
+                assertEquals(queued.map { it.clientEventId }.toSet(), calls.toSet())
+                assertEquals(2, calls.size)
+                assertEquals(0, db.syncEventOutboxDao().countAll())
+            } finally { release.complete(Unit); first.cancel() }
+        }
+    }
+
+    @Test
+    fun exhaustedShopCorrectionRejectsUnavailableOrChangedAuthorization() = runTest {
+        withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+            var calls = 0
+            val events = SupabaseSyncEventRemoteDataSource { _, payload ->
+                calls++
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val foreign = runCatching { tracker.withBusinessDataScopeFlight("00000000-0000-4000-8000-000000000899", selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            } }
+            assertTrue(foreign.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            assertEquals(0, calls)
+            assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
+            val stale = runCatching { tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+            } }
+            assertTrue(stale.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            assertEquals(1, calls)
+            assertEquals(queued.mapIndexed { i, row -> if (i == 0) row.copy(attemptCount = 6) else row }, db.syncEventOutboxDao().listPending(owner, 10))
+            val unavailable = runCatching { tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) { error("unavailable flight admitted") } }
+            assertTrue(unavailable.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+        }
+    }
+
+    @Test
+    fun exhaustedV6CorrectionRequiresCurrentCanonicalGenerationAndExactAcknowledgedBody() = runTest {
+        for (mode in listOf("baseline", "generation", "journal", "ack", "ack_scope", "price_body", "parent_bridge", "parent_body", "preclaim_generation")) {
+            withExhaustedV6ShopEvents { owner, shop, tracker, queued ->
+                val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+                val priceEntry = queued.single { it.domain==SyncEventDomains.PRICES }
+                val ids = Json.decodeFromString<SyncEventEntityIds>(priceEntry.entityIdsJson)
+                val bridge = requireNotNull(db.productPriceRemoteRefDao().getByRemoteId(ids.priceIds.first()))
+                val parent = db.openHelper.readableDatabase.query("SELECT productId FROM product_prices WHERE id=?",
+                    arrayOf<Any>(bridge.productPriceId)).use { assertTrue(it.moveToFirst()); it.getLong(0) }
+                when (mode) {
+                    "baseline" -> db.syncRecoveryBaselineDao().deleteAll()
+                    "generation" -> db.syncRecoveryBaselineDao().upsert(baseline.copy(generationId="foreign-generation"))
+                    "journal" -> db.syncRecoveryJournalDao().upsert(SyncRecoveryJournal(ownerHash=baseline.ownerHash,
+                        storeScope=baseline.storeScope,shopId=shop,deviceId=baseline.deviceId,
+                        authorizationMode=SyncRecoveryAuthorizationModes.SAME_SCOPE,
+                        phase=SyncRecoveryJournalPhases.REQUIRED,reason="fixture",blockingEventId=null,attemptCount=0,
+                        createdAtMs=1,updatedAtMs=1,nextRetryAtMs=1))
+                    "ack" -> db.syncRecoveryManifestDao().deleteByRemoteIds(baseline.generationId,
+                        LOCAL_ACK_BODY_PREFIX+ShopSyncRowDomain.PRICES.wireValue,ids.priceIds)
+                    "ack_scope" -> {
+                        val proof = requireNotNull(db.syncRecoveryManifestDao().get(baseline.generationId,
+                            LOCAL_ACK_BODY_PREFIX+ShopSyncRowDomain.PRICES.wireValue,ids.priceIds.first()))
+                        val identity = Json.decodeFromString<LocalAcknowledgedBodyIdentity>(proof.versionLine)
+                        db.syncRecoveryManifestDao().upsertAll(listOf(proof.copy(versionLine=Json.encodeToString(identity.copy(device="foreign-device")))))
+                    }
+                    "price_body" -> db.openHelper.writableDatabase.execSQL("UPDATE product_prices SET price=price+1 WHERE id=?",arrayOf(bridge.productPriceId))
+                    "parent_bridge" -> db.openHelper.writableDatabase.execSQL("DELETE FROM product_remote_refs WHERE productId=?",arrayOf(parent))
+                    "parent_body" -> db.openHelper.writableDatabase.execSQL("UPDATE products SET productName='changed-after-ACK' WHERE id=?",arrayOf(parent))
+                }
+                if (mode=="preclaim_generation") {
+                    val guard = object : Task126BusinessDataScopeRuntimeGuard by tracker {
+                        var armed=false
+                        var checks=0
+                        override fun captureBusinessDataScopeSignal(ownerUserId: String,shopId: String?): Task126BusinessDataScopeSignalToken {
+                            armed=true
+                            return tracker.captureBusinessDataScopeSignal(ownerUserId,shopId)
+                        }
+                        override suspend fun requireCurrentBusinessDataScope() {
+                            tracker.requireCurrentBusinessDataScope()
+                            if (armed && ++checks==2) db.syncRecoveryBaselineDao().upsert(baseline.copy(generationId="changed-before-claim"))
+                        }
+                    }
+                    repository = DefaultInventoryRepository(db=db,shopSyncReadRemoteDataSource=shopSyncReader,businessDataScopeRuntimeGuard=guard)
+                }
+                val calls = mutableListOf<JsonObject>()
+                val events = guardedV6Events(shop,tracker) { _,payload -> calls+=payload; deployedV6ShopEventContract(owner,payload) }
+                tracker.withBusinessDataScopeFlight(owner,selectedShop(shop)) {
+                    repository.drainSyncEventsFromRemote(FakeCatalogRemote016(),RecordingPriceRemote016(false),events,owner,
+                        CatalogSyncProgressReporter { },selectedShop=selectedShop(shop))
+                }
+                assertTrue("$mode cannot claim/send a sixth price event",calls.none { it.getValue("p_domain").jsonPrimitive.content==SyncEventDomains.PRICES })
+                assertEquals("$mode retains the complete old durable intent",priceEntry,db.syncEventOutboxDao().getById(priceEntry.id))
+                if (mode in listOf("baseline","generation","journal","parent_bridge","parent_body","preclaim_generation")) {
+                    assertTrue("$mode cannot claim catalog either",calls.isEmpty())
+                    assertEquals(queued,db.syncEventOutboxDao().listPending(owner,10))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun exhaustedV6CorrectionNeverRelabelsMixedActiveAndDeletedCatalogOperation() = runTest {
+        withExhaustedV6ShopEvents(products=2) { owner,shop,tracker,queued ->
+            val catalog = queued.single { it.domain==SyncEventDomains.CATALOG }
+            val ids = Json.decodeFromString<SyncEventEntityIds>(catalog.entityIdsJson)
+            assertEquals(2,ids.productIds.size)
+            val ref = requireNotNull(db.productRemoteRefDao().getByRemoteId(ids.productIds.first()))
+            repository.deleteProduct(requireNotNull(db.productDao().getById(ref.productId)))
+            assertEquals(1,db.productDao().count())
+            var calls=0
+            val events=guardedV6Events(shop,tracker) { _,_ -> calls++;error("mixed old operation must not be sent") }
+            tracker.withBusinessDataScopeFlight(owner,selectedShop(shop)) {
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(),RecordingPriceRemote016(false),events,owner,
+                    CatalogSyncProgressReporter { },selectedShop=selectedShop(shop))
+            }
+            assertEquals(0,calls)
+            assertEquals(queued,db.syncEventOutboxDao().listPending(owner,10))
+        }
+    }
+
+    @Test
+    fun exhaustedV6CorrectionRejectsEachInvalidProducerBeforeAnyClaimOrHttp() = runTest {
+        for (mode in listOf("producer","device","device_absent","batch","metadata_extra","metadata_compacted",
+            "chunk_count","chunk_index","prices_tombstone","parents","entity_ids")) {
+            withExhaustedV6ShopEvents { owner,shop,tracker,queued ->
+                val target=queued.single { it.domain==if (mode in listOf("prices_tombstone","parents")) SyncEventDomains.PRICES else SyncEventDomains.CATALOG }
+                queued.filter { it.id!=target.id }.forEach { db.syncEventOutboxDao().update(it.copy(attemptCount=6)) }
+                val metadata=Json.decodeFromString<JsonObject>(target.metadataJson)
+                fun metadata(key: String,value: JsonPrimitive)=target.copy(metadataJson=Json.encodeToString(JsonObject(metadata+(key to value))))
+                fun reidentified(ids: SyncEventEntityIds,index: Int=0,type: String=target.eventType): SyncEventOutboxEntry {
+                    val fingerprint=listOf(ids.supplierIds,ids.categoryIds,ids.productIds,ids.priceIds,ids.sessionIds)
+                        .joinToString("|") { it.sorted().joinToString(",") }.hashCode().toUInt().toString(16)
+                    return target.copy(entityIdsJson=Json.encodeToString(ids),eventType=type,
+                        clientEventId="android-${target.batchId}-${target.domain}-$type-$index-$fingerprint")
+                }
+                val invalid=when(mode) {
+                    "producer" -> target.copy(source="other")
+                    "device" -> target.copy(sourceDeviceId="00000000-0000-4000-8000-000000000888")
+                    "device_absent" -> target.copy(sourceDeviceId=null)
+                    "batch" -> target.copy(batchId=null)
+                    "metadata_extra" -> metadata("unexpected",JsonPrimitive(true))
+                    "metadata_compacted" -> metadata("entity_ids_compacted",JsonPrimitive(true))
+                    "chunk_count" -> metadata("chunk_count",JsonPrimitive(100001))
+                    "chunk_index" -> reidentified(Json.decodeFromString(target.entityIdsJson),100001).copy(metadataJson=Json.encodeToString(
+                        JsonObject(metadata+("chunk_index" to JsonPrimitive(100001))+("chunk_count" to JsonPrimitive(100002)))))
+                    "prices_tombstone" -> reidentified(Json.decodeFromString(target.entityIdsJson),type=SyncEventTypes.PRICES_TOMBSTONE)
+                    "parents" -> reidentified(Json.decodeFromString<SyncEventEntityIds>(target.entityIdsJson)
+                        .copy(productIds=listOf("00000000-0000-4000-8000-000000000889")))
+                    else -> target.copy(entityIdsJson="invalid")
+                }
+                db.syncEventOutboxDao().update(invalid)
+                val before=db.syncEventOutboxDao().listPending(owner,10)
+                var calls=0
+                val events=guardedV6Events(shop,tracker) { _,_ -> calls++;error("$mode cannot be sent") }
+                tracker.withBusinessDataScopeFlight(owner,selectedShop(shop)) {
+                    repository.drainSyncEventsFromRemote(FakeCatalogRemote016(),RecordingPriceRemote016(false),events,owner,
+                        CatalogSyncProgressReporter { },selectedShop=selectedShop(shop))
+                }
+                assertEquals("$mode cannot reach HTTP",0,calls)
+                assertEquals("$mode retains original attempt5 and every durable field",before,db.syncEventOutboxDao().listPending(owner,10))
+            }
+        }
+    }
+
+    private suspend fun withExhaustedV6ShopEvents(
+        legacyFormat: Boolean = true,
+        products: Int = 1,
+        block: suspend (String, String, CatalogSyncStateTracker, List<SyncEventOutboxEntry>) -> Unit
+    ) {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val name = "v6-exhausted-events.db"
+        val owner = "00000000-0000-4000-8000-000000000805"
+        val shop = "00000000-0000-4000-8000-000000000806"
+        db.close(); context.deleteDatabase(name)
+        db = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
+        try {
+            val scope = task126ActiveOwnerStoreScope(owner, selectedShop(shop))
+            shopSyncReader.checkpointFixture = activateEmptyV6EventRecoveryFixture(context,db,owner,selectedShop(shop))
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(scope))
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader, businessDataScopeRuntimeGuard = tracker)
+            repeat(products) { repository.addProduct(Product(barcode = "v6-exhausted-$it", productName = "V6 Exhausted", purchasePrice = 4.0, retailPrice = 6.0)) }
+            val failed = guardedV6Events(shop, tracker) { _, _ -> Result.failure(v6BadRequest()) }
+            tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
+                repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(), RecordingPriceRemote016(), failed, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
+                assertTrue(db.syncEventOutboxDao().listPending(owner, 10).all { it.lastErrorType == "PayloadValidationV6ShopScope" })
+                repeat(5) { repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), failed, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow() }
+            }
+            val current = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(SyncErrorCategory.PayloadValidation, SyncErrorClassifier.classify(v6BadRequest()).category)
+            assertEquals(2, current.size)
+            assertTrue(current.all { it.attemptCount == 5 && it.lastErrorType == "PayloadValidationV6ShopScope" })
+            // Historical Room format: retain every operation/body field; only the old error tag differs.
+            if (legacyFormat) current.forEach { db.syncEventOutboxDao().update(it.copy(lastErrorType = SyncErrorCategory.PayloadValidation.name)) }
+            val queued = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(current.map { it.copy(lastErrorType = if (legacyFormat) SyncErrorCategory.PayloadValidation.name else "PayloadValidationV6ShopScope") }, queued)
+            val device = requireNotNull(db.syncEventDeviceStateDao().get()).deviceId
+            assertTrue(queued.all { it.sourceDeviceId == device && it.storeScope == "shop:$shop" })
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
+            assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
+            val reopened = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val freshTracker = CatalogSyncStateTracker(reopened.resolveBusinessDataScope(scope))
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader, businessDataScopeRuntimeGuard = freshTracker)
+            block(owner, shop, freshTracker, queued)
+        } finally {
+            db.close(); context.deleteDatabase(name)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    @Test
     fun `shop scoped catalog event sends remote store id without local scope prefix`() = runTest {
         val owner = "00000000-0000-4000-8000-000000000725"
         val shopId = "00000000-0000-4000-8000-000000000726"
@@ -8459,6 +9100,125 @@ class DefaultInventoryRepositoryTest {
         val second = repository.bootstrapHistorySessionsFromRemote(fake).getOrThrow()
         assertEquals(1, second.skipped)
     }
+}
+
+internal fun guardedV6Events(
+    shop: String,
+    tracker: Task126BusinessDataScopeRuntimeGuard = Task126UnmanagedBusinessDataScopeRuntimeGuard,
+    active: Boolean = true,
+    invoke: suspend (String, JsonObject) -> Result<SyncEventRemoteRow>
+): DeviceGuardedSyncEventRemoteDataSource {
+    val device = object : ShopDeviceRegistrationRemote {
+        override val isConfigured = true
+        override suspend fun registerCurrentOwnerDevice(reason: String): Result<ShopDeviceRegistrationResult> = error("registration is not part of this writer")
+        override suspend fun currentOwnerDeviceStatus(reason: String): Result<ShopDeviceAuthorizationSnapshot> = error("shop status is required")
+        override suspend fun shopDeviceStatusForShop(shopId: String, reason: String): Result<ShopDeviceAuthorizationSnapshot> {
+            assertEquals(shop, shopId)
+            return Result.success(ShopDeviceAuthorizationSnapshot(
+                status = if (active) "active" else "revoked", code = if (active) "success" else "revoked",
+                canWrite = active, serverTime = null, lastSeenAt = null,
+                reasonCode = if (active) "active" else "revoked", recommendedAction = if (active) "allow" else "contact_shop_admin",
+                checkedAtMs = System.currentTimeMillis()))
+        }
+    }
+    return DeviceGuardedSyncEventRemoteDataSource(SupabaseSyncEventRemoteDataSource(invokeRpc = invoke),
+        ShopDeviceAuthorizationRepository(device, businessDataScopeRuntimeGuard = tracker))
+}
+
+// Independent oracle from deployed helper body SHA7d274b09 (not the Android normalizer).
+internal fun deployedV6MetadataIsRedacted(metadata: JsonObject): Boolean {
+    if (metadata.toString().toByteArray().size > 4096) return false
+    return metadata.all { (key, raw) ->
+        val value = raw as? JsonPrimitive ?: return@all false
+        fun oneOf(vararg allowed: String) = value.isString && value.content in allowed
+        when (key) {
+            "actor_kind" -> oneOf("personal_account", "platform_admin")
+            "atomic_rpc", "atomic_trigger", "retention_floor" -> !value.isString && value.booleanOrNull != null
+            "catalog_scope" -> oneOf("shop_scoped", "legacy_owner_bridge", "authorized_shop_plus_legacy")
+            "chunk_count", "chunk_index", "chunked_from_count", "price_count", "product_count", "uploaded_count" ->
+                !value.isString && Regex("^[0-9]{1,6}$").matches(value.content) && value.intOrNull?.let { it in 0..100000 } == true
+            "entity_type" -> oneOf("supplier", "category", "product", "product_price", "history_session")
+            "operation" -> oneOf("bulk_import", "insert", "update", "tombstone", "hard_delete", "image_finalize", "image_remove")
+            "payload_version" -> !value.isString && value.content.toBigDecimalOrNull()?.compareTo(java.math.BigDecimal.ONE) == 0
+            "retained_through_id" -> value.isString && Regex("^(0|[1-9][0-9]{0,18})$").matches(value.content) && value.longOrNull != null
+            "producer_epoch" -> oneOf("database-atomic-complete-entity-ids-v1")
+            "source" -> oneOf("admin_web", "android", "database_atomic", "ios", "pos_catalog_import_sync", "product_image_api", "supplier_excel")
+            "status" -> oneOf("accepted", "duplicate", "noop", "success")
+            else -> false
+        }
+    }
+}
+
+private fun v6BadRequest(): ClientRequestException {
+    val response = mockk<HttpResponse>()
+    val call = mockk<HttpClientCall>()
+    val request = mockk<HttpRequest>()
+    every { response.status } returns HttpStatusCode.BadRequest
+    every { response.call } returns call
+    every { call.request } returns request
+    every { request.url } returns Url("https://example.test")
+    every { request.method } returns HttpMethod.Post
+    return ClientRequestException(response, "shop-scoped sync event cannot include a legacy store id")
+}
+
+private fun v6AcceptedWireRow(owner: String, payload: JsonObject): SyncEventRemoteRow {
+    val params = Json.decodeFromJsonElement<SyncEventRecordRpcParams>(payload)
+    return SyncEventRemoteRow(id = 801L, ownerUserId = owner, shopId = params.shopId, storeId = params.storeId,
+        domain = params.domain, eventType = params.eventType, source = params.source,
+        sourceDeviceId = params.sourceDeviceId, batchId = params.batchId, clientEventId = params.clientEventId,
+        changedCount = params.changedCount, entityIds = params.entityIds, createdAt = "2026-10-08T00:00:00Z", metadata = params.metadata)
+}
+
+/** Exact PostgreSQL flat UUID-array JSONB text separators; called only after shape validation. */
+private fun deployedV6EntityJsonbTextSize(ids: JsonObject): Int = ids.entries.joinToString(
+    separator=", ", prefix="{", postfix="}"
+) { (key,value) ->
+    "${JsonPrimitive(key)}: ${(value as JsonArray).joinToString(separator=", ",prefix="[",postfix="]") { it.toString() }}"
+}.toByteArray(Charsets.UTF_8).size
+
+/** Source-bound deployed entity completeness contract; remote row scope/state is asserted separately. */
+internal fun deployedV6EntityEnvelopeIsComplete(payload: JsonObject): Boolean {
+    val params = Json.decodeFromJsonElement<SyncEventRecordRpcParams>(payload)
+    val allowed = when (params.domain) {
+        SyncEventDomains.CATALOG -> setOf("supplier_ids","category_ids","product_ids")
+        SyncEventDomains.PRICES -> setOf("price_ids","product_ids")
+        SyncEventDomains.HISTORY -> setOf("session_ids")
+        else -> return false
+    }
+    val limit = if (params.domain==SyncEventDomains.HISTORY) 25 else 250
+    if (params.changedCount !in 0..limit) return false
+    val ids = payload["p_entity_ids"] as? JsonObject ?: return params.changedCount==0
+    val uuid = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    if (ids.keys.any { it !in allowed }) return false
+    val arrays = ids.mapValues { (_,value) -> value as? JsonArray ?: return false }
+    if (arrays.values.any { values -> values.size>limit || values.any {
+            it !is JsonPrimitive || !it.isString || !uuid.matches(it.content)
+        } || values.map { it.jsonPrimitive.content.lowercase() }.distinct().size!=values.size }) return false
+    if (deployedV6EntityJsonbTextSize(ids)>16_384) return false
+    val primary = when(params.domain) {
+        SyncEventDomains.PRICES -> arrays["price_ids"]?.size ?: 0
+        SyncEventDomains.HISTORY -> arrays["session_ids"]?.size ?: 0
+        else -> arrays.values.sumOf { it.size }
+    }
+    val parents = arrays["product_ids"]?.size ?: 0
+    return primary==params.changedCount && (params.domain!=SyncEventDomains.PRICES ||
+        if (primary==0) parents==0 else parents in 1..primary)
+}
+
+internal fun deployedV6ShopEventContract(owner: String, payload: JsonObject): Result<SyncEventRemoteRow> {
+    val params = Json.decodeFromJsonElement<SyncEventRecordRpcParams>(payload)
+    if ((params.shopId != null && params.storeId != null) || !deployedV6MetadataIsRedacted(params.metadata) ||
+        !deployedV6EntityEnvelopeIsComplete(payload) ||
+        (params.domain==SyncEventDomains.PRICES && params.eventType!=SyncEventTypes.PRICES_CHANGED)) {
+        return Result.failure(v6BadRequest())
+    }
+    return Result.success(SyncEventRemoteRow(
+        id = 801L, ownerUserId = owner, shopId = params.shopId, storeId = params.storeId,
+        domain = params.domain, eventType = params.eventType, source = params.source,
+        sourceDeviceId = params.sourceDeviceId, batchId = params.batchId,
+        clientEventId = params.clientEventId, changedCount = params.changedCount,
+        entityIds = params.entityIds, createdAt = "2026-10-08T00:00:00Z", metadata = params.metadata
+    ))
 }
 
 private fun testSyncEventOutboxEntry(

@@ -23,6 +23,10 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -3794,24 +3798,23 @@ class DefaultInventoryRepository(
                 productIds = (pushedProducts.remoteIds + tombstonedIds.productIds).distinct()
             )
             val rawPriceIds = SyncEventEntityIds(priceIds = pushedPrices.remoteIds.distinct())
-            val catalogEventType = if (
-                pushedSuppliers.count + pushedCategories.count + pushedProducts.count == 0 &&
-                !tombstonedIds.isEmpty
-            ) {
-                SyncEventTypes.CATALOG_TOMBSTONE
-            } else {
-                SyncEventTypes.CATALOG_CHANGED
-            }
-            val catalogEventOutcome = recordOrEnqueueSyncEvent(
-                remote = syncEventRemote,
-                ownerUserId = ownerUserId,
-                storeScope = storeScope,
-                ids = rawCatalogIds,
-                domain = SyncEventDomains.CATALOG,
-                eventType = catalogEventType,
-                batchId = batchId,
-                deviceId = deviceId,
-                shopId = shopId
+            val changedCatalogOutcome = recordOrEnqueueSyncEvent(
+                remote = syncEventRemote, ownerUserId = ownerUserId, storeScope = storeScope,
+                ids = SyncEventEntityIds(supplierIds = pushedSuppliers.remoteIds.distinct(),
+                    categoryIds = pushedCategories.remoteIds.distinct(), productIds = pushedProducts.remoteIds.distinct()),
+                domain = SyncEventDomains.CATALOG, eventType = SyncEventTypes.CATALOG_CHANGED,
+                batchId = batchId, deviceId = deviceId, shopId = shopId
+            )
+            val tombstoneCatalogOutcome = recordOrEnqueueSyncEvent(
+                remote = syncEventRemote, ownerUserId = ownerUserId, storeScope = storeScope,
+                ids = tombstonedIds, domain = SyncEventDomains.CATALOG, eventType = SyncEventTypes.CATALOG_TOMBSTONE,
+                batchId = batchId, deviceId = deviceId, shopId = shopId
+            )
+            val catalogEventOutcome = SyncEventRecordOutcome.from(
+                attemptedChunks = changedCatalogOutcome.attemptedChunks + tombstoneCatalogOutcome.attemptedChunks,
+                recordedChunks = changedCatalogOutcome.recordedChunks + tombstoneCatalogOutcome.recordedChunks,
+                enqueuedChunks = changedCatalogOutcome.enqueuedChunks + tombstoneCatalogOutcome.enqueuedChunks,
+                outboxInserted = changedCatalogOutcome.outboxInserted + tombstoneCatalogOutcome.outboxInserted
             )
             val priceEventOutcome = recordOrEnqueueSyncEvent(
                 remote = syncEventRemote,
@@ -6442,6 +6445,158 @@ class DefaultInventoryRepository(
             .coerceAtMost(SYNC_RECOVERY_RETRY_MAX_MS)
     }
 
+    private fun usesCanonicalShopV6Boundary(remote: SyncEventRemoteDataSource): Boolean =
+        remote is SupabaseSyncEventRemoteDataSource ||
+            (remote is DeviceGuardedSyncEventRemoteDataSource && remote.usesCanonicalShopV6Boundary)
+
+    private fun syncEventOutboxErrorType(
+        error: Throwable?, params: SyncEventRecordRpcParams, remote: SyncEventRemoteDataSource
+    ): String {
+        val category = error?.let { SyncErrorClassifier.classify(it).category }
+        // Only this concrete writer used the corrected V6 route; shop events cannot fall back.
+        return if (category == SyncErrorCategory.PayloadValidation &&
+            usesCanonicalShopV6Boundary(remote) && params.shopId != null &&
+            (params.storeId == null || params.storeId == params.shopId)) {
+            SYNC_EVENT_OUTBOX_V6_SHOP_PAYLOAD_VALIDATION
+        } else category?.name ?: "unknown"
+    }
+
+    private fun isShopScopeV6CorrectionCandidate(
+        entry: SyncEventOutboxEntry, owner: String, store: String, device: String?,
+        ids: SyncEventEntityIds, metadata: JsonObject?
+    ): Boolean {
+        if (entry.attemptCount != SYNC_EVENT_OUTBOX_MAX_ATTEMPTS ||
+            entry.lastErrorType != SyncErrorCategory.PayloadValidation.name ||
+            entry.ownerUserId != owner || entry.storeScope != store ||
+            entry.source != "android" || device == null || entry.sourceDeviceId != device ||
+            entry.batchId == null || !UUID_PATTERN.matches(entry.batchId) ||
+            entry.domain !in setOf(SyncEventDomains.CATALOG, SyncEventDomains.PRICES) ||
+            !SyncEventContract.hasSupportedEventType(entry.domain, entry.eventType) ||
+            entry.changedCount <= 0 || !SyncEventContract.hasCompletePrimaryIds(entry.domain, entry.changedCount, ids) ||
+            metadata == null || metadata.keys != setOf("task", "source", "chunk_index", "chunk_count", "entity_ids_compacted")) return false
+        fun field(key: String) = metadata[key] as? JsonPrimitive
+        if (field("task")?.let { it.isString && it.content == "045" } != true ||
+            field("source")?.let { it.isString && it.content == "android_repository" } != true ||
+            field("entity_ids_compacted")?.let { !it.isString && it.booleanOrNull == false } != true) return false
+        val index = field("chunk_index")?.takeUnless { it.isString }?.intOrNull ?: return false
+        val count = field("chunk_count")?.takeUnless { it.isString }?.intOrNull ?: return false
+        return index in 0..100000 && count in 1..100000 && count > index &&
+            entry.eventType == (if (entry.domain == SyncEventDomains.PRICES) SyncEventTypes.PRICES_CHANGED else SyncEventTypes.CATALOG_CHANGED) &&
+            entry.clientEventId == buildClientEventId(entry.batchId, entry.domain, entry.eventType, ids, index)
+    }
+
+    /** Bounded physical linkage; a missing bridge/parent never becomes a partial V6 event. */
+    private suspend fun syncEventPriceBodies(ids: SyncEventEntityIds): Map<String, InventoryProductPriceRow>? {
+        if (ids.priceIds.isEmpty() || ids.priceIds.size > SyncEventContract.MAX_PRICE_ENTITY_IDS_PER_EVENT ||
+            ids.priceIds.distinct().size != ids.priceIds.size || ids.priceIds.any { !UUID_PATTERN.matches(it) }) return null
+        val rows = linkedMapOf<String, InventoryProductPriceRow>()
+        val marks = ids.priceIds.joinToString(",") { "?" }
+        db.openHelper.readableDatabase.query(
+            """SELECT b.remoteId, r.remoteId, p.type, p.price, p.effectiveAt, p.source, p.note, p.createdAt,
+                      p.id, parent.id
+               FROM product_price_remote_refs b
+               LEFT JOIN product_prices p ON p.id=b.productPriceId
+               LEFT JOIN products parent ON parent.id=p.productId
+               LEFT JOIN product_remote_refs r ON r.productId=p.productId
+               WHERE b.remoteId IN ($marks)""".trimIndent(), ids.priceIds.toTypedArray()
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.isNull(1) || cursor.isNull(8) || cursor.isNull(9)) return null
+                val id = cursor.getString(0)
+                val parent = cursor.getString(1)
+                if (!UUID_PATTERN.matches(parent) || rows.containsKey(id)) return null
+                rows[id] = InventoryProductPriceRow(id=id, ownerUserId="", productId=parent,
+                    type=cursor.getString(2), price=cursor.getDouble(3), effectiveAt=cursor.getString(4),
+                    source=if(cursor.isNull(5)) null else cursor.getString(5),
+                    note=if(cursor.isNull(6)) null else cursor.getString(6), createdAt=cursor.getString(7))
+            }
+        }
+        return rows.takeIf { it.keys == ids.priceIds.toSet() }
+    }
+
+    private fun syncEventPriceEnvelopeFits(ids: SyncEventEntityIds): Boolean {
+        val encoded = buildJsonObject {
+            put("price_ids", JsonArray(ids.priceIds.map(::JsonPrimitive)))
+            put("product_ids", JsonArray(ids.productIds.map(::JsonPrimitive)))
+        }.toString().toByteArray(Charsets.UTF_8).size
+        // PostgreSQL's jsonb text includes separator spaces; the deployed helper caps it at 16 KiB.
+        return encoded + ids.priceIds.size + ids.productIds.size + 4 <= 16_384
+    }
+
+    private suspend fun withSyncEventPriceParents(ids: SyncEventEntityIds): SyncEventEntityIds? {
+        val rows = syncEventPriceBodies(ids) ?: return null
+        val parents = rows.values.map { it.productId }.distinct().sorted()
+        if (ids.productIds.isNotEmpty() && ids.productIds.toSet() != parents.toSet()) return null
+        return ids.copy(productIds=parents)
+    }
+
+    /** Exceptional sixth send needs a current-generation actual ACK proof, not just a local ID. */
+    private suspend fun prepareShopScopeV6CorrectionIds(
+        entry: SyncEventOutboxEntry, ids: SyncEventEntityIds, owner: String, shop: String, device: String
+    ): SyncEventEntityIds? {
+        if (businessDataScopeRuntimeGuard === Task126UnmanagedBusinessDataScopeRuntimeGuard) return null
+        val binding = db.businessDataScopeBindingDao().get() ?: return null
+        val baseline = db.syncRecoveryBaselineDao().get() ?: return null
+        val watermark = syncEventWatermarkDao.get(owner, entry.storeScope) ?: return null
+        if (binding.ownerHash != task126OwnerHash(owner) || binding.storeId != entry.storeScope ||
+            db.syncRecoveryJournalDao().get() != null || shopSyncBaselineForEventDrain(owner, entry.storeScope,
+                shop, device, watermark.lastSyncEventId, baseline, watermark) == null) return null
+        suspend fun acknowledged(domain: ShopSyncRowDomain, id: String, revision: Long, fingerprint: String): Boolean {
+            val proof = db.syncRecoveryManifestDao().get(baseline.generationId, LOCAL_ACK_BODY_PREFIX + domain.wireValue, id)
+                ?: return false
+            if (!proof.active || proof.idLine != id || proof.payloadDigest != fingerprint || proof.versionLine.length > 4096) return false
+            val identity = runCatching { syncEventJson.decodeFromString<LocalAcknowledgedBodyIdentity>(proof.versionLine) }.getOrNull()
+                ?: return false
+            return identity.matches(binding, device) && identity.revision == revision
+        }
+        suspend fun productAcknowledged(id: String): Boolean {
+            val ref = productRemoteRefDao.getByRemoteId(id) ?: return false
+            val product = productDao.getById(ref.productId) ?: return false
+            if (ref.lastRemoteAppliedAt == null || ref.localChangeRevision != ref.lastSyncedLocalRevision) return false
+            val row = buildProductPushRow(product, ref, owner, shop, allowCreatingDependencyRefs=false) ?: return false
+            return acknowledged(ShopSyncRowDomain.PRODUCTS, id, ref.lastSyncedLocalRevision.toLong(),
+                fingerprintProductInbound(row.copy(updatedAt=ref.remoteUpdatedAt,
+                    primaryImageVersionId=product.primaryImageVersionId, primaryImageUpdatedAt=product.primaryImageUpdatedAt)))
+        }
+        val prepared = when (entry.domain) {
+            SyncEventDomains.PRICES -> {
+                val bodies = syncEventPriceBodies(ids) ?: return null
+                val parents = bodies.values.map { it.productId }.distinct().sorted()
+                if (ids.productIds.isNotEmpty() && ids.productIds.toSet() != parents.toSet()) return null
+                for (parent in parents) if (!productAcknowledged(parent)) return null
+                for ((id, body) in bodies) if (!acknowledged(ShopSyncRowDomain.PRICES, id, 0L,
+                    localAcknowledgedPriceFingerprint(body))) return null
+                ids.copy(productIds=parents)
+            }
+            SyncEventDomains.CATALOG -> {
+                // An old mixed/tombstone operation is never relabelled under its durable operation ID.
+                if (entry.eventType != SyncEventTypes.CATALOG_CHANGED) return null
+                for (id in ids.supplierIds) {
+                    val ref = supplierRemoteRefDao.getByRemoteId(id) ?: return null
+                    val row = supplierDao.getById(ref.supplierId) ?: return null
+                    if (ref.lastRemoteAppliedAt == null || ref.localChangeRevision != ref.lastSyncedLocalRevision ||
+                        !acknowledged(ShopSyncRowDomain.SUPPLIERS, id, ref.lastSyncedLocalRevision.toLong(),
+                            fingerprintSupplierInbound(buildSupplierPushRow(row,ref,owner,shop).copy(updatedAt=ref.remoteUpdatedAt)))) return null
+                }
+                for (id in ids.categoryIds) {
+                    val ref = categoryRemoteRefDao.getByRemoteId(id) ?: return null
+                    val row = categoryDao.getById(ref.categoryId) ?: return null
+                    if (ref.lastRemoteAppliedAt == null || ref.localChangeRevision != ref.lastSyncedLocalRevision ||
+                        !acknowledged(ShopSyncRowDomain.CATEGORIES, id, ref.lastSyncedLocalRevision.toLong(),
+                            fingerprintCategoryInbound(buildCategoryPushRow(row,ref,owner,shop).copy(updatedAt=ref.remoteUpdatedAt)))) return null
+                }
+                for (id in ids.productIds) if (!productAcknowledged(id)) return null
+                ids
+            }
+            else -> return null
+        }
+        if (entry.domain == SyncEventDomains.PRICES && !syncEventPriceEnvelopeFits(prepared)) return null
+        requireCurrentBusinessDataScope()
+        return prepared.takeIf { db.businessDataScopeBindingDao().get() == binding &&
+            db.syncRecoveryBaselineDao().get() == baseline && db.syncRecoveryJournalDao().get() == null &&
+            syncEventDeviceStateDao.get()?.deviceId == device }
+    }
+
     private suspend fun retrySyncEventOutbox(
         remote: SyncEventRemoteDataSource,
         ownerUserId: String,
@@ -6453,20 +6608,58 @@ class DefaultInventoryRepository(
             storeScope,
             SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
         )
-        val pending = syncEventOutboxDao.listPendingRetryableForScope(
+        val ordinaryPending = syncEventOutboxDao.listPendingRetryableForScope(
             ownerUserId,
             storeScope,
             SYNC_EVENT_OUTBOX_MAX_ATTEMPTS,
             SYNC_EVENT_OUTBOX_RETRY_LIMIT
         )
+        val shopId = shopIdFromStoreScope(storeScope)
+        val deviceId = syncEventDeviceStateDao.get()?.deviceId
+        val correctionCandidates = if (usesCanonicalShopV6Boundary(remote) &&
+            shopId != null && UUID_PATTERN.matches(shopId) && deviceId != null && UUID_PATTERN.matches(deviceId)) {
+            syncEventOutboxDao.listShopScopeCorrectionCandidates(ownerUserId, storeScope,
+                SYNC_EVENT_OUTBOX_MAX_ATTEMPTS, SYNC_EVENT_OUTBOX_RETRY_LIMIT - ordinaryPending.size)
+        } else emptyList()
+        val pending = ordinaryPending + correctionCandidates
+        var correctionClaims = 0
         var retryEligible = 0
         var retrySucceeded = 0
         var retryFailed = 0
         var retryDeletedOnSuccess = 0
         for (entry in pending) {
-            if (entry.attemptCount >= SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) continue
+            val correction = entry.attemptCount == SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+            if (entry.attemptCount > SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) continue
+            val ids = if (correction) runCatching {
+                syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
+            }.getOrNull() ?: continue else syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
+            var correctionIds: SyncEventEntityIds? = null
+            if (correction) {
+                val metadata = runCatching { syncEventJson.decodeFromString<JsonObject>(entry.metadataJson) }.getOrNull()
+                if (!isShopScopeV6CorrectionCandidate(entry, ownerUserId, storeScope, deviceId, ids, metadata)) continue
+                businessDataScopeRuntimeGuard.requireCloudBusinessDataScope()
+                requireCurrentBusinessDataScope()
+                val signal = businessDataScopeRuntimeGuard.captureBusinessDataScopeSignal(ownerUserId, shopId)
+                val claimed = db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    if (!businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(signal) ||
+                        syncEventDeviceStateDao.get()?.deviceId != deviceId || syncEventOutboxDao.getById(entry.id) != entry) false
+                    else {
+                        val prepared = prepareShopScopeV6CorrectionIds(entry, ids, ownerUserId, requireNotNull(shopId), requireNotNull(deviceId))
+                        if (prepared == null || !businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(signal) ||
+                            syncEventOutboxDao.getById(entry.id) != entry) false
+                        else {
+                            // Prepare and claim under the same authorization/body transaction before any RPC.
+                            correctionIds = prepared
+                            syncEventOutboxDao.update(entry.copy(attemptCount = entry.attemptCount + 1))
+                            true
+                        }
+                    }
+                }
+                if (!claimed) continue
+                correctionClaims++
+            }
             retryEligible++
-            val ids = syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
             if (
                 !SyncEventContract.hasCompletePrimaryIds(
                     domain = entry.domain,
@@ -6509,11 +6702,14 @@ class DefaultInventoryRepository(
                     "invalid_persisted_metadata", entry.attemptCount + 1, 0)
                 continue
             }
+            val wireIds = correctionIds ?: if (shopId != null && entry.domain == SyncEventDomains.PRICES && usesCanonicalShopV6Boundary(remote)) {
+                db.withTransaction { withSyncEventPriceParents(ids) }
+            } else ids
             val params = SyncEventRecordRpcParams(
                 domain = entry.domain,
                 eventType = entry.eventType,
                 changedCount = entry.changedCount,
-                entityIds = ids,
+                entityIds = wireIds ?: ids,
                 storeId = remoteStoreIdFromStoreScope(entry.storeScope),
                 source = entry.source,
                 sourceDeviceId = entry.sourceDeviceId,
@@ -6522,7 +6718,10 @@ class DefaultInventoryRepository(
                 metadata = persistedMetadata,
                 shopId = shopIdFromStoreScope(entry.storeScope)
             )
-            val result = businessScopedRemoteCall { remote.recordSyncEvent(params) }
+            val result = if (wireIds == null || (shopId != null && entry.domain == SyncEventDomains.PRICES &&
+                    usesCanonicalShopV6Boundary(remote) && !syncEventPriceEnvelopeFits(wireIds)))
+                Result.failure(ShopSyncContractException("sync_event_price_parent_invalid"))
+                else businessScopedRemoteCall { remote.recordSyncEvent(params) }
             if (result.isSuccess) {
                 requireCurrentBusinessDataScope()
                 syncEventOutboxDao.deleteById(entry.id)
@@ -6537,8 +6736,7 @@ class DefaultInventoryRepository(
                 )
             } else {
                 requireCurrentBusinessDataScope()
-                val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
-                    ?: "unknown"
+                val errorType = syncEventOutboxErrorType(result.exceptionOrNull(), params, remote)
                 val nextAttemptCount = entry.attemptCount + 1
                 requireCurrentBusinessDataScope()
                 syncEventOutboxDao.update(
@@ -6564,7 +6762,7 @@ class DefaultInventoryRepository(
             pendingAfter = pendingAfter,
             retryLoaded = pending.size,
             retryEligible = retryEligible,
-            retrySkippedMaxAttempts = skippedMaxAttempts,
+            retrySkippedMaxAttempts = (skippedMaxAttempts - correctionClaims).coerceAtLeast(0),
             retrySucceeded = retrySucceeded,
             retryFailed = retryFailed,
             retryDeletedOnSuccess = retryDeletedOnSuccess
@@ -6606,7 +6804,17 @@ class DefaultInventoryRepository(
         var recordedChunks = 0
         var enqueuedChunks = 0
         var outboxInserted = 0
-        val chunks = if (ids.isEmpty) listOf(ids) else SyncEventContract.chunkPrimaryIds(domain, ids)
+        val primaryChunks = if (ids.isEmpty) listOf(ids) else SyncEventContract.chunkPrimaryIds(domain, ids)
+        val chunks = if (shopId != null && domain == SyncEventDomains.PRICES && usesCanonicalShopV6Boundary(remote)) {
+            primaryChunks.flatMap { chunk ->
+                val linked = db.withTransaction { withSyncEventPriceParents(chunk) }
+                if (linked != null && !syncEventPriceEnvelopeFits(linked)) {
+                    // Only fresh operation IDs may be split; old persisted operations remain indivisible.
+                    chunk.priceIds.chunked(SyncEventContract.MAX_PRICE_ENTITY_IDS_PER_EVENT / 2)
+                        .map { SyncEventEntityIds(priceIds=it) }
+                } else listOf(chunk)
+            }
+        } else primaryChunks
         for ((index, chunk) in chunks.withIndex()) {
             val clientEventId = buildClientEventId(batchId, domain, eventType, chunk, index)
             val chunkChangedCount = SyncEventContract.primaryChangedCount(domain, chunk)
@@ -6620,11 +6828,14 @@ class DefaultInventoryRepository(
                 put("chunk_count", chunks.size)
                 put("entity_ids_compacted", false)
             }
+            val wireIds = if (shopId != null && domain == SyncEventDomains.PRICES && usesCanonicalShopV6Boundary(remote)) {
+                db.withTransaction { withSyncEventPriceParents(chunk) }
+            } else chunk
             val params = SyncEventRecordRpcParams(
                 domain = domain,
                 eventType = eventType,
                 changedCount = chunkChangedCount,
-                entityIds = chunk,
+                entityIds = wireIds ?: chunk,
                 storeId = remoteStoreIdFromStoreScope(storeScope),
                 source = "android",
                 sourceDeviceId = deviceId,
@@ -6633,15 +6844,15 @@ class DefaultInventoryRepository(
                 metadata = metadata,
                 shopId = shopId
             )
-            val result = businessScopedRemoteCall { remote.recordSyncEvent(params) }
+            val result = if (wireIds == null) Result.failure(ShopSyncContractException("sync_event_price_parent_invalid"))
+                else businessScopedRemoteCall { remote.recordSyncEvent(params) }
             if (result.isSuccess) {
                 recordedChunks++
                 continue
             }
             enqueuedChunks++
             requireCurrentBusinessDataScope()
-            val errorType = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it).category.name }
-                ?: "unknown"
+            val errorType = syncEventOutboxErrorType(result.exceptionOrNull(), params, remote)
             val insertId = syncEventOutboxDao.insert(
                 SyncEventOutboxEntry(
                     ownerUserId = ownerUserId,
@@ -6825,6 +7036,7 @@ class DefaultInventoryRepository(
         const val SYNC_EVENT_ENTITY_ID_BUDGET = SyncEventContract.MAX_PRIMARY_ENTITY_IDS_PER_EVENT
         const val SYNC_EVENT_OUTBOX_RETRY_LIMIT = 20
         const val SYNC_EVENT_OUTBOX_MAX_ATTEMPTS = 5
+        const val SYNC_EVENT_OUTBOX_V6_SHOP_PAYLOAD_VALIDATION = "PayloadValidationV6ShopScope"
         const val SYNC_EVENT_APPLY_MAX_ATTEMPTS = 5
         // Contratto V6: history targeted massimo tre ID per chiamata.
         const val SHOP_SYNC_HISTORY_TARGETED_ID_LIMIT = 3

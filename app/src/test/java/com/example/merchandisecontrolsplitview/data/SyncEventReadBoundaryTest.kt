@@ -7,6 +7,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -94,6 +95,26 @@ class SyncEventReadBoundaryTest {
     }
 
     @Test
+    fun shopV6WireOmitsOnlyLegacyAliasAndPreservesGlobalAndConflictingScopes() = runTest {
+        val calls = mutableListOf<JsonObject>()
+        val source = SupabaseSyncEventRemoteDataSource { function, payload ->
+            assertEquals("record_sync_event_v6", function)
+            calls += payload
+            val params = Json.decodeFromJsonElement(SyncEventRecordRpcParams.serializer(), payload)
+            if (params.shopId != null && params.storeId != null) Result.failure(SyncEventRpcCodedException("22023"))
+            else Result.success(remoteRow(1L))
+        }
+        val global = globalParams()
+        assertTrue(source.recordSyncEvent(global).isSuccess)
+        val shop = global.copy(shopId = uuid(4), storeId = uuid(4))
+        assertTrue(source.recordSyncEvent(shop).isSuccess)
+        val conflict = shop.copy(storeId = uuid(5))
+        assertTrue(source.recordSyncEvent(conflict).isFailure)
+        val decoded = calls.map { Json.decodeFromJsonElement(SyncEventRecordRpcParams.serializer(), it) }
+        assertEquals(listOf(global, shop.copy(storeId = null), conflict), decoded)
+    }
+
+    @Test
     fun `139 missing strict V6 falls back once only for a legacy compatible global event`() =
         runTest {
             for (missingCode in listOf("PGRST202", "42883")) {
@@ -118,6 +139,56 @@ class SyncEventReadBoundaryTest {
                 assertFalse(calls.last().second.containsKey("p_shop_id"))
             }
         }
+
+    @Test
+    fun strictV6DoesNotStripUnknownMetadataOrNonemptyForeignDomainIds() = runTest {
+        val metadata = kotlinx.serialization.json.buildJsonObject {
+            put("task",kotlinx.serialization.json.JsonPrimitive("045"))
+            put("source",kotlinx.serialization.json.JsonPrimitive("android_repository"))
+            put("chunk_index",kotlinx.serialization.json.JsonPrimitive(0))
+            put("chunk_count",kotlinx.serialization.json.JsonPrimitive(1))
+            put("entity_ids_compacted",kotlinx.serialization.json.JsonPrimitive(false))
+        }
+        val original = globalParams().copy(source="android",metadata=metadata)
+        val cases = listOf(original.copy(metadata=JsonObject(metadata+("unexpected" to kotlinx.serialization.json.JsonPrimitive(true)))),
+            original.copy(metadata=JsonObject(metadata+("entity_ids_compacted" to kotlinx.serialization.json.JsonPrimitive(true)))),
+            original.copy(entityIds=requireNotNull(original.entityIds).copy(priceIds=listOf(uuid(6)))))
+        for (params in cases) {
+            var actual: JsonObject? = null
+            val source = SupabaseSyncEventRemoteDataSource { name,payload ->
+                assertEquals("record_sync_event_v6",name);actual=payload;deployedV6ShopEventContract(uuid(7),payload)
+            }
+            assertTrue(source.recordSyncEvent(params).isFailure)
+            val wire = Json.decodeFromJsonElement(SyncEventRecordRpcParams.serializer(),requireNotNull(actual))
+            if (params.metadata!=metadata) assertEquals(params.metadata,wire.metadata)
+            else assertEquals(params.entityIds?.priceIds,wire.entityIds?.priceIds)
+        }
+    }
+
+    @Test
+    fun missingV6PreservesTheOriginalLegacyEnvelopeWhileStrictWireIsCanonical() = runTest {
+        for (code in listOf("PGRST202", "42883")) {
+            val original = globalParams().copy(source="android", metadata=kotlinx.serialization.json.buildJsonObject {
+                put("task", kotlinx.serialization.json.JsonPrimitive("045"))
+                put("source", kotlinx.serialization.json.JsonPrimitive("android_repository"))
+                put("chunk_index", kotlinx.serialization.json.JsonPrimitive(0))
+                put("chunk_count", kotlinx.serialization.json.JsonPrimitive(1))
+                put("entity_ids_compacted", kotlinx.serialization.json.JsonPrimitive(false))
+            })
+            val calls = mutableListOf<Pair<String, JsonObject>>()
+            val remote = SupabaseSyncEventRemoteDataSource { name, payload ->
+                calls += name to payload
+                if (name == "record_sync_event_v6") Result.failure(SyncEventRpcCodedException(code))
+                else Result.success(remoteRow(1L))
+            }
+            assertTrue(remote.recordSyncEvent(original).isSuccess)
+            val serialized = Json.encodeToJsonElement(SyncEventRecordRpcParams.serializer(), original) as JsonObject
+            assertEquals(JsonObject(serialized.filterKeys { it != "p_shop_id" }), calls.last().second)
+            assertFalse("strict normalized metadata must not change an old idempotent legacy body",
+                calls.first().second["p_metadata"] == calls.last().second["p_metadata"])
+            assertEquals(listOf("record_sync_event_v6", "record_sync_event"), calls.map { it.first })
+        }
+    }
 
     @Test
     fun `139 validation lease and network failures never fall back to legacy`() = runTest {
