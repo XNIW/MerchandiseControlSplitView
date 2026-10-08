@@ -172,6 +172,66 @@ class CheckpointTraceActivityLifecycleTest {
         }
     }
 
+    @Test fun localThreadSnapshotColdDeliveryNeverArmsReadinessOrTrace() {
+        val incoming = Intent(Intent.ACTION_MAIN).putExtra("task143_local_thread_snapshot", true)
+        val activity = Robolectric.buildActivity(MainActivity::class.java, incoming).create()
+        try {
+            assertFalse(incoming.hasExtra("task143_local_thread_snapshot"))
+            assertTrue(ShadowLog.getLogsForTag("Task143LocalThreads").single().msg.contains("outcome=BLOCKED_NOT_WARM"))
+            assertTrue(traces().isEmpty())
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").isEmpty())
+            assertNull(activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
+                .apply { isAccessible = true }.get(activity.get()))
+        } finally { activity.destroy() }
+    }
+
+    @Test fun localThreadSnapshotMixedDeliveryDisarmsAllDiagnosticAndSmokeExtras() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java, ordinaryIntent()).create().start().resume()
+        val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val beforeShare = MainActivity.ShareBus.uris.replayCache
+        try {
+            val mixed = Intent(Intent.ACTION_SEND)
+                .putExtra("task143_local_thread_snapshot", true)
+                .putExtra("task143_checkpoint_readiness", true).putExtra(EXTRA, true)
+                .putExtra("task087_smoke", true).putExtra("task126_ui_smoke_kind", "checkpoint-lifecycle")
+                .putExtra(Intent.EXTRA_STREAM, Uri.parse("content://synthetic-thread-snapshot/missing.xlsx"))
+            activity.pause().newIntent(mixed).resume()
+            for (extra in listOf("task143_local_thread_snapshot", "task143_checkpoint_readiness", EXTRA,
+                "task087_smoke", "task126_ui_smoke_kind")) assertFalse(mixed.hasExtra(extra))
+            assertTrue(ShadowLog.getLogsForTag("Task143LocalThreads").single().msg.contains("outcome=BLOCKED_CONFLICT"))
+            assertTrue(traces().isEmpty())
+            assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").isEmpty())
+            assertTrue(ShadowLog.getLogsForTag("Task087Smoke").isEmpty())
+            assertEquals(beforeShare, MainActivity.ShareBus.uris.replayCache)
+            assertFalse(app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
+            assertNull(activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
+                .apply { isAccessible = true }.get(activity.get()))
+        } finally { activity.pause().stop().destroy() }
+    }
+
+    @Test fun localThreadSnapshotWarmNonTestAndStoppedDeliveriesNeverArmAResumeObserver() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java, ordinaryIntent()).create().start().resume()
+        val queued = StandardTestDispatcher()
+        Dispatchers.setMain(queued)
+        try {
+            activity.pause().newIntent(Intent(Intent.ACTION_MAIN).putExtra("task143_local_thread_snapshot", true))
+            assertTrue(ShadowLog.getLogsForTag("Task143LocalThreads").isEmpty())
+            activity.resume()
+            queued.scheduler.runCurrent()
+            assertTrue(ShadowLog.getLogsForTag("Task143LocalThreads").single().msg.contains("outcome=BLOCKED_TEST_TARGET"))
+            ShadowLog.clear()
+            activity.pause().stop().newIntent(Intent(Intent.ACTION_MAIN).putExtra("task143_local_thread_snapshot", true))
+            queued.scheduler.runCurrent()
+            assertTrue(ShadowLog.getLogsForTag("Task143LocalThreads").single().msg.contains("outcome=BLOCKED_NOT_WARM"))
+            assertNull(activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
+                .apply { isAccessible = true }.get(activity.get()))
+            assertTrue(traces().isEmpty())
+        } finally {
+            Dispatchers.setMain(dispatcherRule.dispatcher)
+            activity.destroy()
+        }
+    }
+
     private fun ordinaryIntent() = Intent(Intent.ACTION_MAIN).putExtra("task126_ui_smoke_kind", "checkpoint-lifecycle")
     private fun diagnosticIntent() = ordinaryIntent().putExtra(EXTRA, true)
     private fun traces() = ShadowLog.getLogsForTag("Task143CheckpointTrace").map { it.msg }

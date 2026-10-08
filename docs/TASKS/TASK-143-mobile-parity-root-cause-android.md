@@ -208,6 +208,83 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-08 UTC — gate finale tab Database / reporter, risultati actual
+
+Questa voce aggiorna le precedenti preparazioni: codice congelato nel source538 `bff1bd95`, Task pre-gate `950d8937`. Dopo i gate il solo append documentale corrente modifica il Task; gli altri537 file pubblici restano byte-identici al gate03. Nessun rerun richiesto o eseguito per questa sola documentazione; Master/Planning e fonte app/test preservati.
+
+**Check obbligatori — risultati del runner owner:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | Gate03 unico,22:36:21–22:40:24UTC, exit0/BUILD_SUCCESSFUL; assembleDebug e compilazione/package androidTest, PG82084 assente al rilascio, nessun segnale/timeout. |
+| Lint | ESEGUITO | 44 warning/0error, stesse firme senza aggiunte/rimozioni. XML non byte-identico: sole posizioni DatabaseScreenComponents400→399 e515→514. |
+| Warning nuovi | ESEGUITO | Nessun diagnostic compilatore nuovo; quattro deprecation Thread.id del gate02 eliminate col helper locale API36/31–35. |
+| Coerenza con planning | ESEGUITO | Wrapping minimo delle etichette, corretto spazio di coordinate del test e compatibilità reporter; nessuna modifica business, navigation o permessi. |
+| Criteri di accettazione | ESEGUITO per questa slice; globale aperta | GREEN7 e QA circoscritta tab/banner/header nelle8 configurazioni; task FIX, non DONE e nessuna accettazione autenticata globale dedotta. |
+
+**Baseline TASK-004:**76 XML ufficiali freschi,1250 casi unici =1243PASS/7SKIP,0FAIL/ERROR, nessun duplicato, stessi ID e ragioni dei sette skip. Le classi JVM/Robolectric pertinenti a repository/ViewModel/Excel/sync sono comprese; le sei nuove guard/privacy regressioni reporter passano. Sono prove locali, non UI autenticata né cattura diagnostica sul processo primario. Receipt raw `resume-20261008-android-v6-final-gates-actual-03/receipt.json` SHA `3e2859490c4fa33138cf51ba97f738a9f203c36ef4410294a98872f614bddf5e`; qualificazione `local-qualified.json` SHA `171e0276685dd6368d3df032d858e3df78ddb9790b6d39db0ed84d50db13fda0`. Gate02 e relativi warning restano preservati come prova precedente, non riclassificati.
+
+**Compose / visuale actual:** tutta LocalAvailabilityRootDeviceTest,7 metodi ufficiali PASS; receipt `android-database-secondary-tabs-green-device-01/receipt.json` SHA `35e09581bbae54ffa6ce3eb3f540668b0f91d927248b1eab44ae8062da153eb7`, terminale22:44:50UTC, tutti gruppi propri assenti e AVD eliminato.16 PNG completi CRC/raster, letti dal root a risoluzione originale; adjudication `visual-adjudication-original-pngs.json` SHA `6219055ea231539c1fef6c66505a7cc8535f98d9bb83dbeb0e0b9c1e0aa7a2d4`. Tutte24 etichette complete, banner/titolo/import/export liberi, azioni dei tab e query preservate nelle quattro lingue × font1/1.6. Il wrapping può spezzare parole a360dp/160%, senza ridurre font o nascondere caratteri. L'apparente prima A del banner ES160 è un errore di lettura risolto: primi350 pixel del raster identici fra i due metodi e A completa, senza nuova immagine o rerun. Sei metodi/helper originali intatti; RED02 delle10 etichette realmente incomplete conservato.
+
+**Limiti:** cattura nativa del reporter NON ESEGUITA, holder/causa della ricerca ancora UNKNOWN. KEYLESS dei gate non è il ProperTEST installabile né prova auth/READY/convergenza/iOS. Il PASS visuale riguarda soltanto tab/banner/header verificati; i residui estranei sono nel Handoff. Root owner di review finale, Git/CI e prossima operazione nativa; nessuna azione di runtime o codice aggiunta da questo append.
+
+
+### Esecuzione — 2026-10-08 UTC — tab Database completi a font grande e compatibilità reporter
+
+**File modificati:** `DatabaseScreenComponents.kt` (solo rimozione di `maxLines = 1` dalle etichette dei tab secondari); `LocalAvailabilityRootDeviceTest.kt` (solo nuovo metodo7 e relativo oracolo); `MerchandiseControlApplication.kt` (solo accessor privato ID thread compatibile); questo task, sole Execution/Fix. Sei test Compose preesistenti/helper, predicate Excel9e3259, MainActivity/guard reporter, Master e Planning preservati.
+
+**UI/UX — motivo CA-06/CA-10:** la verifica nativa del coordinatore sull'APK corrente mostra etichette Products/Suppliers/Categories e traduzioni tagliate a font1.6. Il test usa AppNavGraphContent reale con receipt Room attivata, viewport360dp, quattro lingue × font1/1.6, azioni tab/header e query preservate; non replica una Row fittizia. La Tab Material3 fornisce già TextAlign.Center e altezza adattiva: rimuovere il limite a una riga permette il wrapping naturale, senza font ridotti, nuovo componente, fillMaxWidth, cambi di stato/navigation/business.
+
+**RED qualificato e precisione dell'oracolo:** RED01 ufficiale conserva24 flag hasVisualOverflow e8PNG, ma non prova24 tagli dipinti. RED02, receipt `android-database-secondary-tabs-precise-red-device-02/receipt.json` SHA `e2637f0df5ca8d3c9084c929a78713b561c50a551392b07f119dad0c57e866a8`, termina22:25:44UTC con1FAIL,8PNG e cleanup/source-preservation PASS:10 etichette incomplete per fine visibile/altezza (IT/ES/EN tre ciascuna a1.6, ES Proveedores a1.0/360dp). Le altre14 erano complete. Foundation1.11.2 ricostruisce il MultiParagraph semantico alla larghezza massima anche se il nodo Text è più stretto; i limiti centrati sono quindi traslati rispetto al nodo. Il solo metodo7 verifica ora TextAlign.Center e sottrae `(multiParagraph.width - size.width) / 2` da x di linee/glifi prima del confronto/proiezione; y invariato. Fine visibile completa, assenza ellissi e overflow verticale restano obbligatori; quei10 RED hanno offset0 e non vengono assorbiti. Width flag resta diagnostico. Tolleranza1px soltanto per Float→IntSize, nessuna aggiunta per i bounds reali del Tab/header. Asserzioni azioni/query e sei test/helper originali intatti. Nessun terzo RED invariato eseguito.
+
+**Warning e gate precedente:** il canonico owner `resume-20261008-android-v6-final-gates-actual-02/receipt.json` SHA `45651ff1b4a16417cb2a6a31868f4e0b56501b052fa60ee8d171d48abaf75025` ha Gradle BUILD_SUCCESSFUL e1250 casi (1243PASS/7sameSKIP,76XML), lint44 byte-identico/0nuovi, ma resta NOT_PASS per quattro deprecation di Thread.id. Un helper privato usa `thread.threadId()` da API36 e l'accessor legacy su Android31–35, con sola Suppress(DEPRECATION) locale motivata; i quattro call-site lo riusano. Nessun cambiamento a formato, limiti, privacy o guard della cattura.
+
+**Check obbligatori sul nuovo delta:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Nuovo gate finale e compilazione androidTest affidati al root owner. |
+| Lint / warning nuovi | NON ESEGUITO | Verificare il helper API36 e assenza delle quattro deprecation nel nuovo gate; nessun PASS anticipato. |
+| Coerenza con planning | ESEGUITO | Difetto UX concreto e warning del diagnostico già autorizzato, CA-06/CA-10; nessun nuovo scope business. |
+| Criteri di accettazione | NON ESEGUITO integralmente | Nuovo GREEN7 e QA originale delle configurazioni pendenti; FIX, non DONE. |
+
+**Baseline TASK-004 / limiti:** il canonico1250 precedente include la baseline JVM/Robolectric; il root eseguirà quella finale sulle fonti congelate. Il test Compose non sostituisce TASK-004 né accettazione autenticata, ricerca/latency, READY, convergenza o controparte iOS. KEYLESS del gate non installabile sul primario; nessuna esecuzione/build/device/Git/config da questo executor. Fonte ferma dopo il freeze per gate e review del coordinatore.
+
+
+### Esecuzione — 2026-10-08 UTC — snapshot tecnico locale DEBUG per ricerca pendente
+
+**File modificati:** `MainActivity.kt`, `MerchandiseControlApplication.kt`, soli test additivi in `CheckpointTraceActivityLifecycleTest.kt` e `MerchandiseControlApplicationTest.kt`; questo task, sole Execution/Handoff. La precedente predicate Excel è invariata.
+
+**Motivo e scope:** sul nuovo APK la query locale resta con refresh Paging attivo e righe precedenti. Il successivo remount con query riuscita non chiude la latenza né identifica il holder; debugcap non disponibile e JDWP non qualificato non consentono una diagnosi già provata. Mandato diagnostico minimo del coordinatore: sola osservazione tecnica in memoria, nessuna correzione dei dati o della sincronizzazione dedotta da questo sintomo.
+
+**Azioni eseguite:** ramo dedicato `task143_local_thread_snapshot` prima di readiness/trace, solo DEBUG e digest TEST esatto già esistente. Cold/nonforeground/nonTEST e intent misti sono rifiutati; gli extra diagnostici/smoke misti vengono disarmati e i relativi handler non sono chiamati. Gli intent ordinari senza il nuovo extra conservano il comportamento precedente. Nessun nuovo lifecycle observer. Reporter su Dispatchers.Default, una sola acquisizione `Thread.getAllStackTraces()` per processo, protetta da stato atomico esclusivamente diagnostico; rifiuti antecedenti al claim non consumano il tentativo. Nessun auth getter, query Room, RPC, mutex business, recovery, reset, flag READY o nuovo motore.
+
+Output limitato a PID/uptime, threadID/state/kind chiuso e frame con classi/metodi allowlisted/linea/native; nomi thread, file, messaggi/stack Throwable, argomenti e valori business non vengono esportati. Massimo128 thread/48 frame per thread/64KiB di messaggi, conteggi e indicazione truncated; simboli sconosciuti omessi. Il cap limita l'export, non il costo interno della raccolta. Gli stack sono temporali per-thread, non atomici; i chiamanti logici di coroutine sospese e il holder possono mancare. Nessuna sospensione debugger esplicita e nessuna garanzia di costo nullo.
+
+**Verifiche preparate, NON ESEGUITE:** tre regressioni Activity reali per cold/mixed/nonTEST/background senza trace/readiness/smoke; tre regressioni Application per rifiuto senza query/lock business, privacy dei frame e budget/troncamento. Metodi/assert/helper preesistenti intatti. Compilazione/test/BUILD/LINT/WARNING e review finale del delta pendenti al runner coordinato; nessun runtime/device/config/backend/Git da questa lane. Coerenza con mandato CA-07/CA-10 verificata staticamente; acceptance globale ancora aperta, task FIX. Master e Planning invariati.
+
+### Esecuzione — 2026-10-08 UTC — attesa terminale del test addManualRow dopo FAIL CI
+
+**File modificati:**
+- `app/src/test/java/com/example/merchandisecontrolsplitview/viewmodel/ExcelViewModelTest.kt` — una sola predicate di `waitForCondition` nel test `addManualRow appends row updates history entry and tracks last category`; attende `historyActionMessage == app.getString(R.string.manual_row_added)` invece della categoria intermedia. Helper/timeout3000ms, tutte le asserzioni e produzione invariati.
+- Questo task, sole Execution/Fix/Handoff — prova CI e motivazione della sincronizzazione del test.
+
+**Azioni eseguite:**
+1. MASTER e Task143 confermati ACTIVE/FIX, scope CA-08/CA-10; branch isolato `codex/android-local-query-and-gates-20261008`, HEAD `46bbb8240a68f41d3d68cb0e556089e80761a234`, checkout inizialmente pulito. Nessuna modifica Master/Planning.
+2. Letto XML originale mainCI37844829763 in `android-sync-banner-header-main-ci-01/adjudicated/reports/app/build/test-results/testDebugUnitTest/TEST-com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest.xml`: unico FAIL del set1244 (1236 PASS/1 FAIL/7 SKIP), assertion1336 `expected:<Row added> but was:<null>`. Il risultato originale resta preservato, senza rerun artificiale.
+3. `addManualRow` salva su Dispatchers.IO tramite `saveCurrentStateToHistory`, poi pubblica `lastUsedCategory` prima di `historyActionMessage`. La vecchia attesa può osservare la prima assegnazione prima della seconda; attendere il feedback terminale già richiesto dall'ultima asserzione elimina questa finestra senza indebolire il contratto dati/categoria/feedback.
+
+**Check obbligatori:**
+| Check | Stato | Note |
+|---|---|---|
+| Build Gradle | NON ESEGUITO | Lane locale del coordinatore; nessuna build in questa preparazione. |
+| Lint | NON ESEGUITO | Da eseguire sul delta finale dal runner owner. |
+| Warning nuovi | NON ESEGUITO | Nessuna compilazione o lint nuova; nessun PASS dedotto. |
+| Coerenza con planning | ESEGUITO | Riparazione minima del test CI concreto, CA-08/CA-10; sola predicate e documentazione. |
+| Criteri di accettazione | NON ESEGUITO | Verde del nuovo test/review/gate ancora pendenti; task FIX. |
+
+**Baseline regressione TASK-004:** test ExcelViewModel pertinente; nessun nuovo caso/assertion, stessi timeout e fixture. Esecuzione sul delta PENDING, non N/A. Il blocco ricerca nativo resta un'indagine distinta, non corretto né attribuito da questa patch.
+
+**Handoff notes:** sorgenti congelati dopo questa modifica; root unico owner Git/runner. Nessun build/test/device/config/backend o modifica di produzione eseguiti dall'executor.
+
 ### Esecuzione — 2026-10-08 UTC — banner sync e intestazione Database, RED e fix minimo
 
 **File modificati:**
@@ -1276,6 +1353,15 @@ Review indipendente e re-review del primo batch completate; R-A04 scoperto nel s
 
 ## Fix
 
+### Fix — 2026-10-08 UTC — wrapping tab e ID thread compatibile
+
+Dopo il RED02 reale di10 etichette incomplete, rimossa soltanto la restrizione maxLines1 dai Text dei tab Database; centratura e altezza restano Material3. L'oracolo corregge lo spazio di coordinate del MultiParagraph semantico senza rilassare completezza/ellissi/altezza o bounds. L'accessor threadId passa all'API36 con fallback31–35 e suppress locale, per risolvere i quattro warning osservati. Sorgente congelata, nuovi build/lint/GREEN7/QA ancora pendenti; prove RED e gate precedente conservati, nessun DONE.
+
+
+### Fix — 2026-10-08 UTC — sincronizzazione del test manual row
+
+La sola attesa del test CI ora osserva il feedback terminale `manual_row_added`, già asserito dal test, anziché la precedente assegnazione `lastUsedCategory`. Tutte le asserzioni, il timeout3000ms e la produzione restano byte-identici. FAIL CI originale preservato; nessun GREEN dichiarato prima del runner coordinato.
+
 ### Fix — 2026-10-08 UTC — verifica finale del banner
 
 Chiuso localmente il batch geometria/testo: RED24 intersezioni→GREEN, poi RED15 overflow→GREEN6 e8 PNG validi/visione originale PASS. Gate finale1244=1237PASS+7sameSKIP,44 lint/0nuovi. Il falso allarme ES1.6 della vista ridimensionata è adjudicato sullo stesso PNG originale, senza patch della forma né rerun. Sorgenti/test finali invariati; review C approvate, task FIX e accettazione globale aperta. Le righe «pendenti» nelle note di preparazione sottostanti descrivono quei momenti storici.
@@ -1525,6 +1611,21 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff — 2026-10-08 UTC — slice tab/reporter verificata localmente, writer rilasciato
+
+Gate03 actual1250 (1243PASS/7sameSKIP), build/lint/0nuovi warning e GREEN7/16PNG circoscritti PASS. Il solo Task viene aggiornato dopo il gate; altri537 leaf pubblici identici, Master/Planning invariati. Le precedenti frasi «test pendenti» sono snapshot di preparazione superati da questa Execution; la raccolta nativa del reporter resta invece NON ESEGUITA e holder ricerca UNKNOWN. Fonte ferma, writer rilasciato; root gestisce review/Git/CI e installazione autorizzata separatamente, nessun nuovo gate per soli docs.
+
+Residuo visuale da valutare separatamente: in alcune viste sintetiche vuote IT/ES/ZH a160%, il testo di risultato vuoto interseca il Camera FAB. È fuori dal fix minimo dei tab e non è stato corretto né dichiarato PASS. Etichette complete con wrapping naturale anche interno alle parole; nessuna riduzione del font. Nessuna chiusura globale UI/auth/business/iOS o DONE; task FIX.
+
+
+### Handoff — 2026-10-08 UTC — diagnostico stack locale preparato, non eseguito
+
+Solo il coordinatore può compilare/qualificare TEST/installare e decidere una raccolta sul processo corrente. Il reporter non forza reentry, non legge journal o dati e non prova READY/convergenza; il blocco ricerca resta senza causa identificata. Fonte congelata, writer rilasciato dopo consegna patch/pin; sei nuovi test ancora NON ESEGUITI. Conservare il precedente fix Excel e tutti i test/assert originali. Nessun nuovo framework o dipendenza.
+
+### Handoff — 2026-10-08 UTC — test Excel congelato, writer rilasciato
+
+Unica predicate modificata in ExcelViewModelTest e sole tre aggiunte documentali owned. Verifica locale/CI sul nuovo delta ancora PENDING; nessuna modifica al blocco ricerca, ai dati, al banner o ai test Compose. Root mantiene ownership di build/review/Git e dispositivo; task FIX, acceptance globale aperta.
 
 ### Handoff — 2026-10-08 UTC — banner sync verificato, writer rilasciato
 

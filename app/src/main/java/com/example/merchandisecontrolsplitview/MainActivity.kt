@@ -163,7 +163,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!consumeCheckpointReadinessIntent(intent, warmForeground = false)) {
+        val localThreadSnapshot = consumeLocalThreadSnapshotIntent(intent, warmForeground = false)
+        if (!localThreadSnapshot && !consumeCheckpointReadinessIntent(intent, warmForeground = false)) {
             consumeCheckpointTraceIntent(intent, warmForeground = false)
         }
 
@@ -180,8 +181,10 @@ class MainActivity : ComponentActivity() {
             ExistingWorkPolicy.KEEP,             // non enqueua se c'è già una run pendente
             OneTimeWorkRequestBuilder<PriceBackfillWorker>().build()
         )
-        handleShareIntent(intent)
-        runTask087SandboxSmokeIfRequested(intent)
+        if (!localThreadSnapshot) {
+            handleShareIntent(intent)
+            runTask087SandboxSmokeIfRequested(intent)
+        }
         setContent {
             val context = LocalContext.current
             val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
@@ -213,6 +216,9 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         this.intent = intent
+        if (consumeLocalThreadSnapshotIntent(
+                intent, warmForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            )) return
         if (consumeCheckpointReadinessIntent(
                 intent, warmForeground = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
             )) return
@@ -221,6 +227,26 @@ class MainActivity : ComponentActivity() {
             )) return
         handleShareIntent(intent)
         runTask087SandboxSmokeIfRequested(intent)
+    }
+
+    private fun consumeLocalThreadSnapshotIntent(intent: Intent?, warmForeground: Boolean): Boolean {
+        if (!BuildConfig.DEBUG ||
+            intent?.getBooleanExtra("task143_local_thread_snapshot", false) != true) return false
+        val conflictingIntent = intent.extras?.keySet()?.any { it != "task143_local_thread_snapshot" } == true ||
+            intent.action !in listOf(null, Intent.ACTION_MAIN) || intent.data != null || intent.clipData != null ||
+            pendingCheckpointTraceObserver != null
+        intent.removeExtra("task143_local_thread_snapshot")
+        // Cold/mixed delivery must not fall through to any existing diagnostic or smoke path.
+        listOf("task143_checkpoint_readiness", "task143_checkpoint_trace", "task087_smoke",
+            "task126_ui_smoke_kind").forEach(intent::removeExtra)
+        lifecycleScope.launch(Dispatchers.Main) {
+            (application as MerchandiseControlApplication).reportLocalThreadSnapshot(
+                warmForeground = warmForeground,
+                isActivityResumed = { lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) },
+                conflictingIntent = conflictingIntent
+            )
+        }
+        return true
     }
 
     private fun consumeCheckpointReadinessIntent(intent: Intent?, warmForeground: Boolean): Boolean {

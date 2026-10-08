@@ -1325,7 +1325,7 @@ class ExcelViewModelTest {
             categoryName = "Cat A"
         )
         advanceUntilIdle()
-        waitForCondition { viewModel.lastUsedCategory.value == "Cat A" }
+        waitForCondition { viewModel.historyActionMessage.value == app.getString(R.string.manual_row_added) }
 
         assertEquals(2, viewModel.excelData.size)
         assertEquals("11112222", viewModel.excelData[1][0])

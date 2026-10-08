@@ -192,6 +192,150 @@ class LocalAvailabilityRootDeviceTest {
         assertTrue("Busy banner text must be complete and contained:\n${textFailures.joinToString("\n")}", textFailures.isEmpty())
     }
 
+    @Test fun actualDatabaseSecondaryTabsShowCompleteLabelsInFourLocalesAtLargeFont() {
+        val locales = listOf("it", "es", "zh", "en")
+        val fontScales = listOf(1.0f, 1.6f)
+        clearEvidence(*locales.flatMap { locale -> fontScales.map { font ->
+            "android-database-tabs-$locale-font${(font * 100).toInt()}.png"
+        } }.toTypedArray())
+        context.deleteDatabase(DB_NAME)
+        val db = openDatabase().also { database = it }
+        val repository = DefaultInventoryRepository(db)
+        val business = runBlocking {
+            db.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+            db.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+            assertTrue(coordinator(db, repository, Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote())
+                .recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+            assertNull(db.syncRecoveryJournalDao().get())
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+            repository.resolveBusinessDataScope(ownerScope())
+        }
+        assertTrue(business.allowsLocalOperations)
+        lateinit var databaseVM: DatabaseViewModel
+        lateinit var excelVM: ExcelViewModel
+        compose.runOnUiThread {
+            databaseVM = DatabaseViewModel(app, repository); store.put("database", databaseVM)
+            excelVM = ExcelViewModel(app, repository); store.put("excel", excelVM)
+        }
+        val language = mutableStateOf("it")
+        val selectedFontScale = mutableStateOf(1.0f)
+        val progress = mutableStateOf(CatalogSyncProgressState.idle())
+        compose.setContent {
+            val activityResultRegistryOwner = checkNotNull(LocalActivityResultRegistryOwner.current)
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(language.value)); fontScale = selectedFontScale.value
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val density = LocalDensity.current.density
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides cfg,
+                LocalDensity provides Density(density, selectedFontScale.value),
+                LocalActivityResultRegistryOwner provides activityResultRegistryOwner) {
+                MerchandiseControlTheme(darkTheme = false) {
+                    Box(Modifier.width(360.dp).fillMaxHeight().testTag("database-tabs-phone-viewport")) {
+                        AppNavGraphContent(app, excelVM, databaseVM, true,
+                            AuthState.SignedIn(OWNER, "root-test@example.invalid"), progress.value,
+                            ShopContext(OWNER, emptyList(), shop(), syncAllowed = true, localAccessAllowed = true), business)
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("root-tab-databaseScreen").performClick().assertIsSelected()
+        compose.onNodeWithTag("database-search").performTextReplacement("TABS-DRAFT")
+        val failures = mutableListOf<String>()
+        val measurements = mutableListOf<String>()
+        for (locale in locales) for (font in fontScales) {
+            compose.runOnIdle {
+                language.value = locale; selectedFontScale.value = font
+                progress.value = CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN)
+            }
+            compose.mainClock.advanceTimeBy(1_000)
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(locale)); fontScale = font
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val viewport = compose.onNodeWithTag("database-tabs-phone-viewport").fetchSemanticsNode().boundsInRoot
+            assertEquals("actual root phone width", 360f, viewport.width / context.resources.displayMetrics.density, 1f)
+            val title = compose.onNode(hasText(localized.getString(R.string.database)) and
+                !hasAnyAncestor(hasTestTag("root-tab-databaseScreen")), useUnmergedTree = true)
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            for (resource in listOf(R.string.import_file, R.string.export_file)) {
+                compose.onNodeWithContentDescription(localized.getString(resource))
+                    .assertHasClickAction().assertIsEnabled().assertIsDisplayed()
+            }
+            val search = compose.onNodeWithTag("database-search").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val labelResources = listOf(R.string.database_tab_products, R.string.database_tab_suppliers,
+                R.string.database_tab_categories)
+            for (resource in labelResources) {
+                val expected = localized.getString(resource)
+                val tab = compose.onNodeWithText(expected).assertHasClickAction().assertIsEnabled().assertIsDisplayed()
+                    .fetchSemanticsNode().boundsInRoot
+                val layouts = mutableListOf<TextLayoutResult>()
+                val text = compose.onNodeWithText(expected, useUnmergedTree = true).assertIsDisplayed()
+                    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(layouts) }
+                    .fetchSemanticsNode()
+                assertEquals("$locale/font=$font/$expected actual layout", 1, layouts.size)
+                val layout = layouts.single()
+                assertEquals(expected, layout.layoutInput.text.text)
+                assertEquals(androidx.compose.ui.text.style.TextAlign.Center, layout.layoutInput.style.textAlign)
+                // Simple Text semantics uses the maximum-width paragraph, while the node may be narrower.
+                val semanticOffsetX = (layout.multiParagraph.width - layout.size.width) / 2f
+                assertTrue("$locale/font=$font/$expected has a text line", layout.lineCount > 0)
+                val visibleEnds = (0 until layout.lineCount).map { layout.getLineEnd(it, visibleEnd = true) }
+                val ellipsized = (0 until layout.lineCount).map(layout::isLineEllipsized)
+                val lineBounds = (0 until layout.lineCount).map { line ->
+                    androidx.compose.ui.geometry.Rect(layout.getLineLeft(line), layout.getLineTop(line),
+                        layout.getLineRight(line), layout.getLineBottom(line))
+                }
+                val glyphBounds = expected.indices.map(layout::getBoundingBox)
+                val measurement = "$locale/font=$font/$expected size=${layout.size} " +
+                    "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height} " +
+                    "constraints=${layout.layoutInput.constraints} widthFlag=${layout.didOverflowWidth} " +
+                    "heightFlag=${layout.didOverflowHeight} maxLines=${layout.layoutInput.maxLines} " +
+                    "semanticOffsetX=$semanticOffsetX " +
+                    "visibleEnds=$visibleEnds expectedEnd=${expected.length} ellipsis=$ellipsized " +
+                    "lineBounds=$lineBounds glyphBounds=$glyphBounds"
+                measurements += measurement
+                android.util.Log.i("Task143TabLayout", measurement)
+                if (visibleEnds.last() != expected.length || ellipsized.any { it } || layout.didOverflowHeight) {
+                    failures += "$locale/font=$font/$expected incomplete visible text: " +
+                        "end=${visibleEnds.last()}/${expected.length}, ellipsis=$ellipsized, height=${layout.didOverflowHeight}"
+                }
+                val origin = text.positionInRoot
+                for ((kind, bounds) in listOf("line" to lineBounds, "glyph" to glyphBounds)) {
+                    for ((index, semanticRect) in bounds.withIndex()) {
+                        val rect = androidx.compose.ui.geometry.Rect(semanticRect.left - semanticOffsetX,
+                            semanticRect.top, semanticRect.right - semanticOffsetX, semanticRect.bottom)
+                        // Text size is exported as IntSize; tolerate only its subpixel rounding, never clipping a character.
+                        val insideText = rect.left >= -1f && rect.top >= -1f &&
+                            rect.right <= layout.size.width + 1f && rect.bottom <= layout.size.height + 1f
+                        val insideTab = origin.x + rect.left >= tab.left && origin.y + rect.top >= tab.top &&
+                            origin.x + rect.right <= tab.right && origin.y + rect.bottom <= tab.bottom
+                        if (!insideText || !insideTab) failures += "$locale/font=$font/$expected $kind$index outside: " +
+                            "rect=$rect origin=$origin textSize=${layout.size} tab=$tab"
+                    }
+                }
+                if (origin.x < tab.left || origin.y < tab.top ||
+                    origin.x + text.size.width > tab.right || origin.y + text.size.height > tab.bottom) {
+                    failures += "$locale/font=$font/$expected text outside actual tab: origin=$origin size=${text.size} tab=$tab"
+                }
+                if (tab.left < viewport.left || tab.right > viewport.right || tab.top < title.bottom || tab.bottom > search.top) {
+                    failures += "$locale/font=$font/$expected tab outside visible header: tab=$tab viewport=$viewport title=$title search=$search"
+                }
+            }
+            // Exercise the production tab actions, then return to the same product query.
+            for (resource in labelResources.drop(1) + labelResources.first()) {
+                compose.onNodeWithText(localized.getString(resource)).performClick().assertIsSelected()
+            }
+            compose.onNodeWithTag("root-tab-databaseScreen").assertIsSelected().assertIsEnabled()
+            compose.onNodeWithTag("database-search").assertTextContains("TABS-DRAFT")
+            assertEquals("TABS-DRAFT", databaseVM.filter.value)
+            capture("android-database-tabs-$locale-font${(font * 100).toInt()}.png")
+        }
+        assertTrue("Database secondary tab labels must be complete and contained:\n${failures.joinToString("\n")}\n" +
+            "Actual layout measurements:\n${measurements.joinToString("\n")}", failures.isEmpty())
+    }
+
     @Test fun ordinaryEventDrainRecoveryKeepsActualRootDraftAndSaveAvailable() =
         ordinaryRecoveryKeepsActualRootAvailable(push = false)
 
