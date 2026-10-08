@@ -1,6 +1,14 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
 import android.graphics.Bitmap
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import com.example.merchandisecontrolsplitview.R
 import android.content.res.Configuration
 import android.os.LocaleList
 import androidx.compose.runtime.CompositionLocalProvider
@@ -64,6 +72,124 @@ class LocalAvailabilityRootDeviceTest {
         database?.close()
         context.deleteDatabase(DB_NAME)
         ShopSyncRecoveryTestHooks.reset()
+    }
+
+    @Test fun actualBusySyncBannerDoesNotOverlapDatabaseHeaderInFourLocales() {
+        val locales = listOf("it", "es", "zh", "en")
+        val fontScales = listOf(1.0f, 1.6f)
+        clearEvidence(*locales.flatMap { locale -> fontScales.map { font ->
+            "android-sync-banner-$locale-font${(font * 100).toInt()}.png"
+        } }.toTypedArray())
+        context.deleteDatabase(DB_NAME)
+        val db = openDatabase().also { database = it }
+        val repository = DefaultInventoryRepository(db)
+        val business = runBlocking {
+            db.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+            db.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+            assertTrue(coordinator(db, repository, Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote())
+                .recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+            assertNull(db.syncRecoveryJournalDao().get())
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+            repository.resolveBusinessDataScope(ownerScope())
+        }
+        assertTrue(business.allowsLocalOperations)
+        lateinit var databaseVM: DatabaseViewModel
+        lateinit var excelVM: ExcelViewModel
+        compose.runOnUiThread {
+            databaseVM = DatabaseViewModel(app, repository); store.put("database", databaseVM)
+            excelVM = ExcelViewModel(app, repository); store.put("excel", excelVM)
+        }
+        val language = mutableStateOf("it")
+        val selectedFontScale = mutableStateOf(1.0f)
+        val progress = mutableStateOf(CatalogSyncProgressState.idle())
+        compose.setContent {
+            val activityResultRegistryOwner = checkNotNull(LocalActivityResultRegistryOwner.current)
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(language.value))
+                this.fontScale = selectedFontScale.value
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val density = LocalDensity.current.density
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides cfg,
+                LocalDensity provides Density(density, selectedFontScale.value),
+                LocalActivityResultRegistryOwner provides activityResultRegistryOwner) {
+                MerchandiseControlTheme(darkTheme = false) {
+                    Box(Modifier.width(360.dp).fillMaxHeight().testTag("sync-banner-phone-viewport")) {
+                        AppNavGraphContent(app, excelVM, databaseVM, true,
+                            AuthState.SignedIn(OWNER, "root-test@example.invalid"), progress.value,
+                            ShopContext(OWNER, emptyList(), shop(), syncAllowed = true, localAccessAllowed = true), business)
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("root-tab-databaseScreen").performClick().assertIsSelected()
+        compose.onNodeWithTag("database-search").performTextReplacement("BANNER-DRAFT")
+        val viewport = compose.onNodeWithTag("sync-banner-phone-viewport").fetchSemanticsNode().boundsInRoot
+        assertEquals("the actual root is constrained to a phone width", 360f,
+            viewport.width / context.resources.displayMetrics.density, 1f)
+        val overlaps = mutableListOf<String>()
+        val textFailures = mutableListOf<String>()
+        for (locale in locales) for (font in fontScales) {
+            compose.runOnIdle {
+                language.value = locale
+                selectedFontScale.value = font
+                progress.value = CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN)
+            }
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(locale)); this.fontScale = font
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val description = localized.getString(R.string.cloud_sync_indicator_status_cd,
+                localized.getString(R.string.catalog_cloud_stage_sync_events_drain_short))
+            // Allow the production 700ms visibility delay and fade to settle on the Compose clock.
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithContentDescription(description, useUnmergedTree = true)
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            val banner = compose.onNodeWithContentDescription(description, useUnmergedTree = true)
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val title = compose.onNode(hasText(localized.getString(R.string.database)) and
+                !hasAnyAncestor(hasTestTag("root-tab-databaseScreen")), useUnmergedTree = true)
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val importButton = compose.onNodeWithContentDescription(localized.getString(R.string.import_file))
+                .assertHasClickAction().assertIsEnabled().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val exportButton = compose.onNodeWithContentDescription(localized.getString(R.string.export_file))
+                .assertHasClickAction().assertIsEnabled().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            for ((name, bounds) in listOf("title" to title, "import" to importButton, "export" to exportButton)) {
+                if (banner.overlaps(bounds)) overlaps += "$locale/font=$font/$name: banner=$banner header=$bounds"
+            }
+            for ((name, expectedText) in listOf(
+                "stage" to localized.getString(R.string.catalog_cloud_stage_sync_events_drain_short),
+                "detail" to localized.getString(R.string.cloud_sync_indicator_local_ready)
+            )) {
+                val layouts = mutableListOf<TextLayoutResult>()
+                val textNode = compose.onNodeWithText(expectedText, useUnmergedTree = true)
+                    .assertIsDisplayed()
+                    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(layouts) }
+                    .fetchSemanticsNode()
+                assertEquals("$locale/font=$font/$name has one actual Text layout", 1, layouts.size)
+                val layout = layouts.single()
+                assertEquals(expectedText, layout.layoutInput.text.text)
+                if (layout.hasVisualOverflow) {
+                    textFailures += "$locale/font=$font/$name overflow: width=${layout.didOverflowWidth}, " +
+                        "height=${layout.didOverflowHeight}, lines=${layout.lineCount}, maxLines=${layout.layoutInput.maxLines}"
+                }
+                // Unclipped origin and size prevent a clipped semantic rectangle from hiding lost text.
+                val origin = textNode.positionInRoot
+                val contained = origin.x >= banner.left && origin.y >= banner.top &&
+                    origin.x + textNode.size.width <= banner.right && origin.y + textNode.size.height <= banner.bottom
+                if (!contained) textFailures += "$locale/font=$font/$name outside banner: " +
+                    "origin=$origin size=${textNode.size} banner=$banner"
+            }
+            compose.onNodeWithTag("root-tab-databaseScreen").assertIsSelected().assertIsEnabled()
+            compose.onNodeWithTag("database-search").assertTextContains("BANNER-DRAFT")
+            assertEquals("BANNER-DRAFT", databaseVM.filter.value)
+            capture("android-sync-banner-$locale-font${(font * 100).toInt()}.png")
+        }
+        assertTrue("Busy banner occludes the actual Database header:\n${overlaps.joinToString("\n")}", overlaps.isEmpty())
+        assertTrue("Busy banner text must be complete and contained:\n${textFailures.joinToString("\n")}", textFailures.isEmpty())
     }
 
     @Test fun ordinaryEventDrainRecoveryKeepsActualRootDraftAndSaveAvailable() =

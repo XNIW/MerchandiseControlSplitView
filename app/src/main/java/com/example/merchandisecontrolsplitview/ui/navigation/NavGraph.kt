@@ -231,7 +231,16 @@ internal fun AppNavGraphContent(
             }
         }
     ) { innerPadding ->
-      Box(modifier = Modifier.fillMaxSize()) {
+      Column(modifier = Modifier.fillMaxSize()) {
+        // Reserve the indicator's measured height without changing the NavHost's identity.
+        // Options keeps its own cloud status card as the primary surface.
+        if (showCloudSyncIndicator) {
+            CloudSyncIndicator(
+                state = cloudSyncState,
+                modifier = Modifier.align(Alignment.End)
+            )
+        }
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         NavHost(
             navController = navController,
             startDestination = Screen.FilePicker.route,
@@ -630,16 +639,6 @@ internal fun AppNavGraphContent(
                 }
             }
         }
-        // Overlay indicatore sync cloud (root tabs + Generated/PreGenerate/Import).
-        // In Opzioni la card "Catalogo sul cloud" resta la superficie primaria.
-        if (showCloudSyncIndicator) {
-            CloudSyncIndicator(
-                state = cloudSyncState,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = innerPadding.calculateTopPadding() + 12.dp, end = 12.dp)
-                )
-        }
         if (businessRouteBlocked) {
             Surface(
                 modifier = Modifier.fillMaxSize().testTag("root-business-placeholder"),
@@ -665,6 +664,7 @@ internal fun AppNavGraphContent(
                     }) { Text(stringResource(R.string.business_scope_review_details)) }
                 }
             }
+        }
         }
       }
     }
