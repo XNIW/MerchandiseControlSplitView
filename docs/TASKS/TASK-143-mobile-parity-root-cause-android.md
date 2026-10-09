@@ -208,6 +208,34 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-08 UTC — risultato vuoto filtrato separato dai FAB, gate finali actual
+
+**File modificati:** `DatabaseScreenComponents.kt` — solo presentazione EMPTY filtrata; `LocalAvailabilityRootDeviceTest.kt` — metodo8 additivo `actualDatabaseFilteredEmptyMessageDoesNotOverlapFloatingActionsInFourLocales`; questo Task — sole Execution/Handoff. I sette metodi precedenti e gli helper sono preservati integralmente. Il metodo8, incluse tutte le assertion di completezza/altezza/glifi, geometria, azioni/header e query, resta byte-identico dal RED al GREEN (`1709f907…` intero file test).
+
+**UI/UX — intento CA-06/CA-10:** evitare che Camera/Add coprano il risultato della ricerca senza ridurre font, nascondere icone o cambiare stringhe/FAB. Nel solo EMPTY con filtro non vuoto, una Row affianca l'icona esistente56dp, il gap8dp e il Text con peso1, wrapping completo, titleMedium e allineamento Center. La Box riserva il bottom152dp già usato dalla lista. EMPTY non filtrato conserva la Column precedente e padding inferiore0; nessun cambiamento a business, repository, navigation, auth, permessi, focus o stato della ricerca. Produzione finale `231fbd873b12b4b35d701af19755e20af346fc6613ff6d690a01d02710763bb8`.
+
+**Sequenza di evidenza, conservata senza riclassificazioni:**
+1. RED reale, receipt `android-empty-message-fab-red-device-01/receipt.json` SHA `4503ca1b089141c1796b708273f73af3592544afe279c14b936c705595dd4086`: un caso ufficiale FAIL,8 configurazioni complete e6 collisioni. IT/ES160 collidono con Camera+Add, ZH/EN160 con Camera; i raster IT/ES mostrano glifi coperti, per ZH/EN si afferma soltanto la collisione dei bounds del Text.
+2. Primo probe con solo padding152: receipt `android-empty-message-fab-layout-probe-device-01/receipt.json` SHA `ce378ff535caeb26408ab14a9c4c627c23f253eef6e41182a0ad7721dfbdde8a`, NOT_PASS. Collisioni eliminate ma testo IT160 alto163px/ES160 alto135px contro190px necessari: proposta respinta, assertion intatte.
+3. Row probe, receipt `android-empty-message-fab-row-probe-device-01/receipt.json` SHA `b00e7081d5a2ce2814d5cc0a6ff3a61efb0f87133600be14544e51a82edba579`: caso geometrico PASS su8 configurazioni; solo7/8 PNG qualificabili perché EN160 era0byte. Quel gap storico è preservato, non è un PASS visuale8/8. Il successivo finale contiene EN160 valido.
+
+**Check obbligatori — risultati del runner root sul freeze538 `d51ffff0…`:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | Canonico04 unico23:36:01–23:39:00UTC, exit0/BUILD_SUCCESSFUL: assembleDebug e assembleDebugAndroidTest; PG96325 assente, nessun timeout/segnale. |
+| Lint | ESEGUITO | 44 warning/0error, stesse firme senza aggiunte/rimozioni; report byte-identico al gate03, non alla baseline storica che differiva nelle sole posizioni già documentate. |
+| Warning nuovi | ESEGUITO | Nessun diagnostic Kotlin/deprecation nuovo; messaggi JVM CDS separati, non warning applicativi. |
+| Coerenza con planning | ESEGUITO | Correzione minima del difetto UX riprodotto, CA-06/CA-10; Master/Planning, font, risorse e comportamento non filtrato preservati. |
+| Criteri di accettazione | ESEGUITO per questa slice; globale aperta | Classe Compose8 e24 PNG qualificati nel perimetro sotto; nessuna promozione a DONE o accettazione autenticata/globale. |
+
+**Baseline regressione TASK-004:** `testDebugUnitTest` completo,76 XML ufficiali freschi,1250 casi unici =1243PASS/7SKIP/0FAIL/0ERROR; stessi ID/ragioni dei7skip e baseline1219 preservata. Include le classi JVM/Robolectric repository, DatabaseViewModel ed ExcelViewModel; non sono test UI. `assembleDebug/lint/testDebugUnitTest/assembleDebugAndroidTest` nello stesso comando canonico; Release non richiesta e non dichiarata eseguita. Receipt `resume-20261008-android-v6-final-gates-actual-04/receipt.json` SHA `b8a23873ec0e0a343a1a6fc21c436b175ee0e986e76a9d68ee107344ea8466e6`; `local-qualified.json` SHA `39014a2dbc5849575457492d7f9fd56c1595deb58bd8de93a9026a3892233779`. APK KEYLESS del gate non installabile come ProperTEST autenticato.
+
+**Compose / visuale actual finale:** tutta la classe LocalAvailabilityRootDeviceTest,8 metodi ufficiali PASS, incluso lo stesso metodo8 del RED; receipt `android-empty-message-fab-final-device-01/receipt.json` SHA `595068ee9ad1e4653ca498229b916baf4f8cb59231bcf419165f888738e0330d`. Finestra23:40:02–23:42:52UTC entro600s con riserva90s; tutti gruppi owned assenti, AVD sintetico5584 eliminato (SIGTERM del solo emulator proprio registrato), sorgente/config/pair preservate. Nessuna operazione sulla primaria5554.
+
+24 PNG completi CRC/raster, manifest SHA `a261e2acd95367b3cf2e848dacf16ab96379cc47910dfca392e417f1a1498c62`. Root ha letto gli8 originali EMPTY (quattro lingue × font1/1.6): messaggio/query/glifi completi, nessuna collisione con entrambi i FAB, header/banner/query preservati; `root-empty-message-fab-visual-readback.json` SHA `08613cda0b0ea0e49a8e6279b8619251da9f22c92576328843caf00ab6ec032d`. Readback indipendente dei16 originali banner/tab, `banner-tabs-visual-readback.json` SHA `d79ef6130562aa927b9bd1a91d865985b787da50cfd3e281aeb5eca475831170`: tutte le lettere complete e controlli liberi. Alcune etichette IT/ES/EN160 vanno a capo dentro le parole, osservazione già nota senza nuova attribuzione di regressione. Le due review indipendenti C della stessa batch sono APPROVED, comunicate dal root; nessuna nuova modifica source dopo questi gate.
+
+Le ricevute citate sono conservate sotto `/Users/minxiang/Projects/MerchandiseControl-Ecosistema/evidence/native-local-availability-20261004/native-residuals-continuation-20261007-01/`. Il presente append è solo documentale: altri537 leaf esatti al freeze d51, nessun nuovo run. Prove sintetiche locali distinte da primaria, auth/READY, E2E per-record, performance, iOS e QA globale, che restano aperte. Task FIX.
+
 ### Esecuzione — 2026-10-08 UTC — gate finale tab Database / reporter, risultati actual
 
 Questa voce aggiorna le precedenti preparazioni: codice congelato nel source538 `bff1bd95`, Task pre-gate `950d8937`. Dopo i gate il solo append documentale corrente modifica il Task; gli altri537 file pubblici restano byte-identici al gate03. Nessun rerun richiesto o eseguito per questa sola documentazione; Master/Planning e fonte app/test preservati.
@@ -1611,6 +1639,12 @@ I7 skip sono espliciti nel [manifest R-A06](evidence/TASK-143/android-ra06-test-
 - L'XML e l'ordine di pubblicazione sostengono la race nel test; nessun problema funzionale footer osservato. Tutte le cinque asserzioni restano byte-identiche; ripristinare il solo predicato ricostruisce l'intero file di e4bdac44. Slot Gradle rilasciato dopo la slice; parent coordina review del delta, gate canonici, freeze, commit e CI sul nuovo SHA. Nessuna modifica fuori dal test singolo.
 
 ## Handoff
+
+### Handoff — 2026-10-08 UTC — EMPTY/FAB verificato, writer rilasciato
+
+Il residuo EMPTY/FAB registrato nell'handoff tab/reporter precedente è ora corretto nel perimetro filtrato e verificato: canonico04 PASS1250/1243PASS/7sameSKIP,44 firme lint invarianti/0warning nuovi; Compose8 PASS e24 PNG validi letti a risoluzione originale. RED4503, padding-only NOT_PASSce378 e Row probe con EN1600byte restano storici immutati; EN160 finale valido. Test8/assert e sette metodi/helper precedenti intatti, nonfiltered EMPTY/font/stringhe/FAB invariati; nessun risultato futuro anticipato.
+
+Fonte ferma; dopo i gate cambia soltanto questo Task, altri537 file identici a d51. Root gestisce staging selettivo dei soli tre percorsi, Git/CI exact-SHA, ProperTEST e installazione preservativa autorizzata. Questa lane non esegue ulteriori test, build, Git o input nativi. Reporter native capture NON ESEGUITA e holder ricerca UNKNOWN; accettazione primaria/auth/business/iOS/performance/QA globale separata e aperta. Stato FIX, non DONE; nessuna modifica a Master/Planning/criteri/Chiusura.
 
 ### Handoff — 2026-10-08 UTC — slice tab/reporter verificata localmente, writer rilasciato
 

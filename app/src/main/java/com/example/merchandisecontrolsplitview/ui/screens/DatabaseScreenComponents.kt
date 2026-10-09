@@ -554,37 +554,66 @@ internal fun DatabaseProductListSection(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .padding(
+                            bottom = if (filter.isNotEmpty()) {
+                                DatabaseListContentPadding.calculateBottomPadding()
+                            } else {
+                                0.dp
+                            }
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.SearchOff,
-                            contentDescription = stringResource(R.string.no_products_found),
-                            modifier = Modifier.size(56.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = if (filter.isEmpty()) {
-                                stringResource(R.string.no_products_in_db)
-                            } else {
-                                stringResource(R.string.no_results_for, filter)
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center
-                        )
-                        if (filter.isEmpty()) {
+                    if (filter.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SearchOff,
+                                contentDescription = stringResource(R.string.no_products_found),
+                                modifier = Modifier.size(56.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Text(
-                                text = stringResource(R.string.add_first_product_prompt),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = stringResource(R.string.no_results_for, filter),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 textAlign = TextAlign.Center
                             )
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SearchOff,
+                                contentDescription = stringResource(R.string.no_products_found),
+                                modifier = Modifier.size(56.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (filter.isEmpty()) {
+                                    stringResource(R.string.no_products_in_db)
+                                } else {
+                                    stringResource(R.string.no_results_for, filter)
+                                },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            if (filter.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.add_first_product_prompt),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     }
                 }

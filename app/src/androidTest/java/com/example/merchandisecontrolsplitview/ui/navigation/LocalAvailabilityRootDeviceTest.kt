@@ -192,6 +192,150 @@ class LocalAvailabilityRootDeviceTest {
         assertTrue("Busy banner text must be complete and contained:\n${textFailures.joinToString("\n")}", textFailures.isEmpty())
     }
 
+    @Test fun actualDatabaseFilteredEmptyMessageDoesNotOverlapFloatingActionsInFourLocales() {
+        val locales = listOf("it", "es", "zh", "en")
+        val fontScales = listOf(1.0f, 1.6f)
+        clearEvidence(*locales.flatMap { locale -> fontScales.map { font ->
+            "android-database-empty-fab-$locale-font${(font * 100).toInt()}.png"
+        } }.toTypedArray())
+        context.deleteDatabase(DB_NAME)
+        val db = openDatabase().also { database = it }
+        val repository = DefaultInventoryRepository(db)
+        val business = runBlocking {
+            db.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+            db.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+            assertTrue(coordinator(db, repository, Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote())
+                .recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+            assertNull(db.syncRecoveryJournalDao().get())
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+            repository.resolveBusinessDataScope(ownerScope())
+        }
+        assertTrue(business.allowsLocalOperations)
+        lateinit var databaseVM: DatabaseViewModel
+        lateinit var excelVM: ExcelViewModel
+        compose.runOnUiThread {
+            databaseVM = DatabaseViewModel(app, repository); store.put("database", databaseVM)
+            excelVM = ExcelViewModel(app, repository); store.put("excel", excelVM)
+        }
+        val language = mutableStateOf("it")
+        val selectedFontScale = mutableStateOf(1.0f)
+        val progress = mutableStateOf(CatalogSyncProgressState.idle())
+        compose.setContent {
+            val activityResultRegistryOwner = checkNotNull(LocalActivityResultRegistryOwner.current)
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(language.value)); fontScale = selectedFontScale.value
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val density = LocalDensity.current.density
+            CompositionLocalProvider(LocalContext provides localized, LocalConfiguration provides cfg,
+                LocalDensity provides Density(density, selectedFontScale.value),
+                LocalActivityResultRegistryOwner provides activityResultRegistryOwner) {
+                MerchandiseControlTheme(darkTheme = false) {
+                    Box(Modifier.width(360.dp).fillMaxHeight().testTag("database-empty-fab-phone-viewport")) {
+                        AppNavGraphContent(app, excelVM, databaseVM, true,
+                            AuthState.SignedIn(OWNER, "root-test@example.invalid"), progress.value,
+                            ShopContext(OWNER, emptyList(), shop(), syncAllowed = true, localAccessAllowed = true), business)
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("root-tab-databaseScreen").performClick().assertIsSelected()
+        compose.onNodeWithTag("database-search").performTextReplacement("TABS-DRAFT")
+        val failures = mutableListOf<String>()
+        val measurements = mutableListOf<String>()
+        for (locale in locales) for (font in fontScales) {
+            compose.runOnIdle {
+                language.value = locale; selectedFontScale.value = font
+                progress.value = CatalogSyncProgressState.running(CatalogSyncStage.SYNC_EVENTS_DRAIN)
+            }
+            // Same production banner delay/fade and Compose clock allowance as the existing root tests.
+            compose.mainClock.advanceTimeBy(1_000)
+            val cfg = Configuration(context.resources.configuration).apply {
+                setLocales(LocaleList.forLanguageTags(locale)); fontScale = font
+            }
+            val localized = context.createConfigurationContext(cfg)
+            val expected = localized.getString(R.string.no_results_for, "TABS-DRAFT")
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithText(expected, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            val viewport = compose.onNodeWithTag("database-empty-fab-phone-viewport").fetchSemanticsNode().boundsInRoot
+            assertEquals("actual root phone width", 360f, viewport.width / context.resources.displayMetrics.density, 1f)
+            val title = compose.onNode(hasText(localized.getString(R.string.database)) and
+                !hasAnyAncestor(hasTestTag("root-tab-databaseScreen")), useUnmergedTree = true)
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            for (resource in listOf(R.string.import_file, R.string.export_file)) {
+                compose.onNodeWithContentDescription(localized.getString(resource))
+                    .assertHasClickAction().assertIsEnabled().assertIsDisplayed()
+            }
+            val search = compose.onNodeWithTag("database-search").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val rootTab = compose.onNodeWithTag("root-tab-databaseScreen")
+                .assertIsSelected().assertIsEnabled().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            val layouts = mutableListOf<TextLayoutResult>()
+            val text = compose.onNodeWithText(expected, useUnmergedTree = true).assertIsDisplayed()
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(layouts) }
+                .fetchSemanticsNode()
+            assertEquals("$locale/font=$font actual empty-message layout", 1, layouts.size)
+            val layout = layouts.single()
+            assertEquals(expected, layout.layoutInput.text.text)
+            assertEquals(androidx.compose.ui.text.style.TextAlign.Center, layout.layoutInput.style.textAlign)
+            assertTrue("$locale/font=$font empty message has a line", layout.lineCount > 0)
+            val visibleEnd = layout.getLineEnd(layout.lineCount - 1, visibleEnd = true)
+            val ellipsized = (0 until layout.lineCount).map(layout::isLineEllipsized)
+            if (visibleEnd != expected.length || ellipsized.any { it } || layout.didOverflowHeight) {
+                failures += "$locale/font=$font incomplete empty message: end=$visibleEnd/${expected.length}, " +
+                    "ellipsis=$ellipsized height=${layout.didOverflowHeight}"
+            }
+            val origin = text.positionInRoot
+            // These are the rendered node's root coordinates, not the semantics MultiParagraph width.
+            val message = androidx.compose.ui.geometry.Rect(origin.x, origin.y,
+                origin.x + text.size.width, origin.y + text.size.height)
+            // Simple centered Text can export a wider semantics paragraph than the actual node.
+            val semanticOffsetX = (layout.multiParagraph.width - layout.size.width) / 2f
+            val lineBounds = (0 until layout.lineCount).map { line ->
+                androidx.compose.ui.geometry.Rect(layout.getLineLeft(line), layout.getLineTop(line),
+                    layout.getLineRight(line), layout.getLineBottom(line))
+            }
+            val glyphBounds = expected.indices.map(layout::getBoundingBox)
+            for ((kind, bounds) in listOf("line" to lineBounds, "glyph" to glyphBounds)) {
+                for ((index, semanticRect) in bounds.withIndex()) {
+                    val rect = androidx.compose.ui.geometry.Rect(semanticRect.left - semanticOffsetX,
+                        semanticRect.top, semanticRect.right - semanticOffsetX, semanticRect.bottom)
+                    // Only float-to-IntSize subpixel rounding; no overlap tolerance for the FAB targets.
+                    if (rect.left < -1f || rect.top < -1f || rect.right > text.size.width + 1f ||
+                        rect.bottom > text.size.height + 1f) {
+                        failures += "$locale/font=$font $kind$index outside rendered text: rect=$rect size=${text.size}"
+                    }
+                }
+            }
+            if (message.left < viewport.left || message.right > viewport.right ||
+                message.top < search.bottom || message.top < title.bottom || message.bottom > rootTab.top) {
+                failures += "$locale/font=$font empty message outside content: message=$message " +
+                    "viewport=$viewport search=$search rootTab=$rootTab"
+            }
+            val actions = listOf(R.string.scan_barcode, R.string.add_product).map { resource ->
+                val action = compose.onNode(hasContentDescription(localized.getString(resource)) and hasClickAction())
+                    .assertIsEnabled().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                if (message.overlaps(action)) failures += "$locale/font=$font/$resource empty message overlaps FAB: " +
+                    "message=$message action=$action"
+                resource to action
+            }
+            val measurement = "$locale/font=$font message=$message nodeSize=${text.size} " +
+                "layoutSize=${layout.size} paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height} " +
+                "constraints=${layout.layoutInput.constraints} semanticOffsetX=$semanticOffsetX " +
+                "visibleEnd=$visibleEnd/${expected.length} ellipsis=$ellipsized " +
+                "heightFlag=${layout.didOverflowHeight} widthDiagnosticOnly=${layout.didOverflowWidth} " +
+                "lineBounds=$lineBounds glyphBounds=$glyphBounds actions=$actions"
+            measurements += measurement
+            android.util.Log.i("Task143EmptyLayout", measurement)
+            compose.onNodeWithTag("database-search").assertTextContains("TABS-DRAFT")
+            assertEquals("TABS-DRAFT", databaseVM.filter.value)
+            capture("android-database-empty-fab-$locale-font${(font * 100).toInt()}.png")
+        }
+        assertTrue("Database empty message must be complete and separate from floating actions:\n${failures.joinToString("\n")}\n" +
+            "Actual layout measurements:\n${measurements.joinToString("\n")}", failures.isEmpty())
+    }
+
     @Test fun actualDatabaseSecondaryTabsShowCompleteLabelsInFourLocalesAtLargeFont() {
         val locales = listOf("it", "es", "zh", "en")
         val fontScales = listOf(1.0f, 1.6f)
