@@ -1,6 +1,9 @@
 package com.example.merchandisecontrolsplitview.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.content.res.Configuration
+import androidx.lifecycle.ViewModelStore
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CanonicalCatalogInboundRequired
@@ -47,9 +50,11 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.clearMocks
 import io.mockk.every
 import io.mockk.mockk
 import java.io.IOException
+import java.util.Locale
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -83,6 +88,114 @@ class CatalogSyncViewModelTest {
     @Before
     fun setup() {
         app = RuntimeEnvironment.getApplication()
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun selectedAppLanguageLocalizesInitialSyncPresentation() = runTest {
+        val preferences = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        assertTrue(preferences.edit().putString("lang", "zh").commit())
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = mockk<InventoryRepository>(),
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        )
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        try {
+            assertEquals("en", app.resources.configuration.locales[0].language)
+            val chinese = app.createConfigurationContext(
+                Configuration(app.resources.configuration).apply { setLocale(Locale.CHINESE) }
+            )
+            assertEquals(
+                chinese.getString(R.string.catalog_cloud_state_sign_in_required),
+                viewModel.uiState.value.primaryMessage
+            )
+            assertFalse(viewModel.uiState.value.canRefresh)
+            assertFalse(viewModel.uiState.value.isSyncing)
+        } finally {
+            store.clear()
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun selectedAppLanguageReformatsCachedSyncDetailsWithoutAnotherOutcome() = runTest {
+        val preferences = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
+        assertTrue(preferences.edit().putString("lang", "en").commit())
+        val repository = mockk<InventoryRepository>()
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+        coEvery { repository.getLocalDatabaseStatusSnapshot(any(), any()) } returns
+            LocalDatabaseStatusSnapshot(2, 1, 1, 3, 1, 0, 3)
+        val tracker = CatalogSyncStateTracker()
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow<AuthState>(
+                AuthState.SignedIn(OWNER_VM_021, "locale@example.test")
+            ),
+            syncStateTracker = tracker
+        )
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val collectJob = launch { viewModel.uiState.collect {} }
+        try {
+            advanceUntilIdle()
+            tracker.publishSummary(
+                OWNER_VM_021,
+                CatalogSyncFlightOwner.AUTO_PUSH,
+                CatalogSyncSummary(0, 0, 0, 0, 0, 0, syncEventOutboxPending = 3)
+            )
+            advanceUntilIdle()
+            val initial = viewModel.uiState.value
+            val outcome = tracker.lastOutcome.value
+            val timestamp = Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}")
+                .find(requireNotNull(initial.catalogDetail))!!.value
+            clearMocks(repository, answers = false, recordedCalls = true)
+
+            for (language in listOf("zh", "it", "es", "en")) {
+                assertTrue(preferences.edit().putString("lang", language).commit())
+                advanceUntilIdle()
+                val localized = app.createConfigurationContext(
+                    Configuration(app.resources.configuration).apply {
+                        setLocale(Locale.forLanguageTag(language))
+                    }
+                )
+                val current = viewModel.uiState.value
+                val detail = requireNotNull(current.catalogDetail)
+                assertTrue(
+                    "$language last success must be retranslated without a new sync",
+                    detail.contains(
+                        localized.getString(R.string.catalog_cloud_last_ok, timestamp)
+                    )
+                )
+                assertTrue(
+                    "$language plural detail must use the selected resources",
+                    detail.contains(
+                        localized.resources.getQuantityString(
+                            R.plurals.catalog_cloud_sync_event_outbox_hint, 3, 3
+                        )
+                    )
+                )
+                assertEquals(initial.canRefresh, current.canRefresh)
+                assertEquals(initial.canQuickSync, current.canQuickSync)
+                assertEquals(initial.isSyncing, current.isSyncing)
+                assertEquals(initial.statusBadges, current.statusBadges)
+                assertEquals(initial.businessDataScopeStatus, current.businessDataScopeStatus)
+                assertEquals(outcome, tracker.lastOutcome.value)
+                assertEquals("en", app.resources.configuration.locales[0].language)
+            }
+            // Locale changes re-render the current state; they do not refresh business data.
+            coVerify(exactly = 0) { repository.getLocalDatabaseStatusSnapshot(any(), any()) }
+            coVerify(exactly = 0) { repository.hasCatalogCloudPendingWorkInclusive() }
+        } finally {
+            collectJob.cancel()
+            store.clear()
+        }
     }
 
     @Test

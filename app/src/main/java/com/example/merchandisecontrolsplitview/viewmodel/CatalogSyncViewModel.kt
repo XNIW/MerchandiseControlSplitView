@@ -1,6 +1,10 @@
 package com.example.merchandisecontrolsplitview.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
+import android.content.res.Configuration
+import android.content.res.Resources
 import android.util.Log
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
@@ -55,6 +59,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 data class CatalogSyncUiState(
     val primaryMessage: String,
@@ -208,6 +213,16 @@ class CatalogSyncViewModel(
     private var automaticSessionBootstrapScopeKey: String? = null
     private var lastLoggedStage: CatalogSyncStage? = null
 
+    // The Activity's localized context does not change Application.resources. Keep only
+    // presentation resources here, and reformat retained UI state when the preference changes.
+    private val settings = application.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val presentationResources = MutableStateFlow(currentPresentationResources())
+    private val languageListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "lang" || key == null) {
+            presentationResources.value = currentPresentationResources()
+        }
+    }
+
     private val quickSyncLaneAvailable: Boolean get() = autoSyncRepository != null
     private val trackerOutcomeFlow = syncStateTracker?.lastOutcome ?: flowOf<CatalogSyncOutcomeState?>(null)
     private val businessDataScopeFlow = syncStateTracker?.businessDataScopeState
@@ -231,8 +246,9 @@ class CatalogSyncViewModel(
                 SyncInputs(auth, isBusy, err, successAt, pending)
             },
             businessDataScopeFlow,
-            networkAvailableFlow
-        ) { inputs, businessDataScope, networkAvailable ->
+            networkAvailableFlow,
+            presentationResources
+        ) { inputs, businessDataScope, networkAvailable, _ ->
             Triple(inputs, businessDataScope, networkAvailable)
         },
         syncProgress,
@@ -308,6 +324,7 @@ class CatalogSyncViewModel(
     )
 
     init {
+        settings.registerOnSharedPreferenceChangeListener(languageListener)
         viewModelScope.launch {
             combine(authFlow, businessDataScopeFlow) { auth, businessDataScope ->
                 auth to businessDataScope
@@ -340,12 +357,26 @@ class CatalogSyncViewModel(
         refreshLocalDatabaseStatus()
     }
 
+    override fun onCleared() {
+        settings.unregisterOnSharedPreferenceChangeListener(languageListener)
+        super.onCleared()
+    }
+
+    private fun currentPresentationResources(): Resources {
+        val app = getApplication<Application>()
+        val configuration = Configuration(app.resources.configuration)
+        settings.getString("lang", null)?.let { language ->
+            configuration.setLocale(Locale.forLanguageTag(language))
+        }
+        return app.createConfigurationContext(configuration).resources
+    }
+
     private fun str(@StringRes id: Int, vararg args: Any): String =
-        if (args.isEmpty()) getApplication<Application>().getString(id)
-        else getApplication<Application>().getString(id, *args)
+        if (args.isEmpty()) presentationResources.value.getString(id)
+        else presentationResources.value.getString(id, *args)
 
     private fun quantityStr(@PluralsRes id: Int, quantity: Int, vararg args: Any): String =
-        getApplication<Application>().resources.getQuantityString(id, quantity, *args)
+        presentationResources.value.getQuantityString(id, quantity, *args)
 
     private fun buildProgressUi(progress: CatalogSyncProgressState?): CatalogSyncStageUiState? {
         if (progress == null || !progress.isBusy) return null
