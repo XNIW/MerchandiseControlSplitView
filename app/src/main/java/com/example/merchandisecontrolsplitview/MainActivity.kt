@@ -36,6 +36,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import androidx.core.net.toUri
 import androidx.core.content.edit
+import androidx.core.view.WindowCompat
 import androidx.appcompat.app.AppCompatDelegate
 import com.example.merchandisecontrolsplitview.ui.screens.Task126ReviewInteractionSmokeScreen
 
@@ -196,6 +197,12 @@ class MainActivity : ComponentActivity() {
                 "dark" -> true
                 "light" -> false
                 else -> isSystemInDarkTheme()
+            }
+
+            SideEffect {
+                // System icons must follow the app's theme, including an explicit override.
+                WindowCompat.getInsetsController(window, window.decorView)
+                    .isAppearanceLightStatusBars = !darkTheme
             }
 
             MerchandiseControlTheme(darkTheme = darkTheme) {

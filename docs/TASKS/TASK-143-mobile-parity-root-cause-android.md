@@ -208,6 +208,39 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-12 UTC — lingua dei dettagli sync e contrasto della barra di stato
+
+Baseline isolata L `bbbda83bee33b5374d5164a5c989a95db28f7e0f`, worktree `android-native-presentation-20261012/MerchandiseControlSplitView` creato dall'owner N. Il mandato utente corrente richiede di correggere i difetti visibili reali; CA-06/CA-10, stato TASK-143 **FIX** invariato. Nessuna modifica del checkout primario, dei dati, dell'autenticazione o dei controlli recovery.
+
+**Prova e causa:** i quattro PNG del dispositivo primario raccolti dall'owner N il 2026-10-12 18:07:46–18:07:58 UTC mostrano icone di stato bianche sul fondo chiaro e `Last successful sync` in inglese nelle Opzioni in cinese. La ricerca Database `CODEX_NATIVE_20261009_N2339` e il PID3627 sono preservati. Il contesto localizzato di MainActivity non cambia le risorse dell'Application usate da CatalogSyncViewModel; inoltre lo stato UI con stringhe già formattate non reagisce al cambio lingua. La composizione del tema non aggiorna l'aspetto delle icone della statusbar.
+
+**File modificati:**
+- `CatalogSyncViewModel.kt`: risorse di sola presentazione da una copia della configurazione con la lingua scelta; il listener della preferenza lingua riformatta lo stato conservato ed è rimosso in `onCleared`. Nessun nuovo refresh business, mutazione dello scope o cambiamento di capability.
+- `MainActivity.kt`: `SideEffect` allinea `isAppearanceLightStatusBars` al tema effettivo dell'app. Inset, navigation, colori e configurazione SDK preservati.
+- `CatalogSyncViewModelTest.kt`: due regressioni JVM/Robolectric additive per lingua iniziale distinta da quella Application e stato cached ritradotto nelle quattro lingue senza nuovo outcome/richieste repository, con plurali e capability preservati.
+- Questo Task: sola Execution della slice corrente.
+
+**UI/UX intenzionale:** rendere leggibili ora/icone di sistema e coerente la lingua dei dettagli cloud già disponibili. Non si modifica la semantica del successo di sincronizzazione.
+
+**RED ufficiale prima della patch:** 2 test, **0 PASS / 2 FAIL / 0 ERROR / 0 SKIP**, rispettivamente testo iniziale inglese al posto del cinese e dettaglio cached non ritradotto. Runner N 18:23:03.903937–18:24:16.121003 UTC, source immutabile, gruppo posseduto rilasciato. Receipt originale nel coordinamento `ios-language-label-regression-01/android-selected-language-presentation-red-20261012-01/owner-receipt.json`; XML SHA256 `e0aca84ec8cec0bd68a7a6158c800b9cb9e3e046ac12cae2f5fa65f73af3dba5`. Nessun setup failure reinterpretato come difetto.
+
+**GREEN e regressione TASK-004 pertinente:** la classe `CatalogSyncViewModelTest` completa passa **37 PASS / 0 FAIL / 0 ERROR / 0 SKIP**, inclusi i due nuovi metodi byte-identici al RED e i controlli esistenti di scope, stale outcome, deferral e mancato falso successo. Runner N 18:27:48.650570–18:28:19.673042 UTC, source immutabile, exit0 e gruppo posseduto rilasciato. Receipt nel coordinamento `ios-language-label-regression-01/android-selected-language-presentation-green-class-20261012-01/owner-receipt.json`; XML SHA256 `aac25070fb6830c063cd5e3e8c23df9b12eaf0730f5de5226cb8527f8134a04a`.
+
+**Review e check residui:** C ha verificato indipendentemente i quattro file, il RED originale e la causalità, senza rilievi bloccanti sul delta. `git diff --check` PASS. Full suite canonica, build/lint/warning, compile androidTest e verifica visiva dei temi restano **NON ESEGUITI** su questa patch, in carico all'owner N. Sorgenti consegnati fermi: VM `c37a1f2051298e9cdd285c7ed5fb31090efa7c18d89ab01037f9e84bf3c3adf0`, Activity `eba3260235e21789d717e05cd4b51025239e018b8e35d323bc7ecd960d652c1b`, test `ad7b38e3d2e78b9ef7bc47b82879a9c5cb40db7f26d4b2d11d7f6ece7b40da19`. L non esegue SDK, installazioni o mutazioni Git. I test JVM non certificano il rendering reale né l'accettazione autenticata o la convergenza Android↔iOS.
+
+**Check obbligatori finali N — 2026-10-12 UTC:**
+| Check | Stato | Evidenza |
+|---|---|---|
+| Build Gradle | ESEGUITO | assembleDebug PASS sul candidato corrente |
+| Lint | ESEGUITO |34 warning/0 errori, zero firme nuove;10 avvisi aggiornamento dipendenze della baseline44 assenti, configurazioni build identiche. Nessuna riduzione attribuita al prodotto |
+| Warning nuovi | ESEGUITO |0 diagnostiche compiler nuove |
+| Coerenza con planning | ESEGUITO | soli2 difetti di presentazione reali, listener non avvia refresh business e preserva capability/scope |
+| Criteri della slice | ESEGUITO locale / NON ESEGUITO native | RED2→GREEN37, full1252; nuova build installata, temi e lingua su UI reale ancora da verificare |
+
+**Baseline regressione TASK-004 pertinente:** full JVM/Robolectric1252=1245PASS/7stessiSKIP/0FAIL-ERROR,76XML nuovi; tutti1250ID/stati precedenti e7ragioni skip identici più2nuoviPASS. assembleDebugAndroidTest compilato, non eseguito. Runner1800s/90reserve, PG3090 exit0/rilasciato18:34:33.443060, source538 before-after identica. Originali nel coordinamento `ios-language-label-regression-01/android-native-presentation-canonical-gates-20261012-01`, receipt SHA8926f5d1880eeb6de957625725037f5ff020d42b575cdc449ab7ba2a08d9edd7. Primo checker respingeva l'assenza di10 avvisi upgrade; lettura negativa conservata e corretta sul contratto zero nuovi warning, senza rerun o modifiche ai test.
+
+**Handoff:** review C della produzione/test senza finding bloccanti e GREEN37 verificato indipendentemente. Integrazione normale, CI exact-SHA/main, ProperTEST preservativo e collaudo autenticato/UI restano N. Task FIX, non DONE; nessuna accettazione live dedotta da questi gate.
+
 ### Esecuzione — 2026-10-08 UTC — risultato vuoto filtrato separato dai FAB, gate finali actual
 
 **File modificati:** `DatabaseScreenComponents.kt` — solo presentazione EMPTY filtrata; `LocalAvailabilityRootDeviceTest.kt` — metodo8 additivo `actualDatabaseFilteredEmptyMessageDoesNotOverlapFloatingActionsInFourLocales`; questo Task — sole Execution/Handoff. I sette metodi precedenti e gli helper sono preservati integralmente. Il metodo8, incluse tutte le assertion di completezza/altezza/glifi, geometria, azioni/header e query, resta byte-identico dal RED al GREEN (`1709f907…` intero file test).
