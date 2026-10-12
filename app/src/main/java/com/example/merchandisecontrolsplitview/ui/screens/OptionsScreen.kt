@@ -70,6 +70,7 @@ import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncBadgeUiState
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncUiState
 import com.example.merchandisecontrolsplitview.viewmodel.LocalDatabaseStatusUiState
+import com.example.merchandisecontrolsplitview.viewmodel.businessScopeCheckingPresentation
 import com.example.merchandisecontrolsplitview.util.setLocale
 
 @Composable
@@ -197,7 +198,8 @@ fun OptionsScreen(
                 onDiscardUnboundLocalData = onDiscardUnboundLocalData,
                 onReplaceMismatchedLocalData = onReplaceMismatchedLocalData,
                 mismatchIdentity = businessScopeMismatchIdentity,
-                canReplaceMismatchedLocalData = canReplaceMismatchedLocalData
+                canReplaceMismatchedLocalData = canReplaceMismatchedLocalData,
+                checkingMessageRes = businessScopeCheckingPresentation(authState).messageRes
             )
         }
     }
@@ -209,7 +211,8 @@ internal fun LocalDatabaseStatusSection(
     onDiscardUnboundLocalData: () -> Unit,
     onReplaceMismatchedLocalData: () -> Unit,
     mismatchIdentity: String?,
-    canReplaceMismatchedLocalData: Boolean
+    canReplaceMismatchedLocalData: Boolean,
+    checkingMessageRes: Int = R.string.business_scope_checking
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember(context) {
@@ -265,7 +268,7 @@ internal fun LocalDatabaseStatusSection(
         title = stringResource(R.string.local_database_status_title),
         subtitle = when {
             state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING ->
-                stringResource(R.string.business_scope_checking)
+                stringResource(checkingMessageRes)
             state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
                 stringResource(R.string.business_scope_unbound_review_short)
             state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->

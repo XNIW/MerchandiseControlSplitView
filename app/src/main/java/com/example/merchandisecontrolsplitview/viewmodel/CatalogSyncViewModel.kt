@@ -97,6 +97,20 @@ data class CatalogSyncStageUiState(
     val total: Int?
 )
 
+internal data class BusinessScopeCheckingPresentation(
+    val messageRes: Int,
+    val showProgress: Boolean
+)
+
+/** CHECKING also holds a bound database while auth is unavailable; it is not always database work. */
+internal fun businessScopeCheckingPresentation(auth: AuthState): BusinessScopeCheckingPresentation =
+    when (auth) {
+        AuthState.Checking -> BusinessScopeCheckingPresentation(R.string.account_checking, true)
+        AuthState.SignedOut -> BusinessScopeCheckingPresentation(R.string.catalog_cloud_state_sign_in_required, false)
+        is AuthState.ErrorRecoverable -> BusinessScopeCheckingPresentation(R.string.catalog_cloud_state_session_required, false)
+        is AuthState.SignedIn -> BusinessScopeCheckingPresentation(R.string.business_scope_checking, true)
+    }
+
 data class LocalDatabaseStatusUiState(
     val productsCount: Int? = null,
     val suppliersCount: Int? = null,
@@ -468,7 +482,7 @@ class CatalogSyncViewModel(
         when (businessDataScope.status) {
             Task126BusinessDataScopeStatus.CHECKING ->
                 return CatalogSyncUiState(
-                    primaryMessage = str(R.string.business_scope_checking),
+                    primaryMessage = str(businessScopeCheckingPresentation(auth).messageRes),
                     catalogDetail = null,
                     sessionDetail = null,
                     isSyncing = false,
