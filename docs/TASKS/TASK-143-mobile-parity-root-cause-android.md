@@ -1426,10 +1426,6 @@ Lo SKIP è esattamente `DefaultInventoryRepositoryTest.wechat 004 real local Sup
 
 **Incertezze / handoff:** nessun difetto residuo trovato nei gate locali; causalità dello stato storico del primario non dedotta dalle fixture. ProperTEST richiede confronto separato di profilo, firma e sorgenti; merge solo dopo CI del vero SHA e coordinamento del parent. TASK resta FIX.
 
-## Review
-
-Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
-
 ### Esecuzione — 2026-10-12 21:45 UTC — gate del contrasto nativo
 
 Prima invocazione: NON ESEGUITI compile/test, SDKlocation assente nell'ambiente del producer; exit1 e0test correnti, i76XMLcached nonsono evidenza del delta. Originale325ccb11 e release21:37:10.568392 preservati. Ambiente corretto usando esclusivamente gli stessi ANDROID_HOME/JAVA_HOME e rimozione delle chiavi profilo del producer esistente; niente local.properties/configwrite/source/timeout alterati.
@@ -1445,6 +1441,26 @@ Prima verifica effettiva: assemble/lint/fullJVM/compileAndroidTest exit0,1254ID/
 
 **Check obbligatori:** BUILD ESEGUITO; LINT ESEGUITO; WARNING ESEGUITO(0nuovi); COERENZA ESEGUITO(soloappearance/backdrop,nienteinset/nav/DAO/repository/auth); CA NON ESEGUITI integralmente. Il canonico non prova il contrasto Dark sul nuovoAPK: nuovaCI head/main, ProperTEST/in-placeinstall e Dark/Light reali sono ancora pendenti. Nessun DONE o auth/perf/propagazione dedotto.
 
+
+### Esecuzione — 2026-10-12 UTC — contrasto verificato sulla build installata
+
+- PR29 (`e97454acb215caae908acbe00db9583c0dbb6a82`) integrata normalmente in main `2dd7f9cba0659bfd79393c7799e26403755739b2`. CI main `38314605143` qualificata (riferimento `722883`): 1.247 PASS / 7 SKIP preesistenti, nessun FAIL. La verifica sul nuovo sorgente conserva le esclusioni originali; i tentativi ENV NON ESEGUITO e UseKtx FAIL restano distinti.
+- Aggiornamento preservativo del checkout primario, riferimento FF `6feee36`; nuovo pacchetto TEST APK `1510010be33b2201343e2fcf97b188034b71f56eb95fb76813c74be8c8d8bb3e`, receipt `ffd24e4a`. Installazione 22:18:37–22:18:40 UTC, owner rilasciato 22:18:41.053729 UTC: tutte le 19 tabelle conservano conteggi e digest tipizzati, preferenze protette e metadati DB identici. Nessuna riga o credenziale esportata; copia temporanea eliminata.
+- Una normale apertura a freddo (`am start -W`, 1.099 ms), PID12799. La durata del comando di apertura non misura commit→conferma→visibilità sul peer, che resta NON MISURATO.
+- Collaudo reale sullo stesso Medium Phone API35: in tema scuro, status bar e barra gestuale hanno sfondo scuro e icone/pill chiare leggibili; in tema chiaro, sfondo chiaro e icone/pill scure leggibili. PNG originali `android-system-bar-background-normal-dark-light-20261012-01/dark.png` e `light.png`; readback `first-native-contrast-pixel-readback.json` SHA256 `b7a2399f9ee81006c50283a2e0885b4c0d8af3abbd2e390fc6603ff3d99d29c0`. Il FAIL scuro precedente `ab4e5f4d` resta conservato. Ripristinati lingua zh, tema light e fontScale1.0.
+- TASK resta FIX / NON DONE. Account corrente SignedOut, zero nuovi tentativi di login in questa prova. Il PASS riguarda il contrasto delle barre: non certifica accesso autenticato, flussi business, quattro schermate iOS, propagazione bidirezionale o prestazioni.
+
+
+### Esecuzione — 2026-10-12 UTC — testo grande sulla build installata
+
+Sul pacchetto TEST `1510010be33b2201343e2fcf97b188034b71f56eb95fb76813c74be8c8d8bb3e`, PID12799, fontScale effettivo 1.6, la lettura indipendente N/C conferma messaggi completi in Opzioni IT/ES, Google CTA e ultima scheda raggiungibili sopra i tab dopo un normale scroll per lingua. I quattro tab della shell ES risultano selezionati correttamente, senza rimbalzo a Opzioni; le etichette restano complete e senza ellissi, con interruzioni di parola `Inventari|o` e `Cronolog|ia` come limite tipografico esplicito. Evidenze: `android-system-bar-background-current-large-font-20261012-01/receipt.json` e `first-native-large-font-pixel-readback.json`, SHA256 `217de78e33ea617e873d607108ef47a766bec84f126c6b0464203b188fb49862`, sotto la base esterna `evidence/native-local-availability-20261004/native-residuals-continuation-20261007-01/native-resume-20261009-01/ios-language-label-regression-01/` del workspace Ecosistema.
+
+Ripristinati zh/light/fontScale1.0; zero nuovi login, Save o refresh. Il risultato riguarda la shell SignedOut: tastiera, editor, dialog, FAB, autenticazione, VoiceOver ed EN/ZH con testo grande restano NON ESEGUITI in questa prova. Nessuna modifica al prodotto e nessuna nuova qualifica CI dedotta dal solo aggiornamento documentale; TASK resta FIX / NON DONE.
+
+
+## Review
+
+Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
 
 ## Fix
 
