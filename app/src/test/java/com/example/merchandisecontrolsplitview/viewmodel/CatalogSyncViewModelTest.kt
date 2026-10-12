@@ -91,6 +91,87 @@ class CatalogSyncViewModelTest {
     }
 
     @Test
+    fun signedOutBoundDatabaseReportsAccountPrerequisiteWithoutEnablingSync() = runTest {
+        val scope = task126ActiveOwnerStoreScope(OWNER_VM_021, null)
+        val held = Task126BusinessDataScopeState(
+            Task126BusinessDataScopeStatus.CHECKING, boundScope = scope
+        )
+        val tracker = CatalogSyncStateTracker().apply { updateBusinessDataScopeState(held) }
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = mockk<InventoryRepository>(),
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedOut),
+            syncStateTracker = tracker
+        )
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        try {
+            assertEquals(
+                app.getString(R.string.catalog_cloud_state_sign_in_required),
+                viewModel.uiState.value.primaryMessage
+            )
+            assertFalse(viewModel.uiState.value.isSyncing)
+            assertFalse(viewModel.uiState.value.canRefresh)
+            assertFalse(viewModel.uiState.value.canQuickSync)
+            assertEquals(held, tracker.businessDataScopeState.value)
+            assertFalse(com.example.merchandisecontrolsplitview.ui.navigation.businessContentAvailable(
+                true, AuthState.SignedOut, held
+            ))
+        } finally {
+            store.clear()
+        }
+    }
+
+    @Test
+    fun authChangesUpdateCheckingPresentationWithoutChangingBoundDatabaseFence() = runTest {
+        val repository = mockk<InventoryRepository>()
+        coEvery { repository.getLocalDatabaseStatusSnapshot(any(), any()) } returns
+            LocalDatabaseStatusSnapshot(2, 1, 1, 3, 1, 0, 3)
+        val held = Task126BusinessDataScopeState(
+            Task126BusinessDataScopeStatus.CHECKING,
+            boundScope = task126ActiveOwnerStoreScope(OWNER_VM_021, null)
+        )
+        val tracker = CatalogSyncStateTracker().apply { updateBusinessDataScopeState(held) }
+        val auth = MutableStateFlow<AuthState>(AuthState.Checking)
+        val viewModel = CatalogSyncViewModel(
+            application = app,
+            repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(),
+            sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth,
+            syncStateTracker = tracker
+        )
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val collectJob = launch { viewModel.uiState.collect {} }
+        try {
+            val transitions = listOf(
+                AuthState.Checking to R.string.account_checking,
+                AuthState.SignedOut to R.string.catalog_cloud_state_sign_in_required,
+                AuthState.ErrorRecoverable("auth_refresh_failed") to R.string.catalog_cloud_state_session_required,
+                AuthState.SignedIn(OWNER_VM_021, "prerequisite@example.test") to R.string.business_scope_checking
+            )
+            for ((state, messageRes) in transitions) {
+                auth.value = state
+                advanceUntilIdle()
+                assertEquals(app.getString(messageRes), viewModel.uiState.value.primaryMessage)
+                assertFalse(viewModel.uiState.value.isSyncing)
+                assertFalse(viewModel.uiState.value.canRefresh)
+                assertFalse(viewModel.uiState.value.canQuickSync)
+                assertEquals(held, tracker.businessDataScopeState.value)
+                assertFalse(com.example.merchandisecontrolsplitview.ui.navigation.businessContentAvailable(
+                    true, state, held
+                ))
+            }
+        } finally {
+            collectJob.cancel()
+            store.clear()
+        }
+    }
+
+    @Test
     @Config(qualifiers = "en")
     fun selectedAppLanguageLocalizesInitialSyncPresentation() = runTest {
         val preferences = app.getSharedPreferences("settings", Context.MODE_PRIVATE)

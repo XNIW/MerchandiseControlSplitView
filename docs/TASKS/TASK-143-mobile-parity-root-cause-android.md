@@ -208,6 +208,17 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-12 · prerequisito account nel placeholder CHECKING
+
+- Sul TEST corrente b53, PID5173, avvio ordinario 19:25:13 UTC: il ripristino SDK supera il budget di 10s e pubblica SignedOut con attesa SDK conservata. A 183s la root mostra ancora la verifica del database; Opzioni corrente conferma account non connesso. Questo non prova sessione invalida, perdita dati o una causa del timeout SDK.
+- Causa della presentazione: resolveSignedOutBusinessDataScope termina deliberatamente con CHECKING e binding presente per proteggere i dati. La root, CatalogSyncViewModel e la card locale interpretavano CHECKING come lavoro sul database indipendentemente dal prerequisito auth.
+- Due regressioni additive CatalogSyncViewModel riproducono il difetto: 2 FAIL funzionali, 0 ERROR/0 SKIP, rilascio 19:42:45.679545 UTC. Gli altri 37 casi e tutto il codice produttivo erano invariati. Evidenza originale: coordinamento, `android-cold-auth-presentation-red-20261012-01`.
+- UI/UX: proiezione interna condivisa del solo CHECKING per account in verifica, SignedOut, errore account e SignedIn; root, catalogo e card locale usano lo stesso messaggio. Lo spinner della root compare soltanto quando account o database sono in verifica. CTA manuale Rivedi dettagli, navigazione, capability, binding, mismatch/schema, repository, auth/bootstrap e listener restano invariati. Le risorse esistenti coprono it/en/es/zh.
+- File: CatalogSyncViewModel.kt, NavGraph.kt, OptionsScreen.kt e due test additivi in CatalogSyncViewModelTest.kt. Il test resta byte-identico dal RED alla correzione.
+- GREEN pertinente: 56 PASS, 0 FAIL/ERROR/SKIP (CatalogSyncViewModel 39, BusinessContentGate 4, BusinessScopeMismatchDialog 6, OptionsScreenPublicUx 7), rilascio 19:53:07.304661 UTC; originali XML conservati prima dei gate completi. I due nuovi test restano SHA a8264de6567bbb40d6f283a4a7708b06a9df998038b3fd22cd503156f4ae7c9d dal RED.
+- Review indipendente C sul delta prodotto e test: nessun rilievo bloccante. Gate canonici 20:08:38.950810–20:11:25.829527 UTC: assembleDebug, lint, full JVM e compileAndroidTest PASS; 76 XML, 1.254 casi unici = 1.247 PASS / 7 SKIP / 0 FAIL-ERROR. Tutti i 1.252 ID e stati precedenti conservati, stessi 7 skip e motivi, esattamente 2 nuovi PASS. Lint 34 warning con firme e molteplicità identiche al candidato B53; nessun nuovo warning compiler. Sorgenti invariati durante l'esecuzione. Evidenza: coordinamento, `android-cold-auth-presentation-canonical-gates-20261012-01/receipt.json`.
+- Stato: FIX. Commit/PR/CI e verifica della nuova build installata ancora da eseguire. Il tentativo Google ordinario sul B53 installato ha restituito GetCredentialCancellationException dopo la selezione dell'account esistente: non è prova di cancellazione umana o di sessione invalida. È stata richiesta la sola conclusione del normale accesso TEST; nessuna nuova accettazione auth, recovery, ACK o peer dedotta dalla correzione di presentazione.
+
 ### Esecuzione — 2026-10-12 UTC — lingua dei dettagli sync e contrasto della barra di stato
 
 Baseline isolata L `bbbda83bee33b5374d5164a5c989a95db28f7e0f`, worktree `android-native-presentation-20261012/MerchandiseControlSplitView` creato dall'owner N. Il mandato utente corrente richiede di correggere i difetti visibili reali; CA-06/CA-10, stato TASK-143 **FIX** invariato. Nessuna modifica del checkout primario, dei dati, dell'autenticazione o dei controlli recovery.

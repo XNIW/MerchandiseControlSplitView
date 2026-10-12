@@ -62,6 +62,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
+import com.example.merchandisecontrolsplitview.viewmodel.businessScopeCheckingPresentation
 import com.example.merchandisecontrolsplitview.MainActivity
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.flow.first
@@ -640,6 +641,7 @@ internal fun AppNavGraphContent(
             }
         }
         if (businessRouteBlocked) {
+            val checkingPresentation = businessScopeCheckingPresentation(authState)
             Surface(
                 modifier = Modifier.fillMaxSize().testTag("root-business-placeholder"),
                 color = MaterialTheme.colorScheme.background
@@ -649,9 +651,10 @@ internal fun AppNavGraphContent(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING) CircularProgressIndicator()
+                    if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING &&
+                        checkingPresentation.showProgress) CircularProgressIndicator()
                     val message = when (businessDataScopeState.status) {
-                        Task126BusinessDataScopeStatus.CHECKING -> R.string.business_scope_checking
+                        Task126BusinessDataScopeStatus.CHECKING -> checkingPresentation.messageRes
                         Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND -> R.string.business_scope_unbound_review_message
                         Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH -> R.string.business_scope_account_mismatch_message
                         Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH -> R.string.business_scope_shop_mismatch_message
