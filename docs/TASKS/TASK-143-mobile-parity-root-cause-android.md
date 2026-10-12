@@ -208,6 +208,13 @@ Executor prima prepara source/test e congela; nessun compiler/socket/client/devi
 
 ## Execution
 
+### Esecuzione — 2026-10-12 UTC · sfondo delle barre di sistema nel tema scuro
+
+- Base: main `32bf5c0b1d806a199834433f05d75671c47af63d`, worktree isolata `android-native-presentation-20261012/MerchandiseControlSplitView`, branch `codex/android-native-system-bar-background-20261012`. Owner N per Git, SDK e dispositivo; root modifica esclusivamente MainActivity e questa sezione Execution.
+- FAIL originale preservato: `android-final-ordinary-dark-light-options-20261012-01/dark.png`, 21:26:23 UTC, Medium Phone API 35 / Android 15, PID9246, APK `1f5067ade29e74326a08d3f7dcdb4bc302622eae9affd0524dd40d3501690676`. Il corpo delle Opzioni è scuro, ma la status bar conserva uno sfondo chiaro con icone bianche quasi invisibili; anche il fondo della barra gestuale resta chiaro. Il controllo ha ripristinato lingua zh, tema light e fontScale 1.0.
+- Il precedente intervento aggiorna soltanto il contrasto delle icone; il tema XML della finestra resta Light e la selezione Compose non ne aggiorna lo sfondo. Candidato minimo: dentro MerchandiseControlTheme, usare il colore background effettivo per `window.setBackgroundDrawable(ColorDrawable(...))` e aggiornare insieme l'aspetto chiaro/scuro delle icone di status e navigazione. Nessuna modifica a inset, geometria, target SDK, XML, flussi dati o autenticazione.
+- Verifica: review indipendente e gate canonici N (assembleDebug, lint, full JVM 1.254 casi, compileAndroidTest), quindi build TEST e confronto nativo dark/light sullo stesso dispositivo, ancora pendenti al momento della modifica. Il FAIL visivo originale costituisce la regressione da verificare; nessun test che replichi soltanto i setter. La sola revisione sorgente non certifica il rendering delle barre trasparenti. Dopo la prova ripristinare zh/light/fontScale 1.0.
+
 ### Esecuzione — 2026-10-12 · prerequisito account nel placeholder CHECKING
 
 - Sul TEST corrente b53, PID5173, avvio ordinario 19:25:13 UTC: il ripristino SDK supera il budget di 10s e pubblica SignedOut con attesa SDK conservata. A 183s la root mostra ancora la verifica del database; Opzioni corrente conferma account non connesso. Questo non prova sessione invalida, perdita dati o una causa del timeout SDK.
@@ -1422,6 +1429,22 @@ Lo SKIP è esattamente `DefaultInventoryRepositoryTest.wechat 004 real local Sup
 ## Review
 
 Review indipendente e re-review del primo batch completate; R-A04 scoperto nel successivo collaudo live è stato riprodotto, corretto e revisionato separatamente. Sorgente APPROVED, nessun P0/P1/P2 source aperto dopo R-A01/R-A02/R-A03/R-A04; gate locali aggiornati PASS (970 JVM e 5 Compose). R-A05 sul successivo diniego RPC è anch’esso corretto e revisionato. Gate aggiornato985 totali/978 PASS/7 SKIP; ritest autenticato conferma `checkpoint_resource_exceeded` correttamente classificato, preservando binding, dati e journal. Il blocco server TOAST resta aperto. Evidenza: [independent-review.md](evidence/TASK-143/independent-review.md). La review tecnica non è un'approvazione GitHub di un maintainer né una conferma live.
+
+### Esecuzione — 2026-10-12 21:45 UTC — gate del contrasto nativo
+
+Prima invocazione: NON ESEGUITI compile/test, SDKlocation assente nell'ambiente del producer; exit1 e0test correnti, i76XMLcached nonsono evidenza del delta. Originale325ccb11 e release21:37:10.568392 preservati. Ambiente corretto usando esclusivamente gli stessi ANDROID_HOME/JAVA_HOME e rimozione delle chiavi profilo del producer esistente; niente local.properties/configwrite/source/timeout alterati.
+
+Prima verifica effettiva: assemble/lint/fullJVM/compileAndroidTest exit0,1254ID/1247PASS/7stessiSKIP/76XMLfresh e source538immutati, zero nuove diagnostiche compiler; PG95761gone21:43:04.580716. Lint conserva un FAIL pertinente: nuova UseKtx inMainActivity, consigliata Int.toDrawable. Applicata la sola sostituzione ColorDrawable(windowBackground)→windowBackground.toDrawable con importKTX già disponibile, nessuna dipendenza/suppression/gate indebolito; riesecuzione sui byte effettivamente modificati necessaria. Nessun nuovo test che rispecchi il setter; il RED visivoDark originale restaab4e5f4d, nuovoTEST e veri screenshotDark/Light ancoraNON ESEGUITI.
+
+
+### Esecuzione — 2026-10-12 21:51 UTC — contrasto nativo, gate sul delta KTX
+
+**File modificati:** MainActivity — Windowbackdrop dalla colorSchemeeffettiva e appearance status/navigation; Task143 — soloExecution. Review indipendente ordinaria C chiusa su82ae e trasformazione KTXb281 equivalente,0finding.
+
+**Azioni eseguite:** la nuova invocazione sui byte KTXmodificati conserva tutte538sorgenti before/after, compilaDebug/AndroidTest (quest'ultimo COMPILE_ONLY), lint34warning esattamenteimmutati/0nuove diagnosticcompiler e fullJVM **1254ID/1247PASS/7stessiSKIP/76XMLfresh**, nessun nuovo/rimosso/indebolito test. SDKPG97389exit0/gone21:49:04.235754, budget1800s/90reserve; tutti76XMLoriginali copiati inofficial-xml prima di ulteriori build. Iprecedenti ENVNOTRUN e UseKtxFAIL restano conservati; nessuna riesecuzione su sorgente immutato per forzareverde.
+
+**Check obbligatori:** BUILD ESEGUITO; LINT ESEGUITO; WARNING ESEGUITO(0nuovi); COERENZA ESEGUITO(soloappearance/backdrop,nienteinset/nav/DAO/repository/auth); CA NON ESEGUITI integralmente. Il canonico non prova il contrasto Dark sul nuovoAPK: nuovaCI head/main, ProperTEST/in-placeinstall e Dark/Light reali sono ancora pendenti. Nessun DONE o auth/perf/propagazione dedotto.
+
 
 ## Fix
 

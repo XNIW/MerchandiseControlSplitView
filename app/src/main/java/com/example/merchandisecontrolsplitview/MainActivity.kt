@@ -7,6 +7,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.toArgb
 import com.example.merchandisecontrolsplitview.ui.navigation.AppNavGraph
 import com.example.merchandisecontrolsplitview.ui.theme.MerchandiseControlTheme
 import com.example.merchandisecontrolsplitview.util.setLocale
@@ -36,6 +38,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import androidx.core.net.toUri
 import androidx.core.content.edit
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
 import androidx.appcompat.app.AppCompatDelegate
 import com.example.merchandisecontrolsplitview.ui.screens.Task126ReviewInteractionSmokeScreen
@@ -199,13 +202,17 @@ class MainActivity : ComponentActivity() {
                 else -> isSystemInDarkTheme()
             }
 
-            SideEffect {
-                // System icons must follow the app's theme, including an explicit override.
-                WindowCompat.getInsetsController(window, window.decorView)
-                    .isAppearanceLightStatusBars = !darkTheme
-            }
-
             MerchandiseControlTheme(darkTheme = darkTheme) {
+                val windowBackground = MaterialTheme.colorScheme.background.toArgb()
+                SideEffect {
+                    // Transparent system bars need the same backdrop and icon contrast as the app.
+                    window.setBackgroundDrawable(windowBackground.toDrawable())
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !darkTheme
+                        isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
+
                 val task126SmokeKind = if (BuildConfig.DEBUG) {
                     intent?.getStringExtra("task126_ui_smoke_kind")
                 } else {
