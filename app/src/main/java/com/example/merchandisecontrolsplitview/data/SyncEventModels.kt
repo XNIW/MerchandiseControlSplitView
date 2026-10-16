@@ -9,6 +9,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Update
+import java.util.UUID
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -20,9 +21,15 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 
 object SyncEventDomains {
     const val CATALOG = "catalog"
@@ -362,6 +369,9 @@ interface SyncEventDeviceStateDao {
     @Query("SELECT * FROM sync_event_device_state WHERE id = 1 LIMIT 1")
     suspend fun get(): SyncEventDeviceState?
 
+    @Query("SELECT * FROM sync_event_device_state WHERE id = 1 LIMIT 1")
+    fun observe(): kotlinx.coroutines.flow.Flow<SyncEventDeviceState?>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(row: SyncEventDeviceState): Long
 }
@@ -392,6 +402,99 @@ data class SyncEventOutboxEntry(
     val lastErrorType: String? = null
 )
 
+/** Local retry evidence only; the immutable event identity and wire body stay in the outbox row. */
+internal data class SyncEventRetryMetadata(
+    val category: SyncErrorCategory,
+    val phase: String,
+    val windowAttempts: Int,
+    val lastAttemptAtMs: Long,
+    val lastCompletedAtMs: Long?,
+    val nextEligibleAtMs: Long,
+    val claimID: String,
+    val retryAfterAtMs: Long? = null,
+    val retryAfterInvalid: Boolean = false
+) {
+    fun encode(): String = buildJsonObject {
+        put("v", 1)
+        put("kind", "sync_event_outbox_retry")
+        put("category", category.name)
+        put("phase", phase)
+        put("windowAttempts", windowAttempts)
+        put("lastAttemptAtMs", lastAttemptAtMs)
+        put("lastCompletedAtMs", lastCompletedAtMs?.let(::JsonPrimitive) ?: JsonNull)
+        put("nextEligibleAtMs", nextEligibleAtMs)
+        put("retryAfterAtMs", retryAfterAtMs?.let(::JsonPrimitive) ?: JsonNull)
+        put("retryAfterInvalid", retryAfterInvalid)
+        put("claimID", claimID)
+    }.toString()
+
+    val isTransient: Boolean get() = category in setOf(
+        SyncErrorCategory.NetworkOfflineOrTimeout,
+        SyncErrorCategory.RateLimited,
+        SyncErrorCategory.RemoteTransient
+    )
+
+    companion object {
+        private const val MAX_METADATA_CHARS = 2_048
+        private const val UNCERTAIN_REPLAY_DELAY_MS = 300_000L
+        private val fields = setOf(
+            "v", "kind", "category", "phase", "windowAttempts", "lastAttemptAtMs", "lastCompletedAtMs",
+            "nextEligibleAtMs", "retryAfterAtMs", "retryAfterInvalid", "claimID"
+        )
+
+        fun decode(raw: String): SyncEventRetryMetadata? = runCatching {
+            if (raw.length > MAX_METADATA_CHARS) return null
+            val value = Json.parseToJsonElement(raw) as? JsonObject ?: return null
+            if (value.keys != fields) return null
+            fun text(key: String): String? = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            fun number(key: String): JsonPrimitive? = (value[key] as? JsonPrimitive)?.takeUnless { it.isString }
+            if (number("v")?.intOrNull != 1 || text("kind") != "sync_event_outbox_retry") return null
+            val category = SyncErrorCategory.entries.firstOrNull { it.name == text("category") } ?: return null
+            val phase = text("phase")?.takeIf {
+                it in setOf("in_flight", "waiting", "cooldown", "blocked", "uncertain")
+            } ?: return null
+            val attempts = number("windowAttempts")?.intOrNull?.takeIf { it in 1..5 } ?: return null
+            val started = number("lastAttemptAtMs")?.longOrNull?.takeIf { it >= 0L } ?: return null
+            val completed = if (value["lastCompletedAtMs"] == JsonNull) {
+                null
+            } else {
+                number("lastCompletedAtMs")?.longOrNull?.takeIf { it >= 0L } ?: return null
+            }
+            val next = number("nextEligibleAtMs")?.longOrNull?.takeIf { it >= 0L } ?: return null
+            val retryAfter = if (value["retryAfterAtMs"] == JsonNull) {
+                null
+            } else {
+                number("retryAfterAtMs")?.longOrNull?.takeIf { it >= 0L } ?: return null
+            }
+            val invalid = number("retryAfterInvalid")?.booleanOrNull ?: return null
+            val claim = text("claimID")?.takeIf { UUID.fromString(it).toString() == it } ?: return null
+            if (retryAfter != null && next < retryAfter) return null
+            if (invalid && phase != "blocked") return null
+
+            val metadata = SyncEventRetryMetadata(category, phase, attempts, started, completed, next, claim, retryAfter, invalid)
+            if (phase == "in_flight") {
+                if (category != SyncErrorCategory.Unknown || completed != null ||
+                    started > Long.MAX_VALUE - UNCERTAIN_REPLAY_DELAY_MS ||
+                    next < started + UNCERTAIN_REPLAY_DELAY_MS) return null
+            } else {
+                if (completed == null || completed < started || next < completed) return null
+                when (phase) {
+                    "waiting" -> if (!metadata.isTransient || attempts >= 5) return null
+                    "cooldown" -> if (!metadata.isTransient || attempts != 5 ||
+                        completed > Long.MAX_VALUE - UNCERTAIN_REPLAY_DELAY_MS ||
+                        next < completed + UNCERTAIN_REPLAY_DELAY_MS) return null
+                    "uncertain" -> if (category != SyncErrorCategory.Unknown ||
+                        completed > Long.MAX_VALUE - UNCERTAIN_REPLAY_DELAY_MS ||
+                        next < completed + UNCERTAIN_REPLAY_DELAY_MS) return null
+                    "blocked" -> if (metadata.isTransient && !invalid) return null
+                }
+            }
+            // Reject duplicate keys, alternate numeric forms and every noncanonical persisted representation.
+            metadata.takeIf { it.encode() == raw }
+        }.getOrNull()
+    }
+}
+
 @Dao
 interface SyncEventOutboxDao {
     @Query("SELECT * FROM sync_event_outbox WHERE ownerUserId=:owner AND clientEventId=:key LIMIT 1")
@@ -417,6 +520,25 @@ interface SyncEventOutboxDao {
         """
     )
     suspend fun listPending(ownerUserId: String, limit: Int): List<SyncEventOutboxEntry>
+
+    @Query(
+        """
+        SELECT * FROM sync_event_outbox
+        WHERE ownerUserId = :ownerUserId
+          AND storeScope = :storeScope
+          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
+          AND (createdAtMs > :afterCreatedAtMs OR (createdAtMs = :afterCreatedAtMs AND id > :afterId))
+        ORDER BY createdAtMs ASC, id ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun listPendingPageForScope(
+        ownerUserId: String,
+        storeScope: String,
+        afterCreatedAtMs: Long,
+        afterId: Long,
+        limit: Int
+    ): List<SyncEventOutboxEntry>
 
     @Query(
         """

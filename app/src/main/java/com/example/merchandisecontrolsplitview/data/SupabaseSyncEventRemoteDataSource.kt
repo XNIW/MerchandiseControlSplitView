@@ -2,9 +2,24 @@ package com.example.merchandisecontrolsplitview.data
 
 import android.util.Log
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.annotations.SupabaseInternal
+import io.github.jan.supabase.auth.api.authenticatedSupabaseApi
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.exception.PostgrestRestException
+import io.github.jan.supabase.postgrest.result.PostgrestResult
 import io.github.jan.supabase.postgrest.rpc
+import io.github.jan.supabase.supabaseJson
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.header
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.contentType
+import io.ktor.utils.io.ByteReadChannel
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -165,14 +180,45 @@ class SupabaseSyncEventRemoteDataSource private constructor(
     }
 }
 
+/** Transparent transport resends must never spend another physical event request inside one app claim. */
+private class SyncEventOneShotRequestBody(bytes: ByteArray) : OutgoingContent.ReadChannelContent() {
+    private val channel = ByteReadChannel(bytes)
+    private val opened = AtomicBoolean(false)
+    override val contentType: ContentType = ContentType.Application.Json
+    override val contentLength: Long = bytes.size.toLong()
+    override fun readFrom(): ByteReadChannel {
+        check(opened.compareAndSet(false, true)) { "sync_event_record_body_replay" }
+        return channel
+    }
+}
+
+@OptIn(SupabaseInternal::class)
 private fun syncEventRpcInvoker(
     client: SupabaseClient?
 ): suspend (String, JsonObject) -> Result<SyncEventRemoteRow> = { functionName, payload ->
     runCatching {
-        requireNotNull(client) { "Supabase non configurato" }
-            .postgrest
-            .rpc(functionName, payload)
-            .decodeAs<SyncEventRemoteRow>()
+        val configuredClient = requireNotNull(client) { "Supabase non configurato" }
+        val operationClient = (configuredClient as? GenerationOwnedSupabaseClient)?.captureClient() ?: configuredClient
+        val postgrest = operationClient.postgrest
+        if (functionName == STRICT_SYNC_EVENT_RPC) {
+            // RpcRequestBuilder only accepts JsonElement bodies. Reuse its SDK auth/error path and default request contract.
+            val api = operationClient.authenticatedSupabaseApi(postgrest, urlLengthLimit = postgrest.config.urlLengthLimit)
+            val response = api.request("rpc/$functionName") {
+                method = HttpMethod.Post
+                contentType(ContentType.Application.Json)
+                if (postgrest.config.defaultSchema.isNotBlank()) header("Content-Profile", postgrest.config.defaultSchema)
+                header(HttpHeaders.Accept, ContentType.Application.Json.toString())
+                header("Prefer", "")
+                // The SDK ContentNegotiation converter uses this same supabaseJson for JsonObject request bodies.
+                setBody(SyncEventOneShotRequestBody(
+                    supabaseJson.encodeToString(JsonObject.serializer(), payload).encodeToByteArray()
+                ))
+                timeout { requestTimeoutMillis = postgrest.config.timeout.inWholeMilliseconds }
+            }
+            PostgrestResult(response.bodyAsText(), response.headers, postgrest).decodeAs<SyncEventRemoteRow>()
+        } else {
+            postgrest.rpc(functionName, payload).decodeAs<SyncEventRemoteRow>()
+        }
     }
 }
 

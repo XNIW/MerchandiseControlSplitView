@@ -22,9 +22,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import kotlin.coroutines.coroutineContext
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.min
 
 internal object ShopSyncRecoveryReasons {
@@ -48,13 +58,96 @@ internal sealed interface ShopSyncRecoveryResult {
 
     data class RetryRequired(
         val code: String,
-        val nextRetryAtMs: Long?
+        val nextRetryAtMs: Long?,
+        val classification: SyncErrorClassification? = null
     ) : ShopSyncRecoveryResult
 
     data class Rejected(val code: String) : ShopSyncRecoveryResult
 }
 
+/** Local scheduling metadata only. The recovery journal continues to own all scope and staging facts. */
+internal data class AutomaticRecoveryRetryMetadata(
+    val code: String,
+    val category: SyncErrorCategory,
+    val windowAttempts: Int,
+    val state: String,
+    val nextEligibleAtMs: Long,
+    val claimID: String,
+    val lastAttemptAtMs: Long,
+    val lastCompletedAtMs: Long?
+) {
+    fun encode(): String = buildJsonObject {
+        put("v", 1); put("kind", "automatic_recovery_retry"); put("code", code)
+        put("category", category.name); put("windowAttempts", windowAttempts); put("state", state)
+        put("nextEligibleAtMs", nextEligibleAtMs); put("claimID", claimID)
+        put("lastAttemptAtMs", lastAttemptAtMs)
+        put("lastCompletedAtMs", lastCompletedAtMs?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+    }.toString()
+
+    val isTransient: Boolean get() = category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
+        SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient)
+
+    companion object {
+        private val fields = setOf("v", "kind", "code", "category", "windowAttempts", "state", "nextEligibleAtMs", "claimID",
+            "lastAttemptAtMs", "lastCompletedAtMs")
+        fun decode(raw: String): AutomaticRecoveryRetryMetadata? = runCatching {
+            if (raw.length > 2_048) return null
+            val value = Json.parseToJsonElement(raw) as? JsonObject ?: return null
+            if (value.keys != fields) return null
+            fun text(key: String): String? = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            fun number(key: String): JsonPrimitive? = (value[key] as? JsonPrimitive)?.takeUnless { it.isString }
+            if (number("v")?.intOrNull != 1 || text("kind") != "automatic_recovery_retry") return null
+            val code = text("code")?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,160}")) } ?: return null
+            val category = SyncErrorCategory.entries.firstOrNull { it.name == text("category") } ?: return null
+            val attempts = number("windowAttempts")?.intOrNull?.takeIf { it in 1..5 } ?: return null
+            val state = text("state")?.takeIf { it in setOf("in_flight", "waiting", "cooldown", "blocked") } ?: return null
+            val next = number("nextEligibleAtMs")?.longOrNull?.takeIf { it >= 0 } ?: return null
+            val claim = text("claimID")?.takeIf { UUID.fromString(it).toString() == it } ?: return null
+            val started = number("lastAttemptAtMs")?.longOrNull?.takeIf { it >= 0 } ?: return null
+            val completed = number("lastCompletedAtMs")?.longOrNull
+            if (state == "in_flight") {
+                if (value["lastCompletedAtMs"] != kotlinx.serialization.json.JsonNull || next < started) return null
+            } else {
+                if (completed == null || completed < started || next < completed) return null
+                if (state == "cooldown" && (completed > Long.MAX_VALUE - 300_000L || next < completed + 300_000L)) return null
+            }
+            val metadata = AutomaticRecoveryRetryMetadata(code, category, attempts, state, next, claim, started, completed)
+            // Only our canonical encoding is admitted; duplicate keys and ambiguous numeric forms fail closed.
+            metadata.takeIf { it.encode() == raw && (state != "cooldown" || attempts == 5) }
+        }.getOrNull()
+    }
+}
+
+/** Per invocation only. The transport supplies the actual client timeout before each request. */
+private class RecoveryScopeResolutionContinuation(
+    val awaitResolution: suspend (remainingMs: Long) -> Boolean
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<RecoveryScopeResolutionContinuation>
+    var requestStartedAtNanos: Long? = null
+    var requestTimeoutMs: Long? = null
+
+    suspend fun awaitWithinRequestBudget(): Boolean {
+        val started = requestStartedAtNanos ?: return false
+        val timeout = requestTimeoutMs?.takeIf { it > 0L } ?: return false
+        val elapsed = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started).coerceAtLeast(0L)
+        if (elapsed >= timeout) return false
+        val remaining = timeout - elapsed
+        return withTimeoutOrNull(remaining) { awaitResolution(remaining) } == true
+    }
+}
+
+/** Also used by synthetic transports to declare their own bounded request budget explicitly. */
+internal suspend fun recordRecoveryRpcTimeout(timeoutMs: Long) {
+    val continuation = coroutineContext[RecoveryScopeResolutionContinuation] ?: return
+    continuation.requestStartedAtNanos = System.nanoTime()
+    continuation.requestTimeoutMs = timeoutMs.takeIf { it > 0L && it < Long.MAX_VALUE }
+}
+
 internal object ShopSyncRecoveryTestHooks {
+    /** Observation only; never changes admission, deadlines or the result of a scope check. */
+    @Volatile
+    var onScopeResolutionWaiting: (() -> Unit)? = null
+
     @Volatile
     var onRecoveryFailure: ((Exception) -> Unit)? = null
 
@@ -86,6 +179,7 @@ internal object ShopSyncRecoveryTestHooks {
     var afterPageMaterializedBeforeCommit: ((ShopSyncRowDomain) -> Unit)? = null
 
     fun reset() {
+        onScopeResolutionWaiting = null
         onRecoveryFailure = null
         afterPageMaterializedBeforeCommit = null
         afterStagingJournalPersisted = null
@@ -130,15 +224,20 @@ internal class ShopSyncRecoveryCoordinator(
     private val checkpointDecoder: (String) -> ShopSyncRecoveryCheckpoint =
         ::decodeRecoveryCheckpointJson,
     private val deleteStagingDatabase: (Context, String) -> Boolean =
-        { targetContext, name -> targetContext.deleteDatabase(name) }
+        { targetContext, name -> targetContext.deleteDatabase(name) },
+    private val automaticRetryJitter: () -> Double = { kotlin.random.Random.nextDouble(0.5, 1.5) }
 ) {
     private val appContext = context.applicationContext
 
     suspend fun recover(
         accountId: String,
         selectedShop: SelectedShop,
-        activeScope: Task126OwnerStoreScope
-    ): ShopSyncRecoveryResult = withContext(Dispatchers.IO) {
+        activeScope: Task126OwnerStoreScope,
+        automaticClaimID: String? = null,
+        awaitScopeResolution: (suspend (remainingMs: Long) -> Boolean)? = null
+    ): ShopSyncRecoveryResult = withContext(Dispatchers.IO +
+        (if (automaticClaimID != null && awaitScopeResolution != null)
+            RecoveryScopeResolutionContinuation(awaitScopeResolution) else EmptyCoroutineContext)) {
         val shopId = canonicalUuidOrNull(selectedShop.shopId)
             ?: return@withContext ShopSyncRecoveryResult.Rejected("recovery_shop_invalid")
         val expectedActiveScope = task126ActiveOwnerStoreScope(
@@ -155,6 +254,11 @@ internal class ShopSyncRecoveryCoordinator(
         }
         val journal = activeDb.syncRecoveryJournalDao().get()
             ?: return@withContext ShopSyncRecoveryResult.Rejected("recovery_journal_missing")
+        val automaticMetadata = AutomaticRecoveryRetryMetadata.decode(journal.reason)
+        if ((automaticClaimID != null && (automaticMetadata?.claimID != automaticClaimID || automaticMetadata.state != "in_flight")) ||
+            (automaticClaimID == null && journal.reason.trimStart().startsWith("{"))) {
+            return@withContext ShopSyncRecoveryResult.Rejected("recovery_automatic_claim_invalid")
+        }
         if (
             journal.ownerHash != activeScope.ownerHash ||
             journal.storeScope != activeScope.storeId ||
@@ -177,7 +281,8 @@ internal class ShopSyncRecoveryCoordinator(
                 keepActivatedPhase =
                     journal.phase == SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING,
                 expectedRunId = journal.runId,
-                retainStagingDatabase = true
+                retainStagingDatabase = true,
+                automaticClaimID = automaticClaimID
             )
         }
 
@@ -186,7 +291,8 @@ internal class ShopSyncRecoveryCoordinator(
                 accountId,
                 shopId,
                 activeScope,
-                journal
+                journal,
+                automaticClaimID
             )
         }
 
@@ -210,12 +316,12 @@ internal class ShopSyncRecoveryCoordinator(
         }
         if (resumedDb == null && !cleanupKnownStaging(journal.stagingDatabaseName)) {
             return@withContext retryAfterFailure(journal, "recovery_staging_cleanup_deferred", false,
-                journal.runId, retainStagingDatabase = true)
+                journal.runId, retainStagingDatabase = true, automaticClaimID = automaticClaimID)
         }
         if (!cleanupBoundedOrphanStaging(excluding = ownedName.takeIf { resumedDb != null })) {
             resumedDb?.close()
             return@withContext retryAfterFailure(journal, "recovery_orphan_cleanup_deferred", false,
-                journal.runId, retainStagingDatabase = resumedDb != null)
+                journal.runId, retainStagingDatabase = resumedDb != null, automaticClaimID = automaticClaimID)
         }
 
         val replaceConfirmed = journal.authorizationMode ==
@@ -227,7 +333,7 @@ internal class ShopSyncRecoveryCoordinator(
                 activeDb.syncEventOutboxDao().countAll() != scopedOutbox) {
                 resumedDb?.close()
                 return@withContext retryAfterFailure(journal, "recovery_local_pending", false,
-                    expectedRunId = journal.runId, retainStagingDatabase = false)
+                    expectedRunId = journal.runId, retainStagingDatabase = false, automaticClaimID = automaticClaimID)
             }
         }
         val generationId = if (resumedDb != null) requireNotNull(journal.runId) else UUID.randomUUID().toString().lowercase()
@@ -454,7 +560,8 @@ internal class ShopSyncRecoveryCoordinator(
                     keepActivatedPhase = false,
                     expectedRunId = generationId,
                     retainStagingDatabase = !cleanupComplete,
-                    checkpointADigest = markerAfterActivation.checkpointDigest
+                    checkpointADigest = markerAfterActivation.checkpointDigest,
+                    automaticClaimID = automaticClaimID
                 )
             }
             validateManifest(activeDb, generationId, publishedCheckpoint)
@@ -471,7 +578,8 @@ internal class ShopSyncRecoveryCoordinator(
                     code = "recovery_staging_cleanup_deferred",
                     keepActivatedPhase = true,
                     expectedRunId = generationId,
-                    retainStagingDatabase = true
+                    retainStagingDatabase = true,
+                    automaticClaimID = automaticClaimID
                 )
             }
             if (!leaseStillValid(accountId, shopId, currentDevice)) {
@@ -506,14 +614,17 @@ internal class ShopSyncRecoveryCoordinator(
                     code = "recovery_cancelled",
                     keepActivatedPhase = durablyActivated,
                     expectedRunId = generationId,
-                    retainStagingDatabase = !cleanupComplete || durablyActivated || resumable
+                    retainStagingDatabase = !cleanupComplete || durablyActivated || resumable,
+                    automaticClaimID = automaticClaimID
                 )
             }
             throw cancelled
         } catch (error: Exception) {
             ShopSyncRecoveryTestHooks.onRecoveryFailure?.invoke(error)
             val contract = error as? ShopSyncContractException
+            val classification = SyncErrorClassifier.classify(error, nowMs())
             val code = contract?.code
+                ?: classification.httpStatus?.let { "shop_sync_rpc_http_$it" }
                 ?: error.message?.takeIf { it.startsWith("recovery_") }
                 ?: ShopSyncRecoveryReasons.RECOVERY_FAILED
             val missingFields = contract?.missingFields.orEmpty()
@@ -533,16 +644,23 @@ internal class ShopSyncRecoveryCoordinator(
                 activeScope = activeScope,
                 deviceId = currentDevice
             )
-            // Invalid/expired protocol fences require a new A. Transport failures
-            // keep the accepted prefix; every retry still obtains a fresh B/C.
-            val resumable = !durablyActivated && contract == null && hasAcceptedRecoveryHeader(stagingName, latest)
+            // Invalid/expired protocol fences require a new A. A local failure
+            // does not itself invalidate accepted pages; retry eligibility is
+            // still decided separately from their integrity.
+            val typedTransient = classification.category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
+                SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient)
+            // Retry-After eligibility is separate from the integrity of pages already accepted under this fence.
+            val resumable = !durablyActivated && (contract == null || typedTransient) &&
+                hasAcceptedRecoveryHeader(stagingName, latest)
             val cleanupComplete = durablyActivated || resumable || cleanupKnownStaging(stagingName)
             val retry = retryAfterFailure(
                 journal = latest,
                 code = code,
                 keepActivatedPhase = durablyActivated,
                 expectedRunId = generationId,
-                retainStagingDatabase = !cleanupComplete || durablyActivated || resumable
+                retainStagingDatabase = !cleanupComplete || durablyActivated || resumable,
+                automaticClaimID = automaticClaimID,
+                classification = classification
             )
             if (code in SERVER_RESPONSE_BLOCKING_CODES) {
                 // Preserve the durable reason, but do not spend the current
@@ -560,9 +678,10 @@ internal class ShopSyncRecoveryCoordinator(
         accountId: String,
         shopId: String,
         activeScope: Task126OwnerStoreScope,
-        journal: SyncRecoveryJournal
+        journal: SyncRecoveryJournal,
+        automaticClaimID: String?
     ): ShopSyncRecoveryResult = try {
-        finishActivatedCleanup(accountId, shopId, activeScope, journal)
+        finishActivatedCleanup(accountId, shopId, activeScope, journal, automaticClaimID)
     } catch (cancelled: CancellationException) {
         withContext(NonCancellable) {
             retryAfterFailure(
@@ -570,20 +689,25 @@ internal class ShopSyncRecoveryCoordinator(
                 code = "recovery_cancelled",
                 keepActivatedPhase = true,
                 expectedRunId = journal.runId,
-                retainStagingDatabase = true
+                retainStagingDatabase = true,
+                automaticClaimID = automaticClaimID
             )
         }
         throw cancelled
     } catch (error: Exception) {
         logger("shop_sync_recovery cleanup_failed type=${error::class.java.simpleName}")
+        val classification = SyncErrorClassifier.classify(error, nowMs())
         retryAfterFailure(
             journal = journal,
             code = (error as? ShopSyncContractException)?.code
+                ?: classification.httpStatus?.let { "shop_sync_rpc_http_$it" }
                 ?: error.message?.takeIf { it.startsWith("recovery_") }
                 ?: ShopSyncRecoveryReasons.RECOVERY_FAILED,
             keepActivatedPhase = true,
             expectedRunId = journal.runId,
-            retainStagingDatabase = true
+            retainStagingDatabase = true,
+            automaticClaimID = automaticClaimID,
+            classification = classification
         )
     }
 
@@ -591,7 +715,8 @@ internal class ShopSyncRecoveryCoordinator(
         accountId: String,
         shopId: String,
         activeScope: Task126OwnerStoreScope,
-        journal: SyncRecoveryJournal
+        journal: SyncRecoveryJournal,
+        automaticClaimID: String?
     ): ShopSyncRecoveryResult {
         val baseline = activeDb.syncRecoveryBaselineDao().get()
             ?: throw ShopSyncContractException("recovery_baseline_missing")
@@ -628,7 +753,8 @@ internal class ShopSyncRecoveryCoordinator(
                 keepActivatedPhase = false,
                 expectedRunId = journal.runId,
                 retainStagingDatabase = !cleanupComplete,
-                checkpointADigest = marker.checkpointDigest
+                checkpointADigest = marker.checkpointDigest,
+                automaticClaimID = automaticClaimID
             )
         }
         activationBoundary {
@@ -650,7 +776,8 @@ internal class ShopSyncRecoveryCoordinator(
                 code = "recovery_staging_cleanup_deferred",
                 keepActivatedPhase = true,
                 expectedRunId = journal.runId,
-                retainStagingDatabase = true
+                retainStagingDatabase = true,
+                automaticClaimID = automaticClaimID
             )
         }
         if (!leaseStillValid(accountId, shopId, journal.deviceId)) {
@@ -691,7 +818,7 @@ internal class ShopSyncRecoveryCoordinator(
         ).getOrThrow()
         validateRecoveryScopeIdentity(checkpoint.scope, accountId, deviceId)
         validateRecoveryCheckpointResourceBounds(checkpoint, resourceLimits)
-        if (!leaseStillValid(accountId, shopId, deviceId)) {
+        if (!leaseAfterSuccessfulRpc(accountId, shopId, deviceId)) {
             throw ShopSyncContractException("recovery_lease_invalid_after_rpc")
         }
         return checkpoint
@@ -718,7 +845,7 @@ internal class ShopSyncRecoveryCoordinator(
             )
         ).getOrThrow()
         validateRecoveryScopeIdentity(marker.scope, accountId, deviceId)
-        if (!leaseStillValid(accountId, shopId, deviceId)) {
+        if (!leaseAfterSuccessfulRpc(accountId, shopId, deviceId)) {
             throw ShopSyncContractException("recovery_lease_invalid_after_marker")
         }
         return marker
@@ -857,7 +984,7 @@ internal class ShopSyncRecoveryCoordinator(
                 afterId = cursor,
                 limit = RECOVERY_TAIL_EVENT_PAGE_LIMIT
             ).getOrThrow()
-            if (!leaseStillValid(accountId, shopId, deviceId)) {
+            if (!leaseAfterSuccessfulRpc(accountId, shopId, deviceId)) {
                 throw ShopSyncContractException("recovery_lease_invalid_after_tail_page")
             }
             validateTailPage(page, checkpointB, shopId, cursor)
@@ -1144,7 +1271,7 @@ internal class ShopSyncRecoveryCoordinator(
                 throw ShopSyncContractException("recovery_lease_invalid_before_tail_targeted")
             }
             val result = remote.rowsByIds(context, domain, chunk).getOrThrow()
-            if (!leaseStillValid(accountId, shopId, deviceId)) {
+            if (!leaseAfterSuccessfulRpc(accountId, shopId, deviceId)) {
                 throw ShopSyncContractException("recovery_lease_invalid_after_tail_targeted")
             }
             validateTailTargetedRows(result, checkpoint, domain, shopId, chunk)
@@ -1316,7 +1443,7 @@ internal class ShopSyncRecoveryCoordinator(
                 afterId = afterId,
                 limit = pageLimit
             ).getOrThrow()
-            if (!leaseStillValid(accountId, shopId, deviceId)) {
+            if (!leaseAfterSuccessfulRpc(accountId, shopId, deviceId)) {
                 throw ShopSyncContractException("recovery_lease_invalid_after_page")
             }
             validateLiveRecoveryPage(page, checkpoint, domain, shopId, afterId, pageLimit)
@@ -1541,6 +1668,13 @@ internal class ShopSyncRecoveryCoordinator(
     ): Boolean = scopeStillValid(accountId, shopId) &&
         activeDb.syncEventDeviceStateDao().get()?.deviceId == deviceId
 
+    /** Only called after a successful response and outside transactions; direct callers have no continuation. */
+    private suspend fun leaseAfterSuccessfulRpc(accountId: String, shopId: String, deviceId: String): Boolean {
+        if (leaseStillValid(accountId, shopId, deviceId)) return true
+        val resolved = coroutineContext[RecoveryScopeResolutionContinuation]?.awaitWithinRequestBudget() == true
+        return resolved && leaseStillValid(accountId, shopId, deviceId)
+    }
+
     private suspend fun hasPendingWorkBeforeWholeStoreReplacement(): Boolean {
         // L'activation sostituisce l'unico store fisico e cancella l'outbox
         // intera. Una entry foreign-scope e' quindi corruzione/blocco, non lavoro
@@ -1610,7 +1744,9 @@ internal class ShopSyncRecoveryCoordinator(
         keepActivatedPhase: Boolean,
         expectedRunId: String?,
         retainStagingDatabase: Boolean = keepActivatedPhase,
-        checkpointADigest: String? = null
+        checkpointADigest: String? = null,
+        automaticClaimID: String? = null,
+        classification: SyncErrorClassification? = null
     ): ShopSyncRecoveryResult.RetryRequired {
         var persistedRetryAt: Long? = null
         var observedRetryJournal: SyncRecoveryJournal? = null
@@ -1618,15 +1754,24 @@ internal class ShopSyncRecoveryCoordinator(
         activeDb.withTransaction {
             val current = activeDb.syncRecoveryJournalDao().get()
             observedRetryJournal = current
+            val automaticMetadata = current?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
             if (
                 current == journal &&
                 current.ownerHash == journal.ownerHash &&
                 current.storeScope == journal.storeScope &&
                 current.deviceId == journal.deviceId &&
-                current.runId == expectedRunId
+                current.runId == expectedRunId &&
+                (automaticClaimID == null || automaticMetadata?.claimID == automaticClaimID)
             ) {
-                val nextAttempt = nextSyncRecoveryAttemptCount(current.attemptCount)
-                val retryAt = nowMs() + retryBackoffMs(nextAttempt)
+                val nextAttempt = if (automaticClaimID == null) nextSyncRecoveryAttemptCount(current.attemptCount)
+                    else current.attemptCount
+                val localDelay = if (automaticClaimID == null) retryBackoffMs(nextAttempt) else {
+                    val jitter = automaticRetryJitter()
+                    require(jitter.isFinite() && jitter in 0.5..1.5) { "recovery_retry_jitter_invalid" }
+                    val failureNumber = requireNotNull(automaticMetadata).windowAttempts
+                    minOf(60_000L, ((2_000L shl (failureNumber - 1)) * jitter).toLong())
+                }
+                val retryAt = maxOf(nowMs() + localDelay, classification?.retryAfterAtMs ?: 0L)
                 ShopSyncRecoveryTestHooks.beforeRetryJournalPersisted?.invoke()
                 if (activeDb.syncRecoveryJournalDao().get() == current) {
                     activeDb.syncRecoveryJournalDao().upsert(
@@ -1637,7 +1782,7 @@ internal class ShopSyncRecoveryCoordinator(
                                 if (retainStagingDatabase && current.checkpointADigest != null)
                                     SyncRecoveryJournalPhases.STAGING else SyncRecoveryJournalPhases.REQUIRED
                             },
-                            reason = code,
+                            reason = if (automaticClaimID == null) code else current.reason,
                             attemptCount = nextAttempt,
                             updatedAtMs = nowMs(),
                             nextRetryAtMs = retryAt,
@@ -1666,7 +1811,7 @@ internal class ShopSyncRecoveryCoordinator(
                 observedNow +
                     retryBackoffMs(nextSyncRecoveryAttemptCount(retrySource.attemptCount))
                 )
-        return ShopSyncRecoveryResult.RetryRequired(code, retryAt)
+        return ShopSyncRecoveryResult.RetryRequired(code, retryAt, classification)
     }
 
     private suspend fun activationWasCommitted(

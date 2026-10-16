@@ -136,6 +136,7 @@ class MerchandiseControlApplicationTest {
     }
 
     @Test
+    @Config(application = UnconfiguredTestApplication::class)
     fun `checkpoint trace reservation neither queues nor launches recovery on release`() = runTest {
         val app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
         val original = privateApplicationField<CoroutineScope>(app, "appScope")
@@ -143,6 +144,7 @@ class MerchandiseControlApplicationTest {
         setPrivateApplicationField(app, "appScope", scope)
         app.catalogSyncStateTracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
             status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, errorCode = "sync_recovery_required"))
+        val restoreAuthority = installRecoveryRequestAuthority(app)
         try {
             app.requestOneCheckpointTrace(true)
             app.requestPendingBusinessRecovery("synthetic_during_trace")
@@ -154,6 +156,7 @@ class MerchandiseControlApplicationTest {
             assertNotNull(privateApplicationField<Job?>(app, "businessRecoveryJob"))
         } finally {
             privateApplicationField<Job?>(app, "businessRecoveryJob")?.cancel()
+            restoreAuthority()
             scope.cancel(); testScheduler.runCurrent()
             setPrivateApplicationField(app, "appScope", original)
             app.catalogSyncStateTracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.unmanagedAllowed())
@@ -161,6 +164,7 @@ class MerchandiseControlApplicationTest {
     }
 
     @Test
+    @Config(application = UnconfiguredTestApplication::class)
     fun `checkpoint trace wrong target leaves durable snapshot unchanged and exports scalars only`() = runTest {
         withTraceDatabase { app, _ ->
             val before = app.checkpointTraceSnapshot(TRACE_OWNER, "shop:$TRACE_SHOP")
@@ -318,7 +322,9 @@ class MerchandiseControlApplicationTest {
     }
 
 
-    @Test fun checkpointReadinessLocalSnapshotReadsNoWritesOrNetworkAndDoesNotConsume() = runTest {
+    @Test
+    @Config(application = UnconfiguredTestApplication::class)
+    fun checkpointReadinessLocalSnapshotReadsNoWritesOrNetworkAndDoesNotConsume() = runTest {
         var writes = 0
         withTraceDatabase(onQuery = { sql ->
             if (Regex("^\\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\\b", RegexOption.IGNORE_CASE)
@@ -941,6 +947,7 @@ class MerchandiseControlApplicationTest {
     }
 
     @Test
+    @Config(application = UnconfiguredTestApplication::class)
     fun `local thread snapshot denial does not query Room or reserve business recovery`() = runBlocking {
         val queryCount = AtomicInteger()
         withTraceDatabase(onQuery = { queryCount.incrementAndGet() }) { app, db ->
@@ -1015,7 +1022,7 @@ class MerchandiseControlApplicationTest {
 
     private fun traceMessages() = ShadowLog.getLogsForTag("Task143CheckpointTrace").map { it.msg }
     private fun setPrivateApplicationField(target: Any, name: String, value: Any?) {
-        target.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(target, value)
+        (if (target is MerchandiseControlApplication) MerchandiseControlApplication::class.java else target.javaClass).getDeclaredField(name).apply { isAccessible = true }.set(target, value)
     }
     private fun traceActiveScope() = Task126OwnerStoreScope(task126OwnerHash(TRACE_OWNER), "shop:$TRACE_SHOP", null)
     private fun traceSession(expiresAt: Instant = Clock.System.now() + 1.days) = UserSession(
@@ -1164,6 +1171,7 @@ class MerchandiseControlApplicationTest {
     }
 
     @Test
+    @Config(application = UnconfiguredTestApplication::class)
     fun `139 viewmodel factory recovery callback reuses application single flight`() = runTest {
         val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
         application.catalogSyncStateTracker.updateBusinessDataScopeState(
@@ -1172,6 +1180,7 @@ class MerchandiseControlApplicationTest {
                 errorCode = "sync_recovery_required"
             )
         )
+        val restoreAuthority = installRecoveryRequestAuthority(application)
         val executionMutex = privateApplicationField<Mutex>(
             application,
             "businessRecoveryExecutionMutex"
@@ -1198,6 +1207,7 @@ class MerchandiseControlApplicationTest {
             )
         } finally {
             scheduled?.cancel()
+            restoreAuthority()
             executionMutex.unlock()
             advanceUntilIdle()
             application.catalogSyncStateTracker.updateBusinessDataScopeState(
@@ -1225,19 +1235,54 @@ class MerchandiseControlApplicationTest {
     }
 
     @Test
+    @Config(application = UnconfiguredTestApplication::class)
     fun `authManager is singleton and auto-disables without config`() {
         val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
         // Singleton: stessa istanza a ogni accesso.
         assertSame(application.authManager, application.authManager)
-        // In test/CI le chiavi sono vuote: il manager si auto-disabilita.
+        // The explicit absent-configuration fixture disables the real application manager.
         assertFalse(application.authManager.isEnabled)
         // Senza config, lo stato deve essere SignedOut (non Checking).
         assertTrue(application.authManager.state.value is AuthState.SignedOut)
     }
 
+    /** Qualify the real scheduler's current owner/shop gates without any SDK or cloud transport. */
+    private suspend fun installRecoveryRequestAuthority(app: MerchandiseControlApplication): () -> Unit {
+        val originalAuth = privateApplicationField<Lazy<SupabaseAuthManager>>(app, "authManager\$delegate")
+        val originalShop = privateApplicationField<Lazy<ShopContextRepository>>(app, "shopContextRepository\$delegate")
+        val auth = SupabaseAuthManager(client = null, googleWebClientId = "synthetic-client-id")
+        privateApplicationField<MutableStateFlow<AuthState>>(auth, "_state").value = AuthState.SignedIn(TRACE_OWNER, null)
+        val shop = ShopContextRepository(
+            remote = object : LinkedShopRemoteDataSource {
+                override val isConfigured = true
+                override suspend fun fetchLinkedShops() = Result.success(listOf(
+                    LinkedShop(TRACE_SHOP, null, "synthetic-shop", "owner", "active", selectable = true, canWrite = true)
+                ))
+            },
+            selectedShopStore = object : SelectedShopStore {
+                private var selected: String? = null
+                override fun getSelectedShopId(ownerUserId: String) = selected
+                override fun setSelectedShopId(ownerUserId: String, shopId: String) { selected = shopId }
+                override fun clearSelectedShopId(ownerUserId: String) { selected = null }
+            },
+            currentOwnerUserId = { TRACE_OWNER }
+        )
+        shop.refresh(TRACE_OWNER)
+        assertEquals(TRACE_OWNER, shop.state.value.ownerUserId)
+        assertEquals(TRACE_SHOP, shop.state.value.selectedShop?.shopId)
+        assertTrue(shop.state.value.syncAllowed)
+        setPrivateApplicationField(app, "authManager\$delegate", lazyOf(auth))
+        setPrivateApplicationField(app, "shopContextRepository\$delegate", lazyOf(shop))
+        return {
+            setPrivateApplicationField(app, "authManager\$delegate", originalAuth)
+            setPrivateApplicationField(app, "shopContextRepository\$delegate", originalShop)
+            auth.shutdown()
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun <T> privateApplicationField(target: Any, name: String): T {
-        val field = target.javaClass.getDeclaredField(name)
+        val field = (if (target is MerchandiseControlApplication) MerchandiseControlApplication::class.java else target.javaClass).getDeclaredField(name)
         field.isAccessible = true
         return field.get(target) as T
     }

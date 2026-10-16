@@ -30,6 +30,8 @@ import com.example.merchandisecontrolsplitview.data.LocalDatabaseStatusSnapshot
 import com.example.merchandisecontrolsplitview.data.ProductPriceRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.RemoteSessionBatchResult
 import com.example.merchandisecontrolsplitview.data.SessionBackupRemoteDataSource
+import com.example.merchandisecontrolsplitview.data.SelectedShop
+import com.example.merchandisecontrolsplitview.data.ShopContext
 import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationRepository
 import com.example.merchandisecontrolsplitview.data.ShopDeviceAuthorizationSnapshot
 import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationRemote
@@ -38,7 +40,9 @@ import com.example.merchandisecontrolsplitview.data.SharedSheetSessionRecord
 import com.example.merchandisecontrolsplitview.data.SharedSheetSessionUpsertRow
 import com.example.merchandisecontrolsplitview.data.SyncEventRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
+import com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope
 import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.testutil.MainDispatcherRule
 import io.ktor.client.call.HttpClientCall
@@ -62,6 +66,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -76,7 +82,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(application = Application::class, sdk = [33])
 @OptIn(ExperimentalCoroutinesApi::class)
 class CatalogSyncViewModelTest {
 
@@ -88,7 +94,480 @@ class CatalogSyncViewModelTest {
     @Before
     fun setup() {
         app = RuntimeEnvironment.getApplication()
+        // All runtime collaborators are injected; process auth/coordinators belong to Application tests.
+        assertEquals(Application::class.java, app.javaClass)
     }
+
+    @Test
+    fun recoveryRequiredTrackerOutcomeDoesNotInventSuccessDate() = runTest {
+        assertUnqualifiedTrackerOutcomeKeepsSuccessDateAbsent(
+            CatalogSyncSummary(0, 0, 0, 0, 0, 0,
+                manualFullSyncRequired = true, syncEventsGapDetected = true)
+        )
+    }
+
+    @Test
+    fun dirtyLocalBlockedTrackerOutcomeDoesNotInventSuccessDate() = runTest {
+        assertUnqualifiedTrackerOutcomeKeepsSuccessDateAbsent(
+            CatalogSyncSummary(0, 0, 0, 0, 0, 0, syncEventsSkippedDirtyLocal = 1)
+        )
+    }
+
+    @Test
+    fun recreatedViewModelKeepsOriginalOutcomeDateWithoutAnotherSync() = runTest {
+        var nowMs = DATE_OUTCOME_T0_VM_144
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop))
+        )
+        val shops = MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))
+        val firstAuth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val first = dateOutcomeViewModel(repository, tracker, firstAuth, shops) { nowMs }
+        val firstStore = ViewModelStore().apply { put("catalog", first) }
+        val firstUi = launch { first.uiState.collect {} }
+        val firstLocal = launch { first.localDatabaseStatusUi.collect {} }
+        val completedAt: Long
+        val completedText: String
+        try {
+            firstAuth.value = AuthState.SignedIn(OWNER_VM_021, "date-first@example.test")
+            tracker.publishThroughDateFlight(OWNER_VM_021, shop, dateCompletedSummary())
+            advanceUntilIdle()
+            completedAt = requireNotNull(recordedSuccessDate(first))
+            completedText = requireNotNull(first.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            firstUi.cancel()
+            firstLocal.cancel()
+            firstStore.clear()
+        }
+        val retainedOutcome = tracker.lastOutcome.value
+        nowMs += 3_600_000L
+        val secondAuth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val second = dateOutcomeViewModel(repository, tracker, secondAuth, shops) { nowMs }
+        val secondStore = ViewModelStore().apply { put("catalog", second) }
+        val secondUi = launch { second.uiState.collect {} }
+        val secondLocal = launch { second.localDatabaseStatusUi.collect {} }
+        try {
+            secondAuth.value = AuthState.SignedIn(OWNER_VM_021, "date-recreated@example.test")
+            advanceUntilIdle()
+            assertEquals("Recreation must replay the retained outcome", retainedOutcome, tracker.lastOutcome.value)
+            coVerify(exactly = 0) { repository.syncCatalogWithRemote(any(), any(), any()) }
+            coVerify(exactly = 0) { repository.syncCatalogWithRemote(any(), any(), any(), any()) }
+            assertEquals("Replaying an outcome must not create a newer success", completedAt, recordedSuccessDate(second))
+            assertEquals(completedText, second.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            secondUi.cancel()
+            secondLocal.cancel()
+            secondStore.clear()
+        }
+    }
+
+    @Test
+    fun ownerChangeDoesNotShowPreviousOwnerSuccessDate() = runTest {
+        assertSuccessDateDoesNotCrossScope("owner")
+    }
+
+    @Test
+    fun shopChangeDoesNotShowPreviousShopSuccessDate() = runTest {
+        assertSuccessDateDoesNotCrossScope("shop")
+    }
+
+    @Test
+    fun storeEpochChangeDoesNotShowPreviousGenerationSuccessDate() = runTest {
+        assertSuccessDateDoesNotCrossScope("storeEpoch")
+    }
+
+    @Test
+    fun sameScopeBlockedAndDiagnosticOutcomesKeepOriginalQualifiedSuccessDate() = runTest {
+        var nowMs = DATE_OUTCOME_T0_VM_144
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop)))
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { nowMs }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-history@example.test")
+            tracker.publishThroughDateFlight(OWNER_VM_021, shop, dateCompletedSummary())
+            advanceUntilIdle()
+            assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+            val originalText = requireNotNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+            val incomplete = listOf(
+                dateCompletedSummary().copy(manualFullSyncRequired = true),
+                dateCompletedSummary().copy(syncEventsSkippedDirtyLocal = 1)
+            )
+            for (summary in incomplete) {
+                nowMs += 3_600_000L
+                tracker.publishThroughDateFlight(OWNER_VM_021, shop, summary)
+                advanceUntilIdle()
+                assertNull(tracker.lastOutcome.value?.completedAtMs)
+                assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+                assertEquals(originalText, viewModel.localDatabaseStatusUi.value.lastSyncText)
+            }
+            nowMs += 3_600_000L
+            val qualifiedScope = task126ActiveOwnerStoreScope(OWNER_VM_021, shop)
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+                Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, boundScope = qualifiedScope,
+                localAccessScope = qualifiedScope, errorCode = "sync_recovery_required"))
+            tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, dateCompletedSummary())
+            advanceUntilIdle()
+            assertNull(tracker.lastOutcome.value?.completedAtMs)
+            assertNull(tracker.lastOutcome.value?.scopeSignal)
+            assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+            assertEquals(originalText, viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun heldPreviousShopFlightCannotReplaceNewScopeCompletionDate() = runTest {
+        var nowMs = DATE_OUTCOME_T0_VM_144
+        val repository = dateOutcomeRepository()
+        val shopA = dateOutcomeShop()
+        val shopB = dateOutcomeShop("00000000-0000-4000-8000-000000000247")
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shopA)))
+        val signalA = tracker.captureBusinessDataScopeSignal(OWNER_VM_021, shopA.shopId)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val shops = MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shopA))
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth, shops) { nowMs }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        val held = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var oldPublicationAccepted: Boolean? = null
+        val oldFlight = launch {
+            try {
+                tracker.withBusinessDataScopeFlight(OWNER_VM_021, shopA) {
+                    withContext(NonCancellable) {
+                        held.complete(Unit)
+                        release.await()
+                        oldPublicationAccepted = tracker.publishCurrentFlightSummary(
+                            OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, dateCompletedSummary())
+                    }
+                }
+            } catch (_: Task126BusinessDataScopeChangedException) {
+                // The completed held result is from A; its cancellation must not touch B's outcome.
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                // Scope invalidation also cancels the registered original flight.
+            }
+        }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-held@example.test")
+            held.await()
+            shops.value = ShopContext(OWNER_VM_021, emptyList(), shopB)
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shopB)))
+            assertFalse(tracker.isCurrentBusinessDataScopeSignal(signalA))
+            nowMs += 3_600_000L
+            tracker.publishThroughDateFlight(OWNER_VM_021, shopB, dateCompletedSummary())
+            advanceUntilIdle()
+            val outcomeB = requireNotNull(tracker.lastOutcome.value)
+            val dateB = requireNotNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+            assertEquals(nowMs, recordedSuccessDate(viewModel))
+            release.complete(Unit)
+            oldFlight.join()
+            advanceUntilIdle()
+            assertEquals(false, oldPublicationAccepted)
+            assertEquals(outcomeB, tracker.lastOutcome.value)
+            assertEquals(nowMs, recordedSuccessDate(viewModel))
+            assertEquals(dateB, viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            release.complete(Unit)
+            oldFlight.cancel()
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun qualifiedCatalogCompletionRetainsPriceFailureAndOriginalDateOnRecreation() = runTest {
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop)))
+        tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 }
+        tracker.publishThroughDateFlight(OWNER_VM_021, shop, dateCompletedSummary().copy(priceSyncFailed = true))
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { DATE_OUTCOME_T0_VM_144 + 3_600_000L }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-prices@example.test")
+            advanceUntilIdle()
+            assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+            assertTrue(viewModel.localDatabaseStatusUi.value.lastSyncText != null)
+            assertEquals(app.getString(R.string.catalog_cloud_state_prices_incomplete), viewModel.uiState.value.primaryMessage)
+            assertTrue(tracker.lastOutcome.value?.summary?.priceSyncFailed == true)
+        } finally {
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun diagnosticSummaryWithoutOriginalFlightDoesNotInventCompletionProof() = runTest {
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop)))
+        tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, dateCompletedSummary())
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { DATE_OUTCOME_T0_VM_144 }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-unproved@example.test")
+            advanceUntilIdle()
+            assertNull(tracker.lastOutcome.value?.completedAtMs)
+            assertNull(tracker.lastOutcome.value?.scopeSignal)
+            assertNull(recordedSuccessDate(viewModel))
+            assertNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun recreatedViewModelKeepsQualifiedDateAfterNewerDiagnosticSummary() = runTest {
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop)))
+        tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 }
+        tracker.publishThroughDateFlight(OWNER_VM_021, shop, dateCompletedSummary())
+        val diagnostic = dateCompletedSummary().copy(manualFullSyncRequired = true)
+        val qualifiedScope = task126ActiveOwnerStoreScope(OWNER_VM_021, shop)
+        tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+            Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, boundScope = qualifiedScope,
+            localAccessScope = qualifiedScope, errorCode = "sync_recovery_required"))
+        tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, diagnostic)
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { DATE_OUTCOME_T0_VM_144 + 3_600_000L }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-replay-diagnostic@example.test")
+            advanceUntilIdle()
+            assertEquals(diagnostic, tracker.lastOutcome.value?.summary)
+            assertNull(tracker.lastOutcome.value?.completedAtMs)
+            assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+            assertTrue(viewModel.localDatabaseStatusUi.value.lastSyncText != null)
+        } finally {
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun revokedLocalScopeCannotRestorePreviousCompletionWithoutNewFlight() = runTest {
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val scope = task126ActiveOwnerStoreScope(OWNER_VM_021, shop)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(scope))
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { DATE_OUTCOME_T0_VM_144 }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-revoked@example.test")
+            tracker.publishThroughDateFlight(OWNER_VM_021, shop, dateCompletedSummary())
+            advanceUntilIdle()
+            assertEquals(DATE_OUTCOME_T0_VM_144, recordedSuccessDate(viewModel))
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+                Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, boundScope = scope,
+                localAccessScope = scope, localReadsAllowed = false, localWritesAllowed = false))
+            // Returning to the same binding cannot recreate the invalidated original proof.
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(scope))
+            advanceUntilIdle()
+            assertNull(tracker.lastQualifiedOutcome.value)
+            assertNull(recordedSuccessDate(viewModel))
+            assertNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            ui.cancel(); local.cancel(); store.clear()
+        }
+    }
+
+    @Test
+    fun scopeTransitionCannotClearNewScopeCompletionPublishedBySynchronousSubscriber() = runTest {
+        val shopA = dateOutcomeShop()
+        val shopB = dateOutcomeShop("00000000-0000-4000-8000-000000000247")
+        val scopeA = task126ActiveOwnerStoreScope(OWNER_VM_021, shopA)
+        val scopeB = task126ActiveOwnerStoreScope(OWNER_VM_021, shopB)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(scopeA))
+        tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 }
+        tracker.publishThroughDateFlight(OWNER_VM_021, shopA, dateCompletedSummary())
+        val order = mutableListOf<String>()
+        var subscriberObservedA = false
+        var setterReturned = false
+        var subscriberAttemptedB = false
+        var flightBCompletedBeforeSetterReturned = false
+        var publishedB = tracker.lastQualifiedOutcome.value
+        val subscriber = launch(UnconfinedTestDispatcher(testScheduler)) {
+            tracker.businessDataScopeState.collect { state ->
+                if (state.boundScope?.storeId == scopeA.storeId) subscriberObservedA = true
+                if (state.boundScope?.storeId == scopeB.storeId && !subscriberAttemptedB) {
+                    subscriberAttemptedB = true
+                    order += "subscriber_b_enter"
+                    val acceptedB = tracker.withBusinessDataScopeFlight(OWNER_VM_021, shopB) {
+                        val accepted = tracker.publishCurrentFlightSummary(
+                            OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, dateCompletedSummary())
+                        publishedB = tracker.lastQualifiedOutcome.value
+                        accepted
+                    }
+                    order += "flight_b_completed"
+                    flightBCompletedBeforeSetterReturned = !setterReturned && acceptedB &&
+                        publishedB?.completedAtMs == DATE_OUTCOME_T0_VM_144 + 3_600_000L &&
+                        publishedB?.let { tracker.isOutcomeCurrent(it, OWNER_VM_021, shopB) } == true
+                }
+            }
+        }
+        try {
+            assertTrue("NOT_TRAVERSED: the subscriber must be installed before the transition", subscriberObservedA)
+            tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 + 3_600_000L }
+            order += "setter_enter"
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(scopeB))
+            setterReturned = true
+            order += "setter_return"
+            assertTrue("NOT_TRAVERSED: B's real flight must finish during scope emission, order=$order",
+                flightBCompletedBeforeSetterReturned)
+            val expectedB = requireNotNull(publishedB)
+            assertEquals("The previous transition must retain the new scope's qualified completion, order=$order",
+                expectedB, tracker.lastQualifiedOutcome.value)
+            assertEquals(expectedB, tracker.lastOutcome.value)
+            assertTrue(tracker.isOutcomeCurrent(expectedB, OWNER_VM_021, shopB))
+
+            val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+            val viewModel = dateOutcomeViewModel(dateOutcomeRepository(), tracker, auth,
+                MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shopB))) { DATE_OUTCOME_T0_VM_144 + 7_200_000L }
+            val store = ViewModelStore().apply { put("catalog", viewModel) }
+            val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+            try {
+                auth.value = AuthState.SignedIn(OWNER_VM_021, "date-reentrant@example.test")
+                advanceUntilIdle()
+                assertEquals(DATE_OUTCOME_T0_VM_144 + 3_600_000L, recordedSuccessDate(viewModel))
+                assertTrue(viewModel.localDatabaseStatusUi.value.lastSyncText != null)
+            } finally {
+                local.cancel()
+                store.clear()
+            }
+        } finally {
+            subscriber.cancel()
+        }
+    }
+
+    private suspend fun TestScope.assertUnqualifiedTrackerOutcomeKeepsSuccessDateAbsent(summary: CatalogSyncSummary) {
+        val repository = dateOutcomeRepository()
+        val shop = dateOutcomeShop()
+        val tracker = CatalogSyncStateTracker(
+            Task126BusinessDataScopeState.ready(task126ActiveOwnerStoreScope(OWNER_VM_021, shop))
+        )
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth,
+            MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop))) { DATE_OUTCOME_T0_VM_144 }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-blocked@example.test")
+            advanceUntilIdle()
+            assertNull(recordedSuccessDate(viewModel))
+            assertNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+            tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, summary)
+            advanceUntilIdle()
+            assertEquals("The diagnostic outcome must remain available", summary, tracker.lastOutcome.value?.summary)
+            assertNull("A blocked outcome is not a completed sync", recordedSuccessDate(viewModel))
+            assertNull(viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            ui.cancel()
+            local.cancel()
+            store.clear()
+        }
+    }
+
+    private suspend fun TestScope.assertSuccessDateDoesNotCrossScope(boundary: String) {
+        val repository = dateOutcomeRepository()
+        val firstShop = dateOutcomeShop()
+        val firstScope = task126ActiveOwnerStoreScope(OWNER_VM_021, firstShop)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(firstScope))
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedOut)
+        val shops = MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), firstShop))
+        val viewModel = dateOutcomeViewModel(repository, tracker, auth, shops) { DATE_OUTCOME_T0_VM_144 }
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            auth.value = AuthState.SignedIn(OWNER_VM_021, "date-scope-a@example.test")
+            tracker.publishThroughDateFlight(OWNER_VM_021, firstShop, dateCompletedSummary())
+            advanceUntilIdle()
+            assertTrue("The original scope must have a visible date", viewModel.localDatabaseStatusUi.value.lastSyncText != null)
+            val nextOwner = if (boundary == "owner") "00000000-0000-4000-8000-000000000249" else OWNER_VM_021
+            val nextShop = if (boundary == "shop") dateOutcomeShop("00000000-0000-4000-8000-000000000247") else firstShop
+            val nextScope = if (boundary == "storeEpoch") {
+                Task126OwnerStoreScope(firstScope.ownerHash, firstScope.storeId, firstScope.localStoreId,
+                    firstScope.syncProtocolVersion, firstScope.schemaVersion, firstScope.storeEpoch + 1)
+            } else task126ActiveOwnerStoreScope(nextOwner, nextShop)
+            auth.value = AuthState.SignedIn(nextOwner, "date-scope-b@example.test")
+            shops.value = ShopContext(nextOwner, emptyList(), nextShop)
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(nextScope))
+            advanceUntilIdle()
+            assertNull("The tracker must invalidate the old outcome", tracker.lastOutcome.value)
+            assertNull("The new $boundary scope has no completed sync", viewModel.localDatabaseStatusUi.value.lastSyncText)
+        } finally {
+            ui.cancel()
+            local.cancel()
+            store.clear()
+        }
+    }
+
+    private fun dateOutcomeRepository(): InventoryRepository = mockk<InventoryRepository>().also { repository ->
+        coEvery { repository.getLocalDatabaseStatusSnapshot(any(), any()) } returns
+            LocalDatabaseStatusSnapshot(1, 1, 1, 1, 0, 0, 0)
+        coEvery { repository.hasCatalogCloudPendingWorkInclusive() } returns false
+    }
+
+    private fun dateOutcomeViewModel(
+        repository: InventoryRepository,
+        tracker: CatalogSyncStateTracker,
+        auth: MutableStateFlow<AuthState>,
+        shops: MutableStateFlow<ShopContext>,
+        nowMs: () -> Long
+    ): CatalogSyncViewModel {
+        tracker.syncOutcomeNowMs = nowMs
+        return CatalogSyncViewModel(
+            application = app, repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(configured = false),
+            authFlow = auth, syncStateTracker = tracker, shopContextFlow = shops
+        )
+    }
+
+    private suspend fun CatalogSyncStateTracker.publishThroughDateFlight(
+        ownerUserId: String,
+        selectedShop: SelectedShop?,
+        summary: CatalogSyncSummary,
+        source: CatalogSyncFlightOwner = CatalogSyncFlightOwner.SYNC_EVENTS
+    ) = withBusinessDataScopeFlight(ownerUserId, selectedShop) {
+        assertTrue("The fixture must publish from its admitted original flight",
+            publishCurrentFlightSummary(ownerUserId, source, summary))
+    }
+
+    private fun dateOutcomeShop(shopId: String = "00000000-0000-4000-8000-000000000246") =
+        SelectedShop(shopId, "date-fixture", "Date fixture", "owner", "active", true)
+
+    private fun dateCompletedSummary() = CatalogSyncSummary(0, 0, 0, 1, 1, 1,
+        pulledProductPrices = 1, fullCatalogFetch = true, fullPriceFetch = true,
+        remoteActiveSuppliers = 1, remoteActiveCategories = 1, remoteActiveProducts = 1,
+        remotePricesFetched = 1)
+
+    private fun recordedSuccessDate(viewModel: CatalogSyncViewModel): Long? =
+        (viewModel.javaClass.getDeclaredField("lastSuccessAt").apply { isAccessible = true }
+            .get(viewModel) as kotlinx.coroutines.flow.StateFlow<*>).value as Long?
 
     @Test
     fun signedOutBoundDatabaseReportsAccountPrerequisiteWithoutEnablingSync() = runTest {
@@ -226,10 +705,11 @@ class CatalogSyncViewModelTest {
         val collectJob = launch { viewModel.uiState.collect {} }
         try {
             advanceUntilIdle()
-            tracker.publishSummary(
+            tracker.publishThroughDateFlight(
                 OWNER_VM_021,
-                CatalogSyncFlightOwner.AUTO_PUSH,
-                CatalogSyncSummary(0, 0, 0, 0, 0, 0, syncEventOutboxPending = 3)
+                null,
+                CatalogSyncSummary(0, 0, 0, 0, 0, 0, syncEventOutboxPending = 3),
+                source = CatalogSyncFlightOwner.AUTO_PUSH
             )
             advanceUntilIdle()
             val initial = viewModel.uiState.value
@@ -542,9 +1022,9 @@ class CatalogSyncViewModelTest {
             viewModel.uiState.value.primaryMessage
         )
 
-        tracker.publishSummary(
+        tracker.publishThroughDateFlight(
             OWNER_VM_021,
-            CatalogSyncFlightOwner.BOOTSTRAP,
+            null,
             CatalogSyncSummary(
                 pushedSuppliers = 0,
                 pushedCategories = 0,
@@ -553,7 +1033,8 @@ class CatalogSyncViewModelTest {
                 pulledCategories = 1,
                 pulledProducts = 1,
                 pulledProductPrices = 1
-            )
+            ),
+            source = CatalogSyncFlightOwner.BOOTSTRAP
         )
         advanceUntilIdle()
 
@@ -1575,7 +2056,7 @@ class CatalogSyncViewModelTest {
         try {
             advanceUntilIdle()
             val confirmed = CatalogSyncSummary(0, 0, 0, 1, 1, 1)
-            tracker.publishSummary(OWNER_VM_021, CatalogSyncFlightOwner.SYNC_EVENTS, confirmed)
+            tracker.publishThroughDateFlight(OWNER_VM_021, null, confirmed)
             advanceUntilIdle()
             val previousSuccess = field("lastSuccessAt")
             assertTrue(previousSuccess is Long)
@@ -2331,6 +2812,7 @@ private fun statusException(status: HttpStatusCode): ClientRequestException {
     val call = mockk<HttpClientCall>()
     val request = mockk<HttpRequest>()
     every { response.status } returns status
+    every { response.headers } returns io.ktor.http.Headers.Empty
     every { response.call } returns call
     every { call.request } returns request
     every { request.url } returns Url("https://example.test")
@@ -2338,6 +2820,7 @@ private fun statusException(status: HttpStatusCode): ClientRequestException {
     return ClientRequestException(response, status.description)
 }
 
+private const val DATE_OUTCOME_T0_VM_144 = 1_800_000_000_000L
 private const val OWNER_VM_021 = "00000000-0000-4000-8000-000000000240"
 private const val BOOTSTRAP_SUPPLIER_REMOTE_VM_021 = "00000000-0000-4000-8000-000000000241"
 private const val BOOTSTRAP_CATEGORY_REMOTE_VM_021 = "00000000-0000-4000-8000-000000000242"

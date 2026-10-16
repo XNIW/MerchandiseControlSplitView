@@ -218,6 +218,8 @@ class CatalogSyncViewModel(
     private val syncProgress = MutableStateFlow(CatalogSyncProgressState.idle())
     private val lastErrorKind = MutableStateFlow<ErrorKind?>(null)
     private val lastSuccessAt = MutableStateFlow<Long?>(null)
+    private var lastQualifiedOutcome: CatalogSyncOutcomeState? = null
+    private var untrackedSuccessScope: Pair<String, String>? = null
     private val pendingHint = MutableStateFlow(false)
     private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
     private val incrementalDetailSurface = MutableStateFlow(CatalogIncrementalDetailSurface.OTHER)
@@ -239,6 +241,8 @@ class CatalogSyncViewModel(
 
     private val quickSyncLaneAvailable: Boolean get() = autoSyncRepository != null
     private val trackerOutcomeFlow = syncStateTracker?.lastOutcome ?: flowOf<CatalogSyncOutcomeState?>(null)
+    private val trackerQualifiedOutcomeFlow = syncStateTracker?.lastQualifiedOutcome
+        ?: flowOf<CatalogSyncOutcomeState?>(null)
     private val businessDataScopeFlow = syncStateTracker?.businessDataScopeState
         ?: flowOf(Task126BusinessDataScopeState.unmanagedAllowed())
     private val networkAvailableFlow = syncStateTracker?.networkAvailable ?: flowOf<Boolean?>(null)
@@ -274,7 +278,7 @@ class CatalogSyncViewModel(
             scopedInputs.first.auth,
             scopedInputs.first.isBusy,
             scopedInputs.first.err,
-            scopedInputs.first.successAt,
+            scopedSuccessDate(scopedInputs.first.successAt),
             scopedInputs.first.pending,
             progress,
             summary,
@@ -326,7 +330,7 @@ class CatalogSyncViewModel(
             historySessionsCount = effectiveSnapshot?.historySessions,
             pendingLocalChangesCount = effectiveSnapshot?.pendingLocalChanges,
             syncEventOutboxPendingCount = effectiveSnapshot?.syncEventOutboxPending,
-            lastSyncText = successAt?.let(::formatTime),
+            lastSyncText = scopedSuccessDate(successAt)?.let(::formatTime),
             isLoading = loading && effectiveSnapshot == null,
             needsReconciliation = needsReconciliation,
             businessDataScopeStatus = businessDataScope.status
@@ -356,13 +360,13 @@ class CatalogSyncViewModel(
             }
         }
         viewModelScope.launch {
-            combine(authFlow, trackerOutcomeFlow) { auth, outcome ->
-                if (auth is AuthState.SignedIn && outcome?.ownerUserId == auth.userId) {
-                    outcome
-                } else {
-                    null
-                }
-            }.collect { outcome ->
+            combine(authFlow, trackerOutcomeFlow, businessDataScopeFlow,
+                shopContextFlow ?: flowOf<ShopContext?>(null), trackerQualifiedOutcomeFlow) { auth, outcome, _, _, qualified ->
+                val owner = (auth as? AuthState.SignedIn)?.userId
+                outcome?.takeIf { it.ownerUserId == owner } to qualified?.takeIf { it.ownerUserId == owner }
+            }.collect { (outcome, qualified) ->
+                invalidateSuccessDateOutsideCurrentScope()
+                if (qualified != null) applyQualifiedSuccessDate(qualified)
                 if (outcome != null) {
                     applyTrackerOutcome(outcome)
                 }
@@ -1048,13 +1052,47 @@ class CatalogSyncViewModel(
 
     private fun currentSelectedShop() = shopContextFlow?.value?.selectedShop
 
+    private fun scopedSuccessDate(candidate: Long?): Long? {
+        candidate ?: return null
+        val auth = authFlow.value as? AuthState.SignedIn ?: return null
+        val shopContext = shopContextFlow?.value
+        if (shopContext != null &&
+            (shopContext.ownerUserId != auth.userId || !shopContext.localAccessAllowed)) return null
+        val tracker = syncStateTracker
+        return if (tracker != null) {
+            val outcome = lastQualifiedOutcome ?: return null
+            candidate.takeIf {
+                outcome.completedAtMs == candidate && tracker.isOutcomeCurrent(outcome, auth.userId, currentSelectedShop())
+            }
+        } else candidate.takeIf {
+            untrackedSuccessScope == (auth.userId to shopScopedStoreScope(currentSelectedShop()))
+        }
+    }
+
+    private fun invalidateSuccessDateOutsideCurrentScope() {
+        if (lastSuccessAt.value != null && scopedSuccessDate(lastSuccessAt.value) == null) {
+            lastQualifiedOutcome = null
+            untrackedSuccessScope = null
+            lastSuccessAt.value = null
+        }
+    }
+
+    private fun applyQualifiedSuccessDate(outcome: CatalogSyncOutcomeState) {
+        val auth = authFlow.value as? AuthState.SignedIn ?: return
+        if (outcome.completedAtMs != null &&
+            syncStateTracker?.isOutcomeCurrent(outcome, auth.userId, currentSelectedShop()) == true) {
+            lastQualifiedOutcome = outcome
+            lastSuccessAt.value = outcome.completedAtMs
+            invalidateSuccessDateOutsideCurrentScope()
+        }
+    }
+
     private suspend fun applyTrackerOutcome(outcome: CatalogSyncOutcomeState) {
         if (outcome.summary.syncEventsOrdinaryPending) {
             if (outcome.summary.priceSyncFailed) lastErrorKind.value = ErrorKind.CatalogOkPricesIncomplete
             return
         }
         lastCatalogSyncSummary.value = outcome.summary
-        lastSuccessAt.value = System.currentTimeMillis()
         lastErrorKind.value = if (outcome.summary.priceSyncFailed) {
             ErrorKind.CatalogOkPricesIncomplete
         } else {
@@ -1137,15 +1175,17 @@ class CatalogSyncViewModel(
         }
     }
 
-    private fun publishCatalogSummary(
+    private suspend fun publishCatalogSummary(
         ownerUserId: String,
         source: CatalogSyncFlightOwner,
-        summary: CatalogSyncSummary
+        summary: CatalogSyncSummary,
+        diagnosticOnly: Boolean = false
     ) {
         if (summary.syncEventsOrdinaryPending) return
         val tracker = syncStateTracker
         if (tracker != null) {
-            tracker.publishSummary(ownerUserId, source, summary)
+            if (diagnosticOnly) tracker.publishSummary(ownerUserId, source, summary)
+            else tracker.publishCurrentFlightSummary(ownerUserId, source, summary)
         } else {
             lastCatalogSyncSummary.value = summary
         }
@@ -1281,7 +1321,9 @@ class CatalogSyncViewModel(
                         ordinaryPending = summary.syncEventsOrdinaryPending
                         logCatalogOk = !recoveryRequired && !ordinaryPending && summary.syncEventsSkippedDirtyLocal == 0
                         publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
-                        if (logCatalogOk) {
+                        if (logCatalogOk && syncStateTracker == null &&
+                            businessDataScopeStillAllows(auth.userId, selectedShop)) {
+                            untrackedSuccessScope = auth.userId to shopScopedStoreScope(selectedShop)
                             lastSuccessAt.value = System.currentTimeMillis()
                         }
                         val err = when {
@@ -1355,7 +1397,7 @@ class CatalogSyncViewModel(
                     if (!publishManualRecoveryRequiredScope(auth, selectedShop))
                         throw Task126BusinessDataScopeChangedException()
                     logSummary?.let { summary ->
-                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
+                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary, diagnosticOnly = true)
                     }
                     requestRecoveryAfterManualFlight = true
                 }
@@ -1537,7 +1579,7 @@ class CatalogSyncViewModel(
                         )
                     }
                     logSummary?.let { summary ->
-                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary)
+                        publishCatalogSummary(auth.userId, CatalogSyncFlightOwner.MANUAL, summary, diagnosticOnly = true)
                     }
                     requestRecoveryAfterManualFlight = true
                 }
@@ -1760,6 +1802,8 @@ class CatalogSyncViewModel(
             SyncErrorCategory.RemoteNotFoundOrConfig,
             SyncErrorCategory.RemoteSchemaUnexpected -> ErrorKind.NotFoundOrConfig
             SyncErrorCategory.PayloadValidation,
+            SyncErrorCategory.RateLimited,
+            SyncErrorCategory.RemoteTransient,
             SyncErrorCategory.Unknown -> ErrorKind.Generic
         }
 

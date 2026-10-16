@@ -19,7 +19,7 @@ class CheckpointReadinessSnapshotTest {
     @get:Rule val dispatcherRule = MainDispatcherRule()
 
     @Test fun memorySnapshotsCannotInitializeEffectsOrConsumeAttempt() {
-        val app = MerchandiseControlApplication() // No onCreate/storage/network fixture.
+        val app = UnconfiguredTestApplication() // No onCreate/storage/network fixture.
         val traps = installEffectSpies(app)
         val mutex = CountingMutex()
         setField(app, "businessRecoveryExecutionMutex", mutex)
@@ -51,7 +51,7 @@ class CheckpointReadinessSnapshotTest {
     }
 
     @Test fun snapshotLeavesTheSubsequentRealOneShotConsumptionUnchanged() {
-        val app = MerchandiseControlApplication()
+        val app = UnconfiguredTestApplication()
         val traps = installEffectSpies(app)
         val mutex = CountingMutex()
         setField(app, "businessRecoveryExecutionMutex", mutex)
@@ -61,7 +61,7 @@ class CheckpointReadinessSnapshotTest {
             app.checkpointReadinessMemory(true, true, true)
             assertFalse(field<Boolean>(app, "checkpointTraceConsumed"))
             assertEquals(0, mutex.tryLocks)
-            // Same canonical synthetic unit profile as existing caller tests: target guard rejects.
+            // Explicit absent-configuration fixture: the unchanged target digest guard rejects.
             app.requestOneCheckpointTrace(true)
             app.requestOneCheckpointTrace(true)
             val traces = ShadowLog.getLogsForTag("Task143CheckpointTrace").map { it.msg }
@@ -77,7 +77,7 @@ class CheckpointReadinessSnapshotTest {
     }
 
     @Test fun coldSnapshotDoesNotReadOrInitializeAnything() {
-        val app = MerchandiseControlApplication()
+        val app = UnconfiguredTestApplication()
         val traps = installEffectSpies(app)
         val mutex = CountingMutex()
         setField(app, "businessRecoveryExecutionMutex", mutex)
@@ -113,9 +113,9 @@ class CheckpointReadinessSnapshotTest {
     }
 
     private fun setField(app: MerchandiseControlApplication, name: String, value: Any?) {
-        app.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(app, value)
+        MerchandiseControlApplication::class.java.getDeclaredField(name).apply { isAccessible = true }.set(app, value)
     }
     @Suppress("UNCHECKED_CAST")
     private fun <T> field(app: MerchandiseControlApplication, name: String): T =
-        app.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(app) as T
+        MerchandiseControlApplication::class.java.getDeclaredField(name).apply { isAccessible = true }.get(app) as T
 }

@@ -520,7 +520,7 @@ class CatalogAutoSyncCoordinator(
                 recoverySummary = s.takeIf { recoveryRequired }
                 ok = !recoveryRequired && !dirtyLocalBlocked && !ordinaryPending
                 s?.let {
-                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
+                    syncStateTracker.publishCurrentFlightSummary(auth.userId, CatalogSyncFlightOwner.AUTO_PUSH, it)
                 }
                 val cycleOutcome = when {
                     recoveryRequired -> "blocked_recovery_required"
@@ -719,7 +719,7 @@ class CatalogAutoSyncCoordinator(
                 lastBootstrapOkAtMs = System.currentTimeMillis()
                 val s = summary
                 s?.let {
-                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.BOOTSTRAP, it)
+                    syncStateTracker.publishCurrentFlightSummary(auth.userId, CatalogSyncFlightOwner.BOOTSTRAP, it)
                 }
                 logger(
                     "cycle=catalog_bootstrap outcome=ok reason=$reason durationMs=$durationMs " +
@@ -918,7 +918,7 @@ class CatalogAutoSyncCoordinator(
                 recoverySummary = s.takeIf { recoveryRequired }
                 ok = !recoveryRequired && !dirtyLocalBlocked && !ordinaryPending
                 s?.let {
-                    syncStateTracker.publishSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
+                    syncStateTracker.publishCurrentFlightSummary(auth.userId, CatalogSyncFlightOwner.SYNC_EVENTS, it)
                 }
                 val cycleOutcome = when {
                     recoveryRequired -> "blocked_recovery_required"
