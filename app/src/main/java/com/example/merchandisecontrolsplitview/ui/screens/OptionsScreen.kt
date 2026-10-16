@@ -205,6 +205,28 @@ fun OptionsScreen(
     }
 }
 
+internal fun localDatabaseStatusSubtitleRes(
+    state: LocalDatabaseStatusUiState,
+    checkingMessageRes: Int = R.string.business_scope_checking
+): Int = when {
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING && !state.localAccessAvailable ->
+        checkingMessageRes
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
+        R.string.business_scope_unbound_review_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->
+        R.string.business_scope_account_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH ->
+        R.string.business_scope_shop_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH ->
+        R.string.business_scope_schema_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE && !state.localAccessAvailable ->
+        R.string.business_scope_recoverable_error
+    state.isLoading -> R.string.local_database_status_loading
+    state.needsReconciliation -> R.string.local_database_status_reconcile
+    state.isEmpty && state.productsCount != null -> R.string.local_database_status_empty
+    else -> R.string.local_database_status_ready
+}
+
 @Composable
 internal fun LocalDatabaseStatusSection(
     state: LocalDatabaseStatusUiState,
@@ -266,31 +288,10 @@ internal fun LocalDatabaseStatusSection(
     }
     OptionsGroup(
         title = stringResource(R.string.local_database_status_title),
-        subtitle = when {
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING ->
-                stringResource(checkingMessageRes)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
-                stringResource(R.string.business_scope_unbound_review_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->
-                stringResource(R.string.business_scope_account_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH ->
-                stringResource(R.string.business_scope_shop_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH ->
-                stringResource(R.string.business_scope_schema_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE ->
-                stringResource(R.string.business_scope_recoverable_error)
-            state.isLoading -> stringResource(R.string.local_database_status_loading)
-            state.needsReconciliation -> stringResource(R.string.local_database_status_reconcile)
-            state.isEmpty -> stringResource(R.string.local_database_status_empty)
-            else -> stringResource(R.string.local_database_status_ready)
-        },
+        subtitle = stringResource(localDatabaseStatusSubtitleRes(state, checkingMessageRes)),
         icon = Icons.Default.Storage
     ) {
-        val canShowBusinessDataDetails =
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.READY ||
-                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
-                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND
-        if (canShowBusinessDataDetails) {
+        if (state.showBusinessDataDetails) {
             val dash = stringResource(R.string.local_database_status_unknown)
             LocalDatabaseStatusRow(
                 label = stringResource(R.string.local_database_status_products),

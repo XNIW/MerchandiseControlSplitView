@@ -48,6 +48,7 @@ import com.example.merchandisecontrolsplitview.data.SyncErrorClassification
 import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
 import com.example.merchandisecontrolsplitview.data.SyncErrorClassifier
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.Task126LocalPresentationStamp
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeChangedException
 import com.example.merchandisecontrolsplitview.data.shopScopedStoreScope
@@ -124,7 +125,12 @@ data class LocalDatabaseStatusUiState(
     /** TASK-114: ultimo full sync ha rilevato drift locale vs bundle remoto. */
     val needsReconciliation: Boolean = false,
     val businessDataScopeStatus: Task126BusinessDataScopeStatus =
-        Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
+        Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED,
+    /** Presentation only: the current auth, shop and existing local proof permit these counts. */
+    internal val localAccessAvailable: Boolean = false,
+    internal val showBusinessDataDetails: Boolean = businessDataScopeStatus in setOf(
+        Task126BusinessDataScopeStatus.READY, Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED,
+        Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND)
 ) {
     val isEmpty: Boolean
         get() = listOf(
@@ -224,7 +230,22 @@ class CatalogSyncViewModel(
     private val lastCatalogSyncSummary = MutableStateFlow<CatalogSyncSummary?>(null)
     private val incrementalDetailSurface = MutableStateFlow(CatalogIncrementalDetailSurface.OTHER)
     private val lastHistorySessionSyncSummary = MutableStateFlow<HistorySessionCloudUiSummary?>(null)
-    private val localDatabaseStatusSnapshot = MutableStateFlow<LocalDatabaseStatusSnapshot?>(null)
+    private data class LocalPresentationContext(
+        val auth: AuthState,
+        val scope: Task126BusinessDataScopeState,
+        val shop: ShopContext?
+    )
+
+    private data class LocalStatusObservation(
+        val snapshot: LocalDatabaseStatusSnapshot,
+        val ownerUserId: String?,
+        val storeScope: String,
+        val requestId: Long,
+        val localStamp: Task126LocalPresentationStamp?
+    )
+
+    private var localStatusRequestId = 0L
+    private val localDatabaseStatusSnapshot = MutableStateFlow<LocalStatusObservation?>(null)
     private val localDatabaseStatusLoading = MutableStateFlow(true)
     private var automaticSessionBootstrapScopeKey: String? = null
     private var lastLoggedStage: CatalogSyncStage? = null
@@ -246,6 +267,9 @@ class CatalogSyncViewModel(
     private val businessDataScopeFlow = syncStateTracker?.businessDataScopeState
         ?: flowOf(Task126BusinessDataScopeState.unmanagedAllowed())
     private val networkAvailableFlow = syncStateTracker?.networkAvailable ?: flowOf<Boolean?>(null)
+    private val localPresentationContextFlow = combine(
+        authFlow, businessDataScopeFlow, shopContextFlow ?: flowOf<ShopContext?>(null)
+    ) { auth, scope, shop -> LocalPresentationContext(auth, scope, shop) }
     private val catalogSyncSummaryForUi = combine(
         authFlow,
         lastCatalogSyncSummary,
@@ -265,8 +289,9 @@ class CatalogSyncViewModel(
             },
             businessDataScopeFlow,
             networkAvailableFlow,
-            presentationResources
-        ) { inputs, businessDataScope, networkAvailable, _ ->
+            presentationResources,
+            shopContextFlow ?: flowOf<ShopContext?>(null)
+        ) { inputs, businessDataScope, networkAvailable, _, _ ->
             Triple(inputs, businessDataScope, networkAvailable)
         },
         syncProgress,
@@ -314,14 +339,21 @@ class CatalogSyncViewModel(
         localDatabaseStatusLoading,
         lastSuccessAt,
         lastCatalogSyncSummary,
-        businessDataScopeFlow
-    ) { snapshot, loading, successAt, summary, businessDataScope ->
-        val effectiveSnapshot = businessDataScope.localSnapshot ?: snapshot
+        localPresentationContextFlow
+    ) { observation, loading, successAt, summary, context ->
+        val scope = context.scope
+        val locallyAvailable = localPresentationAvailable(context)
+        val unboundReview = scope.status == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND &&
+            context.auth is AuthState.SignedIn && presentationIdentityCurrent(context)
+        val effectiveSnapshot = when {
+            locallyAvailable -> observation?.takeIf { localObservationCurrent(it, context) }?.snapshot
+                ?: scope.localSnapshot
+            unboundReview -> scope.localSnapshot
+            else -> null
+        }
         val needsReconciliation = effectiveSnapshot != null && summary != null &&
-            (
-                summary.hasCatalogCountDrift(effectiveSnapshot) ||
-                    summary.hasPriceCountDrift(effectiveSnapshot.priceHistoryRows)
-                )
+            (summary.hasCatalogCountDrift(effectiveSnapshot) ||
+                summary.hasPriceCountDrift(effectiveSnapshot.priceHistoryRows))
         LocalDatabaseStatusUiState(
             productsCount = effectiveSnapshot?.products,
             suppliersCount = effectiveSnapshot?.suppliers,
@@ -333,20 +365,22 @@ class CatalogSyncViewModel(
             lastSyncText = scopedSuccessDate(successAt)?.let(::formatTime),
             isLoading = loading && effectiveSnapshot == null,
             needsReconciliation = needsReconciliation,
-            businessDataScopeStatus = businessDataScope.status
+            businessDataScopeStatus = scope.status,
+            localAccessAvailable = locallyAvailable,
+            showBusinessDataDetails = locallyAvailable || unboundReview
         )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
-        LocalDatabaseStatusUiState(isLoading = true)
+        LocalDatabaseStatusUiState(isLoading = true, showBusinessDataDetails = false)
     )
 
     init {
         settings.registerOnSharedPreferenceChangeListener(languageListener)
         viewModelScope.launch {
-            combine(authFlow, businessDataScopeFlow) { auth, businessDataScope ->
-                auth to businessDataScope
-            }.collect { (state, businessDataScope) ->
+            localPresentationContextFlow.collect { context ->
+                val state = context.auth
+                val businessDataScope = context.scope
                 refreshLocalDatabaseStatus()
                 if (
                     state is AuthState.SignedIn &&
@@ -486,7 +520,11 @@ class CatalogSyncViewModel(
         when (businessDataScope.status) {
             Task126BusinessDataScopeStatus.CHECKING ->
                 return CatalogSyncUiState(
-                    primaryMessage = str(businessScopeCheckingPresentation(auth).messageRes),
+                    primaryMessage = str(if (localPresentationAvailable(
+                            LocalPresentationContext(auth, businessDataScope, shopContextFlow?.value))) {
+                        if (networkAvailable == false) R.string.catalog_cloud_state_offline
+                        else R.string.business_scope_paused_title
+                    } else businessScopeCheckingPresentation(auth).messageRes),
                     catalogDetail = null,
                     sessionDetail = null,
                     isSyncing = false,
@@ -1018,11 +1056,21 @@ class CatalogSyncViewModel(
 
     fun onOptionsScreenVisible() {
         refreshLocalDatabaseStatus()
+        val requestId = localStatusRequestId
+        val captured = currentLocalPresentationContext()
+        val owner = (captured.auth as? AuthState.SignedIn)?.userId
+        val storeScope = shopScopedStoreScope(captured.shop?.selectedShop)
+        val stamp = syncStateTracker?.captureLocalPresentationStamp(captured.scope)
+        fun stillCurrent() = localRequestCurrent(owner, storeScope, requestId, stamp,
+            currentLocalPresentationContext())
         viewModelScope.launch {
-            pendingHint.value = repository.hasCatalogCloudPendingWorkInclusive()
-            val auth = authFlow.value
-            if (auth is AuthState.SignedIn && sessionRemote.isConfigured) {
+            if (!localPresentationAvailable(captured) || !stillCurrent()) return@launch
+            val pending = repository.hasCatalogCloudPendingWorkInclusive()
+            if (!stillCurrent()) return@launch
+            pendingHint.value = pending
+            if (captured.auth is AuthState.SignedIn && sessionRemote.isConfigured) {
                 val pendingSessionCount = readPendingHistorySessionCount()
+                if (!stillCurrent()) return@launch
                 val pendingOnlySummary = pendingSessionCount
                     .takeIf { it > 0 }
                     ?.let { HistorySessionCloudUiSummary(0, 0, 0, pendingCount = it) }
@@ -1034,20 +1082,80 @@ class CatalogSyncViewModel(
     }
 
     private fun refreshLocalDatabaseStatus() {
+        val requestId = ++localStatusRequestId
         viewModelScope.launch {
             localDatabaseStatusLoading.value = true
-            val ownerUserId = (authFlow.value as? AuthState.SignedIn)?.userId
+            val captured = currentLocalPresentationContext()
+            val ownerUserId = (captured.auth as? AuthState.SignedIn)?.userId
+            val selectedShop = captured.shop?.selectedShop
+            val stamp = syncStateTracker?.captureLocalPresentationStamp(captured.scope)
             try {
-                localDatabaseStatusSnapshot.value =
-                    repository.getLocalDatabaseStatusSnapshot(ownerUserId, currentSelectedShop())
+                if (!localPresentationAvailable(captured)) return@launch
+                val snapshot = repository.getLocalDatabaseStatusSnapshot(ownerUserId, selectedShop)
+                val observation = LocalStatusObservation(snapshot, ownerUserId,
+                    shopScopedStoreScope(selectedShop), requestId, stamp)
+                if (localObservationCurrent(observation, currentLocalPresentationContext())) {
+                    localDatabaseStatusSnapshot.value = observation
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (t: Throwable) {
                 Log.w(TAG, "local_database_status outcome=fail", t)
             } finally {
-                localDatabaseStatusLoading.value = false
+                if (requestId == localStatusRequestId) localDatabaseStatusLoading.value = false
             }
         }
+    }
+
+    private fun currentLocalPresentationContext() = LocalPresentationContext(
+        authFlow.value,
+        syncStateTracker?.businessDataScopeState?.value ?: Task126BusinessDataScopeState.unmanagedAllowed(),
+        shopContextFlow?.value
+    )
+
+    private fun presentationIdentityCurrent(context: LocalPresentationContext): Boolean =
+        context.auth == authFlow.value && context.shop == shopContextFlow?.value &&
+            (syncStateTracker == null || syncStateTracker.businessDataScopeState.value == context.scope)
+
+    private fun localPresentationAvailable(context: LocalPresentationContext): Boolean {
+        if (!presentationIdentityCurrent(context)) return false
+        if (context.scope.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED) {
+            return syncStateTracker == null || syncStateTracker.captureLocalPresentationStamp(context.scope) != null
+        }
+        val auth = context.auth as? AuthState.SignedIn ?: return false
+        if (!context.scope.allowsLocalOperations) return false
+        if (context.shop != null &&
+            (context.shop.ownerUserId != auth.userId || !context.shop.localAccessAllowed)) return false
+        val localScope = context.scope.localAccessScope ?: context.scope.boundScope ?: return false
+        if (Task126OwnerStoreGate.validate(localScope,
+                task126ActiveOwnerStoreScope(auth.userId, context.shop?.selectedShop)) !=
+            Task126OwnerStoreGateDecision.Allowed) return false
+        // An observation token is never a lease. It only pairs the Flow state
+        // with the existing gate's current local generation atomically.
+        return syncStateTracker?.captureLocalPresentationStamp(context.scope) != null
+    }
+
+    private fun localObservationCurrent(
+        observation: LocalStatusObservation,
+        context: LocalPresentationContext
+    ): Boolean = localRequestCurrent(observation.ownerUserId, observation.storeScope,
+        observation.requestId, observation.localStamp, context)
+
+    private fun localRequestCurrent(
+        ownerUserId: String?,
+        storeScope: String,
+        requestId: Long,
+        stamp: Task126LocalPresentationStamp?,
+        context: LocalPresentationContext
+    ): Boolean {
+        if (requestId != localStatusRequestId ||
+            ownerUserId != (context.auth as? AuthState.SignedIn)?.userId ||
+            storeScope != shopScopedStoreScope(context.shop?.selectedShop) ||
+            !localPresentationAvailable(context)) return false
+        val tracker = syncStateTracker ?: return context.scope.status ==
+            Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && stamp == null
+        stamp ?: return false
+        return tracker.isLocalPresentationStampCurrent(stamp, context.scope)
     }
 
     private fun currentSelectedShop() = shopContextFlow?.value?.selectedShop

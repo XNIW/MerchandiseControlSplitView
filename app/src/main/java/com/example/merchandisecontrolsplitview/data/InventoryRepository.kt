@@ -6608,13 +6608,27 @@ class DefaultInventoryRepository(
             syncEventDeviceStateDao.get()?.deviceId == device }
     }
 
+    private fun legacySyncEventRetryDue(entry: SyncEventOutboxEntry): Long? {
+        // The pre-metadata writer stored this exact enum and a timestamp after a failed RPC.
+        // Its count describes recorded retries, not all physical sends. Admit only its exhausted
+        // ordinary window for one diagnostic replay; the historical category does not prove its cause
+        // or a lost server Retry-After. Unknown/stable labels and V6 correction remain unchanged.
+        if (entry.lastErrorType != SyncErrorCategory.NetworkOfflineOrTimeout.name ||
+            entry.attemptCount != SYNC_EVENT_OUTBOX_MAX_ATTEMPTS || entry.createdAtMs < 0L) return null
+        val completedAt = entry.lastAttemptAtMs ?: return null
+        if (completedAt < entry.createdAtMs || completedAt > Long.MAX_VALUE - 300_000L) return null
+        return completedAt + 300_000L
+    }
+
     private fun syncEventRetryEligible(entry: SyncEventOutboxEntry, now: Long, waitedClaimID: String? = null): Boolean {
         if (now < 0L || entry.attemptCount < 0 || entry.eventType == "LOCAL_BUSINESS_WRITE_V1") return false
         val metadata = entry.lastErrorType?.let(SyncEventRetryMetadata::decode)
-        // The old writer persisted this exact enum name. Preserve only its recorded remaining budget;
-        // renewal still requires a newly completed, structurally classified failure.
-        if (metadata == null) return entry.lastErrorType in setOf(null, SyncErrorCategory.NetworkOfflineOrTimeout.name) &&
-            entry.attemptCount < SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+        if (metadata == null) {
+            val legacyDue = legacySyncEventRetryDue(entry)
+            if (legacyDue != null) return now >= legacyDue
+            return entry.lastErrorType in setOf(null, SyncErrorCategory.NetworkOfflineOrTimeout.name) &&
+                entry.attemptCount < SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+        }
         if (metadata.retryAfterInvalid || entry.attemptCount < metadata.windowAttempts) return false
         return when (metadata.phase) {
             "waiting" -> now >= metadata.nextEligibleAtMs || (waitedClaimID == metadata.claimID &&
@@ -6645,7 +6659,13 @@ class DefaultInventoryRepository(
             return SyncEventAttemptOutcome(false, false)
         }
         val previous = entry.lastErrorType?.let(SyncEventRetryMetadata::decode)
-        val window = (if (previous?.phase == "cooldown") 0 else previous?.windowAttempts ?: entry.attemptCount) + 1
+        val window = when {
+            // Spend the sole legacy diagnostic opportunity. An uncertain result has no remaining budget;
+            // only a newly completed typed transient may establish the ordinary cooldown below.
+            legacySyncEventRetryDue(entry) != null -> SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+            previous?.phase == "cooldown" -> 1
+            else -> (previous?.windowAttempts ?: entry.attemptCount) + 1
+        }
         val claim = SyncEventRetryMetadata(category = SyncErrorCategory.Unknown, phase = "in_flight",
             windowAttempts = window, lastAttemptAtMs = now, lastCompletedAtMs = null,
             nextEligibleAtMs = maxOf(now + 300_000L, previous?.retryAfterAtMs ?: 0L),

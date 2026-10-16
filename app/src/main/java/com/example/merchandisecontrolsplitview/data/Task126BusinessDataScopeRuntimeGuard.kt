@@ -112,6 +112,9 @@ object Task126UnmanagedBusinessDataScopeRuntimeGuard : Task126BusinessDataScopeR
 /** Observation only: does not grant a business or recovery lease. */
 internal data class Task126DiagnosticQuietStamp(val generation: Long)
 
+/** UI freshness observation only; cannot admit a local/cloud flight or authorize a write. */
+internal data class Task126LocalPresentationStamp(val localGeneration: Long)
+
 internal class Task126BusinessDataScopeFlightGate(
     initialState: Task126BusinessDataScopeState
 ) : Task126BusinessDataScopeRuntimeGuard {
@@ -146,6 +149,21 @@ internal class Task126BusinessDataScopeFlightGate(
         synchronized(lock) {
             !transitioning && activeFlights.isEmpty() && generation == stamp.generation
         }
+
+    internal fun captureLocalPresentationStamp(
+        expectedState: Task126BusinessDataScopeState
+    ): Task126LocalPresentationStamp? = synchronized(lock) {
+        if (transitioning || state != expectedState || !state.allowsLocalOperations) null
+        else Task126LocalPresentationStamp(localGeneration)
+    }
+
+    internal fun isLocalPresentationStampCurrent(
+        stamp: Task126LocalPresentationStamp,
+        expectedState: Task126BusinessDataScopeState
+    ): Boolean = synchronized(lock) {
+        !transitioning && state == expectedState && state.allowsLocalOperations &&
+            localGeneration == stamp.localGeneration
+    }
 
     /** Requalify the same local generation without cancelling its admitted local writers.
      * Real scope changes/activation still use the strong transition below. Both epochs

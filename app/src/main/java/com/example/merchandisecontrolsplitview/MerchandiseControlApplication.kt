@@ -1707,7 +1707,15 @@ open class MerchandiseControlApplication : Application() {
                             database.syncRecoveryJournalDao().getForScope(activeScope.ownerHash, activeScope.storeId)
                         } ?: return@launch
                         val metadata = AutomaticRecoveryRetryMetadata.decode(journal.reason)
-                        if (metadata == null) {
+                        val legacyResume = if (metadata?.legacyResume != null ||
+                            (metadata == null && journal.reason == "recovery_failed" && journal.attemptCount == 5)) {
+                            withContext(Dispatchers.IO) {
+                                shopSyncRecoveryCoordinator.qualifyLegacyAutomaticRecovery(journal, signedIn.userId,
+                                    selectedShop, activeScope, metadata?.legacyResume)
+                            }
+                        } else null
+                        if (metadata?.legacyResume != null && legacyResume == null) return@launch
+                        if (metadata == null && legacyResume == null) {
                             val confirmedIntent = journal.reason == SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED
                             val initialConfirmedIntent = confirmedIntent &&
                                 journal.authorizationMode == SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED &&
@@ -1722,11 +1730,12 @@ open class MerchandiseControlApplication : Application() {
                                 journal.reason.trimStart().startsWith("{") ||
                                 journal.reason in setOf("recovery_failed", "Unknown", "unknown") ||
                                 !journal.reason.matches(Regex("[A-Za-z0-9_]{1,160}"))) return@launch
-                        } else if (!metadata.isTransient || metadata.state !in setOf("waiting", "cooldown")) {
+                        } else if (metadata != null && (!metadata.isTransient || metadata.state !in setOf("waiting", "cooldown"))) {
                             // Includes an interrupted claim: its consumed budget is never refunded or invented transient.
                             return@launch
                         }
-                        val due = maxOf(journal.nextRetryAtMs ?: 0L, metadata?.nextEligibleAtMs ?: 0L)
+                        val due = maxOf(journal.nextRetryAtMs ?: 0L, metadata?.nextEligibleAtMs ?: 0L,
+                            if (metadata == null && legacyResume != null) journal.updatedAtMs + 300_000L else 0L)
                         val waitMs = due - automaticBusinessRecoveryNowMs()
                         if (waitMs > 0L) {
                             // The existing single-flight job owns one opportunity; no execution lease is held while waiting.
@@ -1736,7 +1745,8 @@ open class MerchandiseControlApplication : Application() {
                         if (!authorityCurrent() || catalogSyncStateTracker.networkAvailable.value == false) return@launch
                         businessRecoveryExecutionMutex.withLock {
                             if (!authorityCurrent() || catalogSyncStateTracker.networkAvailable.value == false) return@launch
-                            val attempts = if (metadata?.state == "cooldown") 0 else metadata?.windowAttempts ?: 0
+                            val attempts = if (metadata == null && legacyResume != null) 4
+                                else if (metadata?.state == "cooldown") 0 else metadata?.windowAttempts ?: 0
                             if (!shouldAttemptAutomaticBusinessRecovery(attempts, journal.attemptCount)) return@launch
                             val now = automaticBusinessRecoveryNowMs()
                             if (now < 0L) return@launch
@@ -1745,7 +1755,7 @@ open class MerchandiseControlApplication : Application() {
                                 category = metadata?.category ?: SyncErrorCategory.Unknown,
                                 windowAttempts = attempts + 1, state = "in_flight",
                                 nextEligibleAtMs = maxOf(due, now), claimID = java.util.UUID.randomUUID().toString(),
-                                lastAttemptAtMs = now, lastCompletedAtMs = null)
+                                lastAttemptAtMs = now, lastCompletedAtMs = null, legacyResume = legacyResume)
                             synchronized(businessRecoveryLock) { businessRecoveryExecutingJob = job }
                             try {
                                 val claimed = withContext(Dispatchers.IO) {
@@ -1788,6 +1798,13 @@ open class MerchandiseControlApplication : Application() {
                                         val currentMetadata = current?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
                                         if (!sameBusinessRecoveryEntityCurrent(reservation) || current == null || currentMetadata == null ||
                                             currentMetadata.claimID != claim.claimID || currentMetadata.state != "in_flight" ||
+                                            (claim.legacyResume != null && (currentMetadata.legacyResume != claim.legacyResume ||
+                                                current.runId != claim.legacyResume.runId ||
+                                                current.checkpointADigest != claim.legacyResume.checkpointADigest ||
+                                                current.stagingDatabaseName != journal.stagingDatabaseName ||
+                                                current.authorizationMode != journal.authorizationMode || current.shopId != journal.shopId ||
+                                                current.createdAtMs != journal.createdAtMs || current.blockingEventId != journal.blockingEventId ||
+                                                current.attemptCount != nextSyncRecoveryAttemptCount(journal.attemptCount))) ||
                                             current.deviceId != journal.deviceId ||
                                             database.syncEventDeviceStateDao().get()?.deviceId != journal.deviceId) false
                                         else {

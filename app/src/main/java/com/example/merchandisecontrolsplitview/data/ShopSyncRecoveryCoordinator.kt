@@ -65,6 +65,35 @@ internal sealed interface ShopSyncRecoveryResult {
     data class Rejected(val code: String) : ShopSyncRecoveryResult
 }
 
+/** A persisted restriction, never evidence that the historical failure was transient. */
+internal data class LegacyRecoveryResume(
+    val runId: String,
+    val originalReason: String,
+    val checkpointADigest: String
+) {
+    fun encode() = buildJsonObject {
+        put("runId", runId); put("originalReason", originalReason); put("checkpointADigest", checkpointADigest)
+    }
+
+    companion object {
+        fun decode(value: JsonObject): LegacyRecoveryResume? = runCatching {
+            if (value.keys != setOf("runId", "originalReason", "checkpointADigest")) return null
+            fun text(key: String) = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val run = text("runId")?.takeIf { UUID.fromString(it).toString() == it } ?: return null
+            val reason = text("originalReason")?.takeIf { it == "recovery_failed" } ?: return null
+            val digest = text("checkpointADigest")?.takeIf { it.matches(Regex("[0-9a-f]{64}")) } ?: return null
+            LegacyRecoveryResume(run, reason, digest)
+        }.getOrNull()
+    }
+}
+
+private class LegacyRecoveryRun(val resume: LegacyRecoveryResume, val claimID: String,
+    val ownerHash: String, val storeScope: String) :
+    AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<LegacyRecoveryRun>
+    var finishingCleanup = false
+}
+
 /** Local scheduling metadata only. The recovery journal continues to own all scope and staging facts. */
 internal data class AutomaticRecoveryRetryMetadata(
     val code: String,
@@ -74,14 +103,16 @@ internal data class AutomaticRecoveryRetryMetadata(
     val nextEligibleAtMs: Long,
     val claimID: String,
     val lastAttemptAtMs: Long,
-    val lastCompletedAtMs: Long?
+    val lastCompletedAtMs: Long?,
+    val legacyResume: LegacyRecoveryResume? = null
 ) {
     fun encode(): String = buildJsonObject {
-        put("v", 1); put("kind", "automatic_recovery_retry"); put("code", code)
+        put("v", if (legacyResume == null) 1 else 2); put("kind", "automatic_recovery_retry"); put("code", code)
         put("category", category.name); put("windowAttempts", windowAttempts); put("state", state)
         put("nextEligibleAtMs", nextEligibleAtMs); put("claimID", claimID)
         put("lastAttemptAtMs", lastAttemptAtMs)
         put("lastCompletedAtMs", lastCompletedAtMs?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull)
+        legacyResume?.let { put("legacyResume", it.encode()) }
     }.toString()
 
     val isTransient: Boolean get() = category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
@@ -93,10 +124,18 @@ internal data class AutomaticRecoveryRetryMetadata(
         fun decode(raw: String): AutomaticRecoveryRetryMetadata? = runCatching {
             if (raw.length > 2_048) return null
             val value = Json.parseToJsonElement(raw) as? JsonObject ?: return null
-            if (value.keys != fields) return null
             fun text(key: String): String? = (value[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
             fun number(key: String): JsonPrimitive? = (value[key] as? JsonPrimitive)?.takeUnless { it.isString }
-            if (number("v")?.intOrNull != 1 || text("kind") != "automatic_recovery_retry") return null
+            val version = number("v")?.intOrNull
+            val legacy = when (version) {
+                1 -> { if (value.keys != fields) return null; null }
+                2 -> {
+                    if (value.keys != fields + "legacyResume") return null
+                    LegacyRecoveryResume.decode(value["legacyResume"] as? JsonObject ?: return null) ?: return null
+                }
+                else -> return null
+            }
+            if (text("kind") != "automatic_recovery_retry") return null
             val code = text("code")?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,160}")) } ?: return null
             val category = SyncErrorCategory.entries.firstOrNull { it.name == text("category") } ?: return null
             val attempts = number("windowAttempts")?.intOrNull?.takeIf { it in 1..5 } ?: return null
@@ -111,7 +150,7 @@ internal data class AutomaticRecoveryRetryMetadata(
                 if (completed == null || completed < started || next < completed) return null
                 if (state == "cooldown" && (completed > Long.MAX_VALUE - 300_000L || next < completed + 300_000L)) return null
             }
-            val metadata = AutomaticRecoveryRetryMetadata(code, category, attempts, state, next, claim, started, completed)
+            val metadata = AutomaticRecoveryRetryMetadata(code, category, attempts, state, next, claim, started, completed, legacy)
             // Only our canonical encoding is admitted; duplicate keys and ambiguous numeric forms fail closed.
             metadata.takeIf { it.encode() == raw && (state != "cooldown" || attempts == 5) }
         }.getOrNull()
@@ -229,6 +268,129 @@ internal class ShopSyncRecoveryCoordinator(
 ) {
     private val appContext = context.applicationContext
 
+    /** Read-only admission: no preparation, repair, migration, deletion or new generation. */
+    suspend fun qualifyLegacyAutomaticRecovery(
+        journal: SyncRecoveryJournal, accountId: String, selectedShop: SelectedShop,
+        activeScope: Task126OwnerStoreScope, existing: LegacyRecoveryResume? = null
+    ): LegacyRecoveryResume? = try {
+        val shop = canonicalUuidOrNull(selectedShop.shopId)
+        val run = journal.runId
+        val digest = journal.checkpointADigest
+        if (!remote.isConfigured || shop == null || run == null || digest == null ||
+            journal.authorizationMode != SyncRecoveryAuthorizationModes.SAME_SCOPE ||
+            journal.ownerHash != activeScope.ownerHash || journal.storeScope != activeScope.storeId ||
+            journal.shopId != shop ||
+            Task126OwnerStoreGate.validate(activeScope, task126ActiveOwnerStoreScope(accountId, selectedShop)) !=
+                Task126OwnerStoreGateDecision.Allowed || !leaseStillValid(accountId, shop, journal.deviceId)) null
+        else {
+            val candidate = existing ?: LegacyRecoveryResume.decode(buildJsonObject {
+                put("runId", run); put("originalReason", journal.reason); put("checkpointADigest", digest)
+            })
+            val legacyShape = existing != null || (journal.reason == "recovery_failed" && journal.attemptCount == 5 &&
+                journal.phase == SyncRecoveryJournalPhases.STAGING && journal.createdAtMs >= 0L &&
+                journal.updatedAtMs >= journal.createdAtMs && journal.updatedAtMs <= Long.MAX_VALUE - 300_000L &&
+                journal.nextRetryAtMs?.let { it >= journal.createdAtMs } == true)
+            val binding = activeDb.businessDataScopeBindingDao().get()?.toOwnerStoreScope()
+            val baseline = activeDb.syncRecoveryBaselineDao().get()
+            if (!legacyShape || candidate == null || candidate.runId != run || candidate.checkpointADigest != digest ||
+                (existing != null && AutomaticRecoveryRetryMetadata.decode(journal.reason)?.legacyResume != existing) ||
+                binding == null || Task126OwnerStoreGate.validate(binding, activeScope) != Task126OwnerStoreGateDecision.Allowed ||
+                baseline == null || baseline.ownerHash != activeScope.ownerHash || baseline.storeScope != activeScope.storeId ||
+                baseline.shopId != shop || baseline.deviceId != journal.deviceId ||
+                activeDb.syncEventOutboxDao().countAll() != activeDb.syncEventOutboxDao().countPendingForScope(accountId, activeScope.storeId)) null
+            else {
+                validateShopSyncActiveReceipt(activeDb, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+                if (journal.phase == SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING && existing != null) {
+                    if (baseline.generationId != run) throw ShopSyncContractException("legacy_recovery_active_generation_changed")
+                } else {
+                    if (journal.phase !in setOf(SyncRecoveryJournalPhases.STAGING, SyncRecoveryJournalPhases.READY_TO_ACTIVATE) ||
+                        baseline.generationId == run) throw ShopSyncContractException("legacy_recovery_generation_invalid")
+                    val name = "$STAGING_DATABASE_PREFIX$run.db"
+                    val file = validatedStagingFile(name)
+                    if (journal.stagingDatabaseName != name || file?.isFile != true || file.name != name) {
+                        throw ShopSyncContractException("legacy_recovery_staging_missing")
+                    }
+                    // Reject old/unknown schemas before Room can run any migration or create an absent file.
+                    android.database.sqlite.SQLiteDatabase.openDatabase(file.path, null,
+                        android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use {
+                        if (it.version != activeDb.openHelper.readableDatabase.version) {
+                            throw ShopSyncContractException("legacy_recovery_staging_schema_changed")
+                        }
+                    }
+                    val stage = openStagingDatabase(name)
+                    try { validateLegacyAcceptedPrefix(stage, journal, accountId, journal.deviceId) }
+                    finally { stage.close() }
+                }
+                candidate.takeIf { activeDb.syncRecoveryJournalDao().get() == journal &&
+                    leaseStillValid(accountId, shop, journal.deviceId) }
+            }
+        }
+    } catch (cancelled: CancellationException) { throw cancelled }
+      catch (_: Exception) { null }
+
+    private suspend fun validateLegacyAcceptedPrefix(
+        stage: AppDatabase, journal: SyncRecoveryJournal, accountId: String, deviceId: String
+    ) {
+        val run = requireNotNull(journal.runId)
+        val sql = stage.openHelper.readableDatabase
+        val progress = RecoveryPageProgress(sql)
+        val checkpoint = progress.checkpoint(journal)
+        validateRecoveryScopeIdentity(checkpoint.scope, accountId, deviceId)
+        validateRecoveryCheckpointResourceBounds(checkpoint, resourceLimits)
+        if (checkpoint.status != "ready" || checkpoint.integrity.totalViolationCount != 0L ||
+            checkpoint.shopId != journal.shopId) throw ShopSyncContractException("legacy_recovery_checkpoint_invalid")
+        val budget = RecoveryTransferBudget(resourceLimits)
+        var unfinished = false
+        var acceptedRows = 0L
+        var acceptedDomains = 0
+        for (domain in ShopSyncRowDomain.entries) {
+            val accepted = progress.accepted(domain)
+            val count = stage.syncRecoveryManifestDao().count(run, domain.wireValue).toLong()
+            if (accepted == null) {
+                if (count != 0L) throw ShopSyncContractException("legacy_recovery_manifest_without_progress")
+                unfinished = true
+                continue
+            }
+            if (unfinished || accepted.rows != count) throw ShopSyncContractException("legacy_recovery_prefix_invalid")
+            budget.restore(domain, accepted)
+            acceptedRows = checkedRecoveryAdd(acceptedRows, accepted.rows, "legacy_recovery_prefix_overflow")
+            acceptedDomains++
+            if (!accepted.complete) {
+                val last = sql.query("SELECT MAX(remoteId) FROM sync_recovery_manifest WHERE generationId=? AND domain=?",
+                    arrayOf(run, domain.wireValue)).use { cursor ->
+                    if (!cursor.moveToFirst() || cursor.isNull(0)) null else cursor.getString(0)
+                }
+                if (last != accepted.afterId) throw ShopSyncContractException("legacy_recovery_cursor_invalid")
+                unfinished = true
+            }
+            if (domain == ShopSyncRowDomain.IMAGES) {
+                // Image metadata has no physical Room body. Revalidate its canonical receipt;
+                // product/image relations can legitimately straddle live pages until the frozen tail.
+                val images = RecoveryManifestReader(stage.syncRecoveryManifestDao(), run, domain)
+                while (true) {
+                    val image = images.next() ?: break
+                    val parts = image.versionLine.split('\u001f')
+                    if (parts.size != 15) throw ShopSyncContractException("legacy_recovery_image_receipt_invalid")
+                    fun variant(start: Int) = ShopSyncImageVariantRow(parts[start], parts[start + 1].toLong(),
+                        parts[start + 2].toInt(), parts[start + 3].toInt(), parts[start + 4])
+                    val canonical = ShopSyncRows.Images(listOf(ShopSyncImageRow(parts[0], accountId, journal.shopId,
+                        parts[3].takeUnless { it == "-" }, parts[1], parts[2], parts[4], variant(5), variant(10))))
+                        .toManifestRows(run, domain).single()
+                    if (image != canonical) throw ShopSyncContractException("legacy_recovery_image_receipt_invalid")
+                }
+            }
+        }
+        fun count(table: String) = sql.query("SELECT COUNT(*) FROM `$table`").use { it.moveToFirst(); it.getLong(0) }
+        if (acceptedRows == 0L || count("sync_recovery_manifest") != acceptedRows ||
+            count("recovery_transfer_progress") != acceptedDomains.toLong()) {
+            throw ShopSyncContractException("legacy_recovery_prefix_missing")
+        }
+        sql.query("PRAGMA foreign_key_check").use {
+            if (it.moveToFirst()) throw ShopSyncContractException("legacy_recovery_prefix_foreign_key")
+        }
+        validatePhysicalSnapshot(stage, run, resourceLimits.historyPageRows)
+    }
+
     suspend fun recover(
         accountId: String,
         selectedShop: SelectedShop,
@@ -274,8 +436,15 @@ internal class ShopSyncRecoveryCoordinator(
         if (!leaseStillValid(accountId, shopId, currentDevice)) {
             return@withContext ShopSyncRecoveryResult.Rejected("recovery_lease_invalid")
         }
+        val legacyResume = automaticMetadata?.legacyResume
+        withContext(legacyResume?.let { LegacyRecoveryRun(it, requireNotNull(automaticClaimID), journal.ownerHash, journal.storeScope) }
+            ?: EmptyCoroutineContext) legacyOperation@ {
+        if (legacyResume != null && qualifyLegacyAutomaticRecovery(journal, accountId, selectedShop,
+                activeScope, legacyResume) != legacyResume) {
+            return@legacyOperation ShopSyncRecoveryResult.Rejected("legacy_recovery_prefix_invalid")
+        }
         if (!remote.isConfigured) {
-            return@withContext retryAfterFailure(
+            return@legacyOperation retryAfterFailure(
                 journal = journal,
                 code = "shop_sync_reader_unavailable",
                 keepActivatedPhase =
@@ -287,7 +456,7 @@ internal class ShopSyncRecoveryCoordinator(
         }
 
         if (journal.phase == SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING) {
-            return@withContext resumeActivatedCleanupWithRetry(
+            return@legacyOperation resumeActivatedCleanupWithRetry(
                 accountId,
                 shopId,
                 activeScope,
@@ -314,13 +483,16 @@ internal class ShopSyncRecoveryCoordinator(
                 candidate.close()
             }
         }
+        if (legacyResume != null && resumedDb == null) {
+            return@legacyOperation ShopSyncRecoveryResult.Rejected("legacy_recovery_staging_missing")
+        }
         if (resumedDb == null && !cleanupKnownStaging(journal.stagingDatabaseName)) {
-            return@withContext retryAfterFailure(journal, "recovery_staging_cleanup_deferred", false,
+            return@legacyOperation retryAfterFailure(journal, "recovery_staging_cleanup_deferred", false,
                 journal.runId, retainStagingDatabase = true, automaticClaimID = automaticClaimID)
         }
-        if (!cleanupBoundedOrphanStaging(excluding = ownedName.takeIf { resumedDb != null })) {
+        if (legacyResume == null && !cleanupBoundedOrphanStaging(excluding = ownedName.takeIf { resumedDb != null })) {
             resumedDb?.close()
-            return@withContext retryAfterFailure(journal, "recovery_orphan_cleanup_deferred", false,
+            return@legacyOperation retryAfterFailure(journal, "recovery_orphan_cleanup_deferred", false,
                 journal.runId, retainStagingDatabase = resumedDb != null, automaticClaimID = automaticClaimID)
         }
 
@@ -332,14 +504,16 @@ internal class ShopSyncRecoveryCoordinator(
             if (binding == null || Task126OwnerStoreGate.validate(binding, activeScope) != Task126OwnerStoreGateDecision.Allowed ||
                 activeDb.syncEventOutboxDao().countAll() != scopedOutbox) {
                 resumedDb?.close()
-                return@withContext retryAfterFailure(journal, "recovery_local_pending", false,
+                if (legacyResume != null) return@legacyOperation ShopSyncRecoveryResult.Rejected("legacy_recovery_local_scope_changed")
+                return@legacyOperation retryAfterFailure(journal, "recovery_local_pending", false,
                     expectedRunId = journal.runId, retainStagingDatabase = false, automaticClaimID = automaticClaimID)
             }
         }
-        val generationId = if (resumedDb != null) requireNotNull(journal.runId) else UUID.randomUUID().toString().lowercase()
+        val generationId = if (legacyResume != null) legacyResume.runId
+            else if (resumedDb != null) requireNotNull(journal.runId) else UUID.randomUUID().toString().lowercase()
         val stagingName = "$STAGING_DATABASE_PREFIX$generationId.db"
         val stagingFile = validatedStagingFile(stagingName)
-            ?: return@withContext ShopSyncRecoveryResult.Rejected("recovery_staging_path_invalid")
+            ?: return@legacyOperation ShopSyncRecoveryResult.Rejected("recovery_staging_path_invalid")
         var stagingDb: AppDatabase? = resumedDb
         var activated = false
         try {
@@ -381,6 +555,17 @@ internal class ShopSyncRecoveryCoordinator(
                 }
             }
             val checkpointA = resumedCheckpoint ?: fetchCheckpoint(accountId, shopId, currentDevice, null)
+            if (legacyResume != null) {
+                val current = fetchCheckpoint(accountId, shopId, currentDevice, checkpointA.scope,
+                    checkpointA.syncEvents.maxId, checkpointA.scope.key)
+                validateCheckpointTailBoundary(checkpointA, current, shopId)
+                if (current.integrity.totalViolationCount != 0L || current.syncEvents.requiresFullRecovery ||
+                    (!sameRecoveryMaterial(checkpointA, current) && current.syncEvents.maxId == checkpointA.syncEvents.maxId)) {
+                    throw ShopSyncContractException("legacy_recovery_checkpoint_changed")
+                }
+                // Awaiting the checkpoint cannot replace or corrupt the accepted local prefix.
+                validateLegacyAcceptedPrefix(requireNotNull(stagingDb), requireOwnedJournal(generationId), accountId, currentDevice)
+            }
             if (checkpointA.integrity.totalViolationCount != 0L) {
                 throw ShopSyncContractException("recovery_remote_integrity_violation")
             }
@@ -550,11 +735,12 @@ internal class ShopSyncRecoveryCoordinator(
                 verifiedBaselineId = publishedCheckpoint.syncEvents.maxId
             )
             if (!markerMatchesCheckpoint(markerAfterActivation, publishedCheckpoint)) {
+                if (legacyResume != null) throw ShopSyncContractException("legacy_recovery_post_activation_checkpoint_changed")
                 val cleanupJournal = requireOwnedJournal(generationId)
                 stagingDb.close()
                 stagingDb = null
                 val cleanupComplete = cleanupKnownStaging(stagingName)
-                return@withContext retryAfterFailure(
+                return@legacyOperation retryAfterFailure(
                     journal = cleanupJournal,
                     code = ShopSyncRecoveryReasons.POST_ACTIVATION_CHECKPOINT_CHANGED,
                     keepActivatedPhase = false,
@@ -572,7 +758,7 @@ internal class ShopSyncRecoveryCoordinator(
             stagingDb.close()
             stagingDb = null
             if (!cleanupKnownStaging(stagingName)) {
-                return@withContext retryAfterFailure(
+                return@legacyOperation retryAfterFailure(
                     journal = activeDb.syncRecoveryJournalDao().get()
                         ?: throw ShopSyncContractException("recovery_cleanup_journal_lost"),
                     code = "recovery_staging_cleanup_deferred",
@@ -607,7 +793,7 @@ internal class ShopSyncRecoveryCoordinator(
                     activeScope = activeScope,
                     deviceId = currentDevice
                 )
-                val resumable = hasAcceptedRecoveryHeader(stagingName, latest)
+                val resumable = legacyResume != null || hasAcceptedRecoveryHeader(stagingName, latest)
                 val cleanupComplete = durablyActivated || resumable || cleanupKnownStaging(stagingName)
                 retryAfterFailure(
                     journal = latest,
@@ -650,8 +836,8 @@ internal class ShopSyncRecoveryCoordinator(
             val typedTransient = classification.category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
                 SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient)
             // Retry-After eligibility is separate from the integrity of pages already accepted under this fence.
-            val resumable = !durablyActivated && (contract == null || typedTransient) &&
-                hasAcceptedRecoveryHeader(stagingName, latest)
+            val resumable = legacyResume != null || (!durablyActivated && (contract == null || typedTransient) &&
+                hasAcceptedRecoveryHeader(stagingName, latest))
             val cleanupComplete = durablyActivated || resumable || cleanupKnownStaging(stagingName)
             val retry = retryAfterFailure(
                 journal = latest,
@@ -671,6 +857,7 @@ internal class ShopSyncRecoveryCoordinator(
             }
         } finally {
             stagingDb?.close()
+        }
         }
     }
 
@@ -746,6 +933,9 @@ internal class ShopSyncRecoveryCoordinator(
             verifiedBaselineId = persisted.syncEvents.maxId
         )
         if (!markerMatchesCheckpoint(marker, persisted)) {
+            if (coroutineContext[LegacyRecoveryRun] != null) {
+                throw ShopSyncContractException("legacy_recovery_post_activation_checkpoint_changed")
+            }
             val cleanupComplete = cleanupKnownStaging(journal.stagingDatabaseName)
             return retryAfterFailure(
                 journal = journal,
@@ -1665,8 +1855,23 @@ internal class ShopSyncRecoveryCoordinator(
         accountId: String,
         shopId: String,
         deviceId: String
-    ): Boolean = scopeStillValid(accountId, shopId) &&
-        activeDb.syncEventDeviceStateDao().get()?.deviceId == deviceId
+    ): Boolean {
+        if (!scopeStillValid(accountId, shopId) || activeDb.syncEventDeviceStateDao().get()?.deviceId != deviceId) return false
+        val legacy = coroutineContext[LegacyRecoveryRun] ?: return true
+        val journal = activeDb.syncRecoveryJournalDao().get()
+        if (journal == null) return legacy.finishingCleanup && activeDb.syncRecoveryBaselineDao().get()?.generationId == legacy.resume.runId
+        val metadata = AutomaticRecoveryRetryMetadata.decode(journal.reason) ?: return false
+        if (metadata.legacyResume != legacy.resume || metadata.claimID != legacy.claimID || metadata.state != "in_flight" ||
+            journal.runId != legacy.resume.runId || journal.checkpointADigest != legacy.resume.checkpointADigest ||
+            journal.shopId != shopId || journal.deviceId != deviceId || journal.ownerHash != legacy.ownerHash ||
+            journal.storeScope != legacy.storeScope) return false
+        if (journal.phase == SyncRecoveryJournalPhases.ACTIVATED_CLEANUP_PENDING) {
+            return activeDb.syncRecoveryBaselineDao().get()?.generationId == legacy.resume.runId
+        }
+        val name = "$STAGING_DATABASE_PREFIX${legacy.resume.runId}.db"
+        return journal.phase in setOf(SyncRecoveryJournalPhases.STAGING, SyncRecoveryJournalPhases.READY_TO_ACTIVATE) &&
+            journal.stagingDatabaseName == name && validatedStagingFile(name)?.isFile == true
+    }
 
     /** Only called after a successful response and outside transactions; direct callers have no continuation. */
     private suspend fun leaseAfterSuccessfulRpc(accountId: String, shopId: String, deviceId: String): Boolean {
@@ -1728,6 +1933,7 @@ internal class ShopSyncRecoveryCoordinator(
                 activeDb.syncEventOutboxDao().countPendingForScope(accountId, activeScope.storeId)) {
                 throw ShopSyncContractException("recovery_cleanup_outbox_scope_mismatch")
             }
+            coroutineContext[LegacyRecoveryRun]?.finishingCleanup = true
             activeDb.syncRecoveryJournalDao().deleteAll()
             if (activeDb.syncRecoveryJournalDao().get() != null) {
                 throw ShopSyncContractException("recovery_cleanup_journal_not_cleared")

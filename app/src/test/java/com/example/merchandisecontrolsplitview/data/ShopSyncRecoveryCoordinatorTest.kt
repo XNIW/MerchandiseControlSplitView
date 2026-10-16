@@ -822,6 +822,432 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun legacyExhaustedRecoveryResumesOnlyItsAcceptedPrefixThroughApplicationAfterReopen() = runTest {
+        seedVerifiedSameScopeRecovery()
+        val oldBaseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val localBefore = db.productDao().getAll()
+        remote = RecoveryRemoteFixture(mixedRetainedPriceFixture())
+        val paged = PagedRecoveryRemoteFixture(remote)
+        val requests = mutableListOf<Pair<ShopSyncRowDomain, String?>>()
+        val order = mutableListOf<String>()
+        var historicalFailure = true
+        val reader = object : ShopSyncReadRemoteDataSource by paged {
+            override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
+                if (!historicalFailure) order += "checkpoint"
+                return paged.checkpoint(context)
+            }
+            override suspend fun recoveryPage(context: ShopSyncRpcContext, domain: ShopSyncRowDomain,
+                afterId: String?, limit: Int): Result<ShopSyncRecoveryPage> {
+                requests += domain to afterId
+                if (!historicalFailure) order += "page"
+                if (domain == ShopSyncRowDomain.PRICES && afterId != null && historicalFailure) {
+                    return Result.failure(java.io.IOException("legacy interrupted same-scope download"))
+                }
+                return paged.recoveryPage(context, domain, afterId, limit)
+            }
+        }
+        // The direct pre-metadata producer persists raw reason/count after each actual failed RPC.
+        repeat(5) {
+            assertTrue(coordinator(recoveryRemote = reader).recover(ACCOUNT, selectedShop(), activeScope())
+                is ShopSyncRecoveryResult.RetryRequired)
+        }
+        val legacy = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals("recovery_failed", legacy.reason)
+        assertEquals(5, legacy.attemptCount)
+        assertEquals(SyncRecoveryJournalPhases.STAGING, legacy.phase)
+        assertEquals(SyncRecoveryAuthorizationModes.SAME_SCOPE, legacy.authorizationMode)
+        assertNull(AutomaticRecoveryRetryMetadata.decode(legacy.reason))
+        val stage = openDatabase(requireNotNull(legacy.stagingDatabaseName))
+        val accepted = try {
+            val progress = RecoveryPageProgress(stage.openHelper.writableDatabase)
+            assertEquals(legacy.checkpointADigest, progress.checkpoint(legacy).checkpointDigest)
+            requireNotNull(progress.accepted(ShopSyncRowDomain.PRICES)).also {
+                assertTrue(it.rows > 0)
+                assertFalse(it.complete)
+                validatePhysicalSnapshot(stage, requireNotNull(legacy.runId))
+            }
+        } finally { stage.close() }
+        assertEquals(oldBaseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(localBefore, db.productDao().getAll())
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+        assertEquals("Legacy journal survives actual Room reopen", legacy, db.syncRecoveryJournalDao().get())
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+        tracker.updateNetworkAvailability(true)
+        historicalFailure = false
+        val beforeRequests = requests.size
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_upgrade")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertTrue("The existing application coordinator must automatically requalify exhausted legacy work", order.isNotEmpty())
+        assertEquals("Current checkpoint requalification precedes any resumed page", "checkpoint", order.first())
+        val resumedPages = requests.drop(beforeRequests)
+        assertEquals(ShopSyncRowDomain.PRICES to accepted.afterId, resumedPages.first())
+        assertEquals("The accepted first price page must never be downloaded twice", 1,
+            requests.count { it.first == ShopSyncRowDomain.PRICES && it.second == null })
+        assertEquals("Upgrade continues the existing generation, never a replacement run", legacy.runId,
+            db.syncRecoveryBaselineDao().get()?.generationId)
+        assertNull(db.syncRecoveryJournalDao().get())
+        val final = requireNotNull(db.syncRecoveryBaselineDao().get())
+        validateShopSyncActiveReceipt(db, final.generationId, decodeRecoveryCheckpointJson(final.checkpointJson))
+    }
+
+    @Test
+    fun legacyRecoveryRejectsHeaderOnlyWithoutChangingStoredRows() = runTest {
+        verifyLegacyPrefixRejected { stage ->
+            stage.clearAllTables()
+            stage.openHelper.writableDatabase.execSQL("DELETE FROM recovery_transfer_progress")
+        }
+    }
+
+    @Test
+    fun legacyRecoveryRejectsMissingManifestRowsWithoutRepair() = runTest {
+        verifyLegacyPrefixRejected { stage ->
+            stage.openHelper.writableDatabase.execSQL("DELETE FROM sync_recovery_manifest WHERE domain='prices'")
+        }
+    }
+
+    @Test
+    fun legacyRecoveryRejectsCursorThatDoesNotNameLastAcceptedRow() = runTest {
+        verifyLegacyPrefixRejected { stage ->
+            stage.openHelper.writableDatabase.execSQL("UPDATE recovery_transfer_progress SET afterId='ffffffff-ffff-4fff-8fff-ffffffffffff' WHERE domain='prices'")
+        }
+    }
+
+    @Test
+    fun legacyRecoveryRejectsCorruptedPhysicalBodyWithoutRepair() = runTest {
+        verifyLegacyPrefixRejected { stage ->
+            val product = stage.productDao().getAll().first()
+            stage.productDao().update(product.copy(productName = "Unrecorded legacy corruption"))
+        }
+    }
+
+    @Test
+    fun legacyRecoveryRejectsHeaderFromAnotherDeviceWithoutRepair() = runTest {
+        verifyLegacyPrefixRejected { stage ->
+            stage.openHelper.writableDatabase.execSQL("UPDATE recovery_transfer_header SET deviceId='other-device'")
+        }
+    }
+
+    @Test
+    fun legacyRecoveryRejectsInvalidChronologyAuthorityAndMarkerWithoutRpc() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val tracker = legacyRecoveryTracker()
+        val marker = LegacyRecoveryResume(requireNotNull(legacy.runId), legacy.reason, requireNotNull(legacy.checkpointADigest))
+        val retry = AutomaticRecoveryRetryMetadata("recovery_failed", SyncErrorCategory.NetworkOfflineOrTimeout,
+            5, "cooldown", 1_400_000L, "70000000-0000-4000-8000-000000000155", 1_000_000L, 1_000_000L, marker)
+        assertEquals(retry, AutomaticRecoveryRetryMetadata.decode(retry.encode()))
+        val v1 = retry.copy(legacyResume = null)
+        assertEquals(v1, AutomaticRecoveryRetryMetadata.decode(v1.encode()))
+        for (bad in listOf(
+            legacy.copy(createdAtMs = -1L), legacy.copy(updatedAtMs = legacy.createdAtMs - 1L),
+            legacy.copy(updatedAtMs = Long.MAX_VALUE), legacy.copy(nextRetryAtMs = null),
+            legacy.copy(nextRetryAtMs = -1L), legacy.copy(deviceId = "another-device"),
+            legacy.copy(runId = "70000000-0000-4000-8000-000000000156"),
+            legacy.copy(authorizationMode = SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED),
+            legacy.copy(reason = retry.encode().replace("\"v\":2", "\"v\":1")),
+            legacy.copy(reason = retry.encode().replace("\"originalReason\":\"recovery_failed\"", "\"originalReason\":\"Unknown\"")),
+            legacy.copy(reason = retry.encode().replace("\"legacyResume\":{", "\"legacyResume\":{\"extra\":true,"))
+        )) {
+            db.syncRecoveryJournalDao().upsert(bad)
+            val before = ordinaryMarkerApplicationRows()
+            val calls = remote.checkpointCalls
+            withApplicationRecoveryOwner(tracker, selectedShop(), recoveryRemote = reader,
+                recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+                application.requestPendingBusinessRecovery("legacy_recovery_negative_metadata")
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+            }
+            assertEquals(calls, remote.checkpointCalls)
+            assertEquals(before, ordinaryMarkerApplicationRows())
+        }
+    }
+
+    @Test
+    fun legacyRecoveryCancellationConsumesDiagnosticClaimAcrossReopen() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val stageBefore = legacyStageRows(legacy)
+        val localBefore = ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" }
+        var entries = 0
+        var observed: SyncRecoveryJournal? = null
+        remote.beforeCheckpoint = {
+            entries++
+            observed = db.syncRecoveryJournalDao().get()
+            throw CancellationException("legacy diagnostic interrupted after durable claim")
+        }
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_cancel")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertEquals(1, entries)
+        val claim = requireNotNull(observed)
+        val metadata = requireNotNull(AutomaticRecoveryRetryMetadata.decode(claim.reason))
+        assertEquals(6, claim.attemptCount)
+        assertEquals(5, metadata.windowAttempts)
+        assertEquals(SyncErrorCategory.Unknown, metadata.category)
+        assertEquals("in_flight", metadata.state)
+        assertEquals(legacy.runId, metadata.legacyResume?.runId)
+        assertEquals(stageBefore, legacyStageRows(legacy))
+        assertEquals(localBefore, ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+        reopenOrdinaryDatabase()
+        val interrupted = ordinaryMarkerApplicationRows()
+        remote.beforeCheckpoint = { entries++ }
+        repeat(2) {
+            withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+                recoveryNowMs = { 5_000_000L }) { application, _, _ ->
+                application.requestPendingBusinessRecovery("legacy_recovery_reopen_consumed")
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+            }
+        }
+        assertEquals(1, entries)
+        assertEquals(interrupted, ordinaryMarkerApplicationRows())
+        assertEquals(stageBefore, legacyStageRows(legacy))
+    }
+
+    @Test
+    fun legacyRecoveryCheckpointSnapshotChangeStopsBeforePagesAndPreservesPrefix() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val stageBefore = legacyStageRows(legacy)
+        val localBefore = ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" }
+        val old = remote.fixture.checkpoint
+        remote.checkpoints = mutableListOf(old.copy(syncEvents = old.syncEvents.copy(requiresFullRecovery = true)))
+        val beforeCalls = remote.checkpointCalls
+        val beforePages = remote.pageCalls
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_snapshot_changed")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertEquals(beforeCalls + 1, remote.checkpointCalls)
+        assertEquals(beforePages, remote.pageCalls)
+        val settled = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals(legacy.runId, settled.runId)
+        assertEquals("blocked", AutomaticRecoveryRetryMetadata.decode(settled.reason)?.state)
+        assertEquals(legacy.checkpointADigest, settled.checkpointADigest)
+        assertEquals(stageBefore, legacyStageRows(legacy))
+        assertEquals(localBefore, ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun legacyRecoveryFreshTimeoutPreservesLineageAndCooldownBeforeSameRunSuccess() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val beforeCalls = remote.checkpointCalls
+        val beforePages = remote.pageCalls
+        val stageBefore = legacyStageRows(legacy)
+        remote.checkpointFailure = legacyRecoveryHttpFailure("601")
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_fresh_timeout")
+            awaitLegacyRecoveryState("cooldown")
+        }
+        val failed = requireNotNull(db.syncRecoveryJournalDao().get())
+        val metadata = requireNotNull(AutomaticRecoveryRetryMetadata.decode(failed.reason))
+        assertEquals(beforeCalls + 1, remote.checkpointCalls)
+        assertEquals(beforePages, remote.pageCalls)
+        assertEquals(5, metadata.windowAttempts)
+        assertEquals(6, failed.attemptCount)
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout, metadata.category)
+        assertEquals(2_001_000L, metadata.nextEligibleAtMs)
+        assertEquals(legacy.runId, metadata.legacyResume?.runId)
+        assertEquals(legacy.stagingDatabaseName, failed.stagingDatabaseName)
+        assertEquals(stageBefore, legacyStageRows(legacy))
+        reopenOrdinaryDatabase()
+        remote.checkpointFailure = null
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 2_000_999L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_before_new_floor")
+            repeat(100) { testScheduler.runCurrent(); Thread.sleep(1) }
+            assertEquals(beforeCalls + 1, remote.checkpointCalls)
+            assertEquals(failed, db.syncRecoveryJournalDao().get())
+        }
+        var successor: SyncRecoveryJournal? = null
+        remote.beforeCheckpoint = { if (successor == null) successor = db.syncRecoveryJournalDao().get() }
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 2_001_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_successor_due")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        val next = requireNotNull(successor)
+        assertEquals(legacy.runId, next.runId)
+        assertEquals(7, next.attemptCount)
+        assertEquals(1, AutomaticRecoveryRetryMetadata.decode(next.reason)?.windowAttempts)
+        assertEquals(metadata.legacyResume, AutomaticRecoveryRetryMetadata.decode(next.reason)?.legacyResume)
+        assertEquals(legacy.runId, db.syncRecoveryBaselineDao().get()?.generationId)
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun legacyRecoveryTransientSuccessorNeverCreatesMissingStage() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        remote.checkpointFailure = java.io.IOException("current diagnostic timeout")
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_timeout_before_missing_stage")
+            awaitLegacyRecoveryState("cooldown")
+        }
+        val calls = remote.checkpointCalls
+        val stageName = requireNotNull(legacy.stagingDatabaseName)
+        assertTrue(app.deleteDatabase(stageName)) // Synthetic loss outside the recovery owner.
+        reopenOrdinaryDatabase()
+        val before = ordinaryMarkerApplicationRows()
+        remote.checkpointFailure = null
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_700_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_existing_stage_required")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertEquals(calls, remote.checkpointCalls)
+        assertEquals(before, ordinaryMarkerApplicationRows())
+        assertFalse(app.getDatabasePath(stageName).exists())
+    }
+
+    @Test
+    fun legacyRecoveryMissingStageAfterPreflightCannotFallbackToFreshRun() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val calls = remote.checkpointCalls
+        val before = ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" }
+        var clockReads = 0
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = {
+                clockReads++
+                if (clockReads == 1) assertTrue(app.deleteDatabase(requireNotNull(legacy.stagingDatabaseName)))
+                1_400_000L
+            }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_stage_lost_after_preflight")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertTrue("Clock is read only after successful prefix preflight", clockReads > 0)
+        assertEquals(calls, remote.checkpointCalls)
+        assertEquals(legacy.runId, db.syncRecoveryJournalDao().get()?.runId)
+        assertEquals(before, ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+        assertFalse(app.getDatabasePath(requireNotNull(legacy.stagingDatabaseName)).exists())
+    }
+
+    @Test
+    fun legacyRecoveryStaleCheckpointCannotCompleteReplacedRun() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val beforePages = remote.pageCalls
+        val stageBefore = legacyStageRows(legacy)
+        var replacement: SyncRecoveryJournal? = null
+        remote.beforeCheckpoint = {
+            val current = requireNotNull(db.syncRecoveryJournalDao().get())
+            replacement = current.copy(runId = "70000000-0000-4000-8000-000000000157")
+            db.syncRecoveryJournalDao().upsert(requireNotNull(replacement))
+        }
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_stale_run_callback")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertNotNull(replacement)
+        assertEquals(beforePages, remote.pageCalls)
+        assertEquals("Old callback cannot complete metadata on a replaced run", replacement, db.syncRecoveryJournalDao().get())
+        assertEquals(stageBefore, legacyStageRows(legacy))
+    }
+
+    @Test
+    fun legacyRecoveryLeaseRevokedDuringCheckpointCannotRequestPages() = runTest {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val beforePages = remote.pageCalls
+        val stageBefore = legacyStageRows(legacy)
+        var leaseCurrent = true
+        remote.beforeCheckpoint = { leaseCurrent = false }
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryLease = { _, _ -> leaseCurrent }, recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_revoked_lease")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertFalse("Checkpoint must actually have crossed the revocation boundary", leaseCurrent)
+        assertEquals(beforePages, remote.pageCalls)
+        assertEquals(legacy.runId, db.syncRecoveryJournalDao().get()?.runId)
+        assertEquals(stageBefore, legacyStageRows(legacy))
+    }
+
+    private fun legacyRecoveryHttpFailure(retryAfter: String): Exception {
+        val response = io.mockk.mockk<io.ktor.client.statement.HttpResponse>()
+        val call = io.mockk.mockk<io.ktor.client.call.HttpClientCall>()
+        val request = io.mockk.mockk<io.ktor.client.request.HttpRequest>()
+        io.mockk.every { response.status } returns io.ktor.http.HttpStatusCode.GatewayTimeout
+        io.mockk.every { response.headers } returns io.ktor.http.headersOf(io.ktor.http.HttpHeaders.RetryAfter, retryAfter)
+        io.mockk.every { response.call } returns call
+        io.mockk.every { call.request } returns request
+        io.mockk.every { request.url } returns io.ktor.http.Url("https://example.test/rest/v1/rpc/shop_sync_recovery_checkpoint_v1")
+        io.mockk.every { request.headers } returns io.ktor.http.Headers.Empty
+        io.mockk.every { request.method } returns io.ktor.http.HttpMethod.Post
+        return ShopSyncContractException("shop_sync_rpc_http_504").apply {
+            initCause(io.ktor.client.plugins.ResponseException(response, "shop_sync_rpc_http_504"))
+        }
+    }
+
+    private suspend fun seedLegacyAcceptedRecoveryPrefix(): Pair<SyncRecoveryJournal, ShopSyncReadRemoteDataSource> {
+        seedVerifiedSameScopeRecovery()
+        remote = RecoveryRemoteFixture(mixedRetainedPriceFixture())
+        val paged = PagedRecoveryRemoteFixture(remote)
+        var failSecondPrice = true
+        val reader = object : ShopSyncReadRemoteDataSource by paged {
+            override suspend fun recoveryPage(context: ShopSyncRpcContext, domain: ShopSyncRowDomain,
+                afterId: String?, limit: Int): Result<ShopSyncRecoveryPage> {
+                if (failSecondPrice && domain == ShopSyncRowDomain.PRICES && afterId != null) {
+                    return Result.failure(java.io.IOException("historical interrupted prefix"))
+                }
+                return paged.recoveryPage(context, domain, afterId, limit)
+            }
+        }
+        repeat(5) { assertTrue(coordinator(recoveryRemote = reader).recover(ACCOUNT, selectedShop(), activeScope())
+            is ShopSyncRecoveryResult.RetryRequired) }
+        val legacy = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals("recovery_failed", legacy.reason)
+        assertEquals(5, legacy.attemptCount)
+        assertEquals(SyncRecoveryJournalPhases.STAGING, legacy.phase)
+        reopenOrdinaryDatabase()
+        assertEquals(legacy, db.syncRecoveryJournalDao().get())
+        failSecondPrice = false
+        return legacy to reader
+    }
+
+    private suspend fun legacyRecoveryTracker() = CatalogSyncStateTracker(
+        repository.resolveBusinessDataScope(activeScope())
+    ).also { assertTrue(it.businessDataScopeState.value.allowsLocalOperations); it.updateNetworkAvailability(true) }
+
+    private fun legacyStageRows(journal: SyncRecoveryJournal): Map<String, List<List<String>>> =
+        openDatabase(requireNotNull(journal.stagingDatabaseName)).let { stage ->
+            try { ordinaryMarkerApplicationRows(stage) } finally { stage.close() }
+        }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyLegacyPrefixRejected(mutate: suspend (AppDatabase) -> Unit) {
+        val (legacy, reader) = seedLegacyAcceptedRecoveryPrefix()
+        val stage = openDatabase(requireNotNull(legacy.stagingDatabaseName))
+        try { mutate(stage) } finally { stage.close() }
+        val activeBefore = ordinaryMarkerApplicationRows()
+        val stageBefore = legacyStageRows(legacy)
+        val calls = remote.checkpointCalls
+        withApplicationRecoveryOwner(legacyRecoveryTracker(), selectedShop(), recoveryRemote = reader,
+            recoveryNowMs = { 1_400_000L }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("legacy_recovery_invalid_prefix")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+        }
+        assertEquals("Invalid prefix never invokes checkpoint", calls, remote.checkpointCalls)
+        assertEquals(activeBefore, ordinaryMarkerApplicationRows())
+        assertEquals(stageBefore, legacyStageRows(legacy))
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.awaitLegacyRecoveryState(expected: String) {
+        for (step in 0 until 5_000) {
+            testScheduler.runCurrent()
+            if (db.syncRecoveryJournalDao().get()?.let { AutomaticRecoveryRetryMetadata.decode(it.reason)?.state } == expected) return
+            Thread.sleep(1)
+        }
+        throw AssertionError("Recovery did not reach $expected: ${db.syncRecoveryJournalDao().get()}")
+    }
+
+    @Test
     fun automaticRecoveryNeverRenewsLegacyUnknownOrMalformedMetadata() = runTest {
         val original = qualifiedAutomaticRecoveryJournal()
         val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
@@ -1980,11 +2406,18 @@ class ShopSyncRecoveryCoordinatorTest {
         debounceMs: Long = Long.MAX_VALUE,
         recoveryNowMs: () -> Long = { 1_000_000L },
         automaticRetryJitter: () -> Double = { 1.0 },
+        recoveryRemote: ShopSyncReadRemoteDataSource = remote,
+        recoveryLease: suspend (String, String) -> Boolean = { account, shop -> account == ACCOUNT && shop == SHOP },
         linkedShops: List<LinkedShop>? = null,
         beforeLinkedShopFetch: suspend () -> Unit = {},
         block: suspend (com.example.merchandisecontrolsplitview.MerchandiseControlApplication, SupabaseAuthManager, ShopContextRepository) -> Unit
     ) {
         val application = app as com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+        // Coordinator.shutdown owns its scope: each reopened application needs a live child,
+        // never the TestScope background parent that later invocations also need.
+        val ownerScope = kotlinx.coroutines.CoroutineScope(backgroundScope.coroutineContext +
+            kotlinx.coroutines.SupervisorJob(backgroundScope.coroutineContext[kotlinx.coroutines.Job]))
+        assertTrue("Application fixture owner must start alive", ownerScope.coroutineContext[kotlinx.coroutines.Job]?.isActive == true)
         val original = application.javaClass.declaredFields.filter {
             it.name.endsWith("\$delegate") || it.name == "appScope" || it.name == "automaticBusinessRecoveryNowMs"
         }
@@ -1992,7 +2425,7 @@ class ShopSyncRecoveryCoordinatorTest {
         fun install(name: String, value: Any?) {
             application.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(application, value)
         }
-        val auth = SupabaseAuthManager(client = null, googleWebClientId = "", scope = backgroundScope)
+        val auth = SupabaseAuthManager(client = null, googleWebClientId = "", scope = ownerScope)
         applicationField<MutableStateFlow<AuthState>>(auth, "_state").value = AuthState.SignedIn(ACCOUNT, "qa@example.test")
         val shops = ShopContextRepository(object : LinkedShopRemoteDataSource {
             override val isConfigured = true
@@ -2009,12 +2442,12 @@ class ShopSyncRecoveryCoordinatorTest {
         shops.refresh(ACCOUNT)
         val auto = CatalogAutoSyncCoordinator(repository, cloud, priceCloud,
             authFlow = auth.state, selectedShopProvider = { selected }, syncStateTracker = tracker,
-            scope = backgroundScope, debounceMs = debounceMs)
+            scope = ownerScope, debounceMs = debounceMs)
         val history = HistorySessionPushCoordinator(repository, SupabaseSessionBackupRemoteDataSource(null),
             authFlow = auth.state, selectedShopProvider = { selected }, flightOwner = SessionCloudSessionFlightOwner(),
-            syncStateTracker = tracker, scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+            syncStateTracker = tracker, scope = ownerScope, debounceMs = Long.MAX_VALUE)
         try {
-            install("appScope", backgroundScope)
+            install("appScope", ownerScope)
             install("automaticBusinessRecoveryNowMs", recoveryNowMs)
             install("database\$delegate", lazyOf(db)); install("repository\$delegate", lazyOf(repository))
             install("authManager\$delegate", lazyOf(auth)); install("shopContextRepository\$delegate", lazyOf(shops))
@@ -2026,7 +2459,8 @@ class ShopSyncRecoveryCoordinatorTest {
                 DeviceInstallIdProvider(db.syncEventDeviceStateDao()))))
             install("shopSyncRecoveryCoordinator\$delegate", lazyOf(coordinator(activationBoundary = {
                 tracker.withBusinessDataScopeTransition { it() }
-            }, nowMs = recoveryNowMs, automaticRetryJitter = automaticRetryJitter)))
+            }, nowMs = recoveryNowMs, automaticRetryJitter = automaticRetryJitter, recoveryRemote = recoveryRemote,
+                scopeStillValid = recoveryLease)))
             block(application, auth, shops)
         } finally {
             applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")?.let { owned ->
@@ -7110,8 +7544,8 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     /** Exact typed rows in the synthetic Room database, including manifests, queues and nullable watermark. */
-    private fun ordinaryMarkerApplicationRows(): Map<String, List<List<String>>> {
-        val sql = db.openHelper.readableDatabase
+    private fun ordinaryMarkerApplicationRows(source: AppDatabase = db): Map<String, List<List<String>>> {
+        val sql = source.openHelper.readableDatabase
         val tables = sql.query("SELECT name FROM sqlite_master WHERE type = 'table' " +
             "AND name NOT LIKE 'sqlite_%' AND name != 'room_master_table' ORDER BY name").use { cursor ->
             buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }

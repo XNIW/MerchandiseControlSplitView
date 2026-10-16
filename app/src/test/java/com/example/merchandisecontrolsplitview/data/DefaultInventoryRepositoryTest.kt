@@ -6225,10 +6225,278 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun exhaustedLegacyEventRowsNeverInventTransientRenewalFromElapsedTime() = runTest {
+    fun legacyNetworkOutboxUpgradeReopensAtCooldownBoundaryWithOriginalEnvelope() = runTest {
+        withLegacyNetworkOutbox("boundary") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 299_999L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val claimed = mutableListOf<SyncEventOutboxEntry>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                claimed += requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+                deployedV6ShopEventContract(owner, payload)
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            val products = db.productDao().getAll()
+            val baseline = db.syncRecoveryBaselineDao().get()
+            repeat(3) { drain() }
+            assertTrue("Poll cannot shorten the legacy completion cooldown", calls.isEmpty())
+            assertEquals(legacy, db.syncEventOutboxDao().getById(legacy.id))
+            now++
+            val resumed = drain()
+            assertEquals("Upgrade must resume the old typed network failure through the actual V6 drain", 1, calls.size)
+            assertEquals(originalWire, calls.single())
+            assertEquals(1, resumed.syncEventOutboxRetried)
+            val claim = claimed.single()
+            assertEquals("The historical diagnostic retry count is preserved and incremented", 6, claim.attemptCount)
+            assertEquals("Legacy diagnostic has no unproven attempts left after this send", 5,
+                SyncEventRetryMetadata.decode(requireNotNull(claim.lastErrorType))?.windowAttempts)
+            assertEquals(legacy.copy(attemptCount = claim.attemptCount, lastAttemptAtMs = claim.lastAttemptAtMs,
+                lastErrorType = claim.lastErrorType), claim)
+            assertNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals(products, db.productDao().getAll())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradePersistsNewWindowAndStopsForFreshStableFailure() = runTest {
+        withLegacyNetworkOutbox("stable-after-upgrade") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                Result.failure(SerializationException("current stable payload rejection"))
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            drain()
+            assertEquals("The admitted legacy attempt must reach the transport exactly once", listOf(originalWire), calls)
+            val blocked = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(blocked.lastErrorType)))
+            assertEquals(6, blocked.attemptCount)
+            assertEquals(5, metadata.windowAttempts)
+            assertEquals("blocked", metadata.phase)
+            assertEquals(SyncErrorCategory.PayloadValidation, metadata.category)
+            now += 86_400_000L
+            repeat(3) { drain() }
+            assertEquals(1, calls.size)
+            assertEquals(blocked, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeRejectsAmbiguousMetadataTimesAndAuthority() = runTest {
+        withLegacyNetworkOutbox("invalid") { owner, shop, tracker, catalog, legacy, _, completedAt ->
+            repository.syncEventRetryNowMs = { completedAt + 86_400_000L }
+            var calls = 0
+            val events = guardedV6Events(shop.shopId, tracker) { _, _ -> calls++; error("Invalid legacy row sent") }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            for (invalid in listOf(legacy.copy(lastErrorType = "Unknown"),
+                legacy.copy(lastErrorType = "RemoteForbiddenRls"), legacy.copy(lastErrorType = "RemoteSchemaUnexpected"),
+                legacy.copy(lastErrorType = "NetworkOfflineOrTimeout "),
+                legacy.copy(lastErrorType = "{\"v\":2}"), legacy.copy(lastErrorType = null),
+                legacy.copy(lastAttemptAtMs = null), legacy.copy(lastAttemptAtMs = -1),
+                legacy.copy(lastAttemptAtMs = legacy.createdAtMs - 1),
+                legacy.copy(lastAttemptAtMs = Long.MAX_VALUE), legacy.copy(attemptCount = 6))) {
+                db.syncEventOutboxDao().update(invalid)
+                drain()
+                assertEquals("Invalid legacy evidence remains byte-for-byte intact", invalid,
+                    db.syncEventOutboxDao().getById(legacy.id))
+            }
+            db.syncEventOutboxDao().update(legacy)
+            val foreign = runCatching { tracker.withBusinessDataScopeFlight(
+                "00000000-0000-4000-8000-000000000899", shop) { drain() } }
+            assertTrue(foreign.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            assertTrue(runCatching { drain() }.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            assertEquals(0, calls)
+            assertEquals(legacy, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeCancellationConsumesOnlyDiagnosticOpportunityAfterReopen() = runTest {
+        withLegacyNetworkOutbox("cancel") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                throw CancellationException("diagnostic response unavailable")
+            }
+            val first = runCatching { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertTrue(first.exceptionOrNull() is CancellationException)
+            assertEquals(listOf(originalWire), calls)
+            val consumed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals(6, consumed.attemptCount)
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(consumed.lastErrorType)))
+            assertEquals(SyncErrorCategory.Unknown, metadata.category)
+            assertTrue(metadata.phase in setOf("uncertain", "in_flight"))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-cancel.db").allowMainThreadQueries().build()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            now += 86_400_000L
+            repository.syncEventRetryNowMs = { now }
+            val healthy = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                deployedV6ShopEventContract(owner, payload)
+            }
+            repeat(3) { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), healthy, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertEquals("Uncertain legacy diagnostic never receives another unproven retry budget", 1, calls.size)
+            assertEquals(consumed, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeInterruptedClaimCannotRestartAfterReopen() = runTest {
+        withLegacyNetworkOutbox("interrupted") { owner, shop, tracker, catalog, legacy, _, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val entered = CompletableDeferred<Unit>()
+            val hold = CompletableDeferred<Unit>()
+            var calls = 0
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls++
+                entered.complete(Unit)
+                hold.await()
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val flight = async { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            entered.await()
+            val claimed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals("in_flight", SyncEventRetryMetadata.decode(requireNotNull(claimed.lastErrorType))?.phase)
+            flight.cancel()
+            flight.join()
+            assertEquals("Interrupted transport preserves its already consumed durable claim", claimed,
+                db.syncEventOutboxDao().getById(legacy.id))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-interrupted.db").allowMainThreadQueries().build()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            now += 86_400_000L
+            repository.syncEventRetryNowMs = { now }
+            val healthy = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls++
+                deployedV6ShopEventContract(owner, payload)
+            }
+            repeat(3) { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), healthy, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertEquals("A reopened in-flight diagnostic never gains another send", 1, calls)
+            assertEquals(claimed, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeFreshTransientRequiresNewCooldownAndServerFloor() = runTest {
+        withLegacyNetworkOutbox("fresh-transient") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            val probeAt = now
+            repository.syncEventRetryNowMs = { now }
+            repository.syncEventRetryJitter = { 1.0 }
+            val calls = mutableListOf<JsonObject>()
+            var failure = true
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                if (failure) Result.failure(q01RetryAfterException("601"))
+                else deployedV6ShopEventContract(owner, payload)
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            drain()
+            assertEquals(listOf(originalWire), calls)
+            val completed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(completed.lastErrorType)))
+            assertEquals("A fresh transient completes the single diagnostic opportunity", "cooldown", metadata.phase)
+            assertEquals(probeAt + 601_000L, metadata.nextEligibleAtMs)
+            failure = false
+            for (time in listOf(probeAt + 299_999L, probeAt + 300_000L, probeAt + 600_999L)) {
+                now = time
+                drain()
+                assertEquals("Current server floor is never shortened by cooldown or polling", 1, calls.size)
+                assertEquals(completed, db.syncEventOutboxDao().getById(legacy.id))
+            }
+            now = probeAt + 601_000L
+            drain()
+            assertEquals(listOf(originalWire, originalWire), calls)
+            assertNull(db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    private suspend fun withLegacyNetworkOutbox(
+        scenario: String,
+        block: suspend (String, SelectedShop, CatalogSyncStateTracker, FakeCatalogRemote016,
+            SyncEventOutboxEntry, JsonObject, Long) -> Unit
+    ) {
+        withQualifiedQ01CatalogOutbox("legacy-$scenario") { owner, shop, tracker, catalog ->
+            val completedAt = System.currentTimeMillis() + 10_000L
+            repository.syncEventRetryNowMs = { completedAt }
+            val calls = mutableListOf<JsonObject>()
+            val failing = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                assertTrue(deployedV6ShopEventContract(owner, payload).isSuccess)
+                Result.failure(IOException("synthetic historical network failure"))
+            }
+            repository.addProduct(Product(barcode = "legacy-$scenario", productName = "Acknowledged legacy $scenario"))
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), failing, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertEquals(1, calls.size)
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            val produced = db.syncEventOutboxDao().listPending(owner, 10).single()
+            // Pre-PR30 persisted the classifier enum plus the failure completion timestamp, not JSON.
+            db.openHelper.writableDatabase.execSQL(
+                "UPDATE sync_event_outbox SET attemptCount=5, lastAttemptAtMs=?, lastErrorType='NetworkOfflineOrTimeout' WHERE id=?",
+                arrayOf<Any>(completedAt, produced.id))
+            val legacy = requireNotNull(db.syncEventOutboxDao().getById(produced.id))
+            assertNull(SyncEventRetryMetadata.decode(requireNotNull(legacy.lastErrorType)))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-$scenario.db").allowMainThreadQueries().build()
+            assertEquals("The upgrade fixture must survive a physical Room reopen", legacy,
+                db.syncEventOutboxDao().getById(legacy.id))
+            val reopened = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val currentTracker = CatalogSyncStateTracker(reopened.resolveBusinessDataScope(task126ActiveOwnerStoreScope(owner, shop)))
+            assertEquals(Task126BusinessDataScopeStatus.READY, currentTracker.businessDataScopeState.value.status)
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = currentTracker)
+            block(owner, shop, currentTracker, catalog, legacy, calls.single(), completedAt)
+        }
+    }
+
+    @Test
+    fun exhaustedLegacyUnclassifiedAndStableEventRowsNeverInventTransientRenewalFromElapsedTime() = runTest {
         val owner = "00000000-0000-4000-8000-000000000751"
-        val categories = listOf(SyncErrorCategory.NetworkOfflineOrTimeout.name, SyncErrorCategory.Unknown.name,
-            SyncErrorCategory.PayloadValidation.name)
+        val categories = listOf(SyncErrorCategory.Unknown.name, SyncErrorCategory.PayloadValidation.name)
         categories.forEachIndexed { index, category ->
             db.syncEventOutboxDao().insert(testSyncEventOutboxEntry(ownerUserId = owner,
                 clientEventId = "task144-exhausted-legacy-$index", createdAtMs = index + 1L,
@@ -6240,7 +6508,7 @@ class DefaultInventoryRepositoryTest {
         val summary = repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
             events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
 
-        assertTrue("Raw legacy categories lack a structured window/claim proof and cannot renew", events.allRecordAttempts.isEmpty())
+        assertTrue("Unclassified or stable legacy categories cannot renew", events.allRecordAttempts.isEmpty())
         assertEquals(0, summary.syncEventOutboxRetried)
         assertEquals(before, db.syncEventOutboxDao().listPending(owner, 10))
     }
