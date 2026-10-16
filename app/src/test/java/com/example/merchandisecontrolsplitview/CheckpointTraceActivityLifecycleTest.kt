@@ -23,7 +23,7 @@ import org.robolectric.shadows.ShadowLog
 
 /** Real Activity callbacks; synthetic app configuration deliberately fails the TEST target pin. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = UnconfiguredTestApplication::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class CheckpointTraceActivityLifecycleTest {
     @get:Rule val dispatcherRule = MainDispatcherRule()
@@ -130,7 +130,7 @@ class CheckpointTraceActivityLifecycleTest {
             assertFalse(mixed.hasExtra("task143_checkpoint_readiness"))
             assertFalse(mixed.hasExtra(EXTRA))
             assertTrue(traces().isEmpty())
-            val consumed = app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }
+            val consumed = MerchandiseControlApplication::class.java.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }
             assertFalse(consumed.getBoolean(app))
             val observer = activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
                 .apply { isAccessible = true }
@@ -164,7 +164,7 @@ class CheckpointTraceActivityLifecycleTest {
             activity.pause().newIntent(ordinaryIntent().putExtra("task143_checkpoint_readiness", true)).stop()
             queued.scheduler.runCurrent()
             assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").single().msg.contains("activity_resumed=false"))
-            assertFalse(app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
+            assertFalse(MerchandiseControlApplication::class.java.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
             assertTrue(traces().isEmpty())
         } finally {
             Dispatchers.setMain(dispatcherRule.dispatcher)
@@ -203,7 +203,7 @@ class CheckpointTraceActivityLifecycleTest {
             assertTrue(ShadowLog.getLogsForTag("Task143CheckpointReadiness").isEmpty())
             assertTrue(ShadowLog.getLogsForTag("Task087Smoke").isEmpty())
             assertEquals(beforeShare, MainActivity.ShareBus.uris.replayCache)
-            assertFalse(app.javaClass.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
+            assertFalse(MerchandiseControlApplication::class.java.getDeclaredField("checkpointTraceConsumed").apply { isAccessible = true }.getBoolean(app))
             assertNull(activity.get().javaClass.getDeclaredField("pendingCheckpointTraceObserver")
                 .apply { isAccessible = true }.get(activity.get()))
         } finally { activity.pause().stop().destroy() }

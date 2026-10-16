@@ -1,6 +1,7 @@
 package com.example.merchandisecontrolsplitview.data
 
 import android.util.Log
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -117,7 +118,11 @@ enum class CatalogSyncFlightOwner {
 data class CatalogSyncOutcomeState(
     val ownerUserId: String,
     val source: CatalogSyncFlightOwner,
-    val summary: CatalogSyncSummary
+    val summary: CatalogSyncSummary,
+    /** Process-local completion evidence; a diagnostic replay has no completion time. */
+    val completedAtMs: Long? = null,
+    /** The original admitted flight, never a scope captured after the work returned. */
+    val scopeSignal: Task126BusinessDataScopeSignalToken? = null
 )
 
 interface CatalogSyncProgressRepository {
@@ -251,6 +256,9 @@ class CatalogSyncStateTracker(
 
     private val _lastOutcome = MutableStateFlow<CatalogSyncOutcomeState?>(null)
     val lastOutcome: StateFlow<CatalogSyncOutcomeState?> = _lastOutcome.asStateFlow()
+    private val _lastQualifiedOutcome = MutableStateFlow<CatalogSyncOutcomeState?>(null)
+    internal val lastQualifiedOutcome: StateFlow<CatalogSyncOutcomeState?> = _lastQualifiedOutcome.asStateFlow()
+    internal var syncOutcomeNowMs: () -> Long = System::currentTimeMillis
 
     private val _businessDataScopeState = MutableStateFlow(initialBusinessDataScopeState)
     val businessDataScopeState: StateFlow<Task126BusinessDataScopeState> =
@@ -317,6 +325,65 @@ class CatalogSyncStateTracker(
         )
     }
 
+    internal suspend fun publishCurrentFlightSummary(
+        ownerUserId: String,
+        source: CatalogSyncFlightOwner,
+        summary: CatalogSyncSummary
+    ): Boolean {
+        if (summary.syncEventsOrdinaryPending && !summary.priceSyncFailed) return false
+        val lease = currentCoroutineContext()[Task126BusinessDataScopeLeaseContext]?.lease ?: return false
+        if (lease.localOnly || ownerUserId.isBlank()) return false
+        if (!lease.unmanaged && lease.boundScope?.ownerHash != task126OwnerHash(ownerUserId)) return false
+        val signal = Task126BusinessDataScopeSignalToken(lease)
+        if (!isCurrentBusinessDataScopeSignal(signal)) return false
+        val previousOutcome = _lastOutcome.value
+        val previousQualified = _lastQualifiedOutcome.value
+        val qualified = !summary.manualFullSyncRequired &&
+            summary.syncEventsSkippedDirtyLocal == 0 && !summary.syncEventsOrdinaryPending
+        val outcome = CatalogSyncOutcomeState(
+            ownerUserId = ownerUserId,
+            source = source,
+            summary = summary,
+            completedAtMs = if (qualified) syncOutcomeNowMs().takeIf { it > 0L } else null,
+            scopeSignal = signal
+        )
+        if (!isCurrentBusinessDataScopeSignal(signal)) return false
+        if (outcome.completedAtMs != null &&
+            !_lastQualifiedOutcome.compareAndSet(previousQualified, outcome)) return false
+        if (!isCurrentBusinessDataScopeSignal(signal)) {
+            _lastQualifiedOutcome.compareAndSet(outcome, null)
+            return false
+        }
+        _lastOutcome.compareAndSet(previousOutcome, outcome)
+        if (!isCurrentBusinessDataScopeSignal(signal)) {
+            // A scope change or synchronous subscriber may have invalidated this publication.
+            // Never remove a newer outcome while retracting this one.
+            _lastOutcome.compareAndSet(outcome, null)
+            _lastQualifiedOutcome.compareAndSet(outcome, null)
+            return false
+        }
+        return true
+    }
+
+    internal fun isOutcomeCurrent(
+        outcome: CatalogSyncOutcomeState,
+        ownerUserId: String,
+        selectedShop: SelectedShop?
+    ): Boolean {
+        if (outcome.ownerUserId != ownerUserId || outcome.completedAtMs == null ||
+            _lastQualifiedOutcome.value !== outcome) return false
+        val signal = outcome.scopeSignal ?: return false
+        if (signal.lease.localOnly) return false
+        val current = _businessDataScopeState.value
+        if (!current.allowsLocalOperations) return false
+        if (signal.lease.unmanaged) return current.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
+        val scope = signal.lease.boundScope ?: return false
+        val currentScope = current.boundScope ?: return false
+        return scope.ownerHash == task126OwnerHash(ownerUserId) &&
+            scope.storeId == shopScopedStoreScope(selectedShop) &&
+            Task126OwnerStoreGate.validate(scope, currentScope) == Task126OwnerStoreGateDecision.Allowed
+    }
+
     internal suspend fun resolveAndPublishBusinessDataScope(
         stillAuthorized: () -> Boolean,
         resolve: suspend (Task126BusinessDataScopeState) -> Task126BusinessDataScopeState
@@ -326,11 +393,17 @@ class CatalogSyncStateTracker(
 
     fun updateBusinessDataScopeState(next: Task126BusinessDataScopeState) {
         val previous = _businessDataScopeState.value
+        // Scope emission can synchronously publish a new outcome; retract only the previous one.
+        val previousOutcome = _lastOutcome.value
+        val previousQualified = _lastQualifiedOutcome.value
         val scopeChanged = scopeSignature(previous) != scopeSignature(next)
         businessDataScopeFlightGate.updateState(next)
         _businessDataScopeState.value = next
         if (scopeChanged || !next.allowsCloudSync) {
-            _lastOutcome.value = null
+            _lastOutcome.compareAndSet(previousOutcome, null)
+        }
+        if (scopeChanged || !next.allowsLocalOperations) {
+            _lastQualifiedOutcome.compareAndSet(previousQualified, null)
         }
         if (previous.status != next.status) {
             Log.i("CatalogCloudSync", "business_scope status=${next.status}")

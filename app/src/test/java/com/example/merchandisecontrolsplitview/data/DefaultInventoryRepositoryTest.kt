@@ -25,9 +25,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -4953,6 +4955,10 @@ class DefaultInventoryRepositoryTest {
         assertEquals(2, pending.map { it.clientEventId }.distinct().size)
 
         syncEvents.alwaysFailRecordForDomains.clear()
+        val retryDue = pending.maxOf {
+            requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(it.lastErrorType))).nextEligibleAtMs
+        }
+        repository.syncEventRetryNowMs = { retryDue }
         val retrySummary = repository.drainSyncEventsFromRemote(
             remote = FakeCatalogRemote016(),
             priceRemote = RecordingPriceRemote016(configured = false),
@@ -5603,9 +5609,23 @@ class DefaultInventoryRepositoryTest {
         assertTrue(original.metadata.size > 1)
         val queued = db.syncEventOutboxDao().listPending(owner, 10).single()
         assertEquals(original.clientEventId, queued.clientEventId)
+        val retryMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(queued.lastErrorType)))
+        assertEquals(1, queued.attemptCount)
+        assertEquals(1, retryMetadata.windowAttempts)
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout, retryMetadata.category)
+        assertEquals("waiting", retryMetadata.phase)
+        val attemptsBefore = events.allRecordAttempts.size
+        repository.syncEventRetryNowMs = { retryMetadata.nextEligibleAtMs - 1L }
+        val beforeDue = repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+        assertEquals("An acknowledged operation still respects its persisted retry deadline", 1, beforeDue.syncEventOutboxPending)
+        assertEquals(attemptsBefore, events.allRecordAttempts.size)
+        assertEquals(queued, db.syncEventOutboxDao().getById(queued.id))
+        repository.syncEventRetryNowMs = { retryMetadata.nextEligibleAtMs }
         val second = repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
             progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
         val retry = events.allRecordAttempts.last { it.domain == SyncEventDomains.CATALOG }
+        assertEquals("The exact payload assertion must cover an actual retry", attemptsBefore + 1, events.allRecordAttempts.size)
         assertEquals("retry must preserve all parameters, including metadata, under the same key", original, retry)
         assertEquals(0, second.syncEventOutboxPending)
         assertEquals(1, events.emittedRows.count { it.clientEventId == original.clientEventId })
@@ -5639,6 +5659,13 @@ class DefaultInventoryRepositoryTest {
         assertEquals(1, first.syncEventOutboxPending)
         assertEquals(listOf(SyncEventDomains.CATALOG), syncEvents.recordedParams.map { it.domain })
 
+        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+        val retryMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(pending.lastErrorType)))
+        assertEquals(1, pending.attemptCount)
+        assertEquals(1, retryMetadata.windowAttempts)
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout, retryMetadata.category)
+        assertEquals("waiting", retryMetadata.phase)
+        repository.syncEventRetryNowMs = { retryMetadata.nextEligibleAtMs }
         val second = repository.syncCatalogQuickWithEvents(
             remote = remote,
             priceRemote = priceRemote,
@@ -5707,6 +5734,804 @@ class DefaultInventoryRepositoryTest {
         )
         assertTrue(retryable.none { it.attemptCount >= 5 })
         assertEquals(maxAttemptId, auditPending.first().id)
+    }
+
+    @Test
+    fun q01CanonicalOutboxHonorsServerRetryAfterFloorAndBlocksInvalidHeader() = runTest {
+        for ((scenario, header) in listOf("server-floor" to "601", "invalid-header" to "not-a-delay")) {
+            withQualifiedQ01CatalogOutbox(scenario) { owner, shop, tracker, catalog ->
+                val now = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+                repository.syncEventRetryNowMs = now::get
+                repository.syncEventRetryJitter = { 1.0 }
+                val failure = q01RetryAfterException(header)
+                val calls = mutableListOf<JsonObject>()
+                var reject = true
+                val events = guardedV6Events(shop.shopId, tracker) { function, payload ->
+                    assertEquals("record_sync_event_v6", function)
+                    calls += payload
+                    val accepted = deployedV6ShopEventContract(owner, payload)
+                    assertTrue("The failed request still has a canonical V6 body", accepted.isSuccess)
+                    if (reject) Result.failure(failure) else accepted
+                }
+                repository.addProduct(Product(barcode = "q01-$scenario", productName = "Acknowledged $scenario"))
+                val produced = tracker.withBusinessDataScopeFlight(owner, shop) {
+                    repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), events, owner,
+                        progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                }
+                assertEquals(1, produced.pushedProducts)
+                assertFalse("Only the notification may remain pending", db.productRemoteRefDao().hasPendingWork())
+                assertEquals(1, calls.size)
+                val queued = db.syncEventOutboxDao().listPending(owner, 10).single()
+                val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(queued.lastErrorType)))
+                assertEquals(1, queued.attemptCount)
+                assertEquals(1, metadata.windowAttempts)
+                assertEquals(SyncErrorCategory.RateLimited, metadata.category)
+                val completed = requireNotNull(metadata.lastCompletedAtMs)
+                reject = false
+                suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                    repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                        progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                }
+                if (scenario == "server-floor") {
+                    val floor = completed + 601_000L
+                    assertEquals("waiting", metadata.phase)
+                    assertFalse(metadata.retryAfterInvalid)
+                    assertEquals(floor, metadata.retryAfterAtMs)
+                    assertEquals("The server minimum must survive the local 60-second cap", floor, metadata.nextEligibleAtMs)
+                    now.set(completed + 60_000L)
+                    drain()
+                    assertEquals(1, calls.size)
+                    assertEquals(queued, db.syncEventOutboxDao().getById(queued.id))
+                    now.set(floor - 1L)
+                    drain()
+                    assertEquals("Retry-After is an inclusive minimum", 1, calls.size)
+                    assertEquals(queued, db.syncEventOutboxDao().getById(queued.id))
+                    now.set(floor)
+                    assertEquals(1, drain().syncEventOutboxRetried)
+                    assertEquals(listOf(calls.first(), calls.first()), calls)
+                    assertNull(db.syncEventOutboxDao().getById(queued.id))
+                } else {
+                    assertEquals("blocked", metadata.phase)
+                    assertTrue(metadata.retryAfterInvalid)
+                    assertNull(metadata.retryAfterAtMs)
+                    now.set(completed + 86_400_000L)
+                    drain()
+                    assertEquals("An invalid server minimum must never become a short local retry", 1, calls.size)
+                    assertEquals(queued, db.syncEventOutboxDao().getById(queued.id))
+                }
+                assertFalse(db.productRemoteRefDao().hasPendingWork())
+                assertEquals("Acknowledged $scenario", repository.findProductByBarcode("q01-$scenario")?.productName)
+            }
+        }
+    }
+
+    @Test
+    fun q01CanonicalOutboxActiveClaimCannotOverlapAcrossRepositoryInstancesAfterReplayDeadline() = runTest {
+        withQualifiedQ01CatalogOutbox("active-claim") { owner, shop, tracker, catalog ->
+            val now = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            repository.syncEventRetryNowMs = now::get
+            repository.syncEventRetryJitter = { 1.0 }
+            val calls = mutableListOf<JsonObject>()
+            val entered = CompletableDeferred<SyncEventOutboxEntry>()
+            val release = CompletableDeferred<Unit>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                val accepted = deployedV6ShopEventContract(owner, payload)
+                assertTrue(accepted.isSuccess)
+                if (calls.size == 1) Result.failure(IOException("synthetic transient before held retry"))
+                else {
+                    if (calls.size == 2) {
+                        entered.complete(requireNotNull(db.syncEventOutboxDao().getByOperationKey(owner,
+                            payload.getValue("p_client_event_id").jsonPrimitive.content)))
+                        release.await()
+                    }
+                    accepted
+                }
+            }
+            repository.addProduct(Product(barcode = "q01-active-claim", productName = "Acknowledged active claim"))
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            assertEquals(1, calls.size)
+            val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+            val waiting = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(pending.lastErrorType)))
+            now.set(waiting.nextEligibleAtMs)
+            val first = async {
+                tracker.withBusinessDataScopeFlight(owner, shop) {
+                    repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                        progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                }
+            }
+            try {
+                val claimed = entered.await()
+                val claim = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(claimed.lastErrorType)))
+                assertEquals("in_flight", claim.phase)
+                assertEquals(2, claimed.attemptCount)
+                assertEquals(2, claim.windowAttempts)
+                now.set(claim.nextEligibleAtMs)
+                val secondRepository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                    businessDataScopeRuntimeGuard = tracker).apply { syncEventRetryNowMs = now::get }
+                tracker.withBusinessDataScopeFlight(owner, shop) {
+                    secondRepository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                        progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                }
+                assertEquals("Elapsed replay time cannot steal an invocation still active in this process", 2, calls.size)
+                assertEquals(claimed, db.syncEventOutboxDao().getById(claimed.id))
+                release.complete(Unit)
+                assertEquals(1, first.await().syncEventOutboxRetried)
+                assertNull(db.syncEventOutboxDao().getById(claimed.id))
+                assertEquals(calls.first(), calls.last())
+            } finally {
+                release.complete(Unit)
+                first.cancel()
+                first.join()
+            }
+        }
+    }
+
+    @Test
+    fun q01CanonicalOutboxKeysetSkipsMoreThanOneBatchOfRealFutureAndBlockedHeads() = runTest {
+        withQualifiedQ01CatalogOutbox("keyset-heads") { owner, shop, tracker, catalog ->
+            val now = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            repository.syncEventRetryNowMs = now::get
+            repository.syncEventRetryJitter = { 1.0 }
+            var failure: Throwable? = null
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                val accepted = deployedV6ShopEventContract(owner, payload)
+                assertTrue(accepted.isSuccess)
+                failure?.let { Result.failure(it) } ?: accepted
+            }
+            suspend fun produce(index: Int, error: Throwable) {
+                now.incrementAndGet()
+                failure = error
+                repository.addProduct(Product(barcode = "q01-keyset-$index", productName = "Acknowledged keyset $index"))
+                tracker.withBusinessDataScopeFlight(owner, shop) {
+                    repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), events, owner,
+                        progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                }
+            }
+            repeat(21) { produce(it, q01RetryAfterException("3600")) }
+            repeat(21) { produce(it + 21, SerializationException("synthetic stable event payload")) }
+            produce(42, IOException("synthetic transient eligible tail"))
+            val queued = db.syncEventOutboxDao().listPending(owner, 100)
+            assertEquals("Each pending operation must come from one actual producer invocation", 43, calls.size)
+            assertEquals(43, queued.size)
+            assertTrue(queued.all { it.eventType == SyncEventTypes.CATALOG_CHANGED && it.attemptCount == 1 })
+            assertEquals(43, catalog.upsertedProducts.flatten().map { it.id }.distinct().size)
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            val heads = queued.dropLast(1)
+            assertEquals(21, heads.count {
+                SyncEventRetryMetadata.decode(requireNotNull(it.lastErrorType))?.phase == "waiting"
+            })
+            assertEquals(21, heads.count {
+                SyncEventRetryMetadata.decode(requireNotNull(it.lastErrorType))?.phase == "blocked"
+            })
+            val tail = queued.last()
+            val tailMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(tail.lastErrorType)))
+            val originalTail = calls.last()
+            val productsBefore = db.productDao().getAll()
+            val refsBefore = productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) }
+            now.set(tailMetadata.nextEligibleAtMs)
+            assertTrue(heads.take(21).all {
+                requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(it.lastErrorType))).nextEligibleAtMs > now.get()
+            })
+            failure = null
+            val drained = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertEquals("An eligible acknowledged tail cannot starve behind more than 20 future/blocked rows", 1,
+                drained.syncEventOutboxRetried)
+            assertEquals(44, calls.size)
+            assertEquals(originalTail, calls.last())
+            assertNull(db.syncEventOutboxDao().getById(tail.id))
+            assertEquals(heads, db.syncEventOutboxDao().listPending(owner, 100))
+            assertEquals(productsBefore, db.productDao().getAll())
+            assertEquals(refsBefore, productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) })
+        }
+    }
+
+    @Test
+    fun q01CanonicalOutboxCheckingAuthorityRejectsHeldAckWithoutClaimReplacement() = runTest {
+        withQualifiedQ01CatalogOutbox("checking-stale-ack") { owner, shop, tracker, catalog ->
+            val now = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+            repository.syncEventRetryNowMs = now::get
+            repository.syncEventRetryJitter = { 1.0 }
+            val entered = CompletableDeferred<SyncEventOutboxEntry>()
+            val release = CompletableDeferred<Unit>()
+            val responseReturned = CompletableDeferred<Unit>()
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                val accepted = deployedV6ShopEventContract(owner, payload)
+                assertTrue(accepted.isSuccess)
+                if (calls.size == 1) Result.failure(IOException("synthetic transient before stale ACK"))
+                else kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    entered.complete(requireNotNull(db.syncEventOutboxDao().getByOperationKey(owner,
+                        payload.getValue("p_client_event_id").jsonPrimitive.content)))
+                    release.await()
+                    responseReturned.complete(Unit)
+                    accepted
+                }
+            }
+            repository.addProduct(Product(barcode = "q01-checking-stale-ack", productName = "Acknowledged before checking"))
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+            val waiting = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(pending.lastErrorType)))
+            val productsBefore = db.productDao().getAll()
+            val refsBefore = productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) }
+            val baselineBefore = db.syncRecoveryBaselineDao().get()
+            now.set(waiting.nextEligibleAtMs)
+            val attempt = async {
+                runCatching {
+                    tracker.withBusinessDataScopeFlight(owner, shop) {
+                        repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                            progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                    }
+                }
+            }
+            try {
+                val claimed = entered.await()
+                val claim = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(claimed.lastErrorType)))
+                assertEquals("in_flight", claim.phase)
+                assertEquals(2, claimed.attemptCount)
+                tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+                assertFalse(tracker.allowsBusinessDataScope(owner, shop))
+                release.complete(Unit)
+                val result = attempt.await()
+                assertTrue("The controlled transport returned its accepted response after authority changed", responseReturned.isCompleted)
+                assertTrue(result.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                assertEquals(2, calls.size)
+                assertEquals("Stale ACK cannot delete, complete or refund the consumed current claim", claimed,
+                    db.syncEventOutboxDao().getById(claimed.id))
+                val denied = runCatching {
+                    tracker.withBusinessDataScopeFlight(owner, shop) {
+                        repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                            progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+                    }
+                }
+                assertTrue(denied.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                assertEquals("Checking authority cannot admit a replacement RPC", 2, calls.size)
+                assertEquals(claimed, db.syncEventOutboxDao().getById(claimed.id))
+                assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
+                assertEquals(productsBefore, db.productDao().getAll())
+                assertEquals(refsBefore, productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) })
+            } finally {
+                release.complete(Unit)
+                attempt.cancel()
+                attempt.join()
+            }
+        }
+    }
+
+    private suspend fun withQualifiedQ01CatalogOutbox(
+        scenario: String,
+        block: suspend (String, SelectedShop, CatalogSyncStateTracker, FakeCatalogRemote016) -> Unit
+    ) {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val databaseName = "task144-q01-negative-$scenario.db"
+        val owner = "00000000-0000-4000-8000-000000000811"
+        val shop = selectedShop("00000000-0000-4000-8000-000000000812")
+        db.close()
+        context.deleteDatabase(databaseName)
+        db = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).allowMainThreadQueries().build()
+        try {
+            shopSyncReader.checkpointFixture = activateEmptyV6EventRecoveryFixture(context, db, owner, shop)
+            val initialRepository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val qualified = initialRepository.resolveBusinessDataScope(task126ActiveOwnerStoreScope(owner, shop))
+            assertEquals(Task126BusinessDataScopeStatus.READY, qualified.status)
+            val tracker = CatalogSyncStateTracker(qualified)
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            block(owner, shop, tracker, FakeCatalogRemote016())
+        } finally {
+            db.close()
+            context.deleteDatabase(databaseName)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    private fun q01RetryAfterException(value: String): ClientRequestException {
+        val response = mockk<HttpResponse>()
+        val call = mockk<HttpClientCall>()
+        val request = mockk<HttpRequest>()
+        every { response.status } returns HttpStatusCode.TooManyRequests
+        every { response.headers } returns io.ktor.http.Headers.build { append("Retry-After", value) }
+        every { response.call } returns call
+        every { call.request } returns request
+        every { request.url } returns Url("https://example.test")
+        every { request.headers } returns io.ktor.http.Headers.Empty
+        every { request.method } returns HttpMethod.Post
+        return ClientRequestException(response, "synthetic rate limited response")
+    }
+
+    @Test
+    fun legacyTransientEventUsesOnlyItsRemainingFiveAttemptBudget() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000752"
+        val initial = testSyncEventOutboxEntry(ownerUserId = owner, clientEventId = "task144-legacy-transient-residual",
+            createdAtMs = 1_000_000L, attemptCount = 3, lastErrorType = SyncErrorCategory.NetworkOfflineOrTimeout.name)
+        val id = db.syncEventOutboxDao().insert(initial)
+        val legacy = requireNotNull(db.syncEventOutboxDao().getById(id))
+        assertNull("This is a historical raw category, not a new structured retry record",
+            SyncEventRetryMetadata.decode(requireNotNull(legacy.lastErrorType)))
+        var retryNow = requireNotNull(legacy.lastAttemptAtMs) + 60_000L
+        repository.syncEventRetryNowMs = { retryNow }
+        val events = FakeSyncEventRemote().apply { alwaysFailRecordForDomains += SyncEventDomains.CATALOG }
+        suspend fun drain() = repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+            events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+        drain()
+        assertEquals("AND-Q01: a classified under-cap legacy transient retains its two remaining attempts", 1,
+            events.allRecordAttempts.size)
+        val fourth = requireNotNull(db.syncEventOutboxDao().getById(id))
+        assertEquals("Legacy diagnostic attempts are never refunded", 4, fourth.attemptCount)
+        val fourthMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(fourth.lastErrorType)))
+        assertEquals(4, fourthMetadata.windowAttempts)
+        assertEquals("waiting", fourthMetadata.phase)
+        assertEquals(legacy.entityIdsJson, fourth.entityIdsJson)
+        assertEquals(legacy.metadataJson, fourth.metadataJson)
+        retryNow += 60_000L
+        drain()
+        assertEquals(2, events.allRecordAttempts.size)
+        val exhausted = requireNotNull(db.syncEventOutboxDao().getById(id))
+        assertEquals(5, exhausted.attemptCount)
+        val exhaustedMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(exhausted.lastErrorType)))
+        assertEquals(5, exhaustedMetadata.windowAttempts)
+        assertEquals("cooldown", exhaustedMetadata.phase)
+        assertTrue(events.allRecordAttempts.all { it == events.allRecordAttempts.first() })
+        assertEquals(legacy.clientEventId, events.allRecordAttempts.first().clientEventId)
+        retryNow += 60_000L
+        drain()
+        assertEquals("A legacy prefix cannot silently acquire five fresh attempts", 2, events.allRecordAttempts.size)
+        assertEquals(exhausted, db.syncEventOutboxDao().getById(id))
+    }
+
+    @Test
+    fun legacyShopPriceEventWithoutFrozenParentsNeverReconstructsEnvelope() = runTest {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val databaseName = "task144-legacy-price-frozen-envelope.db"
+        db.close()
+        context.deleteDatabase(databaseName)
+        db = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).allowMainThreadQueries().build()
+        repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+        try {
+            val owner = "00000000-0000-4000-8000-000000000753"
+            val shop = selectedShop("00000000-0000-4000-8000-000000000754")
+            val scope = task126ActiveOwnerStoreScope(owner, shop)
+            shopSyncReader.checkpointFixture = activateEmptyV6EventRecoveryFixture(context, db, owner, shop)
+            val qualified = repository.resolveBusinessDataScope(scope)
+            assertEquals(Task126BusinessDataScopeStatus.READY, qualified.status)
+            val tracker = CatalogSyncStateTracker(qualified)
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            repository.addProduct(Product(barcode = "task144-legacy-price-envelope", productName = "Acknowledged legacy parent",
+                purchasePrice = 4.0, retailPrice = 6.0))
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { function, payload ->
+                assertEquals("record_sync_event_v6", function)
+                calls += payload
+                deployedV6ShopEventContract(owner, payload)
+            }
+            assertTrue("The fixture must exercise the actual guarded canonical V6 boundary", events.usesCanonicalShopV6Boundary)
+            val catalog = FakeCatalogRemote016()
+            val prices = RecordingPriceRemote016()
+            val pushed = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertEquals("The parent and both price writes must really be acknowledged first", 2, pushed.pushedProductPrices)
+            assertEquals(0, db.syncEventOutboxDao().countAll())
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(scope).status)
+            val acknowledged = prices.upsertBatches.flatten()
+            assertEquals(2, acknowledged.size)
+            val frozenMissingParents = SyncEventEntityIds(priceIds = acknowledged.map { it.id }.distinct().sorted())
+            assertTrue(frozenMissingParents.productIds.isEmpty())
+            val batch = "00000000-0000-4000-8000-000000000755"
+            val fingerprint = listOf("", "", "", frozenMissingParents.priceIds.joinToString(","), "")
+                .joinToString("|").hashCode().toUInt().toString(16)
+            val clientEventId = "android-$batch-prices-prices_changed-0-$fingerprint"
+            val legacyMetadata = kotlinx.serialization.json.buildJsonObject {
+                put("task", kotlinx.serialization.json.JsonPrimitive("045"))
+                put("source", kotlinx.serialization.json.JsonPrimitive("android_repository"))
+                put("chunk_index", kotlinx.serialization.json.JsonPrimitive(0))
+                put("chunk_count", kotlinx.serialization.json.JsonPrimitive(1))
+                put("entity_ids_compacted", kotlinx.serialization.json.JsonPrimitive(false))
+            }
+            // Explicit historical Room shape: no structured retry metadata and no product parents in the persisted body.
+            val legacyId = db.syncEventOutboxDao().insert(SyncEventOutboxEntry(ownerUserId = owner,
+                storeScope = scope.storeId, domain = SyncEventDomains.PRICES, eventType = SyncEventTypes.PRICES_CHANGED,
+                source = "android", sourceDeviceId = requireNotNull(db.syncEventDeviceStateDao().get()).deviceId,
+                batchId = batch, clientEventId = clientEventId, changedCount = frozenMissingParents.priceIds.size,
+                entityIdsJson = Json.encodeToString(frozenMissingParents), metadataJson = legacyMetadata.toString(),
+                createdAtMs = 1_000_000L))
+            val legacy = requireNotNull(db.syncEventOutboxDao().getById(legacyId))
+            assertNull(legacy.lastErrorType)
+            assertEquals(0, legacy.attemptCount)
+            assertEquals(frozenMissingParents, Json.decodeFromString<SyncEventEntityIds>(legacy.entityIdsJson))
+            val productsBefore = db.productDao().getAll()
+            val refsBefore = productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) }
+            val before = calls.size
+            repository.syncEventRetryNowMs = { 1_060_000L }
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(configured = false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            val reconstructed = calls.drop(before).filter { it["p_client_event_id"]?.jsonPrimitive?.content == clientEventId }
+
+            assertEquals("AND-Q01: current parent bridges cannot qualify a legacy operation whose original envelope omitted them", 0,
+                reconstructed.size)
+            val retained = requireNotNull(db.syncEventOutboxDao().getById(legacyId))
+            assertEquals(legacy.clientEventId, retained.clientEventId)
+            assertEquals(legacy.batchId, retained.batchId)
+            assertEquals(legacy.sourceDeviceId, retained.sourceDeviceId)
+            assertEquals(legacy.entityIdsJson, retained.entityIdsJson)
+            assertEquals(legacy.metadataJson, retained.metadataJson)
+            assertEquals("An unqualified legacy envelope never consumes a transport attempt", 0, retained.attemptCount)
+            assertEquals(productsBefore, db.productDao().getAll())
+            assertEquals(refsBefore, productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) })
+        } finally {
+            db.close()
+            context.deleteDatabase(databaseName)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    @Test
+    fun historyStablePayloadEventStopsAfterOneAttemptAndPreservesAcknowledgedSession() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000750"
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("task144-history-stable-event.xlsx"))
+        val remoteId = requireNotNull(repository.getOrCreateRemoteId(uid))
+        val sessions = FakeSessionBackupRemote023()
+        val attempts = mutableListOf<SyncEventRecordRpcParams>()
+        val events = object : SyncEventRemoteDataSource by FakeSyncEventRemote() {
+            override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+                attempts += params
+                return Result.failure(SerializationException("fixture stable event payload"))
+            }
+        }
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository, remote = sessions, syncEventRemote = events,
+            syncEventOutboxDao = db.syncEventOutboxDao(),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedIn(owner, "fixture@example.test")),
+            flightOwner = SessionCloudSessionFlightOwner(), scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+        try {
+            coordinator.runPushCycle("debounce_fired")
+            assertEquals("The session upload must be real and acknowledged before its event fails", remoteId,
+                sessions.upsertedChunks.flatten().single().remoteId)
+            assertEquals("Stable payload failures must not spend History's transient retry budget", 1, attempts.size)
+            assertTrue(repository.getPendingHistorySessionPushUids().isEmpty())
+            val original = attempts.single()
+            val retained = db.syncEventOutboxDao().listPending(owner, 10).single()
+            assertEquals(original.clientEventId, retained.clientEventId)
+            assertEquals(original.entityIds, Json.decodeFromString<SyncEventEntityIds>(retained.entityIdsJson))
+            assertEquals(original.metadata, Json.decodeFromString<JsonObject>(retained.metadataJson))
+            val retryNow = maxOf(System.currentTimeMillis(), retained.lastAttemptAtMs ?: 0L) + 86_400_000L
+            repository.syncEventRetryNowMs = { retryNow }
+            repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+                events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+            assertEquals("Time alone never renews a stable notification failure", 1, attempts.size)
+            assertEquals(retained, db.syncEventOutboxDao().getById(retained.id))
+            assertNotNull(repository.getHistoryEntryByUid(uid))
+        } finally { coordinator.shutdown() }
+    }
+
+    @Test
+    fun exhaustedLegacyEventRowsNeverInventTransientRenewalFromElapsedTime() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000751"
+        val categories = listOf(SyncErrorCategory.NetworkOfflineOrTimeout.name, SyncErrorCategory.Unknown.name,
+            SyncErrorCategory.PayloadValidation.name)
+        categories.forEachIndexed { index, category ->
+            db.syncEventOutboxDao().insert(testSyncEventOutboxEntry(ownerUserId = owner,
+                clientEventId = "task144-exhausted-legacy-$index", createdAtMs = index + 1L,
+                attemptCount = 5, lastErrorType = category))
+        }
+        val before = db.syncEventOutboxDao().listPending(owner, 10)
+        repository.syncEventRetryNowMs = { 86_400_000L }
+        val events = FakeSyncEventRemote()
+        val summary = repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+            events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+        assertTrue("Raw legacy categories lack a structured window/claim proof and cannot renew", events.allRecordAttempts.isEmpty())
+        assertEquals(0, summary.syncEventOutboxRetried)
+        assertEquals(before, db.syncEventOutboxDao().listPending(owner, 10))
+    }
+
+    @Test
+    fun catalogProducerInitialSendCountsTowardFiveAttemptWindow() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000746"
+        val catalog = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016(configured = false)
+        val events = FakeSyncEventRemote().apply { alwaysFailRecordForDomains += SyncEventDomains.CATALOG }
+        var retryNow = System.currentTimeMillis()
+        repository.syncEventRetryNowMs = { retryNow }
+        repository.addProduct(Product(barcode = "task144-catalog-window", productName = "Catalog window"))
+
+        val produced = repository.syncCatalogQuickWithEvents(catalog, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+        assertEquals("The actual Catalog producer must send the initial event", 1, events.allRecordAttempts.size)
+        assertEquals(1, produced.syncEventOutboxPending)
+        val first = events.allRecordAttempts.single()
+        val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(SyncEventTypes.CATALOG_CHANGED, pending.eventType)
+        assertEquals(first.clientEventId, pending.clientEventId)
+        assertFalse(db.productRemoteRefDao().hasPendingWork())
+        retryNow = requireNotNull(pending.lastAttemptAtMs)
+        repeat(4) { retry ->
+            retryNow += 60_000L
+            repository.drainSyncEventsFromRemote(catalog, prices, events, owner,
+                progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+            assertEquals("Initial Catalog send plus each real retry counts toward the same five attempts",
+                retry + 2, events.allRecordAttempts.size)
+        }
+        val exhausted = requireNotNull(db.syncEventOutboxDao().getById(pending.id))
+        assertTrue(events.allRecordAttempts.all { it == first })
+        retryNow += 60_000L // Still four minutes before a new window may begin.
+        repository.drainSyncEventsFromRemote(catalog, prices, events, owner,
+            progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+        assertEquals("AND-Q01: the initial Catalog RPC must not grant a sixth send inside the first window",
+            5, events.allRecordAttempts.size)
+        assertEquals("The exhausted intent is retained without a hidden extra attempt", exhausted,
+            db.syncEventOutboxDao().getById(pending.id))
+    }
+
+    @Test
+    fun historyProducerInitialSendsCountTowardSameFiveAttemptWindow() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000747"
+        val uid = repository.insertHistoryEntry(buildMinimalHistoryEntry("task144-history-window.xlsx"))
+        val remoteId = requireNotNull(repository.getOrCreateRemoteId(uid))
+        assertTrue("The actual repository must admit the unsent History session", uid in repository.getPendingHistorySessionPushUids())
+        val sessions = FakeSessionBackupRemote023()
+        val events = FakeSyncEventRemote().apply { alwaysFailRecordForDomains += SyncEventDomains.HISTORY }
+        val coordinator = HistorySessionPushCoordinator(
+            repository = repository, remote = sessions, syncEventRemote = events,
+            syncEventOutboxDao = db.syncEventOutboxDao(),
+            authFlow = MutableStateFlow<AuthState>(AuthState.SignedIn(owner, "fixture@example.test")),
+            flightOwner = SessionCloudSessionFlightOwner(), scope = backgroundScope, debounceMs = Long.MAX_VALUE)
+        try {
+            coordinator.runPushCycle("debounce_fired")
+            assertEquals("The real History upload precedes notification retries", remoteId,
+                sessions.upsertedChunks.flatten().single().remoteId)
+            assertEquals("All three initial producer RPCs must be traversed", 3, events.allRecordAttempts.size)
+            val first = events.allRecordAttempts.first()
+            assertEquals(SyncEventDomains.HISTORY, first.domain)
+            assertEquals(listOf(remoteId), requireNotNull(first.entityIds).sessionIds)
+            val pending = db.syncEventOutboxDao().listPending(owner, 10).single()
+            assertEquals(SyncEventTypes.HISTORY_CHANGED, pending.eventType)
+            assertEquals(first.clientEventId, pending.clientEventId)
+            assertTrue("The underlying session is acknowledged; only its event is pending",
+                repository.getPendingHistorySessionPushUids().isEmpty())
+            var retryNow = requireNotNull(pending.lastAttemptAtMs)
+            repository.syncEventRetryNowMs = { retryNow }
+            repeat(2) { retry ->
+                retryNow += 60_000L
+                repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+                    events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+                assertEquals("Initial History sends and outbox sends share a five-attempt window",
+                    retry + 4, events.allRecordAttempts.size)
+            }
+            val exhausted = requireNotNull(db.syncEventOutboxDao().getById(pending.id))
+            assertTrue(events.allRecordAttempts.all { it == first })
+            retryNow += 60_000L
+            repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
+                events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+            assertEquals("AND-Q01: History's three initial RPCs must not be forgotten when the queue drains",
+                5, events.allRecordAttempts.size)
+            assertEquals(exhausted, db.syncEventOutboxDao().getById(pending.id))
+        } finally { coordinator.shutdown() }
+    }
+
+    @Test
+    fun catalogEventCancellationKeepsDurableIntentBeforeRpcAndExactReplayAfterReopen() = runTest {
+        verifyCatalogEventIntentBeforeRpcAndReplayAfterReopen(cancelAfterCommit = true)
+    }
+
+    @Test
+    fun catalogEventUnknownAckKeepsDurableIntentBeforeRpcAndExactReplayAfterReopen() = runTest {
+        verifyCatalogEventIntentBeforeRpcAndReplayAfterReopen(cancelAfterCommit = false)
+    }
+
+    private suspend fun verifyCatalogEventIntentBeforeRpcAndReplayAfterReopen(cancelAfterCommit: Boolean) {
+        val scenario = if (cancelAfterCommit) "cancel" else "unknown-ack"
+        val context: Context = RuntimeEnvironment.getApplication()
+        val databaseName = "task144-catalog-event-$scenario.db"
+        val owner = "00000000-0000-4000-8000-000000000748"
+        db.close()
+        context.deleteDatabase(databaseName)
+        fun open() = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).allowMainThreadQueries().build()
+        db = open()
+        try {
+            var retryNow = System.currentTimeMillis()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.syncEventRetryNowMs = { retryNow }
+            repository.addProduct(Product(barcode = "task144-event-$scenario", productName = "Durable $scenario"))
+            val catalog = FakeCatalogRemote016()
+            val prices = RecordingPriceRemote016(configured = false)
+            val server = FakeSyncEventRemote()
+            var durableAtTransport: SyncEventOutboxEntry? = null
+            var committed: SyncEventRecordRpcParams? = null
+            val lostReply = object : SyncEventRemoteDataSource by server {
+                override suspend fun recordSyncEvent(params: SyncEventRecordRpcParams): Result<SyncEventRemoteRow> {
+                    durableAtTransport = db.syncEventOutboxDao().getByOperationKey(owner, requireNotNull(params.clientEventId))
+                    val accepted = server.recordSyncEvent(params).getOrThrow()
+                    committed = params
+                    check(accepted.clientEventId == params.clientEventId)
+                    return Result.failure(if (cancelAfterCommit) CancellationException("fixture cancelled after event commit")
+                        else IOException("fixture lost event ACK after commit"))
+                }
+            }
+            val produced = runCatching {
+                repository.syncCatalogQuickWithEvents(catalog, prices, lostReply, owner,
+                    progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+            }
+            val original = requireNotNull(committed)
+            assertEquals("The real producer must reach and commit exactly one Catalog event", 1, server.allRecordAttempts.size)
+            assertEquals(1, server.emittedRows.count { it.clientEventId == original.clientEventId })
+            assertEquals("Only the response is lost; local product ACK must already be durable", false,
+                db.productRemoteRefDao().hasPendingWork())
+            if (cancelAfterCommit) assertTrue(produced.exceptionOrNull() is CancellationException)
+            else assertTrue(produced.isSuccess)
+            assertNotNull("AND-Q01: the Catalog event intent must be durable before the first RPC, including cancellation",
+                durableAtTransport)
+            val beforeRpc = requireNotNull(durableAtTransport)
+            assertEquals(original.clientEventId, beforeRpc.clientEventId)
+            assertEquals(original.batchId, beforeRpc.batchId)
+            assertEquals(original.sourceDeviceId, beforeRpc.sourceDeviceId)
+            assertEquals(original.entityIds, Json.decodeFromString<SyncEventEntityIds>(beforeRpc.entityIdsJson))
+            assertEquals(original.metadata, Json.decodeFromString<JsonObject>(beforeRpc.metadataJson))
+            val queued = requireNotNull(db.syncEventOutboxDao().getByOperationKey(owner, requireNotNull(original.clientEventId)))
+            db.close()
+            db = open()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.syncEventRetryNowMs = { retryNow }
+            assertEquals("Restart preserves the original event intent and retry evidence", queued,
+                db.syncEventOutboxDao().getById(queued.id))
+            retryNow = maxOf(retryNow, queued.lastAttemptAtMs ?: retryNow) + 300_000L
+            val replay = repository.drainSyncEventsFromRemote(catalog, prices, server, owner,
+                progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+            assertEquals("Restart must retry the exact original committed operation", listOf(original, original), server.allRecordAttempts)
+            assertEquals("Unknown ACK replay cannot duplicate the server event", 1,
+                server.emittedRows.count { it.clientEventId == original.clientEventId })
+            assertEquals(1, replay.syncEventOutboxRetried)
+            assertNull(db.syncEventOutboxDao().getById(queued.id))
+            assertEquals("Durable $scenario", repository.findProductByBarcode("task144-event-$scenario")?.productName)
+        } finally {
+            if (db.isOpen) db.close()
+            context.deleteDatabase(databaseName)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    @Test
+    fun malformedCatalogEventHeadDoesNotBlockSeparatelyAcknowledgedCatalogEvent() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000749"
+        val catalog = FakeCatalogRemote016()
+        val prices = RecordingPriceRemote016(configured = false)
+        val events = FakeSyncEventRemote().apply { alwaysFailRecordForDomains += SyncEventDomains.CATALOG }
+        val report = CatalogSyncProgressReporter { }
+        repository.addProduct(Product(barcode = "task144-malformed-head", productName = "Acknowledged first"))
+        repository.syncCatalogQuickWithEvents(catalog, prices, events, owner, progressReporter = report).getOrThrow()
+        repository.addProduct(Product(barcode = "task144-independent-event", productName = "Acknowledged second"))
+        repository.syncCatalogQuickWithEvents(catalog, prices, events, owner, progressReporter = report).getOrThrow()
+        val pending = db.syncEventOutboxDao().listPending(owner, 10)
+        assertEquals(2, pending.size)
+        assertTrue("Only ordinary notification events are under test", pending.all { it.eventType == SyncEventTypes.CATALOG_CHANGED })
+        val firstIds = Json.decodeFromString<SyncEventEntityIds>(pending[0].entityIdsJson)
+        val secondIds = Json.decodeFromString<SyncEventEntityIds>(pending[1].entityIdsJson)
+        assertTrue(firstIds.productIds.toSet().intersect(secondIds.productIds.toSet()).isEmpty())
+        assertEquals("Both unrelated product writes were actually acknowledged before their notifications", 2,
+            catalog.upsertedProducts.flatten().map { it.id }.distinct().size)
+        assertFalse(db.productRemoteRefDao().hasPendingWork())
+        val productsBefore = db.productDao().getAll()
+        val refsBefore = productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) }
+        val corrupted = pending.first().copy(entityIdsJson = "{not-valid-json")
+        db.syncEventOutboxDao().update(corrupted) // Synthetic corruption of one event, never of a business-write receipt.
+        events.alwaysFailRecordForDomains.clear()
+        val retryNow = maxOf(System.currentTimeMillis(), pending.mapNotNull { it.lastAttemptAtMs }.maxOrNull() ?: 0L) + 60_000L
+        repository.syncEventRetryNowMs = { retryNow } // Both ordinary notification retries are due before decode isolation is tested.
+        val attemptsBefore = events.allRecordAttempts.size
+        val result = repository.drainSyncEventsFromRemote(catalog, prices, events, owner, progressReporter = report)
+
+        assertTrue("AND-Q02: malformed event IDs must be isolated without aborting an unrelated acknowledged event", result.isSuccess)
+        assertEquals(attemptsBefore + 1, events.allRecordAttempts.size)
+        assertEquals(pending[1].clientEventId, events.allRecordAttempts.last().clientEventId)
+        assertNull(db.syncEventOutboxDao().getById(pending[1].id))
+        val retained = requireNotNull(db.syncEventOutboxDao().getById(corrupted.id))
+        assertEquals(corrupted.entityIdsJson, retained.entityIdsJson)
+        assertEquals(corrupted.metadataJson, retained.metadataJson)
+        assertEquals(corrupted.clientEventId, retained.clientEventId)
+        assertEquals(productsBefore, db.productDao().getAll())
+        assertEquals(refsBefore, productsBefore.map { requireNotNull(db.productRemoteRefDao().getByProductId(it.id)) })
+    }
+
+    @Test
+    fun transientOutboxResumesAfterExhaustedWindowAndReopenWithOriginalEnvelope() = runTest {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val databaseName = "task144-transient-outbox-window.db"
+        val owner = "00000000-0000-4000-8000-000000000744"
+        var retryNow = 1_000_000L
+        db.close()
+        context.deleteDatabase(databaseName)
+        db = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).allowMainThreadQueries().build()
+        try {
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.syncEventRetryNowMs = { retryNow }
+            val clockBefore = repository.syncEventRetryNowMs()
+            retryNow += 1L
+            assertEquals("Fixture must control the clock used by production retry completion", clockBefore + 1L,
+                repository.syncEventRetryNowMs())
+            val id = db.syncEventOutboxDao().insert(testSyncEventOutboxEntry(
+                ownerUserId = owner, clientEventId = "task144-original-operation", createdAtMs = retryNow,
+                attemptCount = 0))
+            val original = requireNotNull(db.syncEventOutboxDao().getById(id))
+            val transport = FakeSyncEventRemote().apply { alwaysFailRecordForDomains += SyncEventDomains.CATALOG }
+            suspend fun drain() = repository.drainSyncEventsFromRemote(
+                remote = FakeCatalogRemote016(), priceRemote = RecordingPriceRemote016(configured = false),
+                syncEventRemote = transport, ownerUserId = owner,
+                progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
+
+            repeat(5) { attempt ->
+                if (attempt > 0) retryNow += 60_000L
+                drain()
+                assertEquals("Every counted attempt must cross the real queue and transport", attempt + 1,
+                    transport.allRecordAttempts.size)
+                assertEquals("Every real failure must persist the controlled completion time", retryNow,
+                    db.syncEventOutboxDao().getById(id)?.lastAttemptAtMs)
+            }
+            val exhausted = requireNotNull(db.syncEventOutboxDao().getById(id))
+            assertEquals(5, exhausted.attemptCount)
+            assertEquals(retryNow, exhausted.lastAttemptAtMs)
+            assertEquals(original.clientEventId, exhausted.clientEventId)
+            assertEquals(original.entityIdsJson, exhausted.entityIdsJson)
+            assertEquals(original.metadataJson, exhausted.metadataJson)
+            val stableId = db.syncEventOutboxDao().insert(testSyncEventOutboxEntry(
+                ownerUserId = owner, clientEventId = "task144-stable-operation", createdAtMs = retryNow,
+                attemptCount = 5, lastErrorType = SyncErrorCategory.PayloadValidation.name))
+            val stable = requireNotNull(db.syncEventOutboxDao().getById(stableId))
+            val foreignId = db.syncEventOutboxDao().insert(original.copy(id = 0,
+                clientEventId = "task144-other-scope", storeScope = "shop:00000000-0000-4000-8000-000000000745"))
+            val foreign = requireNotNull(db.syncEventOutboxDao().getById(foreignId))
+            val persisted = db.syncEventOutboxDao().listPending(owner, 10)
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java, databaseName).allowMainThreadQueries().build()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.syncEventRetryNowMs = { retryNow }
+            assertEquals("Restart preserves the exhausted queue and retry evidence", persisted,
+                db.syncEventOutboxDao().listPending(owner, 10))
+            transport.alwaysFailRecordForDomains.clear()
+
+            retryNow += 299_999L
+            drain()
+            assertEquals("No new window before five minutes from the fifth completion", 5, transport.allRecordAttempts.size)
+            assertEquals(exhausted, db.syncEventOutboxDao().getById(id))
+            retryNow += 1L
+            val resumed = drain() // Ordinary admission, without a manual retry/reset or a changed operation.
+
+            assertEquals("AND-Q01: a healthy ordinary drain must resume the due transient window after restart",
+                6, transport.allRecordAttempts.size)
+            assertTrue("Every retry must use the exact original RPC envelope",
+                transport.allRecordAttempts.all { it == transport.allRecordAttempts.first() })
+            assertEquals(1, resumed.syncEventOutboxRetried)
+            assertNull(db.syncEventOutboxDao().getById(id))
+            assertEquals("Stable failures never renew because time passed", stable, db.syncEventOutboxDao().getById(stableId))
+            assertEquals("Other scopes are never sent or dropped", foreign, db.syncEventOutboxDao().getById(foreignId))
+            assertEquals(2, db.syncEventOutboxDao().countAll())
+        } finally {
+            db.close()
+            context.deleteDatabase(databaseName)
+            db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
     }
 
     @Test
@@ -5790,7 +6615,12 @@ class DefaultInventoryRepositoryTest {
         assertEquals(0, summary.syncEventOutboxRetried)
         assertEquals(1, summary.syncEventOutboxPending)
         assertEquals(1, pending.attemptCount)
-        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout.name, pending.lastErrorType)
+        val retryMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(pending.lastErrorType)))
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout, retryMetadata.category)
+        assertEquals("waiting", retryMetadata.phase)
+        assertEquals(1, retryMetadata.windowAttempts)
+        assertEquals(pending.lastAttemptAtMs, retryMetadata.lastCompletedAtMs)
+        assertTrue(retryMetadata.nextEligibleAtMs > requireNotNull(retryMetadata.lastCompletedAtMs))
         assertTrue(syncEvents.recordedParams.isEmpty())
     }
 
@@ -5891,11 +6721,19 @@ class DefaultInventoryRepositoryTest {
                 progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
             val queued = db.syncEventOutboxDao().listPending(owner, 10)
             assertEquals(2, queued.size)
-            assertTrue(queued.all { it.storeScope == "shop:$shop" && it.attemptCount == 0 })
+            assertTrue(queued.all { it.storeScope == "shop:$shop" && it.attemptCount == 1 })
+            val retryMetadata = queued.map {
+                requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(it.lastErrorType)))
+            }
+            assertTrue(retryMetadata.all {
+                it.category == SyncErrorCategory.NetworkOfflineOrTimeout && it.phase == "waiting" && it.windowAttempts == 1
+            })
+            val retryDue = retryMetadata.maxOf { it.nextEligibleAtMs }
             db.close()
             db = Room.databaseBuilder(context, AppDatabase::class.java, name).allowMainThreadQueries().build()
             assertEquals(queued, db.syncEventOutboxDao().listPending(owner, 10))
             repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            repository.syncEventRetryNowMs = { retryDue }
             val retryCalls = mutableListOf<JsonObject>()
             val events = SupabaseSyncEventRemoteDataSource { function, payload ->
                 assertEquals("record_sync_event_v6", function)
@@ -6438,18 +7276,47 @@ class DefaultInventoryRepositoryTest {
             val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(scope))
             repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader, businessDataScopeRuntimeGuard = tracker)
             repeat(products) { repository.addProduct(Product(barcode = "v6-exhausted-$it", productName = "V6 Exhausted", purchasePrice = 4.0, retailPrice = 6.0)) }
-            val failed = guardedV6Events(shop, tracker) { _, _ -> Result.failure(v6BadRequest()) }
+            val producerCalls = mutableListOf<JsonObject>()
+            val failed = guardedV6Events(shop, tracker) { _, payload ->
+                producerCalls += payload
+                Result.failure(v6BadRequest())
+            }
             tracker.withBusinessDataScopeFlight(owner, selectedShop(shop)) {
                 repository.syncCatalogQuickWithEvents(FakeCatalogRemote016(), RecordingPriceRemote016(), failed, owner,
                     progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow()
-                assertTrue(db.syncEventOutboxDao().listPending(owner, 10).all { it.lastErrorType == "PayloadValidationV6ShopScope" })
-                repeat(5) { repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(false), failed, owner,
-                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = selectedShop(shop)).getOrThrow() }
             }
+            val produced = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, produced.size)
+            assertEquals(produced.map { it.clientEventId }, producerCalls.map { it.getValue("p_client_event_id").jsonPrimitive.content })
+            assertTrue(produced.all { row ->
+                val retry = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(row.lastErrorType)))
+                row.attemptCount == 1 && retry.category == SyncErrorCategory.PayloadValidation &&
+                    retry.phase == "blocked" && retry.windowAttempts == 1
+            })
+            assertFalse("Catalog bodies must really be acknowledged before constructing historical event rows", db.productRemoteRefDao().hasPendingWork())
+            // A historical exhausted row is a persisted fixture, not five retries of a newly stable failure.
+            // Old PRICES envelopes froze only primary price IDs; their original key has that fingerprint.
+            // The exceptional legacy correction may recover parents from the real current ACK evidence.
+            val historicalJson = Json { encodeDefaults = true }
+            val historical = produced.map { row ->
+                val producedIds = Json.decodeFromString<SyncEventEntityIds>(row.entityIdsJson)
+                val originalIds = if (row.domain == SyncEventDomains.PRICES) producedIds.copy(productIds = emptyList()) else producedIds
+                val fingerprint = listOf(originalIds.supplierIds.sorted().joinToString(","),
+                    originalIds.categoryIds.sorted().joinToString(","), originalIds.productIds.sorted().joinToString(","),
+                    originalIds.priceIds.sorted().joinToString(","), originalIds.sessionIds.sorted().joinToString(","))
+                    .joinToString("|").hashCode().toUInt().toString(16)
+                val chunkIndex = Json.parseToJsonElement(row.metadataJson).jsonObject.getValue("chunk_index").jsonPrimitive.int
+                assertEquals("The fixture must retain the key of the original historical body",
+                    "android-${row.batchId}-${row.domain}-${row.eventType}-$chunkIndex-$fingerprint", row.clientEventId)
+                row.copy(attemptCount = 5, lastErrorType = "PayloadValidationV6ShopScope",
+                    entityIdsJson = historicalJson.encodeToString(originalIds))
+            }
+            historical.forEach { db.syncEventOutboxDao().update(it) }
             val current = db.syncEventOutboxDao().listPending(owner, 10)
             assertEquals(SyncErrorCategory.PayloadValidation, SyncErrorClassifier.classify(v6BadRequest()).category)
             assertEquals(2, current.size)
             assertTrue(current.all { it.attemptCount == 5 && it.lastErrorType == "PayloadValidationV6ShopScope" })
+            assertEquals(historical, current)
             // Historical Room format: retain every operation/body field; only the old error tag differs.
             if (legacyFormat) current.forEach { db.syncEventOutboxDao().update(it.copy(lastErrorType = SyncErrorCategory.PayloadValidation.name)) }
             val queued = db.syncEventOutboxDao().listPending(owner, 10)
@@ -6564,13 +7431,18 @@ class DefaultInventoryRepositoryTest {
 
         val logs = ShadowLog.getLogsForTag("CatalogCloudSync").map { it.msg }
         assertEquals(1, summary.syncEventOutboxPending)
+        val queued = db.syncEventOutboxDao().listPending(owner, 10).single()
+        val retryMetadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(queued.lastErrorType)))
+        assertEquals(1, queued.attemptCount)
+        assertEquals(1, retryMetadata.windowAttempts)
+        assertEquals(SyncErrorCategory.NetworkOfflineOrTimeout, retryMetadata.category)
+        assertEquals("waiting", retryMetadata.phase)
         assertTrue(
             logs.any {
                 it.contains("sync_event_outbox_enqueue") &&
                     it.contains("outboxInserted=1") &&
                     it.contains("eventType=catalog_changed") &&
-                    it.contains("lastErrorType=NetworkOfflineOrTimeout") &&
-                    it.contains("attemptCount=0") &&
+                    it.contains("attempted=1") &&
                     it.contains("clientEventIdHash=")
             }
         )
@@ -9154,6 +10026,7 @@ private fun v6BadRequest(): ClientRequestException {
     val call = mockk<HttpClientCall>()
     val request = mockk<HttpRequest>()
     every { response.status } returns HttpStatusCode.BadRequest
+    every { response.headers } returns io.ktor.http.Headers.Empty
     every { response.call } returns call
     every { call.request } returns request
     every { request.url } returns Url("https://example.test")

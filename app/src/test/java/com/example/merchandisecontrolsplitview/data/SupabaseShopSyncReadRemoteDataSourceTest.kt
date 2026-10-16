@@ -12,6 +12,8 @@ import io.github.jan.supabase.logging.LogLevel
 import io.github.jan.supabase.postgrest.Postgrest
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.http.ContentType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -52,12 +54,137 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
     private val WIRE_PRIVATE_MARKER = "synthetic-wire-private-response"
 
     @Test
+    fun actualCheckpointInvokerRetains429CategoryAndRetryAfterWithoutNetwork() = runBlocking {
+        verifyActualCheckpointHttpFailure(429, SyncErrorCategory.RateLimited)
+    }
+
+    @Test
+    fun actualCheckpointInvokerRetains503CategoryAndRetryAfterWithoutNetwork() = runBlocking {
+        verifyActualCheckpointHttpFailure(503, SyncErrorCategory.RemoteTransient)
+    }
+
+    @Test
+    fun normalCheckpointPhysical503ReplayCannotHideInsideOneLogicalInvocation() = runBlocking {
+        val logicalInvocations = 1
+        val actual = checkpointWireRun(WireReply.HTTP_503, diagnostic = false)
+        assertTrue(actual.failed)
+        assertTrue(actual.requests.all { it.checkpointPost })
+        assertEquals("One logical checkpoint invocation must not hide extra physical requests after HTTP503 Retry-After0",
+            logicalInvocations, actual.requests.size)
+        assertEquals("The original HTTP503 must survive without becoming a blocked second body read or Unknown",
+            "shop_sync_rpc_http_503", actual.code)
+    }
+
+    @Test
+    fun canonicalEventRecord503ReplayCannotHidePhysicalPostsInsideOneApplicationInvocation() = runBlocking {
+        // The real event writer logs failures; isolate only Android's unavailable JVM logging stub.
+        io.mockk.mockkStatic(android.util.Log::class)
+        io.mockk.every { android.util.Log.w(any<String>(), any<String>()) } returns 0
+        try {
+            withWireServer(WireReply.EVENT_503) { server, sdk ->
+                val params = SyncEventRecordRpcParams(
+                    domain = SyncEventDomains.CATALOG,
+                    eventType = SyncEventTypes.CATALOG_CHANGED,
+                    changedCount = 1,
+                    entityIds = SyncEventEntityIds(productIds = listOf(PRODUCT_ID)),
+                    source = "android",
+                    sourceDeviceId = "00000000-0000-4000-8000-000000000145",
+                    batchId = "00000000-0000-4000-8000-000000000146",
+                    clientEventId = "task144-canonical-event-wire-operation",
+                    metadata = JsonObject(emptyMap()),
+                    shopId = SHOP_ID
+                )
+                val writer = SupabaseSyncEventRemoteDataSource(sdk)
+                var applicationInvocations = 0
+                applicationInvocations += 1
+                val result = writer.recordSyncEvent(params)
+                val failure = requireNotNull(result.exceptionOrNull())
+                val classification = SyncErrorClassifier.classify(failure, nowMs = 1_000_000L)
+                val physical = server.snapshots()
+
+                assertEquals("Exactly one real event-writer invocation is under test", 1, applicationInvocations)
+                assertEquals("The original HTTP503 must remain structured", 503, classification.httpStatus)
+                assertEquals(SyncErrorCategory.RemoteTransient, classification.category)
+                assertEquals("PGRST000", classification.postgrestCode)
+                assertEquals("The synthetic server error must not become a body-replay or decoding error",
+                    "synthetic_event_wire_503", (failure as? io.github.jan.supabase.exceptions.RestException)?.error)
+                assertFalse(failure.message.orEmpty().contains(WIRE_PRIVATE_MARKER))
+                assertTrue("At least one complete physical event POST must reach the owned loopback", physical.isNotEmpty())
+                assertTrue("Only the exact canonical event endpoint is measured",
+                    physical.all { it.eventPost && it.trace == null && it.declaredBytes == it.body.size &&
+                        it.contentType.startsWith(ContentType.Application.Json.toString()) })
+                val body = physical.first().body
+                assertTrue("Every physical resend must retain identical payload bytes", physical.all { it.body.contentEquals(body) })
+                val payload = Json.parseToJsonElement(body.decodeToString()).jsonObject
+                assertEquals(params.clientEventId, payload.getValue("p_client_event_id").jsonPrimitive.content)
+                assertEquals(params.batchId, payload.getValue("p_batch_id").jsonPrimitive.content)
+                assertEquals(params.sourceDeviceId, payload.getValue("p_source_device_id").jsonPrimitive.content)
+                assertEquals(SHOP_ID, payload.getValue("p_shop_id").jsonPrimitive.content)
+                assertEquals(kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(PRODUCT_ID))),
+                    payload.getValue("p_entity_ids").jsonObject.getValue("product_ids"))
+                assertEquals("One application attempt must not hide extra physical event POSTs after HTTP503 Retry-After0",
+                    applicationInvocations, physical.size)
+            }
+        } finally {
+            io.mockk.unmockkStatic(android.util.Log::class)
+        }
+    }
+
+    @OptIn(io.github.jan.supabase.annotations.SupabaseInternal::class)
+    private suspend fun verifyActualCheckpointHttpFailure(status: Int, expected: SyncErrorCategory) {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val sdk = createSupabaseClient("http://127.0.0.1:1", "synthetic-public-key") {
+            // This application interceptor always returns before DNS/connect. No socket or backend is used.
+            httpEngine = OkHttp.create {
+                config {
+                    addInterceptor { chain ->
+                        check(calls.incrementAndGet() == 1) { "Unexpected automatic HTTP resend" }
+                        val request = chain.request()
+                        check(request.method == "POST" && request.url.encodedPath == "/rest/v1/rpc/shop_sync_recovery_checkpoint_v1")
+                        okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1)
+                            .code(status).message("Synthetic").header("Retry-After", "180")
+                            .body("{}".toResponseBody("application/json".toMediaType())).build()
+                    }
+                }
+            }
+            coroutineDispatcher = Dispatchers.IO
+            defaultLogLevel = LogLevel.NONE
+            requestTimeout = 3.seconds
+            install(Auth) {
+                autoLoadFromStorage = false; autoSetupPlatform = false
+                sessionManager = io.github.jan.supabase.auth.MemorySessionManager()
+                codeVerifierCache = MemoryCodeVerifierCache()
+            }
+            install(Postgrest) { timeout = 3.seconds }
+        }
+        try {
+            sdk.auth.importSession(UserSession(accessToken = "synthetic-access", refreshToken = "synthetic-refresh",
+                expiresIn = 86_400, tokenType = "bearer", user = UserInfo(aud = "authenticated", id = ACCOUNT_ID),
+                expiresAt = Clock.System.now() + 1.days), autoRefresh = false)
+            val result = withTimeout(5_000L) {
+                SupabaseShopSyncReadRemoteDataSource(sdk).checkpoint(context(baseline = "0", baselineScopeKey = null))
+            }
+            val failure = requireNotNull(result.exceptionOrNull())
+            assertEquals("The actual authenticated SDK/invoker request crossed only the synthetic interceptor", 1, calls.get())
+            val classification = SyncErrorClassifier.classify(failure, nowMs = 1_000_000L)
+            assertEquals("Actual invoker must preserve HTTP category instead of collapsing it into an unknown contract error",
+                expected, classification.category)
+            assertEquals(status, classification.httpStatus)
+            assertEquals("Retry-After must survive actual HTTP response handling", 1_180_000L, classification.retryAfterAtMs)
+            assertFalse(classification.retryAfterInvalid)
+        } finally {
+            withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { withTimeout(1_000L) { sdk.close() } }
+        }
+    }
+
+    @Test
     fun `checkpoint diagnostic one shot body stops replay after response is lost`() = runBlocking {
         val diagnostic = checkpointWireRun(WireReply.LOST_RESPONSE, diagnostic = true)
         val normal = checkpointWireRun(WireReply.LOST_RESPONSE, diagnostic = false)
         assertTrue("Diagnostic response loss must fail", diagnostic.failed)
         assertEquals(1, diagnostic.requests.size)
-        assertTrue("NOT_PROVEN: normal response-loss control did not demonstrate replay", normal.requests.size >= 2)
+        // Historical normal replay evidence is preserved in the candidate4 RED receipt. The new contract owns retry above HTTP.
+        assertEquals("Canonical checkpoint must also leave unknown-response replay to the application", 1, normal.requests.size)
     }
 
     @Test
@@ -67,7 +194,7 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
         assertTrue(diagnostic.failed)
         assertEquals(408, diagnostic.status)
         assertEquals(1, diagnostic.requests.size)
-        assertEquals("Normal real-engine 408 replay control", 2, normal.requests.size)
+        assertEquals("Canonical checkpoint 408 cannot consume an uncounted retry", 1, normal.requests.size)
     }
 
     @Test
@@ -77,7 +204,19 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
         assertTrue(diagnostic.failed)
         assertEquals(503, diagnostic.status)
         assertEquals(1, diagnostic.requests.size)
-        assertEquals("Normal real-engine 503 replay control", 2, normal.requests.size)
+        assertEquals("Canonical checkpoint 503 cannot consume an uncounted retry", 1, normal.requests.size)
+    }
+
+    @Test
+    fun nonCheckpointRpcKeepsHistoricalTransportBehavior() = runBlocking {
+        withWireServer(WireReply.HTTP_503) { server, sdk ->
+            val result = SupabaseShopSyncReadRemoteDataSource(sdk)
+                .convergenceMarker(context(baseline = "0", baselineScopeKey = null))
+            assertTrue(result.isFailure)
+            val physical = server.snapshots()
+            assertEquals("The checkpoint policy must not silently change another RPC's transport", 2, physical.size)
+            assertTrue(physical.all { it.markerPost && it.trace == null })
+        }
     }
 
     @Test
@@ -186,10 +325,10 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
         }
     }
 
-    private enum class WireReply { LOST_RESPONSE, HTTP_408, HTTP_503, HTTP_401, HTTP_500, MALFORMED, OVERSIZE, STALL }
+    private enum class WireReply { LOST_RESPONSE, HTTP_408, HTTP_503, HTTP_401, HTTP_500, MALFORMED, OVERSIZE, STALL, EVENT_503 }
     private class WireRequest(val body: ByteArray, val declaredBytes: Int, val contentType: String,
         val trace: String?, val checkpointPost: Boolean, val markerPost: Boolean,
-        val connectionId: Int)
+        val connectionId: Int, val eventPost: Boolean = false)
     private class WireResult(val requests: List<WireRequest>, val status: Int?, val failed: Boolean,
         val fixedContractFailure: Boolean, val code: String?)
 
@@ -310,9 +449,10 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
                             val requestLine = lines.first()
                             val checkpoint = requestLine == "POST /rest/v1/rpc/shop_sync_recovery_checkpoint_v1 HTTP/1.1"
                             val marker = requestLine == "POST /rest/v1/rpc/shop_sync_convergence_marker_v1 HTTP/1.1"
-                            check(checkpoint || marker) { "wire_unexpected_endpoint" }
+                            val event = requestLine == "POST /rest/v1/rpc/record_sync_event_v6 HTTP/1.1"
+                            check(checkpoint || marker || (reply == WireReply.EVENT_503 && event)) { "wire_unexpected_endpoint" }
                             val request = WireRequest(body, length, fields["content-type"].orEmpty(),
-                                fields[CHECKPOINT_TRACE_HEADER], checkpoint, marker, connectionId)
+                                fields[CHECKPOINT_TRACE_HEADER], checkpoint, marker, connectionId, eventPost = event)
                             if (warmResponseBody != null && warmRequest.get() == null) {
                                 check(marker && request.trace == null) { "wire_warmup_must_be_ordinary_marker" }
                                 warmRequest.set(request)
@@ -331,16 +471,21 @@ class SupabaseShopSyncReadRemoteDataSourceTest {
                             } else {
                                 val first = requests.size == 1
                                 val status = when {
+                                    reply == WireReply.EVENT_503 -> 503
                                     reply == WireReply.HTTP_408 && first -> 408
                                     reply == WireReply.HTTP_503 && first -> 503
                                     reply == WireReply.HTTP_401 -> 401
                                     reply == WireReply.MALFORMED || reply == WireReply.OVERSIZE -> 200
                                     else -> 500
                                 }
-                                val responseBody = if (reply == WireReply.OVERSIZE) "x".repeat(4 * 1024 * 1024 + 1) else "synthetic-wire-private-response"
+                                val responseBody = when (reply) {
+                                    WireReply.EVENT_503 -> """{"message":"synthetic_event_wire_503","code":"PGRST000","hint":null,"details":null}"""
+                                    WireReply.OVERSIZE -> "x".repeat(4 * 1024 * 1024 + 1)
+                                    else -> "synthetic-wire-private-response"
+                                }
                                 val bytes = responseBody.toByteArray()
                                 val retry = if (status == 503) "Retry-After: 0\r\n" else ""
-                                val empty = status == 408 || status == 503
+                                val empty = status == 408 || (status == 503 && reply != WireReply.EVENT_503)
                                 val response = "HTTP/1.1 $status Synthetic\r\nContent-Type: application/json\r\nContent-Length: ${if (empty) 0 else bytes.size}\r\n${retry}Connection: close\r\n\r\n"
                                 socket.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))
                                 if (!empty) socket.getOutputStream().write(bytes)

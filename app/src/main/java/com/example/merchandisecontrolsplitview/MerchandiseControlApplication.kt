@@ -15,6 +15,7 @@ import com.example.merchandisecontrolsplitview.data.SyncRecoveryBaseline
 import com.example.merchandisecontrolsplitview.data.SyncRecoveryJournal
 import com.example.merchandisecontrolsplitview.data.SyncRecoveryJournalPhases
 import com.example.merchandisecontrolsplitview.data.SyncRecoveryAuthorizationModes
+import com.example.merchandisecontrolsplitview.data.SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED
 import com.example.merchandisecontrolsplitview.data.ShopSyncCheckpointTraceAttempt
 import com.example.merchandisecontrolsplitview.data.ShopSyncRpcContext
 import com.example.merchandisecontrolsplitview.data.CHECKPOINT_TRACE_VALUE
@@ -29,6 +30,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -57,6 +60,12 @@ import com.example.merchandisecontrolsplitview.data.ShopDeviceRegistrationRemote
 import com.example.merchandisecontrolsplitview.data.ShopSyncReadRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinator
 import com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryResult
+import com.example.merchandisecontrolsplitview.data.AutomaticRecoveryRetryMetadata
+import com.example.merchandisecontrolsplitview.data.SyncErrorCategory
+import com.example.merchandisecontrolsplitview.data.nextSyncRecoveryAttemptCount
+import com.example.merchandisecontrolsplitview.data.encodeRecoveryCheckpointJson
+import com.example.merchandisecontrolsplitview.data.validateShopSyncActiveReceipt
+import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.data.SupabaseLinkedShopRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseCatalogRemoteDataSource
 import com.example.merchandisecontrolsplitview.data.SupabaseStorefrontAuthoringRemoteDataSource
@@ -104,6 +113,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.time.Duration.Companion.seconds
 
+internal class ApplicationSupabaseConfiguration(val url: String, val publishableKey: String)
+
 /**
  * Application class singleton (task 010, task 011).
  *
@@ -134,7 +145,11 @@ import kotlin.time.Duration.Companion.seconds
  * il subscriber viene avviato solo in `SignedIn` e fermato in `SignedOut` /
  * `ErrorRecoverable`: il canale Realtime usa il JWT del client Supabase condiviso.
  */
-class MerchandiseControlApplication : Application() {
+open class MerchandiseControlApplication : Application() {
+
+    /** JVM fixtures can supply configuration before onCreate; production reads the same BuildConfig values. */
+    internal open val supabaseConfiguration: ApplicationSupabaseConfiguration
+        get() = ApplicationSupabaseConfiguration(BuildConfig.SUPABASE_URL, BuildConfig.SUPABASE_PUBLISHABLE_KEY)
 
     companion object {
         private const val TAG = "MerchandiseApp"
@@ -158,6 +173,16 @@ class MerchandiseControlApplication : Application() {
     private val businessRecoveryLock = Any()
     private val businessRecoveryExecutionMutex = Mutex()
     private var businessRecoveryJob: Job? = null
+    private data class BusinessRecoveryReservation(
+        val ownerUserId: String,
+        val context: com.example.merchandisecontrolsplitview.data.ShopContext,
+        val shopEpoch: Long
+    )
+    private var businessRecoveryReservation: BusinessRecoveryReservation? = null
+    /** Identifies the existing job while it claims/completes a remote invocation; carries no retry budget. */
+    private var businessRecoveryExecutingJob: Job? = null
+    /** Internal deterministic clock seam; production keeps the existing wall clock. */
+    internal var automaticBusinessRecoveryNowMs: () -> Long = System::currentTimeMillis
     // Diagnostic-only state: unused, capturing, consumed. Never coordinates business work.
     private val localThreadSnapshotState = AtomicInteger(0)
     private var checkpointTraceConsumed = false
@@ -225,7 +250,8 @@ class MerchandiseControlApplication : Application() {
 
     @OptIn(SupabaseInternal::class)
     val supabaseClient: SupabaseClient? by lazy {
-        val configPresent = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()
+        val configuration = supabaseConfiguration
+        val configPresent = configuration.url.isNotBlank() && configuration.publishableKey.isNotBlank()
         if (configPresent) {
             try {
                 val settings = com.example.merchandisecontrolsplitview.data.CheckedAuthSettings(
@@ -234,14 +260,14 @@ class MerchandiseControlApplication : Application() {
                         Context.MODE_PRIVATE
                     )
                 )
-                val settingsKey = createDefaultSettingsKey(BuildConfig.SUPABASE_URL.split("//").last())
+                val settingsKey = createDefaultSettingsKey(configuration.url.split("//").last())
                 val sessionKey = "$settingsKey-${SettingsSessionManager.SETTINGS_KEY}"
                 val verifierKey = "$settingsKey-${SettingsCodeVerifierCache.SETTINGS_KEY}"
                 // Instantiate SDK migration once; every client receives a generation-bound lease.
                 val sessionManager = com.example.merchandisecontrolsplitview.data.ProjectSessionPersistence(
                     settings = settings,
                     sessionKey = sessionKey,
-                    projectUrl = BuildConfig.SUPABASE_URL
+                    projectUrl = configuration.url
                 )
                 val verifierCache = SettingsCodeVerifierCache(settings = settings, key = verifierKey)
                 GenerationOwnedSupabaseClient(
@@ -250,8 +276,8 @@ class MerchandiseControlApplication : Application() {
                     isSessionStored = { sessionManager.isSessionStored() },
                     factory = { sessionLease, verifierLease ->
                         createSupabaseClient(
-                            supabaseUrl = BuildConfig.SUPABASE_URL,
-                            supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY
+                            supabaseUrl = configuration.url,
+                            supabaseKey = configuration.publishableKey
                         ) {
                             requestTimeout = 90.seconds
                             install(Auth) {
@@ -300,7 +326,7 @@ class MerchandiseControlApplication : Application() {
             database = database,
             api = ProductImageApiClient(
                 apiBaseUrl = BuildConfig.PRODUCT_IMAGE_API_BASE_URL,
-                storageBaseUrl = BuildConfig.SUPABASE_URL,
+                storageBaseUrl = supabaseConfiguration.url,
                 debugBuild = BuildConfig.DEBUG
             ),
             accountIdProvider = {
@@ -653,6 +679,7 @@ class MerchandiseControlApplication : Application() {
     private fun observeShopContextForRemoteComponents() {
         appScope.launch {
             shopContextRepository.state.collect { context ->
+                invalidateObsoleteBusinessRecoveryReservation()
                 val signedIn = authManager.state.value as? AuthState.SignedIn ?: return@collect
                 if (context.ownerUserId != signedIn.userId) {
                     Log.i(TAG, "Shop context: owner non corrente, sync cloud sospesa")
@@ -1152,7 +1179,7 @@ class MerchandiseControlApplication : Application() {
     // Only our own compiler-generated lazy fields, in the debug-only snapshot path.
     // Missing/renamed/uninitialized fields fail closed; never invoke a lazy initializer.
     private inline fun <reified T> checkpointReadinessExistingLazy(name: String): T? = try {
-        val lazyValue = javaClass.getDeclaredField(name + "\$delegate")
+        val lazyValue = MerchandiseControlApplication::class.java.getDeclaredField(name + "\$delegate")
             .apply { isAccessible = true }.get(this) as? Lazy<*>
         if (lazyValue?.isInitialized() == true) lazyValue.value as? T else null
     } catch (_: ReflectiveOperationException) {
@@ -1239,7 +1266,7 @@ class MerchandiseControlApplication : Application() {
         if (conflictingIntent) return report(LocalThreadSnapshotOutcome.BLOCKED_CONFLICT)
         if (!warmForeground || !isActivityResumed()) return report(LocalThreadSnapshotOutcome.BLOCKED_NOT_WARM)
         val targetDigest = MessageDigest.getInstance("SHA-256")
-            .digest(BuildConfig.SUPABASE_URL.encodeToByteArray()).joinToString("") { "%02x".format(it) }
+            .digest(supabaseConfiguration.url.encodeToByteArray()).joinToString("") { "%02x".format(it) }
         if (targetDigest != CHECKPOINT_TRACE_TEST_URL_SHA256) {
             return report(LocalThreadSnapshotOutcome.BLOCKED_TEST_TARGET)
         }
@@ -1369,7 +1396,7 @@ class MerchandiseControlApplication : Application() {
     ): CheckpointReadinessSnapshot {
         if (!BuildConfig.DEBUG) return CheckpointReadinessSnapshot(CheckpointReadinessOutcome.BLOCKED_RELEASE)
         val startedAt = SystemClock.elapsedRealtime()
-        val digest = MessageDigest.getInstance("SHA-256").digest(BuildConfig.SUPABASE_URL.encodeToByteArray())
+        val digest = MessageDigest.getInstance("SHA-256").digest(supabaseConfiguration.url.encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
         val target = digest == CHECKPOINT_TRACE_TEST_URL_SHA256
         val resumedNow = isActivityResumed()
@@ -1478,7 +1505,7 @@ class MerchandiseControlApplication : Application() {
                 else -> null
             }
             // reason is the durable retry code, not a raw exception. Never emit it verbatim.
-            val code = journal?.reason
+            val code = journal?.reason?.let { AutomaticRecoveryRetryMetadata.decode(it)?.code ?: it }
             val http = code?.takeIf { it.matches(Regex("shop_sync_rpc_http_[1-5][0-9]{2}")) }
                 ?.takeLast(3)?.toIntOrNull()
             val error = if (journal == null) null else when {
@@ -1558,7 +1585,7 @@ class MerchandiseControlApplication : Application() {
                     if (remaining <= 0) return@launch
                     withTimeout(remaining) {
                         val configuredUrlDigest = MessageDigest.getInstance("SHA-256")
-                            .digest(BuildConfig.SUPABASE_URL.encodeToByteArray())
+                            .digest(supabaseConfiguration.url.encodeToByteArray())
                             .joinToString("") { "%02x".format(it) }
                         targetTest = CHECKPOINT_TRACE_TEST_URL_SHA256.length == 64 &&
                             configuredUrlDigest == CHECKPOINT_TRACE_TEST_URL_SHA256
@@ -1651,76 +1678,157 @@ class MerchandiseControlApplication : Application() {
             catalogSyncStateTracker.businessDataScopeState.value.errorCode !=
             "sync_recovery_required"
         ) return false
+        val signedIn = authManager.state.value as? AuthState.SignedIn ?: return false
+        val context = shopContextRepository.state.value
+        val selectedShop = context.selectedShop ?: return false
+        val shopEpoch = shopContextRepository.diagnosticShopEpoch()
+        if (!currentAuthAndShopMatch(signedIn.userId, selectedShop)) return false
+        val reservation = BusinessRecoveryReservation(signedIn.userId, context, shopEpoch)
         val scheduled = synchronized(businessRecoveryLock) {
             if (checkpointTraceReservation != null) return true
-            if (businessRecoveryJob?.isActive == true) return true
+            if (shopContextRepository.state.value != context || shopContextRepository.diagnosticShopEpoch() != shopEpoch ||
+                !currentAuthAndShopMatch(signedIn.userId, selectedShop)) return false
+            if (businessRecoveryJob?.isCompleted == false &&
+                (businessRecoveryReservation == reservation ||
+                    (businessRecoveryExecutingJob === businessRecoveryJob && businessRecoveryReservation?.let {
+                        sameBusinessRecoveryEntityCurrent(it)
+                    } == true))) return true
+            // Retire only the old reservation; its persisted deadline and consumed claim remain authoritative.
+            businessRecoveryJob?.cancel()
             lateinit var job: Job
             job = appScope.launch(start = CoroutineStart.LAZY) {
+                fun authorityCurrent() = shopContextRepository.state.value == context &&
+                    shopContextRepository.diagnosticShopEpoch() == shopEpoch &&
+                    currentAuthAndShopMatch(signedIn.userId, selectedShop)
                 try {
-                    businessRecoveryExecutionMutex.withLock {
-                        var attemptsInCurrentWindow = 0
-                        while (true) {
-                            val signedIn = authManager.state.value as? AuthState.SignedIn
-                                ?: return@withLock
-                            val context = shopContextRepository.state.value
-                            val selectedShop = context.selectedShop ?: return@withLock
-                            if (!currentAuthAndShopMatch(signedIn.userId, selectedShop)) {
-                                return@withLock
-                            }
-                            val activeScope = task126ActiveOwnerStoreScope(signedIn.userId, selectedShop)
-                            val journal = withContext(Dispatchers.IO) {
-                                database.syncRecoveryJournalDao().getForScope(
-                                    activeScope.ownerHash,
-                                    activeScope.storeId
-                                )
-                            } ?: return@withLock
-                            if (!shouldAttemptAutomaticBusinessRecovery(
-                                    attemptsInCurrentWindow = attemptsInCurrentWindow,
-                                    durableAttemptCount = journal.attemptCount
-                                )
-                            ) {
-                                Log.w(
-                                    TAG,
-                                    "Business recovery: finestra retry esaurita reason=$reason"
-                                )
-                                return@withLock
-                            }
-                            val waitMs = (journal.nextRetryAtMs ?: 0L) - System.currentTimeMillis()
-                            if (waitMs > 0L) delay(waitMs)
-                            if (catalogSyncStateTracker.networkAvailable.value == false ||
-                                shopContextRepository.state.value != context ||
-                                !currentAuthAndShopMatch(signedIn.userId, selectedShop)
-                            ) {
-                                return@withLock
-                            }
-                            attemptsInCurrentWindow += 1
-                            val result = shopSyncRecoveryCoordinator.recover(
-                                accountId = signedIn.userId,
-                                selectedShop = selectedShop,
-                                activeScope = activeScope
-                            )
-                            when (result) {
-                                is ShopSyncRecoveryResult.Activated -> {
-                                    completeBusinessRecovery(signedIn, selectedShop, activeScope)
-                                    return@withLock
+                    val activeScope = task126ActiveOwnerStoreScope(signedIn.userId, selectedShop)
+                    while (authorityCurrent()) {
+                        val journal = withContext(Dispatchers.IO) {
+                            database.syncRecoveryJournalDao().getForScope(activeScope.ownerHash, activeScope.storeId)
+                        } ?: return@launch
+                        val metadata = AutomaticRecoveryRetryMetadata.decode(journal.reason)
+                        if (metadata == null) {
+                            val confirmedIntent = journal.reason == SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED
+                            val initialConfirmedIntent = confirmedIntent &&
+                                journal.authorizationMode == SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED &&
+                                journal.phase == SyncRecoveryJournalPhases.REQUIRED && journal.attemptCount == 1 &&
+                                journal.shopId.equals(selectedShop.shopId, ignoreCase = true) &&
+                                journal.runId == null && journal.stagingDatabaseName == null &&
+                                journal.checkpointADigest == null && journal.checkpointBDigest == null &&
+                                journal.blockingEventId == null && journal.createdAtMs >= 0L &&
+                                journal.updatedAtMs == journal.createdAtMs && journal.nextRetryAtMs == journal.createdAtMs
+                            // An existing unclassified failure cannot acquire a fresh budget at launch/reconnect.
+                            if ((confirmedIntent && !initialConfirmedIntent) || (!confirmedIntent && journal.attemptCount != 0) ||
+                                journal.reason.trimStart().startsWith("{") ||
+                                journal.reason in setOf("recovery_failed", "Unknown", "unknown") ||
+                                !journal.reason.matches(Regex("[A-Za-z0-9_]{1,160}"))) return@launch
+                        } else if (!metadata.isTransient || metadata.state !in setOf("waiting", "cooldown")) {
+                            // Includes an interrupted claim: its consumed budget is never refunded or invented transient.
+                            return@launch
+                        }
+                        val due = maxOf(journal.nextRetryAtMs ?: 0L, metadata?.nextEligibleAtMs ?: 0L)
+                        val waitMs = due - automaticBusinessRecoveryNowMs()
+                        if (waitMs > 0L) {
+                            // The existing single-flight job owns one opportunity; no execution lease is held while waiting.
+                            delay(waitMs)
+                            continue
+                        }
+                        if (!authorityCurrent() || catalogSyncStateTracker.networkAvailable.value == false) return@launch
+                        businessRecoveryExecutionMutex.withLock {
+                            if (!authorityCurrent() || catalogSyncStateTracker.networkAvailable.value == false) return@launch
+                            val attempts = if (metadata?.state == "cooldown") 0 else metadata?.windowAttempts ?: 0
+                            if (!shouldAttemptAutomaticBusinessRecovery(attempts, journal.attemptCount)) return@launch
+                            val now = automaticBusinessRecoveryNowMs()
+                            if (now < 0L) return@launch
+                            val claim = AutomaticRecoveryRetryMetadata(
+                                code = metadata?.code ?: journal.reason,
+                                category = metadata?.category ?: SyncErrorCategory.Unknown,
+                                windowAttempts = attempts + 1, state = "in_flight",
+                                nextEligibleAtMs = maxOf(due, now), claimID = java.util.UUID.randomUUID().toString(),
+                                lastAttemptAtMs = now, lastCompletedAtMs = null)
+                            synchronized(businessRecoveryLock) { businessRecoveryExecutingJob = job }
+                            try {
+                                val claimed = withContext(Dispatchers.IO) {
+                                    database.withTransaction {
+                                        val current = database.syncRecoveryJournalDao().get()
+                                        if (!authorityCurrent() || catalogSyncStateTracker.networkAvailable.value == false || current != journal ||
+                                            !journal.shopId.equals(selectedShop.shopId, ignoreCase = true) || journal.deviceId.isBlank() ||
+                                            database.syncEventDeviceStateDao().get()?.deviceId != journal.deviceId) false
+                                        else {
+                                            database.syncRecoveryJournalDao().upsert(journal.copy(
+                                                reason = claim.encode(), attemptCount = nextSyncRecoveryAttemptCount(journal.attemptCount), updatedAtMs = now))
+                                            true
+                                        }
+                                    }
                                 }
-                                is ShopSyncRecoveryResult.Rejected -> {
-                                    Log.w(TAG, "Business recovery: rifiutato code=${result.code}")
-                                    return@withLock
+                                if (!claimed) return@launch
+                                val result = shopSyncRecoveryCoordinator.recover(signedIn.userId, selectedShop, activeScope,
+                                    automaticClaimID = claim.claimID,
+                                    awaitScopeResolution = { remainingMs ->
+                                        awaitBusinessRecoveryScopeResolution(job, reservation, activeScope,
+                                            claim.claimID, journal.deviceId, remainingMs)
+                                    })
+                                if (result is ShopSyncRecoveryResult.Activated) {
+                                    if (sameBusinessRecoveryEntityCurrent(reservation) &&
+                                        currentAuthAndShopMatch(signedIn.userId, selectedShop)) {
+                                        completeBusinessRecovery(signedIn, selectedShop, activeScope, result)
+                                    }
+                                    return@launch
                                 }
-                                is ShopSyncRecoveryResult.RetryRequired -> {
-                                    Log.w(TAG, "Business recovery: retry code=${result.code}")
+                                val retry = result as? ShopSyncRecoveryResult.RetryRequired
+                                val code = retry?.code ?: (result as ShopSyncRecoveryResult.Rejected).code
+                                val category = retry?.classification?.category ?: SyncErrorCategory.Unknown
+                                val transient = category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
+                                    SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient) && retry?.classification?.retryAfterInvalid != true
+                                val completedAt = automaticBusinessRecoveryNowMs()
+                                if (completedAt < 0L || completedAt > Long.MAX_VALUE - AUTOMATIC_SYNC_RECOVERY_COOLDOWN_MS) return@launch
+                                val completionAccepted = withContext(Dispatchers.IO) {
+                                    database.withTransaction {
+                                        val current = database.syncRecoveryJournalDao().getForScope(activeScope.ownerHash, activeScope.storeId)
+                                        val currentMetadata = current?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
+                                        if (!sameBusinessRecoveryEntityCurrent(reservation) || current == null || currentMetadata == null ||
+                                            currentMetadata.claimID != claim.claimID || currentMetadata.state != "in_flight" ||
+                                            current.deviceId != journal.deviceId ||
+                                            database.syncEventDeviceStateDao().get()?.deviceId != journal.deviceId) false
+                                        else {
+                                            val exhausted = claim.windowAttempts == MAX_AUTOMATIC_SYNC_RECOVERY_ATTEMPTS_PER_TRIGGER
+                                            val next = maxOf(current.nextRetryAtMs ?: 0L, retry?.nextRetryAtMs ?: 0L,
+                                                retry?.classification?.retryAfterAtMs ?: 0L,
+                                                if (transient && exhausted) completedAt + AUTOMATIC_SYNC_RECOVERY_COOLDOWN_MS else completedAt)
+                                            val completion = claim.copy(code = code.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,160}")) }
+                                                ?: "recovery_failed", category = category, lastCompletedAtMs = completedAt,
+                                                state = if (!transient) "blocked" else if (exhausted) "cooldown" else "waiting",
+                                                nextEligibleAtMs = next)
+                                            database.syncRecoveryJournalDao().upsert(current.copy(reason = completion.encode(),
+                                                updatedAtMs = completedAt, nextRetryAtMs = next))
+                                            true
+                                        }
+                                    }
+                                }
+                                if (!completionAccepted || !transient) return@launch
+                            } finally {
+                                synchronized(businessRecoveryLock) {
+                                    if (businessRecoveryExecutingJob === job) businessRecoveryExecutingJob = null
                                 }
                             }
                         }
                     }
                 } finally {
+                    var transferToCurrentAuthority = false
                     synchronized(businessRecoveryLock) {
-                        if (businessRecoveryJob === job) businessRecoveryJob = null
+                        if (businessRecoveryJob === job) {
+                            businessRecoveryJob = null
+                            businessRecoveryReservation = null
+                            transferToCurrentAuthority = job.isActive && !authorityCurrent()
+                        }
                     }
+                    // A fast refresh may conflate loading and the identical final ShopContext in StateFlow.
+                    // Hand off once through normal admission when this timer observes the new epoch.
+                    if (transferToCurrentAuthority) schedulePendingBusinessRecovery("scope_epoch_handoff")
                 }
             }
             businessRecoveryJob = job
+            businessRecoveryReservation = reservation
             job
         }
         scheduled.start()
@@ -1731,9 +1839,36 @@ class MerchandiseControlApplication : Application() {
         signedIn: AuthState.SignedIn,
         selectedShop: com.example.merchandisecontrolsplitview.data.SelectedShop,
         activeScope: Task126OwnerStoreScope
+    ) = completeBusinessRecovery(signedIn, selectedShop, activeScope, null)
+
+    private suspend fun completeBusinessRecovery(
+        signedIn: AuthState.SignedIn,
+        selectedShop: com.example.merchandisecontrolsplitview.data.SelectedShop,
+        activeScope: Task126OwnerStoreScope,
+        expectedActivation: ShopSyncRecoveryResult.Activated?
     ) {
         val activation = businessDataScopeMutex.withLock {
             val context = shopContextRepository.state.value
+            if (!currentAuthAndShopMatch(signedIn.userId, selectedShop) || !context.localAccessAllowed) return@withLock null
+            if (expectedActivation != null) {
+                val proofCurrent = withContext(Dispatchers.IO) {
+                    database.withTransaction {
+                        val baseline = database.syncRecoveryBaselineDao().get() ?: return@withTransaction false
+                        val binding = database.businessDataScopeBindingDao().get()?.toOwnerStoreScope()
+                        if (database.syncRecoveryJournalDao().get() != null || binding == null ||
+                            Task126OwnerStoreGate.validate(binding, activeScope) != Task126OwnerStoreGateDecision.Allowed ||
+                            baseline.generationId != expectedActivation.generationId || baseline.ownerHash != activeScope.ownerHash ||
+                            baseline.storeScope != activeScope.storeId || !baseline.shopId.equals(selectedShop.shopId, ignoreCase = true) ||
+                            baseline.deviceId != database.syncEventDeviceStateDao().get()?.deviceId ||
+                            baseline.checkpointJson != encodeRecoveryCheckpointJson(expectedActivation.checkpoint)) false
+                        else {
+                            validateShopSyncActiveReceipt(database, expectedActivation.generationId, expectedActivation.checkpoint)
+                            true
+                        }
+                    }
+                }
+                if (!proofCurrent) return@withLock null
+            }
             val published = catalogSyncStateTracker.resolveAndPublishBusinessDataScope(
                 stillAuthorized = {
                     currentAuthAndShopMatch(signedIn.userId, selectedShop) &&
@@ -1767,11 +1902,77 @@ class MerchandiseControlApplication : Application() {
         }
     }
 
+    private suspend fun awaitBusinessRecoveryScopeResolution(
+        originJob: Job,
+        reservation: BusinessRecoveryReservation,
+        activeScope: Task126OwnerStoreScope,
+        claimID: String,
+        deviceId: String,
+        remainingMs: Long
+    ): Boolean {
+        fun invocationCurrent() = synchronized(businessRecoveryLock) {
+            businessRecoveryJob === originJob && businessRecoveryExecutingJob === originJob && originJob.isActive
+        } && sameBusinessRecoveryEntityCurrent(reservation)
+        suspend fun claimCurrent(): Boolean = withContext(Dispatchers.IO) {
+            val current = database.syncRecoveryJournalDao().getForScope(activeScope.ownerHash, activeScope.storeId)
+            val retry = current?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
+            current?.deviceId == deviceId && retry?.claimID == claimID && retry.state == "in_flight" &&
+                database.syncEventDeviceStateDao().get()?.deviceId == deviceId
+        }
+        if (remainingMs <= 0L || !invocationCurrent() || !claimCurrent()) return false
+        val expectedShopId = reservation.context.selectedShop?.shopId ?: return false
+        // A single cancellable resolution wait, with the caller's remaining transport deadline.
+        // Confirmed local access preserves the invocation; only the final cloud guard can authorize continuation.
+        var reportedWaiting = false
+        combine(authManager.state, shopContextRepository.state, database.syncEventDeviceStateDao().observe()) {
+                auth, context, device ->
+            val sameEntity = (auth as? AuthState.SignedIn)?.userId == reservation.ownerUserId &&
+                context.ownerUserId == reservation.ownerUserId && context.localAccessAllowed &&
+                context.selectedShop?.shopId.equals(expectedShopId, ignoreCase = true) && device?.deviceId == deviceId
+            if (sameEntity && context.isLoading && !reportedWaiting) {
+                reportedWaiting = true
+                com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryTestHooks.onScopeResolutionWaiting?.invoke()
+            }
+            !sameEntity || !context.isLoading
+        }.first { resolvedOrInvalid -> resolvedOrInvalid }
+        return invocationCurrent() && claimCurrent() && currentAuthAndShopMatch(reservation.ownerUserId,
+            reservation.context.selectedShop)
+    }
+
     private fun cancelBusinessRecovery() {
         val job = synchronized(businessRecoveryLock) {
-            businessRecoveryJob.also { businessRecoveryJob = null }
+            businessRecoveryJob.also {
+                businessRecoveryJob = null
+                businessRecoveryReservation = null
+            }
         }
         job?.cancel()
+    }
+
+    private fun invalidateObsoleteBusinessRecoveryReservation() {
+        val retired = synchronized(businessRecoveryLock) {
+            val reservation = businessRecoveryReservation ?: return
+            if (reservation.ownerUserId == (authManager.state.value as? AuthState.SignedIn)?.userId &&
+                reservation.context == shopContextRepository.state.value &&
+                reservation.shopEpoch == shopContextRepository.diagnosticShopEpoch()) return
+            // A refresh does not revoke the same entity's already-owned invocation. Its result still needs
+            // the durable claim/device checks; the next timer is admitted with the newly confirmed epoch.
+            if (businessRecoveryExecutingJob === businessRecoveryJob && sameBusinessRecoveryEntityCurrent(reservation)) return
+            businessRecoveryJob.also {
+                businessRecoveryJob = null
+                businessRecoveryReservation = null
+            }
+        }
+        retired?.cancel()
+    }
+
+    /** Preserves an owned invocation or its factual failure completion, never grants cloud admission. */
+    private fun sameBusinessRecoveryEntityCurrent(reservation: BusinessRecoveryReservation): Boolean {
+        val current = shopContextRepository.state.value
+        val previousShop = reservation.context.selectedShop ?: return false
+        return (authManager.state.value as? AuthState.SignedIn)?.userId == reservation.ownerUserId &&
+            current.ownerUserId == reservation.ownerUserId && current.localAccessAllowed &&
+            current.selectedShop?.shopId.equals(previousShop.shopId, ignoreCase = true)
     }
 
     private fun cancelShopContextRecovery() {
@@ -1936,6 +2137,7 @@ class MerchandiseControlApplication : Application() {
 }
 
 internal const val MAX_AUTOMATIC_SYNC_RECOVERY_ATTEMPTS_PER_TRIGGER = 5
+internal const val AUTOMATIC_SYNC_RECOVERY_COOLDOWN_MS = 5 * 60_000L
 
 /**
  * Ogni trigger esterno (relaunch, foreground o reconnect) apre una finestra

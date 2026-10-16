@@ -19,8 +19,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
@@ -369,6 +372,14 @@ class DefaultInventoryRepository(
     CatalogSyncProgressRepository,
     CatalogAutoSyncRepository,
     Task126BusinessDataScopeRepository {
+
+    /** Internal deterministic clock seam; production keeps the existing wall clock. */
+    internal var syncEventRetryNowMs: () -> Long = System::currentTimeMillis
+    internal var syncEventRetryJitter: () -> Double = { kotlin.random.Random.nextDouble(0.5, 1.5) }
+
+    internal data class SyncEventProducerOutcome(val recorded: Boolean, val outboxInserted: Int, val attempted: Int)
+    private data class SyncEventAttemptOutcome(val sent: Boolean, val recorded: Boolean,
+        val completion: SyncEventRetryMetadata? = null)
 
     private data class HistorySessionPushCandidate(
         val entry: HistoryEntry,
@@ -6597,6 +6608,159 @@ class DefaultInventoryRepository(
             syncEventDeviceStateDao.get()?.deviceId == device }
     }
 
+    private fun syncEventRetryEligible(entry: SyncEventOutboxEntry, now: Long, waitedClaimID: String? = null): Boolean {
+        if (now < 0L || entry.attemptCount < 0 || entry.eventType == "LOCAL_BUSINESS_WRITE_V1") return false
+        val metadata = entry.lastErrorType?.let(SyncEventRetryMetadata::decode)
+        // The old writer persisted this exact enum name. Preserve only its recorded remaining budget;
+        // renewal still requires a newly completed, structurally classified failure.
+        if (metadata == null) return entry.lastErrorType in setOf(null, SyncErrorCategory.NetworkOfflineOrTimeout.name) &&
+            entry.attemptCount < SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
+        if (metadata.retryAfterInvalid || entry.attemptCount < metadata.windowAttempts) return false
+        return when (metadata.phase) {
+            "waiting" -> now >= metadata.nextEligibleAtMs || (waitedClaimID == metadata.claimID &&
+                now >= (metadata.retryAfterAtMs ?: 0L))
+            "cooldown" -> now >= metadata.nextEligibleAtMs
+            // This is idempotent uncertainty replay within the remaining budget, never a transient renewal.
+            "in_flight", "uncertain" -> metadata.windowAttempts < SYNC_EVENT_OUTBOX_MAX_ATTEMPTS &&
+                metadata.claimID !in activeSyncEventClaims && now >= metadata.nextEligibleAtMs
+            else -> false
+        }
+    }
+
+    private fun syncEventRetryDelay(attempt: Int): Long {
+        val jitter = syncEventRetryJitter().takeIf { it.isFinite() && it in 0.5..1.5 } ?: 1.0
+        return ((2_000L shl (attempt - 1).coerceIn(0, 4)) * jitter).toLong().coerceAtMost(60_000L)
+    }
+
+    /** The local row is the operation; only a matching current claim may acknowledge or complete it. */
+    private suspend fun sendClaimedSyncEvent(
+        entry: SyncEventOutboxEntry, params: SyncEventRecordRpcParams, remote: SyncEventRemoteDataSource,
+        requireCurrentProducerScope: suspend () -> Unit = {}, waitedClaimID: String? = null
+    ): SyncEventAttemptOutcome {
+        requireCurrentProducerScope()
+        businessDataScopeRuntimeGuard.requireCloudBusinessDataScope()
+        requireCurrentBusinessDataScope()
+        val now = syncEventRetryNowMs()
+        if (!syncEventRetryEligible(entry, now, waitedClaimID) || now > Long.MAX_VALUE - 300_000L) {
+            return SyncEventAttemptOutcome(false, false)
+        }
+        val previous = entry.lastErrorType?.let(SyncEventRetryMetadata::decode)
+        val window = (if (previous?.phase == "cooldown") 0 else previous?.windowAttempts ?: entry.attemptCount) + 1
+        val claim = SyncEventRetryMetadata(category = SyncErrorCategory.Unknown, phase = "in_flight",
+            windowAttempts = window, lastAttemptAtMs = now, lastCompletedAtMs = null,
+            nextEligibleAtMs = maxOf(now + 300_000L, previous?.retryAfterAtMs ?: 0L),
+            claimID = java.util.UUID.randomUUID().toString(), retryAfterAtMs = previous?.retryAfterAtMs)
+        val signal = businessDataScopeRuntimeGuard.captureBusinessDataScopeSignal(entry.ownerUserId, params.shopId)
+        val expectedDevice = syncEventDeviceStateDao.get()?.deviceId
+        val claimed = entry.copy(attemptCount = if (entry.attemptCount == Int.MAX_VALUE) Int.MAX_VALUE else entry.attemptCount + 1,
+            lastAttemptAtMs = now, lastErrorType = claim.encode())
+        activeSyncEventClaims.add(claim.claimID)
+        try {
+            val accepted = db.withTransaction {
+                requireCurrentProducerScope()
+                requireCurrentBusinessDataScope()
+                if (!businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(signal) ||
+                    syncEventDeviceStateDao.get()?.deviceId != expectedDevice || syncEventOutboxDao.getById(entry.id) != entry) false
+                else { syncEventOutboxDao.update(claimed); true }
+            }
+            if (!accepted) return SyncEventAttemptOutcome(false, false)
+            suspend fun complete(metadata: SyncEventRetryMetadata?, acknowledge: Boolean): Boolean = db.withTransaction {
+                requireCurrentProducerScope()
+                requireCurrentBusinessDataScope()
+                val current = syncEventOutboxDao.getById(entry.id)
+                if (!businessDataScopeRuntimeGuard.isCurrentBusinessDataScopeSignal(signal) ||
+                    syncEventDeviceStateDao.get()?.deviceId != expectedDevice || current == null || current != claimed ||
+                    current.lastErrorType?.let(SyncEventRetryMetadata::decode)?.claimID != claim.claimID) false
+                else {
+                    if (acknowledge) syncEventOutboxDao.deleteById(entry.id)
+                    else syncEventOutboxDao.update(current.copy(lastAttemptAtMs = metadata?.lastCompletedAtMs,
+                        lastErrorType = metadata?.encode()))
+                    true
+                }
+            }
+            val result = try {
+                requireCurrentProducerScope()
+                businessScopedRemoteCall { remote.recordSyncEvent(params) }.also { requireCurrentProducerScope() }
+            } catch (cancelled: CancellationException) {
+                // A returned cancellation can finish locally; actual task cancellation leaves the consumed in-flight claim.
+                // Both are explicit Unknown outcomes with an identity-preserving, bounded replay policy.
+                if (coroutineContext.isActive) {
+                    val finished = syncEventRetryNowMs()
+                    if (finished >= now && finished <= Long.MAX_VALUE - 300_000L) {
+                        complete(claim.copy(phase = "uncertain", lastCompletedAtMs = finished,
+                            nextEligibleAtMs = maxOf(finished + 300_000L, claim.retryAfterAtMs ?: 0L)), false)
+                    }
+                }
+                throw cancelled
+            }
+            if (result.isSuccess) {
+                val acknowledged = complete(null, true)
+                return SyncEventAttemptOutcome(true, acknowledged)
+            }
+            val finished = syncEventRetryNowMs()
+            if (finished < now || finished > Long.MAX_VALUE - 300_000L) return SyncEventAttemptOutcome(true, false)
+            val classification = result.exceptionOrNull()?.let { SyncErrorClassifier.classify(it, finished) }
+                ?: SyncErrorClassification(SyncErrorCategory.Unknown)
+            val transient = classification.category in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
+                SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient) && !classification.retryAfterInvalid
+            val localDelay = if (window == SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) 300_000L else syncEventRetryDelay(window)
+            val next = maxOf(finished + if (transient) localDelay else 0L, classification.retryAfterAtMs ?: 0L)
+            val completion = claim.copy(category = classification.category,
+                phase = if (!transient) "blocked" else if (window == SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) "cooldown" else "waiting",
+                lastCompletedAtMs = finished, nextEligibleAtMs = next,
+                retryAfterAtMs = classification.retryAfterAtMs, retryAfterInvalid = classification.retryAfterInvalid)
+            val completed = complete(completion, false)
+            return SyncEventAttemptOutcome(true, false, completion.takeIf { completed })
+        } finally { activeSyncEventClaims.remove(claim.claimID) }
+    }
+
+    /** Reuses the ordinary event operation and gates for both Catalog and History producers. */
+    internal suspend fun recordSyncEventDurably(
+        remote: SyncEventRemoteDataSource, ownerUserId: String, storeScope: String, params: SyncEventRecordRpcParams,
+        maxImmediateAttempts: Int = 1, requireCurrentProducerScope: suspend () -> Unit = {}
+    ): SyncEventProducerOutcome {
+        require(maxImmediateAttempts in 1..3)
+        requireCurrentProducerScope()
+        requireCurrentBusinessDataScope()
+        val key = requireNotNull(params.clientEventId)
+        val now = syncEventRetryNowMs()
+        require(now >= 0L)
+        val row = SyncEventOutboxEntry(ownerUserId = ownerUserId, storeScope = storeScope, domain = params.domain,
+            eventType = params.eventType, source = params.source, sourceDeviceId = params.sourceDeviceId,
+            batchId = params.batchId, clientEventId = key, changedCount = params.changedCount,
+            entityIdsJson = syncEventJson.encodeToString(params.entityIds ?: SyncEventEntityIds()),
+            metadataJson = syncEventJson.encodeToString(params.metadata), createdAtMs = now)
+        val inserted = db.withTransaction {
+            requireCurrentProducerScope(); requireCurrentBusinessDataScope()
+            syncEventOutboxDao.insert(row)
+        }
+        val persisted = syncEventOutboxDao.getByOperationKey(ownerUserId, key) ?: return SyncEventProducerOutcome(false, 0, 0)
+        // An existing operation ID can never be relabelled with another body or store.
+        if (persisted.copy(id = row.id, createdAtMs = row.createdAtMs, attemptCount = 0,
+                lastAttemptAtMs = null, lastErrorType = null) != row) return SyncEventProducerOutcome(false, 0, 0)
+        var attempts = 0
+        var entry = persisted
+        var waitedClaimID: String? = null
+        repeat(maxImmediateAttempts) { index ->
+            val outcome = sendClaimedSyncEvent(entry, params, remote, requireCurrentProducerScope, waitedClaimID)
+            if (outcome.sent) attempts++
+            if (outcome.recorded) return SyncEventProducerOutcome(true, 0, attempts)
+            val completion = outcome.completion
+            if (index == maxImmediateAttempts - 1 || !outcome.sent || completion?.phase != "waiting") {
+                return SyncEventProducerOutcome(false, if (inserted != -1L) 1 else 0, attempts)
+            }
+            if ((completion.retryAfterAtMs ?: 0L) > requireNotNull(completion.lastCompletedAtMs) + 60_000L) {
+                return SyncEventProducerOutcome(false, if (inserted != -1L) 1 else 0, attempts)
+            }
+            // This credit belongs only to this completion/row. Server Retry-After is always checked with wall time.
+            delay(completion.nextEligibleAtMs - requireNotNull(completion.lastCompletedAtMs))
+            requireCurrentProducerScope(); requireCurrentBusinessDataScope()
+            entry = syncEventOutboxDao.getById(entry.id) ?: return SyncEventProducerOutcome(false, 0, attempts)
+            waitedClaimID = completion.claimID
+        }
+        return SyncEventProducerOutcome(false, if (inserted != -1L) 1 else 0, attempts)
+    }
+
     private suspend fun retrySyncEventOutbox(
         remote: SyncEventRemoteDataSource,
         ownerUserId: String,
@@ -6608,13 +6772,30 @@ class DefaultInventoryRepository(
             storeScope,
             SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
         )
-        val ordinaryPending = syncEventOutboxDao.listPendingRetryableForScope(
-            ownerUserId,
-            storeScope,
-            SYNC_EVENT_OUTBOX_MAX_ATTEMPTS,
-            SYNC_EVENT_OUTBOX_RETRY_LIMIT
-        )
         val shopId = shopIdFromStoreScope(storeScope)
+        val canonicalShopWriter = shopId != null && usesCanonicalShopV6Boundary(remote)
+        val ordinaryPending = mutableListOf<SyncEventOutboxEntry>()
+        var afterCreatedAtMs = Long.MIN_VALUE
+        var afterId = Long.MIN_VALUE
+        while (ordinaryPending.size < SYNC_EVENT_OUTBOX_RETRY_LIMIT) {
+            val page = syncEventOutboxDao.listPendingPageForScope(ownerUserId, storeScope,
+                afterCreatedAtMs, afterId, SYNC_EVENT_OUTBOX_RETRY_LIMIT)
+            if (page.isEmpty()) break
+            for (entry in page) {
+                if (!syncEventRetryEligible(entry, syncEventRetryNowMs())) continue
+                if (canonicalShopWriter && entry.domain == SyncEventDomains.PRICES) {
+                    val frozenIds = try { syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson) }
+                        catch (_: SerializationException) { null }
+                    // Old rows without their original parents cannot establish the wire operation that was sent.
+                    // Leave that evidence unchanged and do not let it consume an eligible batch position.
+                    if (frozenIds != null && frozenIds.productIds.isEmpty()) continue
+                }
+                ordinaryPending += entry
+                if (ordinaryPending.size == SYNC_EVENT_OUTBOX_RETRY_LIMIT) break
+            }
+            afterCreatedAtMs = page.last().createdAtMs
+            afterId = page.last().id
+        }
         val deviceId = syncEventDeviceStateDao.get()?.deviceId
         val correctionCandidates = if (usesCanonicalShopV6Boundary(remote) &&
             shopId != null && UUID_PATTERN.matches(shopId) && deviceId != null && UUID_PATTERN.matches(deviceId)) {
@@ -6628,14 +6809,25 @@ class DefaultInventoryRepository(
         var retryFailed = 0
         var retryDeletedOnSuccess = 0
         for (entry in pending) {
-            val correction = entry.attemptCount == SYNC_EVENT_OUTBOX_MAX_ATTEMPTS
-            if (entry.attemptCount > SYNC_EVENT_OUTBOX_MAX_ATTEMPTS) continue
-            val ids = if (correction) runCatching {
-                syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
-            }.getOrNull() ?: continue else syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson)
+            val correction = entry.attemptCount == SYNC_EVENT_OUTBOX_MAX_ATTEMPTS &&
+                entry.lastErrorType == SyncErrorCategory.PayloadValidation.name
+            val ids = try { syncEventJson.decodeFromString<SyncEventEntityIds>(entry.entityIdsJson) }
+                catch (_: SerializationException) {
+                    if (!correction) {
+                        requireCurrentBusinessDataScope()
+                        db.withTransaction {
+                            requireCurrentBusinessDataScope()
+                            if (syncEventOutboxDao.getById(entry.id) == entry) syncEventOutboxDao.update(entry.copy(
+                                lastErrorType = "invalid_persisted_entity_ids"))
+                        }
+                        retryFailed++
+                    }
+                    continue
+                }
             var correctionIds: SyncEventEntityIds? = null
             if (correction) {
-                val metadata = runCatching { syncEventJson.decodeFromString<JsonObject>(entry.metadataJson) }.getOrNull()
+                val metadata = try { syncEventJson.decodeFromString<JsonObject>(entry.metadataJson) }
+                    catch (_: SerializationException) { null }
                 if (!isShopScopeV6CorrectionCandidate(entry, ownerUserId, storeScope, deviceId, ids, metadata)) continue
                 businessDataScopeRuntimeGuard.requireCloudBusinessDataScope()
                 requireCurrentBusinessDataScope()
@@ -6673,7 +6865,7 @@ class DefaultInventoryRepository(
                 syncEventOutboxDao.update(
                     entry.copy(
                         attemptCount = nextAttemptCount,
-                        lastAttemptAtMs = System.currentTimeMillis(),
+                        lastAttemptAtMs = syncEventRetryNowMs(),
                         lastErrorType = errorType
                     )
                 )
@@ -6687,14 +6879,13 @@ class DefaultInventoryRepository(
                 )
                 continue
             }
-            val persistedMetadata = runCatching {
-                syncEventJson.decodeFromString<JsonObject>(entry.metadataJson)
-            }.getOrNull()
+            val persistedMetadata = try { syncEventJson.decodeFromString<JsonObject>(entry.metadataJson) }
+                catch (_: SerializationException) { null }
             if (persistedMetadata == null) {
                 requireCurrentBusinessDataScope()
                 syncEventOutboxDao.update(entry.copy(
                     attemptCount = entry.attemptCount + 1,
-                    lastAttemptAtMs = System.currentTimeMillis(),
+                    lastAttemptAtMs = syncEventRetryNowMs(),
                     lastErrorType = "invalid_persisted_metadata"
                 ))
                 retryFailed++
@@ -6702,14 +6893,12 @@ class DefaultInventoryRepository(
                     "invalid_persisted_metadata", entry.attemptCount + 1, 0)
                 continue
             }
-            val wireIds = correctionIds ?: if (shopId != null && entry.domain == SyncEventDomains.PRICES && usesCanonicalShopV6Boundary(remote)) {
-                db.withTransaction { withSyncEventPriceParents(ids) }
-            } else ids
+            val wireIds = correctionIds ?: ids
             val params = SyncEventRecordRpcParams(
                 domain = entry.domain,
                 eventType = entry.eventType,
                 changedCount = entry.changedCount,
-                entityIds = wireIds ?: ids,
+                entityIds = wireIds,
                 storeId = remoteStoreIdFromStoreScope(entry.storeScope),
                 source = entry.source,
                 sourceDeviceId = entry.sourceDeviceId,
@@ -6718,8 +6907,25 @@ class DefaultInventoryRepository(
                 metadata = persistedMetadata,
                 shopId = shopIdFromStoreScope(entry.storeScope)
             )
-            val result = if (wireIds == null || (shopId != null && entry.domain == SyncEventDomains.PRICES &&
-                    usesCanonicalShopV6Boundary(remote) && !syncEventPriceEnvelopeFits(wireIds)))
+            if (!correction) {
+                if (shopId != null && entry.domain == SyncEventDomains.PRICES &&
+                        usesCanonicalShopV6Boundary(remote) && !syncEventPriceEnvelopeFits(wireIds)) {
+                    requireCurrentBusinessDataScope()
+                    db.withTransaction {
+                        requireCurrentBusinessDataScope()
+                        if (syncEventOutboxDao.getById(entry.id) == entry) syncEventOutboxDao.update(entry.copy(
+                            lastErrorType = "sync_event_price_parent_invalid"))
+                    }
+                    retryFailed++
+                    continue
+                }
+                val outcome = sendClaimedSyncEvent(entry, params, remote)
+                if (outcome.recorded) { retrySucceeded++; retryDeletedOnSuccess++ }
+                else if (outcome.sent) retryFailed++
+                continue
+            }
+            val result = if (shopId != null && entry.domain == SyncEventDomains.PRICES &&
+                    usesCanonicalShopV6Boundary(remote) && !syncEventPriceEnvelopeFits(wireIds))
                 Result.failure(ShopSyncContractException("sync_event_price_parent_invalid"))
                 else businessScopedRemoteCall { remote.recordSyncEvent(params) }
             if (result.isSuccess) {
@@ -6742,7 +6948,7 @@ class DefaultInventoryRepository(
                 syncEventOutboxDao.update(
                     entry.copy(
                         attemptCount = nextAttemptCount,
-                        lastAttemptAtMs = System.currentTimeMillis(),
+                        lastAttemptAtMs = syncEventRetryNowMs(),
                         lastErrorType = errorType
                     )
                 )
@@ -6844,40 +7050,27 @@ class DefaultInventoryRepository(
                 metadata = metadata,
                 shopId = shopId
             )
-            val result = if (wireIds == null) Result.failure(ShopSyncContractException("sync_event_price_parent_invalid"))
-                else businessScopedRemoteCall { remote.recordSyncEvent(params) }
-            if (result.isSuccess) {
+            val outcome = if (wireIds == null) {
+                requireCurrentBusinessDataScope()
+                val inserted = syncEventOutboxDao.insert(SyncEventOutboxEntry(ownerUserId = ownerUserId,
+                    storeScope = storeScope, domain = domain, eventType = eventType, source = params.source,
+                    sourceDeviceId = deviceId, batchId = batchId, clientEventId = clientEventId,
+                    changedCount = chunkChangedCount, entityIdsJson = syncEventJson.encodeToString(params.entityIds),
+                    metadataJson = syncEventJson.encodeToString(metadata), createdAtMs = syncEventRetryNowMs(),
+                    lastErrorType = "sync_event_price_parent_invalid"))
+                SyncEventProducerOutcome(false, if (inserted != -1L) 1 else 0, 0)
+            } else recordSyncEventDurably(remote, ownerUserId, storeScope, params)
+            if (outcome.recorded) {
                 recordedChunks++
                 continue
             }
             enqueuedChunks++
-            requireCurrentBusinessDataScope()
-            val errorType = syncEventOutboxErrorType(result.exceptionOrNull(), params, remote)
-            val insertId = syncEventOutboxDao.insert(
-                SyncEventOutboxEntry(
-                    ownerUserId = ownerUserId,
-                    storeScope = storeScope,
-                    domain = domain,
-                    eventType = eventType,
-                    source = "android",
-                    sourceDeviceId = deviceId,
-                    batchId = batchId,
-                    clientEventId = clientEventId,
-                    changedCount = chunkChangedCount,
-                    entityIdsJson = syncEventJson.encodeToString(chunk),
-                    metadataJson = syncEventJson.encodeToString(metadata),
-                    createdAtMs = System.currentTimeMillis(),
-                    lastAttemptAtMs = System.currentTimeMillis(),
-                    lastErrorType = errorType
-                )
-            )
-            val inserted = insertId != -1L
-            if (inserted) outboxInserted++
+            outboxInserted += outcome.outboxInserted
             Log.w(
                 TAG,
                 "sync_event_outbox_enqueue " +
-                    "eventType=$eventType domain=$domain outboxInserted=${if (inserted) 1 else 0} " +
-                    "lastErrorType=$errorType attemptCount=0 " +
+                    "eventType=$eventType domain=$domain outboxInserted=${outcome.outboxInserted} " +
+                    "attempted=${outcome.attempted} " +
                     "clientEventIdHash=${clientEventIdHash(clientEventId)} " +
                     "changedCount=$chunkChangedCount entityIdsCompacted=false"
             )
@@ -7003,11 +7196,14 @@ class DefaultInventoryRepository(
         attemptCount: Int,
         retryDeletedOnSuccess: Int
     ) {
+        val retryMetadata = lastErrorType?.let(SyncEventRetryMetadata::decode)
+        val diagnostic = retryMetadata?.let { "${it.category.name}/${it.phase}" }
+            ?: lastErrorType?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,80}")) } ?: "unclassified"
         Log.i(
             TAG,
             "sync_event_outbox_retry_entry " +
                 "outcome=$outcome eventType=${entry.eventType} domain=${entry.domain} " +
-                "lastErrorType=${lastErrorType ?: "none"} attemptCount=$attemptCount " +
+                "lastErrorType=$diagnostic attemptCount=$attemptCount " +
                 "clientEventIdHash=${clientEventIdHash(entry.clientEventId)} " +
                 "retryDeletedOnSuccess=$retryDeletedOnSuccess"
         )
@@ -7037,6 +7233,9 @@ class DefaultInventoryRepository(
         const val SYNC_EVENT_OUTBOX_RETRY_LIMIT = 20
         const val SYNC_EVENT_OUTBOX_MAX_ATTEMPTS = 5
         const val SYNC_EVENT_OUTBOX_V6_SHOP_PAYLOAD_VALIDATION = "PayloadValidationV6ShopScope"
+        // Ownership only: no timer or budget lives here. A durable Unknown claim can be replayed after restart,
+        // but never while its original invocation is still actively owned anywhere in this process.
+        val activeSyncEventClaims: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         const val SYNC_EVENT_APPLY_MAX_ATTEMPTS = 5
         // Contratto V6: history targeted massimo tre ID per chiamata.
         const val SHOP_SYNC_HISTORY_TARGETED_ID_LIMIT = 3

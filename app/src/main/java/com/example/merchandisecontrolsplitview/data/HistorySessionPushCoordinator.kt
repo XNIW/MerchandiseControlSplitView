@@ -437,6 +437,25 @@ class HistorySessionPushCoordinator(
                 },
                 shopId = selectedShop?.shopId
             )
+            val durableRepository = repository as? DefaultInventoryRepository
+            if (durableRepository != null) {
+                val outcome = durableRepository.recordSyncEventDurably(
+                    remote = syncEventRemote,
+                    ownerUserId = ownerUserId,
+                    storeScope = storeScope,
+                    params = params,
+                    maxImmediateAttempts = HISTORY_SYNC_EVENT_RECORD_ATTEMPTS,
+                    requireCurrentProducerScope = {
+                        syncStateTracker?.requireCurrentBusinessDataScope()
+                        if (!businessDataScopeAllows(ownerUserId, selectedShop)) {
+                            throw Task126BusinessDataScopeChangedException("history_event_producer_scope_changed")
+                        }
+                    }
+                )
+                totalAttempts += outcome.attempted
+                if (outcome.recorded) recordedChunks++ else outboxInserted += outcome.outboxInserted
+                continue
+            }
             var recorded: Result<SyncEventRemoteRow>? = null
             for (attemptIndex in 0 until HISTORY_SYNC_EVENT_RECORD_ATTEMPTS) {
                 totalAttempts++

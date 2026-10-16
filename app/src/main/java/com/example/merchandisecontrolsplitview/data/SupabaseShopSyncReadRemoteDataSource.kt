@@ -93,6 +93,18 @@ private class CheckpointTraceOneShotBody(bytes: ByteArray) : OutgoingContent.Rea
     }
 }
 
+/** Canonical recovery retries belong to the application scheduler, including after a lost response. */
+private class RecoveryCheckpointRequestBody(bytes: ByteArray) : OutgoingContent.ReadChannelContent() {
+    private val channel = ByteReadChannel(bytes)
+    private val opened = AtomicBoolean(false)
+    override val contentType: ContentType = ContentType.Application.Json
+    override val contentLength: Long = bytes.size.toLong()
+    override fun readFrom(): ByteReadChannel {
+        if (!opened.compareAndSet(false, true)) contractFailure("recovery_checkpoint_body_replay")
+        return channel
+    }
+}
+
 @OptIn(SupabaseInternal::class)
 private class SupabaseShopSyncRpcInvoker(
     private val client: SupabaseClient,
@@ -108,6 +120,9 @@ private class SupabaseShopSyncRpcInvoker(
             contractFailure("rpc_response_limit_invalid")
         }
         val operationClient = (client as? GenerationOwnedSupabaseClient)?.captureClient() ?: client
+        val requestTimeoutMs = if (checkpointTrace == null) operationClient.postgrest.config.timeout.inWholeMilliseconds
+            else CHECKPOINT_TRACE_TIMEOUT_MS
+        recordRecoveryRpcTimeout(requestTimeoutMs)
         checkpointTrace?.begin(operationClient, function)
         val api = operationClient.authenticatedSupabaseApi(operationClient.postgrest)
         return api.prepareRequest("rpc/$function") {
@@ -117,7 +132,11 @@ private class SupabaseShopSyncRpcInvoker(
             headers.append("Content-Profile", operationClient.postgrest.config.defaultSchema)
             checkpointTrace?.requireCurrent()
             if (checkpointTrace == null) {
-                setBody(params)
+                if (function == SHOP_SYNC_RECOVERY_CHECKPOINT_RPC) {
+                    setBody(RecoveryCheckpointRequestBody(
+                        supabaseJson.encodeToString(JsonObject.serializer(), params).encodeToByteArray()
+                    ))
+                } else setBody(params)
             } else {
                 headers.append(CHECKPOINT_TRACE_HEADER, CHECKPOINT_TRACE_VALUE)
                 setBody(CheckpointTraceOneShotBody(
@@ -125,14 +144,16 @@ private class SupabaseShopSyncRpcInvoker(
                 ))
             }
             timeout {
-                requestTimeoutMillis = if (checkpointTrace == null) {
-                    operationClient.postgrest.config.timeout.inWholeMilliseconds
-                } else CHECKPOINT_TRACE_TIMEOUT_MS
+                requestTimeoutMillis = requestTimeoutMs
             }
         }.execute { response ->
             checkpointTrace?.recordStatus(response.status.value)
             if (!response.status.isSuccess()) {
-                throw ShopSyncContractException("shop_sync_rpc_http_${response.status.value}")
+                val code = "shop_sync_rpc_http_${response.status.value}"
+                // Keep the public contract diagnostic while retaining structured status/headers for retry policy.
+                throw ShopSyncContractException(code).apply {
+                    initCause(io.ktor.client.plugins.ResponseException(response, code))
+                }
             }
             val boundedBody = readShopSyncResponseBounded(
                 channel = response.bodyAsChannel(),

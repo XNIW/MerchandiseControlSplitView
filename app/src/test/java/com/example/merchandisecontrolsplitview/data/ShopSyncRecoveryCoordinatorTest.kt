@@ -34,6 +34,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.postgrest.postgrest
+import kotlin.time.Duration.Companion.seconds
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -244,6 +248,912 @@ class ShopSyncRecoveryCoordinatorTest {
                 assertNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
             }
         } finally { auto.shutdown() }
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun automaticRecoverySchedulesOneFutureWindowAfterFiveTransientFailuresWithoutAnotherTrigger() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = false)
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun automaticRecoveryCooldownNeverSendsForRevokedShop() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = true)
+    }
+
+    @Test
+    fun automaticRecoveryResumesPersistedCooldownAfterDatabaseReopen() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = false, reopenDuringCooldown = true)
+    }
+
+    @Test
+    fun automaticRecoveryReobservationKeepsCompletionAndDeadline() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = false, observeDuringCooldown = true)
+    }
+
+    @Test
+    fun automaticRecoverySameShopRefreshDoesNotStrandPersistedCooldown() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = false, refreshDuringCooldown = true)
+    }
+
+    @Test
+    fun automaticRecoveryRealShopChangeNeverSpendsOldScopeCooldown() = runTest {
+        verifyAutomaticRecoveryAfterExhaustedWindow(revokeDuringCooldown = false, changeShopDuringCooldown = true)
+    }
+
+    @Test
+    fun automaticRecoverySameShopRefreshDuringCheckpointDoesNotStrandConsumedClaim() = runTest {
+        verifyAutomaticRecoveryContextChangeDuringCheckpoint(changeShop = false)
+    }
+
+    @Test
+    fun automaticRecoveryRealShopChangeDuringCheckpointNeverReplaysOldScope() = runTest {
+        verifyAutomaticRecoveryContextChangeDuringCheckpoint(changeShop = true)
+    }
+
+    @Test
+    fun automaticRecoveryCheckpointReturningDuringSameShopLoadingDoesNotStrandOrdinaryOpportunity() = runTest {
+        verifyAutomaticHealthyRecoveryAfterSameShopRefresh(holdRefreshLoading = true)
+    }
+
+    @Test
+    fun automaticRecoveryHealthyActivationAfterSameShopRefreshPublishesApplicationReady() = runTest {
+        verifyAutomaticHealthyRecoveryAfterSameShopRefresh(holdRefreshLoading = false)
+    }
+
+    @Test
+    fun automaticRecoveryWaitingScopeCancellationPreservesConsumedIntent() = runTest {
+        verifyAutomaticRecoveryWaitingScopeTermination(WaitingScopeTermination.CANCEL)
+    }
+
+    @Test
+    fun automaticRecoveryWaitingScopeDeviceChangeRejectsHealthyResponse() = runTest {
+        verifyAutomaticRecoveryWaitingScopeTermination(WaitingScopeTermination.DEVICE)
+    }
+
+    @Test
+    fun automaticRecoveryWaitingScopeRevocationRejectsHealthyResponse() = runTest {
+        verifyAutomaticRecoveryWaitingScopeTermination(WaitingScopeTermination.REVOKE)
+    }
+
+    @Test
+    fun automaticRecoveryWaitingScopeDeadlineUsesOnlyRemainingRequestBudget() = runTest {
+        verifyAutomaticRecoveryWaitingScopeTermination(WaitingScopeTermination.DEADLINE)
+    }
+
+    private enum class WaitingScopeTermination { CANCEL, DEVICE, REVOKE, DEADLINE }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, io.github.jan.supabase.annotations.SupabaseInternal::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyAutomaticRecoveryWaitingScopeTermination(
+        termination: WaitingScopeTermination
+    ) {
+        qualifiedAutomaticRecoveryJournal()
+        val beforeBaseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val beforeDevice = requireNotNull(db.syncEventDeviceStateDao().get())
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        var now = 1_000_000L
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseCheckpoint = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val loading = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val waiting = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val waitingObservedAtNanos = java.util.concurrent.atomic.AtomicLong()
+        val fetches = java.util.concurrent.atomic.AtomicInteger()
+        val rpcStartedAtNanos = java.util.concurrent.atomic.AtomicLong()
+        val requestedTimeout = if (termination == WaitingScopeTermination.DEADLINE) 2.seconds else 10.seconds
+        // This client supplies configuration only: no API method or network transport is invoked.
+        val timeoutClient = createSupabaseClient("http://127.0.0.1:1", "synthetic-public-key") {
+            defaultLogLevel = io.github.jan.supabase.logging.LogLevel.NONE
+            requestTimeout = requestedTimeout
+            install(Postgrest) { timeout = requestedTimeout }
+        }
+        val timeoutMs = timeoutClient.postgrest.config.timeout.inWholeMilliseconds
+        assertEquals("The fixture must use the SDK timeout read by the production invoker", requestedTimeout.inWholeMilliseconds, timeoutMs)
+        fun elapsedMs() = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - rpcStartedAtNanos.get())
+        fun pumpUntil(message: String, condition: () -> Boolean) {
+            repeat(5_000) {
+                testScheduler.runCurrent()
+                if (condition()) return
+                Thread.sleep(1)
+            }
+            assertTrue(message, condition())
+        }
+        fun stableRows() = ordinaryMarkerApplicationRows().filterKeys {
+            it !in setOf("sync_recovery_journal", "sync_event_device_state")
+        }
+        remote.beforeCheckpoint = { entered.complete(Unit); releaseCheckpoint.await() }
+        ShopSyncRecoveryTestHooks.onScopeResolutionWaiting = {
+            waitingObservedAtNanos.set(System.nanoTime())
+            waiting.complete(Unit)
+        }
+        try {
+            withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = { now }, beforeLinkedShopFetch = {
+                if (fetches.incrementAndGet() == 2) { loading.complete(Unit); releaseRefresh.await() }
+            }) { application, auth, shops ->
+                val observedRemote = object : ShopSyncReadRemoteDataSource by remote {
+                    override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
+                        rpcStartedAtNanos.set(System.nanoTime())
+                        recordRecoveryRpcTimeout(timeoutMs)
+                        val result = remote.checkpoint(context)
+                        if (termination == WaitingScopeTermination.DEADLINE) {
+                            // Model real response latency on the transport dispatcher, charging it to the same budget.
+                            kotlinx.coroutines.delay(timeoutMs * 3L / 4L)
+                        }
+                        return result
+                    }
+                }
+                val scoped = coordinator(nowMs = { now }, recoveryRemote = observedRemote, scopeStillValid = { owner, shop ->
+                    val current = shops.state.value
+                    (auth.state.value as? AuthState.SignedIn)?.userId == owner && current.ownerUserId == owner &&
+                        !current.isLoading && current.syncAllowed && current.activeShopId == shop
+                }, activationBoundary = { tracker.withBusinessDataScopeTransition { it() } })
+                application.javaClass.getDeclaredField("shopSyncRecoveryCoordinator\$delegate").apply { isAccessible = true }
+                    .set(application, lazyOf(scoped))
+                var refreshFlight: kotlinx.coroutines.Deferred<Unit>? = null
+                try {
+                    application.javaClass.getDeclaredMethod("observeShopContextForRemoteComponents")
+                        .apply { isAccessible = true }.invoke(application)
+                    application.requestPendingBusinessRecovery("task144_wait_termination")
+                    pumpUntil("A real checkpoint must enter after its durable claim") { entered.isCompleted }
+                    val origin = requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+                    refreshFlight = backgroundScope.async { shops.refresh(ACCOUNT) }
+                    pumpUntil("The real same-shop refresh must be held Loading") { loading.isCompleted }
+                    releaseCheckpoint.complete(Unit)
+                    pumpUntil("The actual combined authority flow must be waiting before the terminating action") { waiting.isCompleted }
+                    assertTrue(origin.isActive)
+                    assertTrue(shops.state.value.isLoading)
+                    val atWait = requireNotNull(runBlocking { db.syncRecoveryJournalDao().get() })
+                    val claim = requireNotNull(AutomaticRecoveryRetryMetadata.decode(atWait.reason))
+                    assertEquals("in_flight", claim.state)
+                    assertEquals(1, atWait.attemptCount)
+                    assertEquals(1, claim.windowAttempts)
+                    val rowsAtWait = stableRows()
+                    val checkpointsAtWait = remote.checkpointCalls
+                    val pagesAtWait = remote.pageCalls
+                    when (termination) {
+                        WaitingScopeTermination.CANCEL -> origin.cancel(CancellationException("fixture explicit cancellation while waiting"))
+                        WaitingScopeTermination.DEVICE -> runBlocking {
+                            db.withTransaction {
+                                db.openHelper.writableDatabase.execSQL(
+                                    "UPDATE sync_event_device_state SET deviceId = ? WHERE id = 1",
+                                    arrayOf("task144-replaced-install-identity"))
+                            }
+                        }
+                        WaitingScopeTermination.REVOKE -> {
+                            shops.invalidateLocalAuthorization(ACCOUNT, SHOP)
+                            assertFalse("The real revocation must remove local authorization", shops.state.value.localAccessAllowed)
+                            assertFalse(shops.state.value.syncAllowed)
+                        }
+                        WaitingScopeTermination.DEADLINE -> {
+                            val waitingElapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                                waitingObservedAtNanos.get() - rpcStartedAtNanos.get())
+                            assertTrue("RPC time must already consume most of the configured request budget", waitingElapsedMs >= timeoutMs * 3L / 4L)
+                            assertTrue("WAIT must be observed before the original request deadline", waitingElapsedMs < timeoutMs)
+                        }
+                    }
+                    pumpUntil("The owned invocation must settle while refresh is still unresolved") { origin.isCompleted }
+                    if (termination == WaitingScopeTermination.DEADLINE) {
+                        assertFalse("Deadline expiry is a refused continuation, not an invented task cancellation", origin.isCancelled)
+                        assertTrue("A still-Loading invocation must actually wait through the remaining budget", elapsedMs() >= timeoutMs - 2L)
+                        assertTrue("The wait must expire against the original deadline, not receive a fresh timeout", elapsedMs() < timeoutMs + timeoutMs / 4L)
+                    }
+                    assertFalse(applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex").isLocked)
+                    val settled = requireNotNull(runBlocking { db.syncRecoveryJournalDao().get() })
+                    val evidence = requireNotNull(AutomaticRecoveryRetryMetadata.decode(settled.reason))
+                    assertEquals(atWait.ownerHash, settled.ownerHash)
+                    assertEquals(atWait.storeScope, settled.storeScope)
+                    assertEquals(atWait.deviceId, settled.deviceId)
+                    assertEquals(atWait.authorizationMode, settled.authorizationMode)
+                    assertEquals(atWait.createdAtMs, settled.createdAtMs)
+                    assertEquals(claim.claimID, evidence.claimID)
+                    assertEquals(1, settled.attemptCount)
+                    assertEquals(1, evidence.windowAttempts)
+                    assertEquals(SyncErrorCategory.Unknown, evidence.category)
+                    assertTrue(evidence.state in setOf("in_flight", "blocked"))
+                    assertEquals(checkpointsAtWait, remote.checkpointCalls)
+                    assertEquals(pagesAtWait, remote.pageCalls)
+                    assertEquals(beforeBaseline, runBlocking { db.syncRecoveryBaselineDao().get() })
+                    assertEquals(rowsAtWait, stableRows())
+                    releaseRefresh.complete(Unit)
+                    pumpUntil("The held refresh must settle without replaying the old response") { refreshFlight.isCompleted }
+                    refreshFlight.await()
+                    now += 300_001L
+                    testScheduler.advanceTimeBy(300_001L)
+                    testScheduler.runCurrent()
+                    application.requestPendingBusinessRecovery("task144_wait_termination_future_opportunity")
+                    repeat(100) { testScheduler.runCurrent(); Thread.sleep(1) }
+                    assertEquals("Unknown/cancelled/revoked claims never renew merely because time passed", checkpointsAtWait, remote.checkpointCalls)
+                    assertEquals(pagesAtWait, remote.pageCalls)
+                    assertEquals(beforeBaseline, runBlocking { db.syncRecoveryBaselineDao().get() })
+                    assertEquals(rowsAtWait, stableRows())
+                    assertEquals(1, runBlocking { db.syncRecoveryJournalDao().get() }?.attemptCount)
+                    assertEquals(if (termination == WaitingScopeTermination.DEVICE)
+                        beforeDevice.copy(deviceId = "task144-replaced-install-identity") else beforeDevice,
+                        runBlocking { db.syncEventDeviceStateDao().get() })
+                } finally {
+                    releaseCheckpoint.complete(Unit); releaseRefresh.complete(Unit)
+                    refreshFlight?.let { it.cancel(); it.join() }
+                }
+            }
+        } finally { timeoutClient.close() }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyAutomaticHealthyRecoveryAfterSameShopRefresh(holdRefreshLoading: Boolean) {
+        qualifiedAutomaticRecoveryJournal()
+        val beforeProduct = db.productDao().getAll().single()
+        val beforeBaseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        var now = 1_000_000L
+        val checkpointEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseCheckpoint = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val checkpointReturned = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val postRpcLoadingObserved = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val refreshLoading = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val releaseRefresh = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val linkedFetches = java.util.concurrent.atomic.AtomicInteger()
+        val checkpointEntries = java.util.concurrent.atomic.AtomicInteger()
+        var claimAtTransport: SyncRecoveryJournal? = null
+        remote.beforeCheckpoint = {
+            if (checkpointEntries.incrementAndGet() == 1) {
+                claimAtTransport = db.syncRecoveryJournalDao().get()
+                checkpointEntered.complete(Unit)
+                releaseCheckpoint.await()
+            }
+        }
+        fun pumpUntil(message: String, condition: () -> Boolean) {
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (condition()) return
+                Thread.sleep(1)
+            }
+            assertTrue(message, condition())
+        }
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = { now }, beforeLinkedShopFetch = {
+            if (linkedFetches.incrementAndGet() == 2 && holdRefreshLoading) {
+                refreshLoading.complete(Unit)
+                releaseRefresh.await()
+            }
+        }) { application, auth, shops ->
+            val returnedWhileLoading = java.util.concurrent.atomic.AtomicBoolean()
+            val observedRemote = object : ShopSyncReadRemoteDataSource by remote {
+                override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
+                    // Synthetic transport declares its own bounded timeout; production reads the actual client config.
+                    recordRecoveryRpcTimeout(90_000L)
+                    val result = remote.checkpoint(context)
+                    if (!checkpointReturned.isCompleted) {
+                        returnedWhileLoading.set(shops.state.value.isLoading)
+                        checkpointReturned.complete(Unit)
+                    }
+                    return result
+                }
+            }
+            val scopedCoordinator = coordinator(nowMs = { now }, recoveryRemote = observedRemote, scopeStillValid = { owner, shop ->
+                val current = shops.state.value
+                val allowed = (auth.state.value as? AuthState.SignedIn)?.userId == owner && current.ownerUserId == owner &&
+                    !current.isLoading && current.syncAllowed && current.activeShopId == shop
+                if (checkpointReturned.isCompleted && current.isLoading) postRpcLoadingObserved.complete(Unit)
+                allowed
+            }, activationBoundary = { tracker.withBusinessDataScopeTransition { it() } })
+            application.javaClass.getDeclaredField("shopSyncRecoveryCoordinator\$delegate").apply { isAccessible = true }
+                .set(application, lazyOf(scopedCoordinator))
+            var refreshFlight: kotlinx.coroutines.Deferred<Unit>? = null
+            try {
+                application.javaClass.getDeclaredMethod("observeShopContextForRemoteComponents")
+                    .apply { isAccessible = true }.invoke(application)
+                application.requestPendingBusinessRecovery("task144_healthy_checkpoint_before_refresh")
+                pumpUntil("The healthy checkpoint must enter after its durable claim") { checkpointEntered.isCompleted }
+                val claimed = requireNotNull(claimAtTransport)
+                assertEquals(1, claimed.attemptCount)
+                assertEquals("in_flight", AutomaticRecoveryRetryMetadata.decode(claimed.reason)?.state)
+                val oldFlight = requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+                val epoch = shops.diagnosticShopEpoch()
+                val ownedRefresh = backgroundScope.async { shops.refresh(ACCOUNT) }
+                refreshFlight = ownedRefresh
+                if (holdRefreshLoading) {
+                    pumpUntil("The real refresh must stay Loading while its linked-shop response is held") { refreshLoading.isCompleted }
+                    assertTrue(shops.state.value.isLoading)
+                    assertEquals(SHOP, shops.state.value.activeShopId)
+                    assertTrue(shops.state.value.localAccessAllowed)
+                    releaseCheckpoint.complete(Unit)
+                    pumpUntil("The healthy remote checkpoint must return before the held refresh is resolved") { checkpointReturned.isCompleted }
+                    assertTrue("The result must actually return while the real shop context is Loading", returnedWhileLoading.get())
+                    pumpUntil("The real post-RPC authority predicate must observe the held Loading context") { postRpcLoadingObserved.isCompleted }
+                    releaseRefresh.complete(Unit)
+                }
+                pumpUntil("The same-shop refresh must resolve its actual authority") { ownedRefresh.isCompleted }
+                ownedRefresh.await()
+                assertTrue(shops.diagnosticShopEpoch() > epoch)
+                assertEquals(SHOP, shops.state.value.activeShopId)
+                assertFalse(shops.state.value.isLoading)
+                assertTrue(shops.state.value.syncAllowed)
+                if (!holdRefreshLoading) {
+                    // Observe the refreshed context while the recovery journal still exists, before activation.
+                    repeat(100) { testScheduler.runCurrent(); Thread.sleep(1) }
+                    assertNotNull(runBlocking { db.syncRecoveryJournalDao().get() })
+                    releaseCheckpoint.complete(Unit)
+                }
+                pumpUntil("The original recovery invocation must settle") { oldFlight.isCompleted }
+                if (holdRefreshLoading) {
+                    val settledJournal = runBlocking { db.syncRecoveryJournalDao().get() }
+                    val settledRetry = settledJournal?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
+                    // Observe the actual result before time/admission can change it; omit identity and payload fields.
+                    println("task144_loading_settlement journalPresent=${settledJournal != null} " +
+                        "code=${settledRetry?.code ?: "unclassified"} state=${settledRetry?.state ?: "none"} " +
+                        "category=${settledRetry?.category?.name ?: "none"} cumulative=${settledJournal?.attemptCount} " +
+                        "window=${settledRetry?.windowAttempts} completedAt=${settledRetry?.lastCompletedAtMs} " +
+                        "nextEligibleAt=${settledRetry?.nextEligibleAtMs} oldFlightCancelled=${oldFlight.isCancelled} " +
+                        "checkpointEntries=${checkpointEntries.get()}")
+                    now += 300_001L
+                    testScheduler.advanceTimeBy(300_001L)
+                    testScheduler.runCurrent()
+                    application.requestPendingBusinessRecovery("task144_ordinary_opportunity_after_loading_resolved")
+                }
+                pumpUntil("A healthy same-shop recovery must finish its durable journal after refresh") {
+                    runBlocking { db.syncRecoveryJournalDao().get() } == null
+                }
+                val afterBaseline = requireNotNull(runBlocking { db.syncRecoveryBaselineDao().get() })
+                assertFalse("The actual coordinator must publish a new durable generation", beforeBaseline.generationId == afterBaseline.generationId)
+                validateShopSyncActiveReceipt(db, afterBaseline.generationId, decodeRecoveryCheckpointJson(afterBaseline.checkpointJson))
+                assertEquals(beforeProduct.productName, runBlocking { db.productDao().getAll().single() }.productName)
+                // Durable activation is a separate proof from the Application publishing its normal usable state.
+                pumpUntil("A verified healthy activation must also publish Application READY without another trigger") {
+                    tracker.businessDataScopeState.value.status == Task126BusinessDataScopeStatus.READY
+                }
+                val published = tracker.businessDataScopeState.value
+                assertNull(published.errorCode)
+                assertTrue(published.localReadsAllowed)
+                assertTrue(published.localWritesAllowed)
+                assertTrue(tracker.allowsBusinessDataScope(ACCOUNT, selectedShop()))
+                assertFalse(applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex").isLocked)
+            } finally {
+                releaseCheckpoint.complete(Unit)
+                releaseRefresh.complete(Unit)
+                refreshFlight?.let { it.cancel(); it.join() }
+            }
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyAutomaticRecoveryContextChangeDuringCheckpoint(changeShop: Boolean) {
+        qualifiedAutomaticRecoveryJournal()
+        val beforeProduct = db.productDao().getAll().single()
+        val beforeBaseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        var now = 1_000_000L
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val entries = java.util.concurrent.atomic.AtomicInteger()
+        val observedClaim = java.util.concurrent.atomic.AtomicReference<SyncRecoveryJournal?>()
+        remote.checkpointFailure = java.io.IOException("task144_in_flight_refresh_offline")
+        remote.beforeCheckpoint = {
+            if (entries.incrementAndGet() == 1) {
+                observedClaim.set(db.syncRecoveryJournalDao().get())
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        val otherShop = "90000000-0000-4000-8000-000000000144"
+        val linked = listOf(
+            LinkedShop(SHOP, null, selectedShop().name, selectedShop().role, "active", selectable = true, canWrite = true),
+            LinkedShop(otherShop, null, "Other synthetic shop", "owner", "active", selectable = true, canWrite = true))
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = { now }, linkedShops = linked) { application, auth, shops ->
+            // Use the production coordinator's changing auth/shop predicate, rather than the fixture's fixed scope.
+            val scopedCoordinator = coordinator(nowMs = { now }, scopeStillValid = { owner, shop ->
+                val current = shops.state.value
+                (auth.state.value as? AuthState.SignedIn)?.userId == owner && current.ownerUserId == owner &&
+                    !current.isLoading && current.syncAllowed && current.activeShopId == shop
+            }, activationBoundary = { tracker.withBusinessDataScopeTransition { it() } })
+            application.javaClass.getDeclaredField("shopSyncRecoveryCoordinator\$delegate").apply { isAccessible = true }
+                .set(application, lazyOf(scopedCoordinator))
+            try {
+                application.javaClass.getDeclaredMethod("observeShopContextForRemoteComponents")
+                    .apply { isAccessible = true }.invoke(application)
+                application.requestPendingBusinessRecovery("task144_in_flight_context_change")
+                for (step in 0 until 5_000) {
+                    testScheduler.runCurrent()
+                    if (entered.isCompleted) break
+                    Thread.sleep(1)
+                }
+                assertTrue("The real checkpoint must be held after the durable claim, before changing context", entered.isCompleted)
+                val claim = requireNotNull(observedClaim.get())
+                val metadata = requireNotNull(AutomaticRecoveryRetryMetadata.decode(claim.reason))
+                assertEquals(1, claim.attemptCount)
+                assertEquals(1, metadata.windowAttempts)
+                assertEquals("in_flight", metadata.state)
+                val oldFlight = requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+                val epoch = shops.diagnosticShopEpoch()
+                if (changeShop) assertTrue(shops.selectShop(otherShop)) else shops.refresh(ACCOUNT)
+                assertTrue("The real shop operation advances its epoch", shops.diagnosticShopEpoch() > epoch)
+                assertEquals(if (changeShop) otherShop else SHOP, shops.state.value.activeShopId)
+                assertTrue(shops.state.value.syncAllowed)
+                release.complete(Unit)
+                for (step in 0 until 5_000) {
+                    testScheduler.runCurrent()
+                    if (oldFlight.isCompleted) break
+                    Thread.sleep(1)
+                }
+                assertTrue("The held invocation must settle before a new ordinary opportunity", oldFlight.isCompleted)
+                assertFalse(applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex").isLocked)
+                val settled = runBlocking { db.syncRecoveryJournalDao().get() }
+                assertEquals(beforeProduct, runBlocking { db.productDao().getAll().single() })
+                assertEquals(beforeBaseline, runBlocking { db.syncRecoveryBaselineDao().get() })
+                remote.checkpointFailure = null
+                now += 300_001L
+                testScheduler.advanceTimeBy(300_001L)
+                testScheduler.runCurrent()
+                // An existing foreground/reconnect opportunity must not require resetting the consumed claim.
+                application.requestPendingBusinessRecovery("task144_ordinary_opportunity_after_in_flight_refresh")
+                for (step in 0 until 5_000) {
+                    testScheduler.runCurrent()
+                    if ((!changeShop && entries.get() > 1) ||
+                        (changeShop && applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")?.isCompleted != false)) break
+                    Thread.sleep(1)
+                }
+                if (changeShop) {
+                    assertEquals("A real shop change must never replay the old scope", 1, entries.get())
+                    assertEquals(settled, runBlocking { db.syncRecoveryJournalDao().get() })
+                    assertEquals(beforeProduct, runBlocking { db.productDao().getAll().single() })
+                    assertEquals(beforeBaseline, runBlocking { db.syncRecoveryBaselineDao().get() })
+                } else {
+                    assertTrue("A same-shop refresh must not strand a consumed claim; ordinary opportunity produced " +
+                        "${entries.get()} checkpoint entries, settled metadata=${settled?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }}",
+                        entries.get() > 1)
+                }
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun newlyConfirmedMismatchRunsActualProducerAndApplicationRecoveryWithoutResettingDiagnosticCount() = runTest {
+        seedOldMismatchGeneration()
+        db.syncRecoveryJournalDao().deleteAll() // Synthetic precondition: no confirmation or remote recovery attempt yet.
+        val initial = repository.resolveBusinessDataScope(activeScope())
+        assertEquals(Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH, initial.status)
+        val tracker = CatalogSyncStateTracker(initial)
+        tracker.updateNetworkAvailability(true)
+        val beforeProduct = db.productDao().getAll().single()
+        val beforeOutbox = db.syncEventOutboxDao().countAll()
+        val claimAtTransport = java.util.concurrent.atomic.AtomicReference<SyncRecoveryJournal?>()
+        remote.beforeCheckpoint = { claimAtTransport.set(db.syncRecoveryJournalDao().get()) }
+        remote.checkpointFailure = java.io.IOException("task144_new_confirmation_offline")
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = System::currentTimeMillis) { application, _, _ ->
+            // This is the real confirmation entry point, including its repository producer and scheduler.
+            application.replaceMismatchedLocalBusinessDataAndBind()
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (claimAtTransport.get() != null) break
+                Thread.sleep(1)
+            }
+            assertTrue("A new user confirmation must reach the real checkpoint without erasing diagnostic count1",
+                claimAtTransport.get() != null)
+            val claim = requireNotNull(claimAtTransport.get())
+            assertEquals(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED, claim.authorizationMode)
+            assertEquals("Producer diagnostic1 plus one durable automatic claim", 2, claim.attemptCount)
+            assertEquals(1, AutomaticRecoveryRetryMetadata.decode(claim.reason)?.windowAttempts)
+            assertEquals(beforeProduct, runBlocking { db.productDao().getAll().single() })
+            assertEquals(beforeOutbox, runBlocking { db.syncEventOutboxDao().countAll() })
+        }
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun automaticRecoveryFirstRetryUsesContractOneToThreeSecondDelay() = runTest {
+        verifyAutomaticFirstRetryDelay(jitter = 1.0, expectedDelay = 2_000L)
+    }
+
+    @Test
+    fun automaticRecoverySeededMinimumJitterSchedulesFirstRetryAtOneSecond() = runTest {
+        verifyAutomaticFirstRetryDelay(jitter = 0.5, expectedDelay = 1_000L)
+    }
+
+    @Test
+    fun automaticRecoverySeededMaximumJitterSchedulesFirstRetryAtThreeSeconds() = runTest {
+        verifyAutomaticFirstRetryDelay(jitter = 1.5, expectedDelay = 3_000L)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyAutomaticFirstRetryDelay(jitter: Double, expectedDelay: Long) {
+        qualifiedAutomaticRecoveryJournal()
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        remote.checkpointFailure = java.io.IOException("task144_cadence_offline")
+        val callsBefore = remote.checkpointCalls
+        var now = 1_000_000L
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = { now }, automaticRetryJitter = { jitter }) { application, _, _ ->
+            application.requestPendingBusinessRecovery("task144_automatic_retry_cadence")
+            var completed: AutomaticRecoveryRetryMetadata? = null
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                val observed = runBlocking { db.syncRecoveryJournalDao().get() }
+                    ?.let { AutomaticRecoveryRetryMetadata.decode(it.reason) }
+                if (observed?.state == "waiting") { completed = observed; break }
+                Thread.sleep(1)
+            }
+            val first = requireNotNull(completed)
+            assertEquals(callsBefore + 1, remote.checkpointCalls)
+            val delay = first.nextEligibleAtMs - requireNotNull(first.lastCompletedAtMs)
+            assertTrue("AND-R02: actual automatic failure must schedule its first retry within 1000..3000ms; actual=$delay",
+                delay in 1_000L..3_000L)
+            assertEquals("Seeded jitter must control the real automatic deadline", expectedDelay, delay)
+            now += 999L
+            testScheduler.advanceTimeBy(999L); testScheduler.runCurrent()
+            assertEquals("No transport before the contract minimum", callsBefore + 1, remote.checkpointCalls)
+            now += 2_001L
+            testScheduler.advanceTimeBy(2_001L); testScheduler.runCurrent()
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (remote.checkpointCalls >= callsBefore + 2) break
+                Thread.sleep(1)
+            }
+            assertTrue("Existing automatic scheduler must actually deliver the retry by 3s", remote.checkpointCalls >= callsBefore + 2)
+        }
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun automaticRecoverySaturatedDiagnosticCountDoesNotPermanentlyDisableTransientWindow() = runTest {
+        val original = qualifiedAutomaticRecoveryJournal()
+        val metadata = AutomaticRecoveryRetryMetadata("recovery_failed", SyncErrorCategory.NetworkOfflineOrTimeout,
+            5, "cooldown", 300_000L, "70000000-0000-4000-8000-000000000145", 0L, 0L)
+        db.syncRecoveryJournalDao().upsert(original.copy(reason = metadata.encode(),
+            attemptCount = SYNC_RECOVERY_MAX_RECORDED_ATTEMPTS, nextRetryAtMs = 300_000L, updatedAtMs = 0L))
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val callsBefore = remote.checkpointCalls
+        remote.checkpointFailure = java.io.IOException("task144_saturated_diagnostic_counter")
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            application.requestPendingBusinessRecovery("task144_saturated_counter_due_transient")
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (remote.checkpointCalls > callsBefore) break
+                Thread.sleep(1)
+            }
+            assertEquals("A saturated historical diagnostic must not permanently disable a due transient window", callsBefore + 1,
+                remote.checkpointCalls)
+            val observed = runBlocking { db.syncRecoveryJournalDao().get() }
+            assertEquals("The diagnostic cumulative count never resets", SYNC_RECOVERY_MAX_RECORDED_ATTEMPTS, observed?.attemptCount)
+        }
+    }
+
+    @Test
+    fun automaticRecoveryNeverRenewsLegacyUnknownOrMalformedMetadata() = runTest {
+        val original = qualifiedAutomaticRecoveryJournal()
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        assertTrue("Upgrade fixture has qualified same-scope local data", tracker.businessDataScopeState.value.allowsLocalOperations)
+        val callsBefore = remote.checkpointCalls
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            for ((reason, attempts) in listOf("recovery_failed" to 5, "Unknown" to 5,
+                "{\"v\":2}" to 0, "{broken" to 0)) {
+                val persisted = original.copy(reason = reason, attemptCount = attempts)
+                db.syncRecoveryJournalDao().upsert(persisted)
+                val before = ordinaryMarkerApplicationRows()
+                application.requestPendingBusinessRecovery("task144_legacy_or_unknown_metadata")
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+                assertEquals("Unproven metadata never authorizes a remote attempt", callsBefore, remote.checkpointCalls)
+                assertEquals(persisted, db.syncRecoveryJournalDao().get())
+                assertEquals("Upgrade preserves every local row, journal and budget", before, ordinaryMarkerApplicationRows())
+            }
+        }
+    }
+
+    @Test
+    fun automaticRecoveryCanonicalConfirmationRequiresTheExactInitialProducerState() = runTest {
+        val original = qualifiedAutomaticRecoveryJournal()
+        val initial = original.copy(reason = SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED,
+            authorizationMode = SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED,
+            attemptCount = 1, nextRetryAtMs = original.createdAtMs)
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        val callsBefore = remote.checkpointCalls
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            val invalidIntents = listOf(initial.copy(attemptCount = 0), initial.copy(attemptCount = 2),
+                initial.copy(attemptCount = 5), initial.copy(authorizationMode = SyncRecoveryAuthorizationModes.SAME_SCOPE),
+                initial.copy(phase = SyncRecoveryJournalPhases.STAGING), initial.copy(runId = "prior-run"),
+                initial.copy(stagingDatabaseName = "prior-staging.db"), initial.copy(checkpointADigest = "prior-a"),
+                initial.copy(checkpointBDigest = "prior-b"), initial.copy(blockingEventId = 12L),
+                initial.copy(createdAtMs = -1L, updatedAtMs = -1L, nextRetryAtMs = -1L),
+                initial.copy(updatedAtMs = initial.createdAtMs + 1L), initial.copy(nextRetryAtMs = 0L),
+                initial.copy(shopId = "90000000-0000-4000-8000-000000000144"), initial.copy(deviceId = ""))
+            for (intent in invalidIntents) {
+                db.syncRecoveryJournalDao().upsert(intent)
+                val before = ordinaryMarkerApplicationRows()
+                application.requestPendingBusinessRecovery("task144_invalid_initial_confirmation")
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+                assertEquals("A mutated confirmation never acquires remote authority", callsBefore, remote.checkpointCalls)
+                assertEquals("Invalid intent preserves every local row, journal and budget", before, ordinaryMarkerApplicationRows())
+            }
+        }
+    }
+
+    @Test
+    fun automaticRecoveryRejectsIncoherentCooldownDeadlineWithoutTouchingValidStore() = runTest {
+        val original = qualifiedAutomaticRecoveryJournal()
+        val callsBefore = remote.checkpointCalls
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            val invalidDue = AutomaticRecoveryRetryMetadata("recovery_failed", SyncErrorCategory.NetworkOfflineOrTimeout,
+                5, "cooldown", 0L, "70000000-0000-4000-8000-000000000144", 1_000_000L, 1_000_000L)
+            for (metadata in listOf(invalidDue, invalidDue.copy(nextEligibleAtMs = 1_300_000L, lastCompletedAtMs = 999_999L))) {
+                db.syncRecoveryJournalDao().upsert(original.copy(reason = metadata.encode(), attemptCount = 5,
+                    updatedAtMs = 1_000_000L, nextRetryAtMs = metadata.nextEligibleAtMs))
+                val before = ordinaryMarkerApplicationRows()
+                application.requestPendingBusinessRecovery("task144_corrupt_cooldown_deadline")
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+                assertEquals(callsBefore, remote.checkpointCalls)
+                assertEquals(before, ordinaryMarkerApplicationRows())
+            }
+        }
+    }
+
+    @Test
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun automaticRecoveryRechecksNetworkAfterWaitingForExecutionMutex() = runTest {
+        qualifiedAutomaticRecoveryJournal()
+        val before = ordinaryMarkerApplicationRows()
+        val callsBefore = remote.checkpointCalls
+        val clockReads = java.util.concurrent.atomic.AtomicInteger()
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = {
+            clockReads.incrementAndGet(); 1_000_000L
+        }) { application, _, _ ->
+            val mutex = applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex")
+            mutex.lock()
+            try {
+                application.requestPendingBusinessRecovery("task144_network_drop_behind_owner")
+                val scheduled = requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+                for (step in 0 until 1_000) {
+                    testScheduler.runCurrent()
+                    if (clockReads.get() > 0) break
+                    Thread.sleep(1)
+                }
+                assertTrue("Admission reached the held execution mutex", clockReads.get() > 0)
+                assertTrue(scheduled.isActive)
+                tracker.updateNetworkAvailability(false)
+                mutex.unlock()
+                scheduled.join()
+                assertEquals(callsBefore, remote.checkpointCalls)
+                assertEquals(before, ordinaryMarkerApplicationRows())
+            } finally {
+                if (mutex.isLocked) mutex.unlock()
+            }
+        }
+    }
+
+    private suspend fun qualifiedAutomaticRecoveryJournal(): SyncRecoveryJournal {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        val journal = SyncRecoveryJournal(ownerHash = activeScope().ownerHash, storeScope = activeScope().storeId,
+            shopId = SHOP, deviceId = DEVICE, authorizationMode = SyncRecoveryAuthorizationModes.SAME_SCOPE,
+            phase = SyncRecoveryJournalPhases.REQUIRED, reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED,
+            blockingEventId = null, attemptCount = 0, createdAtMs = 1_000_000L, updatedAtMs = 1_000_000L,
+            nextRetryAtMs = 0L)
+        db.syncRecoveryJournalDao().upsert(journal)
+        return journal
+    }
+
+    @Test
+    fun automaticRecoveryClaimsBudgetBeforeCheckpointAndNeverRefundsInterruptedClaimAfterReopen() = runTest {
+        seedOldMismatchGeneration()
+        db.syncRecoveryJournalDao().get()!!.let { db.syncRecoveryJournalDao().upsert(it.copy(attemptCount = 0,
+            reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED)) }
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState(
+            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, errorCode = "sync_recovery_required"))
+        tracker.updateNetworkAvailability(true)
+        var checkpointEntries = 0
+        var observedClaim: SyncRecoveryJournal? = null
+        remote.beforeCheckpoint = {
+            checkpointEntries++
+            observedClaim = db.syncRecoveryJournalDao().get()
+            throw CancellationException("task144_synthetic_process_interruption")
+        }
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            application.requestPendingBusinessRecovery("task144_claim_before_checkpoint")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+            val observed = requireNotNull(observedClaim)
+            val metadata = requireNotNull(AutomaticRecoveryRetryMetadata.decode(observed.reason))
+            assertEquals(1, observed.attemptCount)
+            assertEquals(1, metadata.windowAttempts)
+            assertEquals("in_flight", metadata.state)
+            assertEquals(1, checkpointEntries)
+            val interrupted = requireNotNull(db.syncRecoveryJournalDao().get())
+            assertEquals(1, interrupted.attemptCount)
+            reopenOrdinaryDatabase()
+            assertEquals(interrupted, db.syncRecoveryJournalDao().get())
+            remote.beforeCheckpoint = null
+            application.javaClass.getDeclaredField("database\$delegate").apply { isAccessible = true }.set(application, lazyOf(db))
+            application.javaClass.getDeclaredField("repository\$delegate").apply { isAccessible = true }.set(application, lazyOf(repository))
+            application.javaClass.getDeclaredField("shopSyncRecoveryCoordinator\$delegate").apply { isAccessible = true }
+                .set(application, lazyOf(coordinator()))
+            application.requestPendingBusinessRecovery("task144_restart_unknown_in_flight")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+            assertEquals("Unknown interrupted attempt is never silently refunded", interrupted, db.syncRecoveryJournalDao().get())
+            assertEquals(0, remote.checkpointCalls)
+            assertEquals(1, checkpointEntries)
+        }
+    }
+
+    @Test
+    fun automaticRecoveryDoesNotRetryStablePayloadFailure() = runTest {
+        seedOldMismatchGeneration()
+        db.syncRecoveryJournalDao().get()!!.let { db.syncRecoveryJournalDao().upsert(it.copy(attemptCount = 0,
+            reason = SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED)) }
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState(
+            status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, errorCode = "sync_recovery_required"))
+        tracker.updateNetworkAvailability(true)
+        remote.checkpointFailure = SerializationException("task144_stable_invalid_payload")
+        val callsBefore = remote.checkpointCalls
+        withApplicationRecoveryOwner(tracker, selectedShop()) { application, _, _ ->
+            application.requestPendingBusinessRecovery("task144_single_stable_failure")
+            requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).join()
+            assertEquals("Stable payload failures must not consume a five-attempt retry window", callsBefore + 1,
+                remote.checkpointCalls)
+            assertNotNull("Stable refusal preserves the durable journal", db.syncRecoveryJournalDao().get())
+            assertFalse(applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex").isLocked)
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private suspend fun kotlinx.coroutines.test.TestScope.verifyAutomaticRecoveryAfterExhaustedWindow(
+        revokeDuringCooldown: Boolean,
+        reopenDuringCooldown: Boolean = false,
+        observeDuringCooldown: Boolean = false,
+        refreshDuringCooldown: Boolean = false,
+        changeShopDuringCooldown: Boolean = false
+    ) {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        var recoveryNow = 1_000_000L
+        val beforeProduct = db.productDao().getAll().single()
+        val beforeBaseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val journal = SyncRecoveryJournal(ownerHash = activeScope().ownerHash, storeScope = activeScope().storeId,
+            shopId = SHOP, deviceId = DEVICE, authorizationMode = SyncRecoveryAuthorizationModes.SAME_SCOPE,
+            phase = SyncRecoveryJournalPhases.REQUIRED, reason = "task144_synthetic_transient_recovery",
+            blockingEventId = null, attemptCount = 0, createdAtMs = recoveryNow,
+            updatedAtMs = recoveryNow, nextRetryAtMs = null)
+        db.syncRecoveryJournalDao().upsert(journal)
+        val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))
+        tracker.updateNetworkAvailability(true)
+        assertEquals("sync_recovery_required", tracker.businessDataScopeState.value.errorCode)
+        val checkpointCallsBefore = remote.checkpointCalls
+        remote.checkpointFailure = java.io.IOException("task144_synthetic_offline")
+        val otherShop = "90000000-0000-4000-8000-000000000144"
+        val linkedShops = if (changeShopDuringCooldown) listOf(
+            LinkedShop(SHOP, null, selectedShop().name, selectedShop().role, "active", selectable = true, canWrite = true),
+            LinkedShop(otherShop, null, "Other synthetic shop", "owner", "active", selectable = true, canWrite = true)) else null
+        withApplicationRecoveryOwner(tracker, selectedShop(), recoveryNowMs = { recoveryNow }, linkedShops = linkedShops) { application, _, shops ->
+            val clockBefore = application.automaticBusinessRecoveryNowMs()
+            recoveryNow += 1L
+            assertEquals("Fixture must control the clock used by Application recovery admission", clockBefore + 1L,
+                application.automaticBusinessRecoveryNowMs())
+            val executionMutex = applicationField<kotlinx.coroutines.sync.Mutex>(application, "businessRecoveryExecutionMutex")
+            fun currentJournal() = runBlocking { db.syncRecoveryJournalDao().get() }
+            fun currentProduct() = runBlocking { db.productDao().getAll().single() }
+            suspend fun awaitJournalAttempt(expected: Int, released: Boolean = false) {
+                // Only pump ready callbacks. Advancing time here would hide a missing timer.
+                repeat(5_000) {
+                    testScheduler.runCurrent()
+                    val observed = currentJournal()
+                    val inFlight = observed?.let { AutomaticRecoveryRetryMetadata.decode(it.reason)?.state == "in_flight" } == true
+                    if (observed?.attemptCount == expected && !inFlight && (!released || !executionMutex.isLocked)) {
+                        repeat(10) { testScheduler.runCurrent(); Thread.sleep(1) }
+                        return
+                    }
+                    Thread.sleep(1)
+                }
+                throw AssertionError("Recovery fixture did not complete attempt $expected; " +
+                    "observed=${currentJournal()?.attemptCount} mutexLocked=${executionMutex.isLocked}")
+            }
+            fun advanceClock(milliseconds: Long) {
+                recoveryNow += milliseconds
+                testScheduler.advanceTimeBy(milliseconds)
+                testScheduler.runCurrent()
+            }
+
+            application.requestPendingBusinessRecovery("task144_single_initial_trigger")
+            val initialFlight = requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+            application.requestPendingBusinessRecovery("task144_duplicate_initial_trigger")
+            assertSame("Existing single flight coalesces concurrent admission", initialFlight,
+                applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob"))
+            repeat(5) { attempt ->
+                awaitJournalAttempt(attempt + 1, released = attempt == 4)
+                assertEquals(checkpointCallsBefore + attempt + 1, remote.checkpointCalls)
+                if (attempt < 4) {
+                    val next = requireNotNull(currentJournal()?.nextRetryAtMs)
+                    advanceClock((next - recoveryNow).coerceAtLeast(1L))
+                }
+            }
+            var exhausted = requireNotNull(currentJournal())
+            assertEquals(5, exhausted.attemptCount)
+            assertEquals(beforeProduct, currentProduct())
+            assertEquals(beforeBaseline, runBlocking { db.syncRecoveryBaselineDao().get() })
+            assertFalse("Cooldown must release the recovery execution owner", executionMutex.isLocked)
+            remote.checkpointFailure = null
+            if (observeDuringCooldown) {
+                val completion = requireNotNull(AutomaticRecoveryRetryMetadata.decode(exhausted.reason))
+                remote.emptyTailConfigured = true
+                val summary = runBlocking { drainOrdinary(OrdinaryFencedReadFixture(remote)).getOrThrow() }
+                assertTrue(summary.manualFullSyncRequired)
+                val observed = requireNotNull(currentJournal())
+                assertEquals(completion, AutomaticRecoveryRetryMetadata.decode(observed.reason))
+                assertEquals(exhausted.attemptCount, observed.attemptCount)
+                assertEquals(exhausted.nextRetryAtMs, observed.nextRetryAtMs)
+                assertTrue("The observer may update journal time without inventing another completion", observed.updatedAtMs > exhausted.updatedAtMs)
+                exhausted = observed
+            }
+            val callsAtCooldown = remote.checkpointCalls
+            if (refreshDuringCooldown || changeShopDuringCooldown) {
+                application.javaClass.getDeclaredMethod("observeShopContextForRemoteComponents")
+                    .apply { isAccessible = true }.invoke(application)
+                repeat(50) { testScheduler.runCurrent(); Thread.sleep(1) }
+                val epoch = shops.diagnosticShopEpoch()
+                if (refreshDuringCooldown) {
+                    runBlocking { shops.refresh(ACCOUNT) }
+                    assertEquals(SHOP, shops.state.value.activeShopId)
+                    assertTrue(shops.state.value.syncAllowed)
+                } else assertTrue(shops.selectShop(otherShop))
+                assertTrue("The real context operation must advance the actual shop epoch", shops.diagnosticShopEpoch() > epoch)
+                repeat(100) { testScheduler.runCurrent(); Thread.sleep(1) }
+                if (refreshDuringCooldown) {
+                    assertEquals("Retargeting preserves the original deadline and budget", exhausted, currentJournal())
+                }
+            }
+            if (reopenDuringCooldown) {
+                requireNotNull(applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")).let {
+                    it.cancel(); it.join()
+                }
+                reopenOrdinaryDatabase()
+                assertEquals(exhausted, currentJournal())
+                application.javaClass.getDeclaredField("database\$delegate").apply { isAccessible = true }.set(application, lazyOf(db))
+                application.javaClass.getDeclaredField("repository\$delegate").apply { isAccessible = true }.set(application, lazyOf(repository))
+                application.javaClass.getDeclaredField("shopSyncRecoveryCoordinator\$delegate").apply { isAccessible = true }
+                    .set(application, lazyOf(coordinator(nowMs = { recoveryNow })))
+                application.requestPendingBusinessRecovery("task144_restart_persisted_cooldown")
+                testScheduler.runCurrent()
+                assertEquals(exhausted, currentJournal())
+            }
+            if (revokeDuringCooldown || changeShopDuringCooldown) {
+                if (revokeDuringCooldown) applicationField<MutableStateFlow<ShopContext>>(shops, "mutableState").value =
+                    ShopContext.blocked(ACCOUNT, "task144_revoked_during_cooldown")
+                advanceClock(300_001L)
+                repeat(100) { testScheduler.runCurrent(); Thread.sleep(1) }
+                assertEquals("A retired shop must never spend the future opportunity", callsAtCooldown,
+                    remote.checkpointCalls)
+                assertEquals(exhausted, currentJournal())
+                assertEquals(beforeProduct, currentProduct())
+                assertFalse(executionMutex.isLocked)
+                return@withApplicationRecoveryOwner
+            }
+            advanceClock(299_999L)
+            assertEquals("No sixth attempt before five minutes from last completion", callsAtCooldown,
+                remote.checkpointCalls)
+            assertEquals(exhausted, currentJournal())
+            advanceClock(1L)
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (remote.checkpointCalls > callsAtCooldown) break
+                Thread.sleep(1)
+            }
+            assertTrue("AND-R01: the real Application scheduler must create a future opportunity without another trigger",
+                remote.checkpointCalls > callsAtCooldown)
+            for (step in 0 until 5_000) {
+                testScheduler.runCurrent()
+                if (currentJournal() == null && !executionMutex.isLocked) break
+                Thread.sleep(1)
+            }
+            assertNull("Healthy retry must activate and finish the real recovery journal", currentJournal())
+            assertEquals(beforeProduct.productName, currentProduct().productName)
+            assertFalse(executionMutex.isLocked)
+        }
     }
 
     @Test
@@ -1068,10 +1978,16 @@ class ShopSyncRecoveryCoordinatorTest {
         cloud: CatalogRemoteDataSource = NoOpCatalogRemoteForRecoveryTest,
         priceCloud: ProductPriceRemoteDataSource = NoOpPriceRemoteForRecoveryTest,
         debounceMs: Long = Long.MAX_VALUE,
+        recoveryNowMs: () -> Long = { 1_000_000L },
+        automaticRetryJitter: () -> Double = { 1.0 },
+        linkedShops: List<LinkedShop>? = null,
+        beforeLinkedShopFetch: suspend () -> Unit = {},
         block: suspend (com.example.merchandisecontrolsplitview.MerchandiseControlApplication, SupabaseAuthManager, ShopContextRepository) -> Unit
     ) {
         val application = app as com.example.merchandisecontrolsplitview.MerchandiseControlApplication
-        val original = application.javaClass.declaredFields.filter { it.name.endsWith("\$delegate") || it.name == "appScope" }
+        val original = application.javaClass.declaredFields.filter {
+            it.name.endsWith("\$delegate") || it.name == "appScope" || it.name == "automaticBusinessRecoveryNowMs"
+        }
             .associateWith { it.apply { isAccessible = true }.get(application) }
         fun install(name: String, value: Any?) {
             application.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(application, value)
@@ -1080,8 +1996,11 @@ class ShopSyncRecoveryCoordinatorTest {
         applicationField<MutableStateFlow<AuthState>>(auth, "_state").value = AuthState.SignedIn(ACCOUNT, "qa@example.test")
         val shops = ShopContextRepository(object : LinkedShopRemoteDataSource {
             override val isConfigured = true
-            override suspend fun fetchLinkedShops() = Result.success(listOf(LinkedShop(SHOP, null, selected.name,
-                selected.role, "active", selectable = true, canWrite = selected.canWrite)))
+            override suspend fun fetchLinkedShops(): Result<List<LinkedShop>> {
+                beforeLinkedShopFetch()
+                return Result.success(linkedShops ?: listOf(LinkedShop(SHOP, null, selected.name,
+                    selected.role, "active", selectable = true, canWrite = selected.canWrite)))
+            }
         }, object : SelectedShopStore {
             override fun getSelectedShopId(ownerUserId: String) = SHOP
             override fun setSelectedShopId(ownerUserId: String, shopId: String) = Unit
@@ -1096,6 +2015,7 @@ class ShopSyncRecoveryCoordinatorTest {
             syncStateTracker = tracker, scope = backgroundScope, debounceMs = Long.MAX_VALUE)
         try {
             install("appScope", backgroundScope)
+            install("automaticBusinessRecoveryNowMs", recoveryNowMs)
             install("database\$delegate", lazyOf(db)); install("repository\$delegate", lazyOf(repository))
             install("authManager\$delegate", lazyOf(auth)); install("shopContextRepository\$delegate", lazyOf(shops))
             install("catalogSyncStateTracker\$delegate", lazyOf(tracker))
@@ -1106,10 +2026,13 @@ class ShopSyncRecoveryCoordinatorTest {
                 DeviceInstallIdProvider(db.syncEventDeviceStateDao()))))
             install("shopSyncRecoveryCoordinator\$delegate", lazyOf(coordinator(activationBoundary = {
                 tracker.withBusinessDataScopeTransition { it() }
-            })))
+            }, nowMs = recoveryNowMs, automaticRetryJitter = automaticRetryJitter)))
             block(application, auth, shops)
         } finally {
-            applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")?.cancel()
+            applicationField<kotlinx.coroutines.Job?>(application, "businessRecoveryJob")?.let { owned ->
+                owned.cancel()
+                owned.join()
+            }
             applicationField<kotlinx.coroutines.Job?>(application, "shopDeviceStatusPollingJob")?.cancel()
             auto.shutdown(); history.shutdown()
             original.forEach { (field, value) -> field.set(application, value) }
@@ -1699,6 +2622,107 @@ class ShopSyncRecoveryCoordinatorTest {
             requests.count { it.first == ShopSyncRowDomain.PRICES && it.second == null })
         for (domain in listOf(ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS)) {
             assertEquals("completed dependency domain must be reused: $domain", 1, requests.count { it.first == domain })
+        }
+        assertEquals(560, db.productPriceDao().countAll())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        validateShopSyncActiveReceipt(db, baseline.generationId, decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun automaticRecoveryStructured503PreservesAcceptedPricePageAndCursorAfterReopen() = runTest {
+        seedOldMismatchGeneration()
+        remote = RecoveryRemoteFixture(mixedRetainedPriceFixture())
+        val paged = PagedRecoveryRemoteFixture(remote)
+        val requests = mutableListOf<Pair<ShopSyncRowDomain, String?>>()
+        val response = io.mockk.mockk<io.ktor.client.statement.HttpResponse>()
+        val call = io.mockk.mockk<io.ktor.client.call.HttpClientCall>()
+        val request = io.mockk.mockk<io.ktor.client.request.HttpRequest>()
+        io.mockk.every { response.status } returns io.ktor.http.HttpStatusCode.ServiceUnavailable
+        io.mockk.every { response.headers } returns io.ktor.http.headersOf(io.ktor.http.HttpHeaders.RetryAfter, "180")
+        io.mockk.every { response.call } returns call
+        io.mockk.every { call.request } returns request
+        io.mockk.every { request.url } returns io.ktor.http.Url("https://example.test/rest/v1/rpc/shop_sync_recovery_page_v1")
+        io.mockk.every { request.headers } returns io.ktor.http.Headers.Empty
+        io.mockk.every { request.method } returns io.ktor.http.HttpMethod.Post
+        // This is the canonical invoker's public contract wrapper plus structured HTTP cause/header.
+        val unavailable = ShopSyncContractException("shop_sync_rpc_http_503").apply {
+            initCause(io.ktor.client.plugins.ResponseException(response, "shop_sync_rpc_http_503"))
+        }
+        val classified = SyncErrorClassifier.classify(unavailable, 1_000_000L)
+        assertEquals(SyncErrorCategory.RemoteTransient, classified.category)
+        assertEquals(1_180_000L, classified.retryAfterAtMs)
+        var failSecond = true
+        var acceptedJournal: SyncRecoveryJournal? = null
+        var acceptedPricePage: RecoveryPageProgress.Accepted? = null
+        var acceptedPhysicalPriceRows: Int? = null
+        val flaky = object : ShopSyncReadRemoteDataSource by paged {
+            override suspend fun recoveryPage(context: ShopSyncRpcContext, domain: ShopSyncRowDomain,
+                afterId: String?, limit: Int): Result<ShopSyncRecoveryPage> {
+                requests += domain to afterId
+                if (domain == ShopSyncRowDomain.PRICES && afterId != null && failSecond) {
+                    failSecond = false
+                    val journal = requireNotNull(db.syncRecoveryJournalDao().get())
+                    val stage = openDatabase(requireNotNull(journal.stagingDatabaseName))
+                    try {
+                        val accepted = requireNotNull(RecoveryPageProgress(stage.openHelper.writableDatabase)
+                            .accepted(ShopSyncRowDomain.PRICES))
+                        assertEquals("The previous price page must already be durable before HTTP503", 1L, accepted.pages)
+                        assertFalse(accepted.complete)
+                        assertEquals(afterId, accepted.afterId)
+                        assertTrue(accepted.rows > 0)
+                        // The wire ledger also includes prices whose parent is a product tombstone.
+                        // Such rows remain in the manifest but must not be materialized in product_prices.
+                        val activeParents = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRODUCTS) as ShopSyncRows.Products)
+                            .values.filter { it.deletedAt == null }.map { it.id }.toSet()
+                        val priceRows = (remote.fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+                        val cursorIndex = priceRows.indexOfFirst { it.id == afterId }
+                        assertTrue("The persisted cursor must identify a real row in the accepted fixture prefix", cursorIndex >= 0)
+                        val prefix = priceRows.take(cursorIndex + 1)
+                        assertEquals(prefix.size.toLong(), accepted.rows)
+                        assertEquals(accepted.rows.toInt(), stage.syncRecoveryManifestDao()
+                            .count(requireNotNull(journal.runId), ShopSyncRowDomain.PRICES.wireValue))
+                        val physicalRows = prefix.count { it.productId in activeParents }
+                        assertEquals(physicalRows, stage.productPriceDao().countAll())
+                        acceptedJournal = journal
+                        acceptedPricePage = accepted
+                        acceptedPhysicalPriceRows = physicalRows
+                    } finally { stage.close() }
+                    return Result.failure(unavailable)
+                }
+                return paged.recoveryPage(context, domain, afterId, limit)
+            }
+        }
+        val failed = coordinator(recoveryRemote = flaky).recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(failed.toString(), failed is ShopSyncRecoveryResult.RetryRequired)
+        assertEquals(SyncErrorCategory.RemoteTransient, (failed as ShopSyncRecoveryResult.RetryRequired).classification?.category)
+        assertOldGenerationAndManifestIntact()
+        val accepted = requireNotNull(acceptedJournal)
+        val afterFailure = requireNotNull(db.syncRecoveryJournalDao().get())
+        assertEquals("A typed transient HTTP503 must retain the already accepted staging generation",
+            accepted.stagingDatabaseName, afterFailure.stagingDatabaseName)
+        assertEquals(accepted.runId, afterFailure.runId)
+        assertEquals(accepted.checkpointADigest, afterFailure.checkpointADigest)
+        assertEquals(SyncRecoveryJournalPhases.STAGING, afterFailure.phase)
+        db.close()
+        db = openDatabase(ACTIVE_DATABASE)
+        repository = DefaultInventoryRepository(db)
+        assertEquals(afterFailure, db.syncRecoveryJournalDao().get())
+        val reopenedStage = openDatabase(requireNotNull(afterFailure.stagingDatabaseName))
+        try {
+            assertEquals(acceptedPricePage, RecoveryPageProgress(reopenedStage.openHelper.writableDatabase)
+                .accepted(ShopSyncRowDomain.PRICES))
+            assertEquals(requireNotNull(acceptedPricePage).rows.toInt(), reopenedStage.syncRecoveryManifestDao()
+                .count(requireNotNull(afterFailure.runId), ShopSyncRowDomain.PRICES.wireValue))
+            assertEquals(requireNotNull(acceptedPhysicalPriceRows), reopenedStage.productPriceDao().countAll())
+        } finally { reopenedStage.close() }
+        val resumed = coordinator(recoveryRemote = flaky).recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(resumed.toString(), resumed is ShopSyncRecoveryResult.Activated)
+        assertEquals("The accepted first price page must not be downloaded again after structured503/reopen", 1,
+            requests.count { it.first == ShopSyncRowDomain.PRICES && it.second == null })
+        for (domain in listOf(ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS)) {
+            assertEquals("A completed dependency domain remains accepted: $domain", 1, requests.count { it.first == domain })
         }
         assertEquals(560, db.productPriceDao().countAll())
         val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
@@ -2349,9 +3373,13 @@ class ShopSyncRecoveryCoordinatorTest {
             throw IllegalStateException("fixture_late_activation_failure")
         }
 
+        var observedFailure: Throwable? = null
+        ShopSyncRecoveryTestHooks.onRecoveryFailure = { observedFailure = it }
         val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
 
         assertTrue(result is ShopSyncRecoveryResult.RetryRequired)
+        assertEquals("fixture_late_activation_failure", observedFailure?.message)
+        assertEquals(ShopSyncRecoveryReasons.RECOVERY_FAILED, (result as ShopSyncRecoveryResult.RetryRequired).code)
         assertNotNull(db.productDao().findByBarcode("old-barcode"))
         assertNull(db.productDao().findByBarcode("target-barcode"))
         assertEquals(1, db.syncEventOutboxDao().countAll())
@@ -3119,9 +4147,13 @@ class ShopSyncRecoveryCoordinatorTest {
             )
         )
 
+        var observedFailure: Throwable? = null
+        ShopSyncRecoveryTestHooks.onRecoveryFailure = { observedFailure = it }
         val result = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
 
         assertTrue(result is ShopSyncRecoveryResult.RetryRequired)
+        assertEquals("fixture_event_page_not_configured", observedFailure?.message)
+        assertEquals(ShopSyncRecoveryReasons.RECOVERY_FAILED, (result as ShopSyncRecoveryResult.RetryRequired).code)
         assertNotNull(db.productDao().findByBarcode("old-barcode"))
         assertNull(db.productDao().findByBarcode("target-barcode"))
         assertEquals(oldScope().ownerHash, db.businessDataScopeBindingDao().get()?.ownerHash)
@@ -4758,7 +5790,9 @@ class ShopSyncRecoveryCoordinatorTest {
             ::decodeRecoveryCheckpointJson,
         deleteStagingDatabase: (android.content.Context, String) -> Boolean =
             { context, name -> context.deleteDatabase(name) },
-        recoveryRemote: ShopSyncReadRemoteDataSource = remote
+        recoveryRemote: ShopSyncReadRemoteDataSource = remote,
+        nowMs: () -> Long = { 1_000_000L },
+        automaticRetryJitter: () -> Double = { 1.0 }
     ): ShopSyncRecoveryCoordinator = ShopSyncRecoveryCoordinator(
         context = app,
         activeDb = db,
@@ -4771,13 +5805,14 @@ class ShopSyncRecoveryCoordinatorTest {
         onActivated = { accountId, shopId ->
             onScopedActivated?.invoke(accountId, shopId) ?: onActivated()
         },
-        nowMs = { 1_000_000L },
+        nowMs = nowMs,
         resourceLimits = resourceLimits,
         generationSizeBytes = generationSizeBytes,
         activeGenerationSizeBytes = activeGenerationSizeBytes,
         availableStorageBytes = availableStorageBytes,
         checkpointDecoder = checkpointDecoder,
-        deleteStagingDatabase = deleteStagingDatabase
+        deleteStagingDatabase = deleteStagingDatabase,
+        automaticRetryJitter = automaticRetryJitter
     )
 
     @Test
@@ -6400,6 +7435,7 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
     override val isConfigured: Boolean get() = configured
     var checkpoints = mutableListOf(fixture.checkpoint)
     var checkpointFailure: Exception? = null
+    var beforeCheckpoint: (suspend () -> Unit)? = null
     var cancelAtDomain: ShopSyncRowDomain? = null
     var fatalAtDomain: Pair<ShopSyncRowDomain, Error>? = null
     var afterPage: (suspend (ShopSyncRowDomain) -> Unit)? = null
@@ -6423,6 +7459,7 @@ private class RecoveryRemoteFixture(val fixture: RecoveryFixture) : ShopSyncRead
     override suspend fun checkpoint(
         context: ShopSyncRpcContext
     ): Result<ShopSyncRecoveryCheckpoint> {
+        beforeCheckpoint?.invoke()
         checkpointFailure?.let {
             checkpointCalls++
             return Result.failure(it)
