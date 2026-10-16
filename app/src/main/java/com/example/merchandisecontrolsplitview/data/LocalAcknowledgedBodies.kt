@@ -25,7 +25,7 @@ internal fun localAcknowledgedPriceFingerprint(row: InventoryProductPriceRow): S
         JsonPrimitive(row.price),JsonPrimitive(row.effectiveAt),row.source?.let(::JsonPrimitive) ?: JsonNull,
         row.note?.let(::JsonPrimitive) ?: JsonNull,JsonPrimitive(row.createdAt)))
     return "local-price-body-v1:" + MessageDigest.getInstance("SHA-256").digest(body.toString().encodeToByteArray())
-        .joinToString("") { "%02x".format(it) }
+        .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 }
 
 /** Retire only verified private price proofs before the legitimate parent's FK cascade. */

@@ -60,12 +60,15 @@ import io.mockk.mockk
 import java.io.IOException
 import java.util.Locale
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -96,6 +99,270 @@ class CatalogSyncViewModelTest {
         app = RuntimeEnvironment.getApplication()
         // All runtime collaborators are injected; process auth/coordinators belong to Application tests.
         assertEquals(Application::class.java, app.javaClass)
+    }
+
+
+    @Test
+    fun offlineQualifiedCheckingShowsOfflineWithoutClaimingDatabaseWorkOrCloudAuthority() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(1)) { f ->
+            assertTrue(f.tracker.businessDataScopeState.value.allowsLocalOperations)
+            assertFalse(f.tracker.businessDataScopeState.value.allowsCloudSync)
+            val original = f.tracker.businessDataScopeState.value
+            assertEquals(app.getString(R.string.catalog_cloud_state_offline), f.viewModel.uiState.value.primaryMessage)
+            assertEquals(1, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            assertTrue(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            assertTrue(f.viewModel.localDatabaseStatusUi.value.showBusinessDataDetails)
+            assertEquals(R.string.local_database_status_ready,
+                com.example.merchandisecontrolsplitview.ui.screens.localDatabaseStatusSubtitleRes(
+                    f.viewModel.localDatabaseStatusUi.value))
+            assertFalse(f.viewModel.uiState.value.isSyncing)
+            assertFalse(f.viewModel.uiState.value.canRefresh)
+            assertFalse(f.viewModel.uiState.value.canQuickSync)
+            assertFalse(f.viewModel.uiState.value.showAutomaticSyncDetail)
+            assertNull(f.viewModel.localDatabaseStatusUi.value.lastSyncText)
+            assertNull(f.tracker.lastQualifiedOutcome.value)
+            assertEquals(original, f.tracker.businessDataScopeState.value)
+        }
+    }
+
+    @Test
+    fun offlineQualifiedSnapshotRefreshShowsNewPendingCountInTheSameScope() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(0)) { f ->
+            assertEquals(0, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            val original = f.tracker.businessDataScopeState.value
+            f.nextSnapshot = optionsSnapshot(1)
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertEquals(1, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            assertTrue(f.viewModel.localDatabaseStatusUi.value.hasPendingLocalChanges)
+            assertEquals(original, f.tracker.businessDataScopeState.value)
+            assertFalse(f.tracker.businessDataScopeState.value.allowsCloudSync)
+            assertNull(f.viewModel.localDatabaseStatusUi.value.lastSyncText)
+        }
+    }
+
+    @Test
+    fun offlineOlderSameScopeCountReadCannotReplaceTheNewerRefresh() = runTest {
+        withOfflineOptionsFixture(null) { f ->
+            f.nextSnapshot = optionsSnapshot(99)
+            f.holdNextRead = true
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertTrue(f.readEntered.isCompleted)
+            f.nextSnapshot = optionsSnapshot(1)
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertEquals(1, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            f.releaseRead.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(1, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+        }
+    }
+
+    @Test
+    fun offlineCountReadCannotPublishAcrossAnActualLocalPermissionGenerationAba() = runTest {
+        withOfflineOptionsFixture(null) { f ->
+            val original = f.tracker.businessDataScopeState.value
+            f.nextSnapshot = optionsSnapshot(99)
+            f.holdNextRead = true
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertTrue(f.readEntered.isCompleted)
+            // Both synchronous calls hit the existing gate's updateState. Its
+            // localGeneration changes twice, while StateFlow consumers can see
+            // only the identical final object. A UI key/requestId is insufficient.
+            f.nextSnapshot = optionsSnapshot(1)
+            f.tracker.updateBusinessDataScopeState(original.copy(localReadsAllowed = false))
+            f.tracker.updateBusinessDataScopeState(original)
+            assertEquals(original, f.tracker.businessDataScopeState.value)
+            f.releaseRead.complete(Unit)
+            advanceUntilIdle()
+            assertFalse("A read from the revoked local generation must never be published",
+                f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount == 99)
+            assertEquals(original, f.tracker.businessDataScopeState.value)
+            assertFalse(f.tracker.businessDataScopeState.value.allowsCloudSync)
+        }
+    }
+
+    @Test
+    fun offlineOldShopCountReadCannotReplaceTheCurrentShopSnapshot() = runTest {
+        withOfflineOptionsFixture(null) { f ->
+            f.nextSnapshot = optionsSnapshot(99)
+            f.holdNextRead = true
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertTrue(f.readEntered.isCompleted)
+            val secondShop = dateOutcomeShop("00000000-0000-4000-8000-000000000247")
+            val secondScope = task126ActiveOwnerStoreScope(OWNER_VM_021, secondShop)
+            f.nextSnapshot = optionsSnapshot(7)
+            f.shops.value = ShopContext(OWNER_VM_021, emptyList(), secondShop,
+                syncAllowed = false, localAccessAllowed = true)
+            f.tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+                Task126BusinessDataScopeStatus.CHECKING, boundScope = secondScope,
+                localAccessScope = secondScope))
+            advanceUntilIdle()
+            assertEquals(7, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            f.releaseRead.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(7, f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            assertFalse(f.viewModel.uiState.value.canRefresh)
+            assertNull(f.viewModel.localDatabaseStatusUi.value.lastSyncText)
+        }
+    }
+
+    @Test
+    fun offlineUnqualifiedOrRevokedScopeNeverExposesProtectedCounts() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(99)) { f ->
+            val original = f.tracker.businessDataScopeState.value
+            val foreign = task126ActiveOwnerStoreScope("00000000-0000-4000-8000-000000000249", f.shops.value.selectedShop)
+            val denied = listOf(
+                original.copy(localAccessScope = null),
+                original.copy(localAccessScope = foreign),
+                original.copy(localReadsAllowed = false),
+                original.copy(status = Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH),
+                original.copy(status = Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH),
+                original.copy(status = Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH)
+            )
+            for (state in denied) {
+                assertFalse(state.allowsLocalOperations)
+                f.tracker.updateBusinessDataScopeState(state)
+                advanceUntilIdle()
+                assertNull("Denied local access must hide protected counts: $state",
+                    f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+                assertFalse(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+                assertFalse(f.viewModel.localDatabaseStatusUi.value.showBusinessDataDetails)
+                assertFalse(f.viewModel.uiState.value.canRefresh)
+                assertFalse(f.viewModel.uiState.value.canQuickSync)
+                assertFalse(f.viewModel.uiState.value.isSyncing)
+            }
+            f.tracker.updateBusinessDataScopeState(original)
+            f.auth.value = AuthState.SignedOut
+            advanceUntilIdle()
+            assertNull(f.viewModel.localDatabaseStatusUi.value.pendingLocalChangesCount)
+            assertEquals(app.getString(R.string.catalog_cloud_state_sign_in_required),
+                f.viewModel.uiState.value.primaryMessage)
+            assertFalse(f.viewModel.uiState.value.canRefresh)
+        }
+    }
+
+    @Test
+    fun offlineOptionsPendingHintCannotPublishAfterLocalGenerationWasRevoked() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(0)) { f ->
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.repository.hasCatalogCloudPendingWorkInclusive() } coAnswers {
+                entered.complete(Unit)
+                release.await()
+                true
+            }
+            try {
+                f.viewModel.onOptionsScreenVisible()
+                advanceUntilIdle()
+                assertTrue(entered.isCompleted)
+                val original = f.tracker.businessDataScopeState.value
+                f.tracker.updateBusinessDataScopeState(original.copy(localReadsAllowed = false))
+                f.tracker.updateBusinessDataScopeState(original)
+                release.complete(Unit)
+                advanceUntilIdle()
+                assertEquals(false, optionsStateField(f.viewModel, "pendingHint"))
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun offlineOptionsHistoryCountCannotPublishAfterShopChanges() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(0), sessionConfigured = true) { f ->
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.repository.getPendingHistorySessionPushUids() } coAnswers {
+                entered.complete(Unit)
+                release.await()
+                listOf(40L)
+            }
+            try {
+                f.viewModel.onOptionsScreenVisible()
+                advanceUntilIdle()
+                assertTrue(entered.isCompleted)
+                val secondShop = dateOutcomeShop("00000000-0000-4000-8000-000000000247")
+                val secondScope = task126ActiveOwnerStoreScope(OWNER_VM_021, secondShop)
+                f.shops.value = ShopContext(OWNER_VM_021, emptyList(), secondShop,
+                    syncAllowed = false, localAccessAllowed = true)
+                f.tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+                    Task126BusinessDataScopeStatus.CHECKING, boundScope = secondScope,
+                    localAccessScope = secondScope))
+                advanceUntilIdle()
+                release.complete(Unit)
+                advanceUntilIdle()
+                assertNull(optionsStateField(f.viewModel, "lastHistorySessionSyncSummary"))
+                assertNull(f.viewModel.uiState.value.sessionDetail)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    private fun optionsStateField(viewModel: CatalogSyncViewModel, name: String): Any? =
+        (viewModel.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            .get(viewModel) as kotlinx.coroutines.flow.StateFlow<*>).value
+
+    private fun optionsSnapshot(pending: Int) = LocalDatabaseStatusSnapshot(2, 1, 1, 3, 1, pending, 0)
+
+    private class OfflineOptionsFixture(
+        val tracker: CatalogSyncStateTracker,
+        val auth: MutableStateFlow<AuthState>,
+        val shops: MutableStateFlow<ShopContext>,
+        val repository: InventoryRepository,
+        var nextSnapshot: LocalDatabaseStatusSnapshot,
+        var holdNextRead: Boolean = false,
+        val readEntered: CompletableDeferred<Unit> = CompletableDeferred(),
+        val releaseRead: CompletableDeferred<Unit> = CompletableDeferred()
+    ) {
+        lateinit var viewModel: CatalogSyncViewModel
+    }
+
+    private suspend fun TestScope.withOfflineOptionsFixture(
+        qualifiedSnapshot: LocalDatabaseStatusSnapshot?,
+        sessionConfigured: Boolean = false,
+        block: suspend (OfflineOptionsFixture) -> Unit
+    ) {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val shop = dateOutcomeShop()
+        val scope = task126ActiveOwnerStoreScope(OWNER_VM_021, shop)
+        val original = Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING,
+            boundScope = scope, localAccessScope = scope, localSnapshot = qualifiedSnapshot)
+        val tracker = CatalogSyncStateTracker(original).apply { updateNetworkAvailability(false) }
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn(OWNER_VM_021, "offline-options@example.test"))
+        val shops = MutableStateFlow(ShopContext(OWNER_VM_021, emptyList(), shop,
+            syncAllowed = false, localAccessAllowed = true))
+        val repository = dateOutcomeRepository()
+        val fixture = OfflineOptionsFixture(tracker, auth, shops, repository, qualifiedSnapshot ?: optionsSnapshot(0))
+        coEvery { repository.getLocalDatabaseStatusSnapshot(any(), any()) } coAnswers {
+            val captured = fixture.nextSnapshot
+            if (fixture.holdNextRead) {
+                fixture.holdNextRead = false
+                fixture.readEntered.complete(Unit)
+                fixture.releaseRead.await()
+            }
+            captured
+        }
+        tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 }
+        val viewModel = CatalogSyncViewModel(application = app, repository = repository,
+            remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
+            priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(sessionConfigured),
+            authFlow = auth, syncStateTracker = tracker, shopContextFlow = shops)
+        fixture.viewModel = viewModel
+        val store = ViewModelStore().apply { put("catalog", viewModel) }
+        val ui = launch { viewModel.uiState.collect {} }
+        val local = launch { viewModel.localDatabaseStatusUi.collect {} }
+        try {
+            advanceUntilIdle()
+            assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+            assertFalse(tracker.businessDataScopeState.value.allowsCloudSync)
+            block(fixture)
+            coVerify(exactly = 0) { repository.bootstrapHistorySessionsFromRemote(any()) }
+        } finally {
+            fixture.releaseRead.complete(Unit)
+            ui.cancel(); local.cancel(); store.clear()
+            Dispatchers.setMain(mainDispatcherRule.dispatcher)
+        }
     }
 
     @Test
