@@ -6696,8 +6696,10 @@ class DefaultInventoryRepositoryTest {
             val createdDependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
             val createdIndependent = requireNotNull(repository.findProductByBarcode("t11-independent"))
             val supplierIdentity = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(createdSupplier.id)).remoteId
-            val dependentIdentity = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id)).remoteId
-            val independentIdentity = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id)).remoteId
+            val dependentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id))
+            val independentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id))
+            val dependentIdentity = dependentCreatedRef.remoteId
+            val independentIdentity = independentCreatedRef.remoteId
             repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, createdSupplier.id, "T11 rejected supplier")
             repository.updateProduct(createdDependent.copy(productName = "Dependent product"))
             repository.updateProduct(createdIndependent.copy(productName = "Independent sibling"))
@@ -6730,7 +6732,34 @@ class DefaultInventoryRepositoryTest {
             assertTrue(supplierBefore.localChangeRevision > supplierBefore.lastSyncedLocalRevision)
             assertTrue(dependentBefore.localChangeRevision > dependentBefore.lastSyncedLocalRevision)
             assertTrue(independentBefore.localChangeRevision > independentBefore.lastSyncedLocalRevision)
-            assertEquals(0, db.syncEventOutboxDao().countAll())
+            // Genuine edits append local intent evidence; these rows are neither cloud work nor ACKs.
+            val intentEntriesBefore = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, intentEntriesBefore.size)
+            assertEquals(intentEntriesBefore.size, db.syncEventOutboxDao().countAll())
+            assertTrue(intentEntriesBefore.all { it.eventType == BUSINESS_RESOLUTION_EVENT })
+            val intentsBefore = intentEntriesBefore.map { BusinessResolutionLedger.decode(it) }
+            assertEquals(setOf("intent_provenance"), intentsBefore.map { it.kind }.toSet())
+            assertEquals(setOf(dependent.id, independent.id), intentsBefore.map { it.productId }.toSet())
+            assertEquals(2, intentsBefore.map { it.recordId }.distinct().size)
+            val expectedIntentScope = BusinessResolutionScope(owner, bindingBefore.storeId, shop.shopId,
+                bindingBefore.localStoreId, bindingBefore.syncProtocolVersion, bindingBefore.schemaVersion,
+                bindingBefore.storeEpoch, baselineBefore.deviceId)
+            for ((product, currentRef, createdRef) in listOf(
+                Triple(dependent, dependentBefore, dependentCreatedRef),
+                Triple(independent, independentBefore, independentCreatedRef)
+            )) {
+                val record = intentsBefore.single { it.productId == product.id }
+                assertEquals(expectedIntentScope, record.scope)
+                assertEquals(baselineBefore.generationId, record.generationId)
+                assertEquals(decodeRecoveryCheckpointJson(baselineBefore.checkpointJson).checkpointDigest,
+                    record.checkpointDigest)
+                assertEquals(currentRef.remoteId, record.remoteId)
+                assertEquals(CatalogIntentProvenance(currentRef.localChangeRevision, createdRef.localChangeRevision,
+                    CatalogProductSnapshot.from(product), listOf("productname"), null, emptyList()), record.intent)
+                assertNull(record.decision)
+                assertNull(record.transfer)
+                assertNull(record.acknowledgement)
+            }
 
             val localRejection = runCatching { CatalogTextCanonicalizer.supplierName(supplier.name) }.exceptionOrNull()
             assertTrue(localRejection is CatalogTextValidationException)
@@ -6740,6 +6769,7 @@ class DefaultInventoryRepositoryTest {
             val supplierAttempts = mutableListOf<List<InventorySupplierRow>>()
             val productAttempts = mutableListOf<List<InventoryProductRow>>()
             val order = mutableListOf<String>()
+            var independentReceiptAtTransport: SyncEventOutboxEntry? = null
             val remote = object : CatalogRemoteDataSource by catalog {
                 override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
                     supplierAttempts += rows.toList()
@@ -6755,6 +6785,21 @@ class DefaultInventoryRepositoryTest {
                     order += "products_acknowledged"
                     assertTrue(rows.all { it.ownerUserId == owner && it.shopId == shop.shopId })
                     // Do not filter the dependent row here: the production admission must exclude it.
+                    val receipt = db.syncEventOutboxDao().listPending(owner, 10)
+                        .single { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "PRODUCTS" }
+                    val attempt = Json.decodeFromString<BusinessWriteAttempt>(receipt.metadataJson)
+                    validateBusinessWritePayload(attempt)
+                    assertEquals(owner, attempt.owner)
+                    assertEquals(shop.shopId, attempt.shop)
+                    assertEquals(bindingBefore.storeId, attempt.store)
+                    assertEquals(baselineBefore.generationId, attempt.generation)
+                    assertEquals(baselineBefore.deviceId, attempt.device)
+                    assertEquals(rows, attempt.payload.products)
+                    assertEquals(listOf(independentBefore.remoteId), attempt.payload.revisions.map { it.remoteId })
+                    assertEquals("PRODUCT", attempt.payload.revisions.single().domain)
+                    assertEquals(independentBefore.localChangeRevision.toLong(), attempt.payload.revisions.single().revision)
+                    assertEquals(1, receipt.attemptCount)
+                    independentReceiptAtTransport = receipt
                     return catalog.upsertProducts(rows)
                 }
                 override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> {
@@ -6804,7 +6849,21 @@ class DefaultInventoryRepositoryTest {
             assertNotNull(independentAfter.lastRemotePayloadFingerprint)
             assertNull(independentAfter.localChangedFields)
             assertEquals(setOf(dependent.id), pendingProductIds)
-            assertTrue(retained.isEmpty())
+            // Initial provenance is immutable; only Q's genuine dispatch appends its exact lineage successor.
+            val initialIntentIds = intentEntriesBefore.map { it.id }.toSet()
+            assertEquals(intentEntriesBefore.sortedBy { it.id },
+                retained.filter { it.id in initialIntentIds }.sortedBy { it.id })
+            val dispatchedIntentEntry = retained.single { it.id !in initialIntentIds }
+            val dispatchedIntent = BusinessResolutionLedger.decode(dispatchedIntentEntry)
+            val independentIntent = intentsBefore.single { it.remoteId == independentBefore.remoteId }
+            val acknowledgedReceipt = requireNotNull(independentReceiptAtTransport)
+            assertEquals(independentIntent.copy(recordId = dispatchedIntent.recordId,
+                intent = requireNotNull(independentIntent.intent).copy(
+                    dispatchOperationKeys = listOf(acknowledgedReceipt.clientEventId),
+                    supersedesProvenanceId = independentIntent.recordId)), dispatchedIntent)
+            assertEquals(intentEntriesBefore.size + 1, retained.size)
+            assertEquals(retained.size, db.syncEventOutboxDao().countAll())
+            assertNull(db.syncEventOutboxDao().getById(acknowledgedReceipt.id))
             val notification = events.recordedParams.single { it.domain == SyncEventDomains.CATALOG }
             assertEquals(SyncEventEntityIds(productIds = listOf(independentBefore.remoteId)), notification.entityIds)
             assertEquals(1, events.recordedParams.size)
@@ -6838,8 +6897,10 @@ class DefaultInventoryRepositoryTest {
             val createdDependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
             val createdIndependent = requireNotNull(repository.findProductByBarcode("t11-independent"))
             val supplierIdentity = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(createdSupplier.id)).remoteId
-            val dependentIdentity = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id)).remoteId
-            val independentIdentity = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id)).remoteId
+            val dependentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id))
+            val independentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id))
+            val dependentIdentity = dependentCreatedRef.remoteId
+            val independentIdentity = independentCreatedRef.remoteId
             repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, createdSupplier.id, "T11 rejected supplier")
             repository.updateProduct(createdDependent.copy(productName = "Dependent product"))
             repository.updateProduct(createdIndependent.copy(productName = "Independent sibling"))
@@ -6868,7 +6929,34 @@ class DefaultInventoryRepositoryTest {
             assertTrue(supplierBefore.localChangeRevision > supplierBefore.lastSyncedLocalRevision)
             assertTrue(dependentBefore.localChangeRevision > dependentBefore.lastSyncedLocalRevision)
             assertTrue(independentBefore.localChangeRevision > independentBefore.lastSyncedLocalRevision)
-            assertEquals(0, db.syncEventOutboxDao().countAll())
+            // Genuine edits append local intent evidence; these rows are neither cloud work nor ACKs.
+            val intentEntriesBefore = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, intentEntriesBefore.size)
+            assertEquals(intentEntriesBefore.size, db.syncEventOutboxDao().countAll())
+            assertTrue(intentEntriesBefore.all { it.eventType == BUSINESS_RESOLUTION_EVENT })
+            val intentsBefore = intentEntriesBefore.map { BusinessResolutionLedger.decode(it) }
+            assertEquals(setOf("intent_provenance"), intentsBefore.map { it.kind }.toSet())
+            assertEquals(setOf(dependent.id, independent.id), intentsBefore.map { it.productId }.toSet())
+            assertEquals(2, intentsBefore.map { it.recordId }.distinct().size)
+            val expectedIntentScope = BusinessResolutionScope(owner, bindingBefore.storeId, shop.shopId,
+                bindingBefore.localStoreId, bindingBefore.syncProtocolVersion, bindingBefore.schemaVersion,
+                bindingBefore.storeEpoch, baselineBefore.deviceId)
+            for ((product, currentRef, createdRef) in listOf(
+                Triple(dependent, dependentBefore, dependentCreatedRef),
+                Triple(independent, independentBefore, independentCreatedRef)
+            )) {
+                val record = intentsBefore.single { it.productId == product.id }
+                assertEquals(expectedIntentScope, record.scope)
+                assertEquals(baselineBefore.generationId, record.generationId)
+                assertEquals(decodeRecoveryCheckpointJson(baselineBefore.checkpointJson).checkpointDigest,
+                    record.checkpointDigest)
+                assertEquals(currentRef.remoteId, record.remoteId)
+                assertEquals(CatalogIntentProvenance(currentRef.localChangeRevision, createdRef.localChangeRevision,
+                    CatalogProductSnapshot.from(product), listOf("productname"), null, emptyList()), record.intent)
+                assertNull(record.decision)
+                assertNull(record.transfer)
+                assertNull(record.acknowledgement)
+            }
 
             val stableFailure = SerializationException("fixture response decode failed after supplier commit")
             assertEquals(SyncErrorCategory.PayloadValidation, SyncErrorClassifier.classify(stableFailure).category)
@@ -6953,7 +7041,11 @@ class DefaultInventoryRepositoryTest {
             assertEquals(listOf("supplier_committed_response_decode_failed"), order)
             assertEquals(independentBefore, independentAfter)
             assertEquals(setOf(dependent.id, independent.id), pendingProductIds)
-            assertEquals(listOf(rejected), retained)
+            val initialIntentIds = intentEntriesBefore.map { it.id }.toSet()
+            assertEquals(intentEntriesBefore.sortedBy { it.id },
+                retained.filter { it.id in initialIntentIds }.sortedBy { it.id })
+            assertEquals(listOf(rejected), retained.filterNot { it.id in initialIntentIds })
+            assertEquals(intentEntriesBefore.size + 1, db.syncEventOutboxDao().countAll())
             assertTrue(events.recordedParams.isEmpty())
             assertTrue(events.emittedRows.isEmpty())
             assertEquals(productsBefore, db.productDao().getAll().sortedBy { it.id })

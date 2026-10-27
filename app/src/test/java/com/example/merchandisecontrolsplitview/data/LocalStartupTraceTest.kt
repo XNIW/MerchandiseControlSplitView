@@ -449,4 +449,187 @@ class LocalStartupTraceTest {
         assertEquals(readsAfterFailure, clockReads); assertEquals(0, clockFailureWrites)
     }
 
+    @Test fun quietCostAggregatesActualDomainsWithoutLoggingRowsAndKeepsResultIdentity() {
+        val clock = Clock(100L); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        val expected = Any(); var calls = 0
+        assertSame(expected, trace.cost(StartupCostStage.RECEIPT_HEADER) { calls += 1; clock.value = 110L; expected })
+        trace.cost(StartupCostStage.PHYSICAL_PROJECTION, ShopSyncRowDomain.PRODUCTS) { calls += 1; clock.value = 120L }
+        trace.cost(StartupCostStage.PHYSICAL_PROJECTION, ShopSyncRowDomain.PRICES) { calls += 1; clock.value = 135L }
+        trace.cost(StartupCostStage.PHYSICAL_PROJECTION, ShopSyncRowDomain.PRODUCTS) { calls += 1; clock.value = 140L }
+        assertEquals(4, calls); assertTrue(lines.isEmpty())
+        val beforeFinish = clock.calls; trace.finish("ok")
+        assertEquals(beforeFinish + 1, clock.calls)
+        assertEquals(3, lines.size)
+        assertTrue(lines[0].contains("event=cost_time_summary"))
+        assertTrue(lines[0].contains("cost_ns=0.0:10,12.3:15,12.4:15"))
+        assertTrue(lines[1].contains("event=cost_count_summary"))
+        assertTrue(lines[1].contains("cost_count=0.0:1,12.3:2,12.4:1"))
+        assertTrue(lines[2].contains("event=terminal"))
+        assertEquals(1, lines.map { Regex("at_ns=([0-9]+)").find(it)!!.groupValues[1] }.distinct().size)
+    }
+
+    @Test fun cursorCostCountsTheLastFalseMoveWithExactlyTwoClocksPerOriginalCall() {
+        val clock = Clock(0L); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        val initial = clock.calls; var moves = 0
+        repeat(10000) {
+            assertTrue(trace.cost(StartupCostStage.PHYSICAL_CURSOR_MOVE, ShopSyncRowDomain.PRODUCTS) {
+                moves += 1; clock.value += 1L; true
+            })
+            trace.checkpoint("physical_compare_row")
+        }
+        assertFalse(trace.cost(StartupCostStage.PHYSICAL_CURSOR_MOVE, ShopSyncRowDomain.PRODUCTS) {
+            moves += 1; clock.value += 1L; false
+        })
+        assertEquals(10001, moves); assertEquals(initial + 20002, clock.calls); assertTrue(lines.isEmpty())
+        trace.finish("ok")
+        assertEquals(initial + 20003, clock.calls)
+        assertTrue(lines[0].contains("cost_ns=11.3:10001"))
+        assertTrue(lines[1].contains("cost_count=11.3:10001"))
+        assertTrue(lines[2].contains("physical_compare_row:10000"))
+    }
+
+    @Test fun failedCostClocksAreTwoDistinctBoundariesAndOnlyMakeMetadataUnknown() {
+        var clockReads = 0; var businessCalls = 0; val lines = mutableListOf<String>(); val expected = Any()
+        val trace = LocalStartupTrace(null, {
+            clockReads += 1
+            if (clockReads == 2 || clockReads == 3) throw AssertionError("private-clock-failure")
+            100L
+        }, { lines.add(it) })
+        assertSame(expected, trace.cost(StartupCostStage.MANIFEST_FETCH, ShopSyncRowDomain.PRODUCTS) {
+            businessCalls += 1; expected
+        })
+        assertEquals(3, clockReads); assertEquals(1, businessCalls); assertTrue(lines.isEmpty())
+        trace.finish("ok")
+        assertEquals(4, clockReads); assertEquals(3, lines.size)
+        assertTrue(lines[0].contains("cost_ns=UNKNOWN"))
+        assertTrue(lines[1].contains("cost_count=4.3:1"))
+        assertTrue(lines.all { "diagnostic_status=INCOMPLETE_UNKNOWN" in it })
+        assertFalse(lines.any { "private-clock-failure" in it })
+    }
+
+    @Test fun costFinallyCannotReplaceTheOriginalFailureOrCancellationWhenItsClockThrows() {
+        for (expected in listOf(IllegalStateException("private-business-failure"), CancellationException("private-cancel"))) {
+            var failClock = false; var reads = 0; var calls = 0; val lines = mutableListOf<String>()
+            val trace = LocalStartupTrace(null, {
+                reads += 1
+                if (failClock) throw AssertionError("private-clock")
+                100L
+            }, { lines.add(it) })
+            val observed = runCatching {
+                trace.cost(StartupCostStage.PHYSICAL_COMPARE, ShopSyncRowDomain.HISTORY) {
+                    calls += 1; failClock = true; throw expected
+                }
+            }.exceptionOrNull()
+            assertSame(expected, observed); assertEquals(1, calls); assertEquals(3, reads)
+            failClock = false; trace.finish(if (expected is CancellationException) "cancelled" else "failed")
+            assertTrue(lines[0].contains("cost_ns=UNKNOWN"))
+            assertTrue(lines[1].contains("cost_count=13.5:1"))
+            assertFalse(lines.any { "private-" in it })
+        }
+    }
+
+    @Test fun nullTraceCostRunsOnlyTheOriginalBlockOnceAndPreservesThrows() {
+        val trace: LocalStartupTrace? = null; val expected = Any(); var calls = 0
+        assertSame(expected, trace.cost(StartupCostStage.RECEIPT_HEADER) { calls += 1; expected })
+        for (failure in listOf(IllegalStateException("original failure"), CancellationException("original cancel"))) {
+            assertSame(failure, runCatching {
+                trace.cost(StartupCostStage.PHYSICAL_PROJECTION, ShopSyncRowDomain.HISTORY) { calls += 1; throw failure }
+            }.exceptionOrNull())
+        }
+        assertEquals(3, calls)
+    }
+
+    @Test fun regressiveCostClockIsUnknownInsteadOfAnInventedZeroOrNegativeDuration() {
+        val clock = Clock(200L); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        assertEquals(42, trace.cost(StartupCostStage.RECEIPT_RELATIONAL) { clock.value = 100L; 42 })
+        trace.finish("ok")
+        assertTrue(lines[0].contains("cost_ns=UNKNOWN"))
+        assertTrue(lines[1].contains("cost_count=1.0:1"))
+        assertTrue(lines.last().contains("diagnostic_status=INCOMPLETE_UNKNOWN"))
+        assertFalse(lines.any { Regex("cost_ns=.*:-").containsMatchIn(it) })
+    }
+
+    @Test fun admissionAcceptsOnlySevenStaticCallersAndCapturesOnlyTheFirstWithoutChangingFirstReason() {
+        val allowed = listOf("direct", "auth_checking_restored", "auth_signed_in_restored", "auth_refresh_unavailable",
+            "shop_context_offline", "auth_refresh_ready", "shop_context_ready")
+        for (reason in allowed) {
+            val clock = Clock(); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+            val before = clock.calls
+            trace.admission("private-owner@example.invalid\nraw-device")
+            assertEquals(before, clock.calls); assertTrue(lines.isEmpty())
+            trace.admission(reason)
+            trace.admission(allowed[(allowed.indexOf(reason) + 1) % allowed.size])
+            assertEquals(before + 1, clock.calls); assertEquals(1, lines.size)
+            trace.finish("ok")
+            assertEquals(2, lines.size)
+            assertTrue(lines.first().contains("event=admission"))
+            assertTrue(lines.all { "caller=$reason" in it.split(' ') })
+            assertTrue("first_reason=none" in lines.last().split(' '))
+            assertFalse(lines.any { "private-owner" in it || "raw-device" in it })
+        }
+    }
+
+    @Test fun costAndAdmissionSinkFailuresCannotRetryOrHideTheAttemptedOriginalTerminal() {
+        var writes = 0; var calls = 0; val lines = mutableListOf<String>(); val expected = Any()
+        val trace = LocalStartupTrace(null, { 100L }, {
+            writes += 1; lines.add(it); throw AssertionError("private-sink")
+        })
+        trace.admission("direct"); trace.admission("shop_context_ready")
+        assertEquals(1, writes)
+        assertSame(expected, trace.cost(StartupCostStage.MANIFEST_DIGEST) { calls += 1; expected })
+        val failure = CancellationException("private-business-cancel")
+        assertSame(failure, runCatching {
+            trace.cost(StartupCostStage.RECEIPT_MANIFEST) { calls += 1; throw failure }
+        }.exceptionOrNull())
+        assertEquals(1, writes); trace.finish("cancelled"); trace.finish("ok")
+        assertEquals(2, calls); assertEquals(4, writes)
+        assertEquals(listOf("admission", "cost_time_summary", "cost_count_summary", "terminal"),
+            lines.map { Regex("event=([a-z_]+)").find(it)!!.groupValues[1] })
+        assertTrue("caller=direct" in lines.last().split(' '))
+        assertFalse(lines.any { "private-" in it })
+    }
+
+    @Test fun completedTraceCostStillRunsTheOriginalBlockWithoutClocksOrAdditionalRecords() {
+        val clock = Clock(); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        trace.finish("ok"); val before = clock.calls; val expected = Any(); var calls = 0
+        assertSame(expected, trace.cost(StartupCostStage.PRICE_PARENT_FETCH) { calls += 1; expected })
+        trace.admission("direct")
+        assertEquals(1, calls); assertEquals(before, clock.calls); assertEquals(1, lines.size)
+    }
+
+    @Test fun all105CostBucketsRemainQuietAndEachSummaryHasAnUnambiguousBoundedLongFormat() {
+        val clock = Clock(0L); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        val domains = listOf<ShopSyncRowDomain?>(null) + ShopSyncRowDomain.entries
+        val before = clock.calls
+        for (stage in StartupCostStage.entries) for (domain in domains) {
+            clock.value = 0L
+            trace.cost(stage, domain) { clock.value = Long.MAX_VALUE }
+        }
+        assertEquals(before + 210, clock.calls); assertTrue(lines.isEmpty())
+        trace.finish("ok")
+        assertEquals(3, lines.size)
+        val times = lines[0].substringAfter("cost_ns=").split(',')
+        val counts = lines[1].substringAfter("cost_count=").split(',')
+        assertEquals(105, times.size); assertEquals(105, counts.size)
+        assertEquals(105, times.map { it.substringBefore(':') }.distinct().size)
+        assertTrue(times.all { it.substringAfter(':') == Long.MAX_VALUE.toString() })
+        assertTrue(counts.all { it.substringAfter(':') == "1" })
+        assertTrue(lines.all { it.toByteArray(Charsets.UTF_8).size < 3800 })
+        // Any nonnegative Long count has at most19 digits; prove that whole record bound too.
+        val maximumCountRecord = lines[1].replace(Regex(":1(?=,|$)"), ":${Long.MAX_VALUE}")
+        assertTrue(maximumCountRecord.toByteArray(Charsets.UTF_8).size < 3800)
+    }
+
+    @Test fun costInlineKeepsAnExistingSuspendingCallAtItsOriginalSite() = kotlinx.coroutines.runBlocking {
+        val clock = Clock(100L); val lines = mutableListOf<String>(); val trace = trace(clock, lines)
+        val expected = Any(); var calls = 0
+        val actual = trace.cost(StartupCostStage.PHYSICAL_HISTORY_FETCH, ShopSyncRowDomain.HISTORY) {
+            kotlinx.coroutines.yield(); calls += 1; clock.value = 135L; expected
+        }
+        assertSame(expected, actual); assertEquals(1, calls); assertTrue(lines.isEmpty())
+        trace.finish("ok")
+        assertTrue(lines[0].contains("cost_ns=14.5:35"))
+        assertTrue(lines[1].contains("cost_count=14.5:1"))
+    }
+
 }

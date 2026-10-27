@@ -168,6 +168,186 @@ class ApplicationLocalIdentityTest {
         }
     }
 
+
+    @Test
+    fun equivalentOfflineCallsRegisteredDuringHeldRoomTransactionRunOneStructuralProof() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, _, _, tracker, shops, db ->
+            checks.set(0)
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holding = async(Dispatchers.IO) {
+                db.withTransaction { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val context = shops.state.value
+            val leader = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+            var follower: Deferred<Unit>? = null
+            try {
+                assertTrue(proofFlights(app).hasOpen())
+                val original = requireNotNull(currentProofEntry(app))
+                assertTrue(original.accepting); assertFalse(original.completion.isCompleted)
+                follower = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+                assertFalse(leader.isCompleted); assertFalse(follower.isCompleted)
+                assertSame(original, currentProofEntry(app))
+                assertEquals("The held transaction prevents the first physical proof from running", 0, checks.get())
+                release.complete(Unit); holding.await(); leader.await(); follower.await()
+                assertEquals("Equivalent callers must consume one actual Room quick_check", 1, checks.get())
+                assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertFalse(proofFlights(app).hasOpen()); assertNull(currentProofEntry(app))
+                assertTrue(original.completion.isCompleted); assertFalse(original.accepting)
+            } finally {
+                release.complete(Unit)
+                holding.cancelAndJoin(); leader.cancelAndJoin(); follower?.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun completedLocalProofCannotHideDirectDaoBindingTamperBehindTheSameRamAuthority() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        val bindingReads = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+            if (sql.trimStart().startsWith("SELECT", ignoreCase = true) &&
+                sql.contains("business_data_scope_binding", ignoreCase = true)) bindingReads.incrementAndGet()
+        }) { app, auth, _, tracker, shops, db ->
+            checks.set(0); bindingReads.set(0)
+            val context = shops.state.value; val identity = requireNotNull(auth.localIdentity.value)
+            publishOffline(app, context)
+            assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+            assertEquals(1, checks.get()); assertEquals(1, bindingReads.get())
+            assertFalse(proofFlights(app).hasOpen()); assertNull(currentProofEntry(app))
+            // The Application's RAM authority/key inputs stay the same; this bypasses repository writers.
+            val foreign = task126ActiveOwnerStoreScope("20000000-0000-4000-8000-000000000144", context.selectedShop)
+            val expectedBinding = BusinessDataScopeBinding.from(foreign, 1L)
+            db.businessDataScopeBindingDao().upsert(expectedBinding)
+            assertEquals(context, shops.state.value); assertEquals(identity, auth.localIdentity.value)
+            publishOffline(app, context)
+            assertEquals("A completed flight must not suppress the fresh binding read", 2, bindingReads.get())
+            assertEquals("The fresh mismatched binding is rejected before quick_check", 1, checks.get())
+            assertFalse(tracker.businessDataScopeState.value.allowsLocalOperations)
+            assertEquals(Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH,
+                tracker.businessDataScopeState.value.status)
+            assertEquals(expectedBinding, db.businessDataScopeBindingDao().get())
+        }
+    }
+
+    @Test
+    fun revocationWhileEquivalentCallersWaitCannotPublishTheEarlierRoomProof() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, auth, controller, tracker, shops, db ->
+            checks.set(0)
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holding = async(Dispatchers.IO) {
+                db.withTransaction { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val context = shops.state.value
+            val leader = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+            var follower: Deferred<Unit>? = null
+            try {
+                assertTrue(proofFlights(app).hasOpen())
+                val original = requireNotNull(currentProofEntry(app))
+                follower = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+                assertFalse(leader.isCompleted); assertFalse(follower.isCompleted)
+                assertSame(original, currentProofEntry(app))
+                controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+                runCurrent(); assertNull(auth.localIdentity.value)
+                assertFalse(tracker.businessDataScopeState.value.allowsLocalOperations)
+                release.complete(Unit); holding.await(); leader.await(); follower.await()
+                assertEquals(1, checks.get())
+                assertFalse("Neither waiting caller may grant the revoked local identity",
+                    tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertFalse(proofFlights(app).hasOpen()); assertNull(currentProofEntry(app))
+                assertTrue(original.completion.isCompleted)
+            } finally {
+                release.complete(Unit)
+                holding.cancelAndJoin(); leader.cancelAndJoin(); follower?.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun cancellingAnEquivalentApplicationFollowerLeavesTheRoomOwnerAndProofAlive() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, _, _, tracker, shops, db ->
+            checks.set(0)
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holding = async(Dispatchers.IO) {
+                db.withTransaction { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val context = shops.state.value
+            val leader = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+            var follower: Deferred<Unit>? = null
+            try {
+                assertTrue(proofFlights(app).hasOpen())
+                val original = requireNotNull(currentProofEntry(app))
+                follower = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+                assertFalse(follower.isCompleted)
+                follower.cancelAndJoin()
+                assertTrue(follower.isCancelled); assertFalse(leader.isCompleted)
+                assertFalse(original.completion.isCancelled); assertFalse(original.completion.isCompleted)
+                assertSame(original, currentProofEntry(app))
+                release.complete(Unit); holding.await(); leader.await()
+                assertEquals(1, checks.get()); assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertTrue(original.completion.isCompleted); assertFalse(proofFlights(app).hasOpen())
+            } finally {
+                release.complete(Unit)
+                holding.cancelAndJoin(); leader.cancelAndJoin(); follower?.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun proofKeyFactoryCannotRelabelCapturedIdentityAAsSameOwnerRestoredGenerationB() = runTest {
+        withOwnedFixture { app, auth, controller, _, shops, _ ->
+            val capturedAuth = auth.state.value
+            val capturedIdentity = requireNotNull(auth.localIdentity.value)
+            val capturedContext = shops.state.value
+            val capturedEpoch = shops.diagnosticShopEpoch()
+            val capturedDevice = requireNotNull(app.deviceInstallIdProvider.currentId)
+            val factory = MerchandiseControlApplication::class.java.getDeclaredMethod(
+                "capturedOfflineLocalProofKey", AuthState::class.java, LocalAuthIdentity::class.java,
+                ShopContext::class.java, java.lang.Long.TYPE, String::class.java
+            ).apply { isAccessible = true }
+            assertNotNull(factory.invoke(app, capturedAuth, capturedIdentity, capturedContext,
+                capturedEpoch, capturedDevice))
+            auth.signOut(); runCurrent()
+            controller.sessionStatus.value = SessionStatus.Initializing
+            auth.restoreSession()
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS + 1L); runCurrent()
+            val replacement = requireNotNull(auth.localIdentity.value)
+            assertEquals(capturedIdentity.userId, replacement.userId)
+            assertNotEquals(capturedIdentity.authGeneration, replacement.authGeneration)
+            assertNull("A-captured proof inputs cannot acquire a freshly observed B key",
+                factory.invoke(app, capturedAuth, capturedIdentity, capturedContext, capturedEpoch, capturedDevice))
+            assertNotNull("A proof freshly captured under current B retains a valid key",
+                factory.invoke(app, auth.state.value, replacement, shops.state.value,
+                    shops.diagnosticShopEpoch(), requireNotNull(app.deviceInstallIdProvider.currentId)))
+        }
+    }
+
+    private fun proofFlights(app: MerchandiseControlApplication): LocalStoreProofFlights<*> =
+        MerchandiseControlApplication::class.java.getDeclaredField("localProofFlights")
+            .apply { isAccessible = true }.get(app) as LocalStoreProofFlights<*>
+
+    private fun currentProofEntry(app: MerchandiseControlApplication): LocalStoreProofFlights.Entry<*>? {
+        val flights = proofFlights(app)
+        val lock = requireNotNull(LocalStoreProofFlights::class.java.getDeclaredField("lock")
+            .apply { isAccessible = true }.get(flights))
+        return synchronized(lock) {
+            LocalStoreProofFlights::class.java.getDeclaredField("currentEntry")
+                .apply { isAccessible = true }.get(flights) as? LocalStoreProofFlights.Entry<*>
+        }
+    }
+
     @Suppress("UNCHECKED_CAST")
     private fun <T> authFlow(auth: SupabaseAuthManager, name: String): MutableStateFlow<T> =
         SupabaseAuthManager::class.java.getDeclaredField(name).apply { isAccessible = true }
@@ -179,13 +359,17 @@ class ApplicationLocalIdentityTest {
 
     private suspend fun TestScope.withOwnedFixture(denied: Boolean = false,
         cloudRead: suspend () -> Result<List<LinkedShop>> = { error("No cloud read permitted") },
+        onQuery: ((String) -> Unit)? = null,
         block: suspend (MerchandiseControlApplication, SupabaseAuthManager, WaitingIdentityController,
             CatalogSyncStateTracker, ShopContextRepository, AppDatabase) -> Unit) {
         val app = MerchandiseControlApplication()
         ContextWrapper::class.java.getDeclaredMethod("attachBaseContext", Context::class.java)
             .apply { isAccessible = true }.invoke(app, RuntimeEnvironment.getApplication())
-        val db = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), AppDatabase::class.java)
-            .allowMainThreadQueries().build()
+        val builder = Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), AppDatabase::class.java)
+            .allowMainThreadQueries()
+        if (onQuery != null) builder.setQueryCallback({ sql, _ -> onQuery(sql) },
+            java.util.concurrent.Executor { it.run() })
+        val db = builder.build()
         val controller = WaitingIdentityController()
         val ownedScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
         val auth = SupabaseAuthManager.createForTest(controller, ownedScope)

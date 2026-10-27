@@ -9,6 +9,8 @@ import android.util.Log
 import android.os.SystemClock
 import androidx.room.withTransaction
 import com.example.merchandisecontrolsplitview.data.BusinessDataScopeBinding
+import com.example.merchandisecontrolsplitview.data.LocalStoreProofFlights
+import com.example.merchandisecontrolsplitview.data.LocalStoreProofTransactionContext
 import com.example.merchandisecontrolsplitview.data.SyncEventDeviceState
 import com.example.merchandisecontrolsplitview.data.SyncEventWatermark
 import com.example.merchandisecontrolsplitview.data.SyncRecoveryBaseline
@@ -188,6 +190,18 @@ open class MerchandiseControlApplication : Application() {
     private var lastShopDeviceRegistrationAtMs: Long = 0L
     private var shopDeviceStatusPollingJob: Job? = null
     private val businessDataScopeMutex = Mutex()
+    private enum class LocalProofMode { OFFLINE, CLOUD }
+    private data class LocalProofKey(
+        val mode: LocalProofMode,
+        val database: AppDatabase,
+        val auth: AuthState,
+        val identity: com.example.merchandisecontrolsplitview.data.LocalAuthIdentity,
+        val context: com.example.merchandisecontrolsplitview.data.ShopContext,
+        val epoch: Long,
+        val device: String,
+        val selected: com.example.merchandisecontrolsplitview.data.SelectedShop?
+    )
+    private val localProofFlights = LocalStoreProofFlights<LocalProofKey>()
     private val businessRecoveryLock = Any()
     private val businessRecoveryExecutionMutex = Mutex()
     private var businessRecoveryJob: Job? = null
@@ -717,7 +731,7 @@ open class MerchandiseControlApplication : Application() {
                                 }
                             }
                             if (restoredDevice != null && authManager.isCurrentLocalIdentity(identity)) {
-                                publishOfflineBusinessScope(shopContextRepository.state.value)
+                                publishOfflineBusinessScope(shopContextRepository.state.value, "auth_checking_restored")
                             }
                         }
                     }
@@ -736,7 +750,7 @@ open class MerchandiseControlApplication : Application() {
                             deviceInstallIdProvider.getOrCreate()
                             shopContextRepository.restoreLocalAuthorization(state.userId)
                         }
-                        publishOfflineBusinessScope(shopContextRepository.state.value)
+                        publishOfflineBusinessScope(shopContextRepository.state.value, "auth_signed_in_restored")
                         withContext(Dispatchers.IO) {
                             shopContextRepository.refresh(state.userId)
                         }
@@ -752,11 +766,11 @@ open class MerchandiseControlApplication : Application() {
                         }
                         if (!currentShopContextAllowsSync(state.userId)) {
                             Log.w(TAG, "Shop context: sync cloud sospesa per errore linked-shops")
-                            publishOfflineBusinessScope(refreshedContext)
+                            publishOfflineBusinessScope(refreshedContext, "auth_refresh_unavailable")
                             suspendRemoteComponentsForBusinessScope()
                             return@collectLatest
                         }
-                        if (!alignBusinessDataScope(state.userId, refreshedContext.selectedShop)) {
+                        if (!alignBusinessDataScope(state.userId, refreshedContext.selectedShop, "auth_refresh_ready")) {
                             suspendRemoteComponentsForBusinessScope()
                             return@collectLatest
                         }
@@ -814,11 +828,11 @@ open class MerchandiseControlApplication : Application() {
                 }
                 val signedIn = authManager.state.value as? AuthState.SignedIn
                 if (signedIn == null || context.isLoading || !context.syncAllowed) {
-                    publishOfflineBusinessScope(context)
+                    publishOfflineBusinessScope(context, "shop_context_offline")
                     suspendRemoteComponentsForBusinessScope()
                     return@collect
                 }
-                if (!alignBusinessDataScope(signedIn.userId, context.selectedShop)) {
+                if (!alignBusinessDataScope(signedIn.userId, context.selectedShop, "shop_context_ready")) {
                     suspendRemoteComponentsForBusinessScope()
                     return@collect
                 }
@@ -831,14 +845,80 @@ open class MerchandiseControlApplication : Application() {
     private fun canStartOfflinePublication(identity: com.example.merchandisecontrolsplitview.data.LocalAuthIdentity?): Boolean =
         identity != null
 
-    private suspend fun publishOfflineBusinessScope(context: com.example.merchandisecontrolsplitview.data.ShopContext) {
+    /** Sharing is limited to callers registered before the owner's original transaction exits.
+     * This is not a completed-proof cache; every later admission still runs the original resolver. */
+    private fun currentLocalProofKey(
+        mode: LocalProofMode,
+        context: com.example.merchandisecontrolsplitview.data.ShopContext,
+        selected: com.example.merchandisecontrolsplitview.data.SelectedShop? = context.selectedShop
+    ): LocalProofKey? {
+        val auth = authManager.state.value
+        val identity = authManager.localIdentity.value ?: return null
+        if (auth !is AuthState.Checking && auth !is AuthState.SignedIn) return null
+        if (auth is AuthState.SignedIn && auth.userId != identity.userId) return null
+        val epoch = shopContextRepository.diagnosticShopEpoch()
+        val device = deviceInstallIdProvider.currentId ?: return null
+        val key = LocalProofKey(mode, database, auth, identity, context, epoch, device, selected)
+        return key.takeIf {
+            authManager.state.value == auth && authManager.localIdentity.value == identity &&
+                authManager.isCurrentLocalIdentity(identity) && shopContextRepository.state.value == context &&
+                shopContextRepository.diagnosticShopEpoch() == epoch && deviceInstallIdProvider.currentId == device
+        }
+    }
+
+    private fun capturedOfflineLocalProofKey(
+        auth: AuthState,
+        identity: com.example.merchandisecontrolsplitview.data.LocalAuthIdentity?,
+        context: com.example.merchandisecontrolsplitview.data.ShopContext,
+        epoch: Long,
+        device: String
+    ): LocalProofKey? {
+        if (identity == null) return null
+        val captured = LocalProofKey(LocalProofMode.OFFLINE, database, auth, identity,
+            context, epoch, device, context.selectedShop)
+        // Never label an A-captured proof with a freshly observed replacement identity B.
+        return captured.takeIf { currentLocalProofKey(LocalProofMode.OFFLINE, context) == it }
+    }
+
+    private fun joinCurrentLocalProof(
+        mode: LocalProofMode,
+        context: com.example.merchandisecontrolsplitview.data.ShopContext,
+        selected: com.example.merchandisecontrolsplitview.data.SelectedShop? = context.selectedShop
+    ): LocalStoreProofFlights.Entry<LocalProofKey>? {
+        if (!localProofFlights.hasOpen()) return null
+        val key = currentLocalProofKey(mode, context, selected) ?: return null
+        return localProofFlights.tryJoin(key)
+    }
+
+    private suspend fun <T> withLocalProofTransaction(
+        flight: LocalStoreProofFlights.Entry<LocalProofKey>?, block: suspend () -> T
+    ): T = if (flight == null) block() else withContext(
+        LocalStoreProofTransactionContext { localProofFlights.seal(flight) }
+    ) { block() }
+
+    private suspend fun publishOfflineBusinessScope(context: com.example.merchandisecontrolsplitview.data.ShopContext): Unit =
+        publishOfflineBusinessScope(context, "direct")
+
+    private suspend fun publishOfflineBusinessScope(
+        context: com.example.merchandisecontrolsplitview.data.ShopContext, admissionReason: String
+    ) {
         val trace = if (BuildConfig.DEBUG) LocalStartupTrace.start(LocalStartupTrace.hashIdentity(
             "owner:${context.ownerUserId.orEmpty()}\nshop:${context.selectedShop?.shopId.orEmpty()}")) else null
+        trace?.admission(admissionReason)
         trace?.event("offline_scope")
-        trace?.event("mutex_requested")
         var traceOutcome = "ok"
+        var ownedFlight: LocalStoreProofFlights.Entry<LocalProofKey>? = null
+        var ownedFailure: Throwable? = null
         try {
+            val joined = joinCurrentLocalProof(LocalProofMode.OFFLINE, context)
+            if (joined != null) {
+                trace?.event("proof_joined")
+                joined.completion.await()
+                return
+            }
+            trace?.event("mutex_requested")
             businessDataScopeMutex.withLock {
+                try {
                 trace?.event("mutex_acquired")
                 val authState = authManager.state.value
                 val identity = authManager.localIdentity.value
@@ -887,8 +967,12 @@ open class MerchandiseControlApplication : Application() {
                     return@withLock
                 }
                 val activeScope = task126ActiveOwnerStoreScope(owner, context.selectedShop)
+                val key = capturedOfflineLocalProofKey(authState, identity, context, shopEpoch, device)
+                ownedFlight = key?.let(localProofFlights::begin)
                 val resolved = trace.span("resolve") {
-                    repository.resolveOfflineBusinessDataScope(activeScope, context.selectedShop?.canWrite != false, trace)
+                    withLocalProofTransaction(ownedFlight) {
+                        repository.resolveOfflineBusinessDataScope(activeScope, context.selectedShop?.canWrite != false, trace)
+                    }
                 }
                 trace?.event("scope_resolved")
                 val persistedDevice = trace.span("persisted_device") {
@@ -902,6 +986,12 @@ open class MerchandiseControlApplication : Application() {
                 } else {
                     trace?.event("scope_discarded", "stale_result"); traceOutcome = "discarded"
                 }
+                } catch (error: Throwable) {
+                    ownedFailure = error
+                    throw error
+                } finally {
+                    ownedFlight?.let { localProofFlights.finish(it, ownedFailure) }
+                }
             }
         } catch (error: Throwable) {
             traceOutcome = if (error is CancellationException) "cancelled" else "failed"
@@ -912,15 +1002,35 @@ open class MerchandiseControlApplication : Application() {
     private suspend fun alignBusinessDataScope(
         ownerUserId: String,
         selectedShop: com.example.merchandisecontrolsplitview.data.SelectedShop?
+    ): Boolean = alignBusinessDataScope(ownerUserId, selectedShop, "direct")
+
+    private suspend fun alignBusinessDataScope(
+        ownerUserId: String,
+        selectedShop: com.example.merchandisecontrolsplitview.data.SelectedShop?, admissionReason: String
     ): Boolean {
         val trace = if (BuildConfig.DEBUG) LocalStartupTrace.start(LocalStartupTrace.hashIdentity(
             "owner:$ownerUserId\nshop:${selectedShop?.shopId.orEmpty()}")) else null
+        trace?.admission(admissionReason)
         trace?.event("cloud_align")
-        trace?.event("mutex_requested")
         var traceOutcome = "ok"
+        var ownedFlight: LocalStoreProofFlights.Entry<LocalProofKey>? = null
+        var ownedFailure: Throwable? = null
         try {
+            val currentContext = shopContextRepository.state.value
+            val joined = joinCurrentLocalProof(LocalProofMode.CLOUD, currentContext, selectedShop)
+            if (joined != null) {
+                trace?.event("proof_joined")
+                joined.completion.await()
+                return currentLocalProofKey(LocalProofMode.CLOUD, currentContext, selectedShop) == joined.key &&
+                    currentAuthAndShopMatch(ownerUserId, selectedShop) && allowsResolvedBusinessDataScope(
+                        catalogSyncStateTracker.businessDataScopeState.value,
+                        task126ActiveOwnerStoreScope(ownerUserId, selectedShop))
+            }
+            trace?.event("mutex_requested")
             return businessDataScopeMutex.withLock {
+            try {
             trace?.event("mutex_acquired")
+            var joiningPermitted = false
             val resolveScope: suspend () -> Boolean = resolveScope@ {
                 if (!currentAuthAndShopMatch(ownerUserId, selectedShop)) {
                     catalogSyncStateTracker.updateBusinessDataScopeState(
@@ -932,10 +1042,15 @@ open class MerchandiseControlApplication : Application() {
                 val activeScope = task126ActiveOwnerStoreScope(ownerUserId, selectedShop)
                 val legacyValue = shopDataScopePreferences.getString(KEY_LAST_BUSINESS_DATA_SCOPE, null)
                 val legacyScope = parseLegacyBusinessDataScope(legacyValue)
+                val key = if (joiningPermitted)
+                    currentLocalProofKey(LocalProofMode.CLOUD, shopContextRepository.state.value, selectedShop) else null
+                ownedFlight = key?.let(localProofFlights::begin)
                 val state = try {
                     trace.span("resolve") {
-                        withContext(Dispatchers.IO + (trace ?: kotlin.coroutines.EmptyCoroutineContext)) {
-                            repository.resolveBusinessDataScope(activeScope, legacyScope)
+                        withLocalProofTransaction(ownedFlight) {
+                            withContext(Dispatchers.IO + (trace ?: kotlin.coroutines.EmptyCoroutineContext)) {
+                                repository.resolveBusinessDataScope(activeScope, legacyScope)
+                            }
                         }
                     }
                 } catch (error: Throwable) {
@@ -975,10 +1090,17 @@ open class MerchandiseControlApplication : Application() {
             }
             val previous = catalogSyncStateTracker.businessDataScopeState.value
             val active = task126ActiveOwnerStoreScope(ownerUserId, selectedShop)
-            if (previous.allowsLocalOperations && previous.boundScope?.let {
+            joiningPermitted = previous.allowsLocalOperations && previous.boundScope?.let {
                 Task126OwnerStoreGate.validate(it, active) == Task126OwnerStoreGateDecision.Allowed
-            } == true) resolveScope()
+            } == true
+            if (joiningPermitted) resolveScope()
             else catalogSyncStateTracker.withBusinessDataScopeTransition { resolveScope() }
+            } catch (error: Throwable) {
+                ownedFailure = error
+                throw error
+            } finally {
+                ownedFlight?.let { localProofFlights.finish(it, ownedFailure) }
+            }
             }
         } catch (error: Throwable) {
             traceOutcome = if (error is CancellationException) "cancelled" else "failed"

@@ -2284,14 +2284,17 @@ internal suspend fun validateShopSyncCanonicalReceipt(
     generationId: String,
     checkpoint: ShopSyncRecoveryCheckpoint
 ) {
-    if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
-        checkpoint.integrity.totalViolationCount != 0L || checkpoint.syncEvents.requiresFullRecovery) {
-        throw ShopSyncContractException("ordinary_canonical_receipt_invalid")
+    val startupTrace = coroutineContext[LocalStartupTrace]
+    startupTrace.cost(StartupCostStage.RECEIPT_HEADER) {
+        if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
+            checkpoint.integrity.totalViolationCount != 0L || checkpoint.syncEvents.requiresFullRecovery) {
+            throw ShopSyncContractException("ordinary_canonical_receipt_invalid")
+        }
     }
-    validateRelationalManifest(db, generationId)
-    validateManifest(db, generationId, checkpoint)
+    startupTrace.cost(StartupCostStage.RECEIPT_RELATIONAL) { validateRelationalManifest(db, generationId) }
+    startupTrace.cost(StartupCostStage.RECEIPT_MANIFEST) { validateManifest(db, generationId, checkpoint) }
     // Also prove every retained/active price parent in the same generation, without reading physical A bodies.
-    materializablePriceCount(db, generationId)
+    startupTrace.cost(StartupCostStage.RECEIPT_PRICE_PARENTS) { materializablePriceCount(db, generationId) }
 }
 
 /** Shared complete local proof; the active store deliberately retains History tombstone bodies. */
@@ -2376,6 +2379,7 @@ internal suspend fun validateManifest(
     generationId: String,
     checkpoint: ShopSyncRecoveryCheckpoint
 ) {
+    val startupTrace = coroutineContext[LocalStartupTrace]
     val calculated = linkedMapOf<ShopSyncRowDomain, ShopSyncDomainCheckpoint>()
     for (domain in ShopSyncRowDomain.entries) {
         var afterId: String? = null
@@ -2387,39 +2391,45 @@ internal suspend fun validateManifest(
         var identityPresent = false
         do {
             checkOrdinaryNoWorkReceiptPriority(db, "canonical_page")
-            val rows = db.syncRecoveryManifestDao().page(
-                generationId = generationId,
-                domain = domain.wireValue,
-                afterId = afterId,
-                limit = MANIFEST_VERIFY_PAGE_SIZE
-            )
-            for (row in rows) {
-                checkOrdinaryNoWorkReceiptPriority(db, "canonical_row")
-                if (row.active) active++ else tombstones++
-                // Every V6 domain, including images, publishes its id set
-                // ordered by the manifest remote id. For images that id is
-                // the scoped product id, never the image-version id.
-                idDigest.add(row.idLine)
-                versionDigest.add(row.versionLine)
-                row.identityLine?.let {
-                    identityDigest.add(it)
-                    identityPresent = true
+            val rows = startupTrace.cost(StartupCostStage.MANIFEST_FETCH, domain) {
+                db.syncRecoveryManifestDao().page(
+                    generationId = generationId,
+                    domain = domain.wireValue,
+                    afterId = afterId,
+                    limit = MANIFEST_VERIFY_PAGE_SIZE
+                )
+            }
+            startupTrace.cost(StartupCostStage.MANIFEST_DIGEST, domain) {
+                for (row in rows) {
+                    checkOrdinaryNoWorkReceiptPriority(db, "canonical_row")
+                    if (row.active) active++ else tombstones++
+                    // Every V6 domain, including images, publishes its id set
+                    // ordered by the manifest remote id. For images that id is
+                    // the scoped product id, never the image-version id.
+                    idDigest.add(row.idLine)
+                    versionDigest.add(row.versionLine)
+                    row.identityLine?.let {
+                        identityDigest.add(it)
+                        identityPresent = true
+                    }
                 }
             }
             checkOrdinaryNoWorkReceiptPriority(db, "canonical_page_end")
             afterId = rows.lastOrNull()?.remoteId
         } while (rows.size == MANIFEST_VERIFY_PAGE_SIZE)
-        calculated[domain] = ShopSyncDomainCheckpoint(
-            activeCount = active,
-            tombstoneCount = tombstones,
-            idSetDigest = idDigest.finish(),
-            versionDigest = versionDigest.finish(),
-            identityDigest = identityDigest.finish().takeIf {
-                identityPresent || domain == ShopSyncRowDomain.PRODUCTS
+        startupTrace.cost(StartupCostStage.MANIFEST_DIGEST, domain) {
+            calculated[domain] = ShopSyncDomainCheckpoint(
+                activeCount = active,
+                tombstoneCount = tombstones,
+                idSetDigest = idDigest.finish(),
+                versionDigest = versionDigest.finish(),
+                identityDigest = identityDigest.finish().takeIf {
+                    identityPresent || domain == ShopSyncRowDomain.PRODUCTS
+                }
+            )
+            if (calculated.getValue(domain) != checkpoint.domain(domain)) {
+                throw ShopSyncContractException("recovery_manifest_digest_mismatch_${domain.wireValue}")
             }
-        )
-        if (calculated.getValue(domain) != checkpoint.domain(domain)) {
-            throw ShopSyncContractException("recovery_manifest_digest_mismatch_${domain.wireValue}")
         }
     }
     val catalogDigest = sha256(
@@ -2456,7 +2466,8 @@ internal suspend fun validateRelationalManifest(db: AppDatabase, generationId: S
         if (image != null && image.remoteId < product.remoteId) {
             throw ShopSyncContractException("recovery_image_product_invalid")
         }
-        val primaryImage = productPrimaryImageVersion(product)
+        val productParts = productManifestParts(product)
+        val primaryImage = productParts[5].takeUnless { it == "-" }?.let(::canonicalUuid)
         if (primaryImage == null) {
             if (image?.remoteId == product.remoteId) {
                 // V6 deliberately keeps an image-domain tombstone when a
@@ -2465,7 +2476,7 @@ internal suspend fun validateRelationalManifest(db: AppDatabase, generationId: S
                 if (
                     !product.active &&
                     !image.active &&
-                    productDeletedAt(product) == imageProductDeletedAt(image)
+                    productDeletedAt(productParts) == imageProductDeletedAt(image)
                 ) {
                     image = images.next()
                 } else {
@@ -2501,6 +2512,7 @@ internal suspend fun validatePhysicalSnapshot(
     localOverlay: Boolean = false,
     localAcknowledgements: Boolean = false
 ) {
+    val startupTrace = coroutineContext[LocalStartupTrace]
     checkOrdinaryNoWorkReceiptPriority(db, "physical_begin")
     val resolvedTombstones = if (localOverlay) validateBusinessResolutionPhysical(db).tombstoneRemoteIds else emptySet()
     val acknowledgedScope = if (localAcknowledgements) {
@@ -2522,19 +2534,21 @@ internal suspend fun validatePhysicalSnapshot(
         }
         do {
             checkOrdinaryNoWorkReceiptPriority(db, "physical_page")
-            val expected = if (localAcknowledgements) {
-                localAcknowledgedManifestPage(db, generationId, domain, afterId, pageSize, resolvedTombstones)
-            } else if (localOverlay) {
-                cleanOverlayManifestPage(db, generationId, domain, afterId, pageSize, resolvedTombstones)
-            } else if (domain == ShopSyncRowDomain.PRICES) {
-                materializablePriceManifestPage(db, generationId, afterId, pageSize)
-            } else {
-                db.syncRecoveryManifestDao().pageActive(
-                    generationId = generationId,
-                    domain = domain.wireValue,
-                    afterId = afterId,
-                    limit = pageSize
-                )
+            val expected = startupTrace.cost(StartupCostStage.PHYSICAL_EXPECTED, domain) {
+                if (localAcknowledgements) {
+                    localAcknowledgedManifestPage(db, generationId, domain, afterId, pageSize, resolvedTombstones)
+                } else if (localOverlay) {
+                    cleanOverlayManifestPage(db, generationId, domain, afterId, pageSize, resolvedTombstones)
+                } else if (domain == ShopSyncRowDomain.PRICES) {
+                    materializablePriceManifestPage(db, generationId, afterId, pageSize)
+                } else {
+                    db.syncRecoveryManifestDao().pageActive(
+                        generationId = generationId,
+                        domain = domain.wireValue,
+                        afterId = afterId,
+                        limit = pageSize
+                    )
+                }
             }
             // Only an exact-domain, same-ID ACK consumes this secondary fingerprint. The set is
             // bounded by the already-read expected page; canonical bodies remain fully verified.
@@ -2553,26 +2567,28 @@ internal suspend fun validatePhysicalSnapshot(
                     "recovery_physical_count_mismatch_${domain.wireValue}"
                 )
             }
-            expected.zip(physical).forEach body@ { (manifest, materialized) ->
-                checkOrdinaryNoWorkReceiptPriority(db, "physical_compare_row")
-                if (manifest.domain == LOCAL_ACK_BODY_PREFIX + domain.wireValue) {
-                    val (binding, device) = requireNotNull(acknowledgedScope)
-                    validateLocalAcknowledgedMaterialization(binding, device, manifest, materialized)
-                    return@body
-                }
-                if (
-                    manifest.remoteId != materialized.remoteId ||
-                    manifest.payloadDigest == null ||
-                    manifest.payloadDigest != materialized.payloadDigest ||
-                    (materialized.versionLine != null &&
-                        manifest.versionLine != materialized.versionLine)
-                ) {
-                    throw ShopSyncContractException(
-                        "recovery_physical_digest_mismatch_${domain.wireValue}"
-                    )
-                }
-                if (domain == ShopSyncRowDomain.HISTORY) {
-                    validateHistoryPhysicalMaterialization(manifest, materialized)
+            startupTrace.cost(StartupCostStage.PHYSICAL_COMPARE, domain) {
+                expected.zip(physical).forEach body@ { (manifest, materialized) ->
+                    checkOrdinaryNoWorkReceiptPriority(db, "physical_compare_row")
+                    if (manifest.domain == LOCAL_ACK_BODY_PREFIX + domain.wireValue) {
+                        val (binding, device) = requireNotNull(acknowledgedScope)
+                        validateLocalAcknowledgedMaterialization(binding, device, manifest, materialized)
+                        return@body
+                    }
+                    if (
+                        manifest.remoteId != materialized.remoteId ||
+                        manifest.payloadDigest == null ||
+                        manifest.payloadDigest != materialized.payloadDigest ||
+                        (materialized.versionLine != null &&
+                            manifest.versionLine != materialized.versionLine)
+                    ) {
+                        throw ShopSyncContractException(
+                            "recovery_physical_digest_mismatch_${domain.wireValue}"
+                        )
+                    }
+                    if (domain == ShopSyncRowDomain.HISTORY) {
+                        validateHistoryPhysicalMaterialization(manifest, materialized)
+                    }
                 }
             }
             afterId = expected.lastOrNull()?.remoteId
@@ -2707,6 +2723,51 @@ internal suspend fun materializableRecoveryRows(
     return ShopSyncRows.Prices(materializable)
 }
 
+/** A projection hint, never a validity cache. The original Room transaction stays owned. */
+private class PriceParentProjectionContext(
+    val database: AppDatabase, val generationId: String
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<PriceParentProjectionContext>
+}
+
+internal suspend fun <T> withPriceParentProjection(
+    db: AppDatabase, generationId: String, block: suspend () -> T
+): T = if (!db.inTransaction()) block() else withContext(PriceParentProjectionContext(db, generationId)) { block() }
+
+private data class PriceParentProjection(val remoteId: String, val active: Boolean, val versionLine: String)
+
+/** Called only on the current original transaction thread; never opens another dispatcher/transaction. */
+private fun readPriceParentProjection(
+    db: AppDatabase, generationId: String, parentIds: List<String>
+): Map<String, PriceParentProjection> {
+    val placeholders = parentIds.joinToString(",") { "?" }
+    val args = (listOf<Any>(generationId) + parentIds).toTypedArray()
+    return db.openHelper.readableDatabase.query(
+        "SELECT remoteId, active, versionLine FROM sync_recovery_manifest " +
+            "WHERE generationId = ? AND domain = 'products' AND remoteId IN ($placeholders)", args
+    ).use { cursor ->
+        buildMap {
+            while (cursor.moveToNext()) {
+                val remoteId = cursor.getString(0)
+                put(remoteId, PriceParentProjection(remoteId, cursor.getInt(1) != 0, cursor.getString(2)))
+            }
+        }
+    }
+}
+
+private suspend inline fun <T> validatedActivePriceParents(
+    db: AppDatabase, parentIds: List<String>, parents: Map<String, T>,
+    active: (T) -> Boolean, deletedAt: (T) -> String?
+): Set<String> = parentIds.filterTo(hashSetOf()) { parentId ->
+    checkOrdinaryNoWorkReceiptPriority(db, "price_parent_row")
+    val parent = parents[parentId]
+        ?: throw ShopSyncContractException("recovery_price_parent_manifest_missing")
+    if (active(parent) != (deletedAt(parent) == null)) {
+        throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+    }
+    active(parent)
+}
+
 private suspend fun activePriceParentIds(
     db: AppDatabase,
     generationId: String,
@@ -2717,17 +2778,26 @@ private suspend fun activePriceParentIds(
         throw ShopSyncContractException("recovery_price_parent_lookup_bound_exceeded")
     }
     checkOrdinaryNoWorkReceiptPriority(db, "price_parents_begin")
-    val parents = db.syncRecoveryManifestDao()
-        .getProductsByRemoteIds(generationId, parentIds)
-        .associateBy { it.remoteId }
-    return parentIds.filterTo(hashSetOf()) { parentId ->
-        checkOrdinaryNoWorkReceiptPriority(db, "price_parent_row")
-        val parent = parents[parentId]
-            ?: throw ShopSyncContractException("recovery_price_parent_manifest_missing")
-        if (parent.active != (productDeletedAt(parent) == null)) {
-            throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+    val startupTrace = coroutineContext[LocalStartupTrace]
+    val projection = coroutineContext[PriceParentProjectionContext]
+    if (projection != null && projection.database === db && projection.generationId == generationId && db.inTransaction()) {
+        val parents = startupTrace.cost(StartupCostStage.PRICE_PARENT_FETCH, ShopSyncRowDomain.PRICES) {
+            readPriceParentProjection(db, generationId, parentIds)
         }
-        parent.active
+        return startupTrace.cost(StartupCostStage.PRICE_PARENT_VALIDATE, ShopSyncRowDomain.PRICES) {
+            validatedActivePriceParents(db, parentIds, parents, { it.active }, {
+                productDeletedAt(it.remoteId, it.versionLine)
+            })
+        }
+    }
+    // Other recovery callers keep the original suspending DAO/Room connection dispatch.
+    val parents = startupTrace.cost(StartupCostStage.PRICE_PARENT_FETCH, ShopSyncRowDomain.PRICES) {
+        db.syncRecoveryManifestDao()
+            .getProductsByRemoteIds(generationId, parentIds)
+            .associateBy { it.remoteId }
+    }
+    return startupTrace.cost(StartupCostStage.PRICE_PARENT_VALIDATE, ShopSyncRowDomain.PRICES) {
+        validatedActivePriceParents(db, parentIds, parents, { it.active }, ::productDeletedAt)
     }
 }
 
@@ -2750,21 +2820,24 @@ private suspend fun materializablePriceManifestPage(
     afterId: String?,
     limit: Int
 ): List<SyncRecoveryManifestRow> {
+    val startupTrace = coroutineContext[LocalStartupTrace]
     val materializable = ArrayList<SyncRecoveryManifestRow>(limit)
     var cursor = afterId
     while (materializable.size < limit) {
         coroutineContext.ensureActive()
         checkOrdinaryNoWorkReceiptPriority(db, "price_page")
         val batchLimit = limit - materializable.size
-        val rows = db.syncRecoveryManifestDao().pageActive(
-            generationId,
-            ShopSyncRowDomain.PRICES.wireValue,
-            cursor,
-            batchLimit
-        )
+        val rows = startupTrace.cost(StartupCostStage.PRICE_PAGE_FETCH, ShopSyncRowDomain.PRICES) {
+            db.syncRecoveryManifestDao().pageActive(
+                generationId,
+                ShopSyncRowDomain.PRICES.wireValue,
+                cursor,
+                batchLimit
+            )
+        }
         checkOrdinaryNoWorkReceiptPriority(db, "price_page_end")
         if (rows.isEmpty()) break
-        val parentIds = rows.map(::priceManifestParentId)
+        val parentIds = startupTrace.cost(StartupCostStage.PRICE_PARENT_VALIDATE, ShopSyncRowDomain.PRICES) { rows.map(::priceManifestParentId) }
         val activeParents = activePriceParentIds(db, generationId, parentIds.distinct())
         materializable += rows.filterIndexed { index, _ -> parentIds[index] in activeParents }
         cursor = rows.last().remoteId
@@ -2801,33 +2874,38 @@ private suspend fun readPhysicalPage(
     includeLocalAckFingerprints: Boolean = false,
     acknowledgedRemoteIds: Set<String>
 ): List<PhysicalRecoveryRow> {
+    val startupTrace = coroutineContext[LocalStartupTrace]
     if (domain == ShopSyncRowDomain.HISTORY) {
-        val rows = if (activeStoreHistory) {
-            db.historyEntryDao().getRecoveryActivePhysicalPage(afterId, limit, onlyClean = localOverlay)
-        } else {
-            db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit, onlyClean = localOverlay)
-        }
-        return rows.map { row ->
-            if (
-                row.localRevision != row.syncedRevision ||
-                row.payloadFingerprint == null
-            ) {
-                throw ShopSyncContractException("recovery_physical_history_dirty")
+        val rows = startupTrace.cost(StartupCostStage.PHYSICAL_HISTORY_FETCH, domain) {
+            if (activeStoreHistory) {
+                db.historyEntryDao().getRecoveryActivePhysicalPage(afterId, limit, onlyClean = localOverlay)
+            } else {
+                db.historyEntryDao().getRecoveryPhysicalPage(afterId, limit, onlyClean = localOverlay)
             }
-            PhysicalRecoveryRow(
-                remoteId = canonicalRecoveryEntityUuid(row.remoteId),
-                payloadDigest = recoveryHistoryPayloadDigest(
-                    physicalFingerprint = recoveryHistoryPhysicalFingerprint(row.entry),
-                    sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
-                ),
-                history = HistoryPhysicalRecoveryState(
-                    entry = row.entry,
-                    sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
-                ),
-                localAckFingerprint = if (includeLocalAckFingerprints)
-                    historyPhysicalPayloadFingerprint(row.entry, row.remoteId) else null,
-                acknowledgedRevision = row.syncedRevision.toLong()
-            )
+        }
+        return startupTrace.cost(StartupCostStage.PHYSICAL_PROJECTION, domain) {
+            rows.map { row ->
+                if (
+                    row.localRevision != row.syncedRevision ||
+                    row.payloadFingerprint == null
+                ) {
+                    throw ShopSyncContractException("recovery_physical_history_dirty")
+                }
+                PhysicalRecoveryRow(
+                    remoteId = canonicalRecoveryEntityUuid(row.remoteId),
+                    payloadDigest = recoveryHistoryPayloadDigest(
+                        physicalFingerprint = recoveryHistoryPhysicalFingerprint(row.entry),
+                        sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
+                    ),
+                    history = HistoryPhysicalRecoveryState(
+                        entry = row.entry,
+                        sourcePayloadFingerprint = requireNotNull(row.payloadFingerprint)
+                    ),
+                    localAckFingerprint = if (includeLocalAckFingerprints)
+                        historyPhysicalPayloadFingerprint(row.entry, row.remoteId) else null,
+                    acknowledgedRevision = row.syncedRevision.toLong()
+                )
+            }
         }
     }
     val sql = when (domain) {
@@ -2886,11 +2964,15 @@ private suspend fun readPhysicalPage(
         append(" ORDER BY $remoteAlias.remoteId LIMIT ?")
     }
     checkOrdinaryNoWorkReceiptPriority(db, "physical_sql_begin")
-    return db.openHelper.readableDatabase.query(scopedSql, args).use { cursor ->
+    return startupTrace.cost(StartupCostStage.PHYSICAL_QUERY_OPEN, domain) {
+        db.openHelper.readableDatabase.query(scopedSql, args)
+    }.use { cursor ->
         buildList {
-            while (cursor.moveToNext()) {
+            while (startupTrace.cost(StartupCostStage.PHYSICAL_CURSOR_MOVE, domain) { cursor.moveToNext() }) {
                 checkOrdinaryNoWorkReceiptPriority(db, "physical_sql_row")
-                add(physicalRow(domain, cursor, includeLocalAckFingerprints, acknowledgedRemoteIds))
+                add(startupTrace.cost(StartupCostStage.PHYSICAL_PROJECTION, domain) {
+                    physicalRow(domain, cursor, includeLocalAckFingerprints, acknowledgedRemoteIds)
+                })
             }
         }
     }
@@ -3706,8 +3788,31 @@ private fun productManifestParts(row: SyncRecoveryManifestRow): List<String> {
 private fun productPrimaryImageVersion(row: SyncRecoveryManifestRow): String? =
     productManifestParts(row)[5].takeUnless { it == "-" }?.let(::canonicalUuid)
 
+private fun productDeletedAt(parts: List<String>): String? =
+    parts[2].takeUnless { it == "-" }?.let(::canonicalTimestamp)
+
 private fun productDeletedAt(row: SyncRecoveryManifestRow): String? =
-    productManifestParts(row)[2].takeUnless { it == "-" }?.let(::canonicalTimestamp)
+    productDeletedAt(row.remoteId, row.versionLine)
+
+/** Exactly the old split(separator, limit=7) shape/id checks, without allocating unused fields. */
+private fun productDeletedAt(remoteId: String, versionLine: String): String? {
+    var separator = -1
+    var first = -1
+    var second = -1
+    var third = -1
+    repeat(6) { index ->
+        separator = versionLine.indexOf('\u001f', separator + 1)
+        if (separator < 0) throw ShopSyncContractException("recovery_product_manifest_invalid")
+        when (index) { 0 -> first = separator; 1 -> second = separator; 2 -> third = separator }
+    }
+    // limit=7 deliberately allows additional separators in the last, unconsumed field.
+    if (first != remoteId.length || !versionLine.regionMatches(0, remoteId, 0, remoteId.length)) {
+        throw ShopSyncContractException("recovery_product_manifest_invalid")
+    }
+    val start = second + 1
+    return if (third == start + 1 && versionLine[start] == '-') null
+        else canonicalTimestamp(versionLine.substring(start, third))
+}
 
 private fun imageProductDeletedAt(row: SyncRecoveryManifestRow): String? {
     return imageManifestParts(row)[3].takeUnless { it == "-" }?.let(::canonicalTimestamp)

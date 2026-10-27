@@ -3582,6 +3582,7 @@ class DefaultInventoryRepository(
         legacyBoundScope: Task126OwnerStoreScope?
     ): Task126BusinessDataScopeState = withContext(Dispatchers.IO) {
         db.withTransaction {
+            try {
             val storedBinding = businessDataScopeBindingDao.get()
             val boundScope = storedBinding?.toOwnerStoreScope() ?: legacyBoundScope
             if (storedBinding == null && legacyBoundScope != null) {
@@ -3623,6 +3624,10 @@ class DefaultInventoryRepository(
                     )
                 is Task126BusinessDataBindingDecision.Blocked ->
                     blockedBusinessDataScopeState(decision.reason, boundScope, snapshot)
+            }
+            } finally {
+                // Close joining before Room marks/ends this original transaction; no result survives it.
+                coroutineContext[LocalStoreProofTransactionContext]?.sealBeforeTransactionExit()
             }
         }
     }
@@ -3781,6 +3786,7 @@ class DefaultInventoryRepository(
         val trace = coroutineContext[LocalStartupTrace]
         trace?.begin("transaction_wait")
         db.withTransaction {
+            try {
             trace?.end("transaction_wait")
             val binding = trace.span("binding") { businessDataScopeBindingDao.get()?.toOwnerStoreScope() }
             val snapshot = trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
@@ -3805,6 +3811,10 @@ class DefaultInventoryRepository(
                 localSnapshot = snapshot, localAccessScope = binding.takeIf { usable },
                 localWritesAllowed = canWrite,
                 errorCode = if (usable) null else "local_snapshot_unavailable")
+            } finally {
+                // Close joining before Room marks/ends this original transaction; no result survives it.
+                coroutineContext[LocalStoreProofTransactionContext]?.sealBeforeTransactionExit()
+            }
         }
     }
 
@@ -3849,10 +3859,12 @@ class DefaultInventoryRepository(
             }
             if (!watermarkValid) { trace?.event("scope_unavailable", "watermark_invalid"); return false }
             validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
-            trace.span("receipt") { validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint) }
-            trace.span("physical") {
-                validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
-                    localOverlay=true, localAcknowledgements=true)
+            withPriceParentProjection(db, baseline.generationId) {
+                trace.span("receipt") { validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint) }
+                trace.span("physical") {
+                    validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
+                        localOverlay=true, localAcknowledgements=true)
+                }
             }
             true
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -7330,7 +7342,7 @@ class DefaultInventoryRepository(
                 for (parent in parents) {
                     if (!productAcknowledged(parent)) {
                         val ref = productRemoteRefDao.getByRemoteId(parent) ?: return null
-                        if (!resolvedParentEligibleForPrice(ref)) return null
+                        if (!resolvedParentEligibleForV6Correction(ref)) return null
                     }
                 }
                 for ((id, body) in bodies) if (!acknowledged(ShopSyncRowDomain.PRICES, id, 0L,
@@ -8442,6 +8454,22 @@ class DefaultInventoryRepository(
     private suspend fun resolvedParentEligibleForPrice(ref: ProductRemoteRef): Boolean {
         if (ref.lastRemoteAppliedAt == null) return false
         if (ref.localChangeRevision <= ref.lastSyncedLocalRevision) return true
+        val decision = effectiveCatalogDecision(ref) ?: return false
+        if (decision.decision?.remote?.row?.deletedAt != null || decision.decision?.remote?.row == null) return false
+        val entries = readLocalBusinessEntries(db, decision.scope.owner, decision.scope.store)
+        val ledger = requireNotNull(loadBusinessResolutionSnapshot(db, decision.scope.owner, decision.scope.store, entries))
+        if (entries.filter { it.eventType == BUSINESS_WRITE_EVENT }.any { entry ->
+            !ledger.supersededAttempt(entry) && decodeResolutionAttempt(entry).payload.revisions.any {
+                it.domain == "PRODUCT" && it.remoteId == ref.remoteId
+            }
+        }) return false
+        val fresh = readQualifiedCatalogConflictRemote(decision.scope.owner, decision.scope.shop, ref.remoteId)
+        return fresh.row != null && fresh.row.deletedAt == null && productRemoteRefDao.getByProductId(ref.productId) == ref
+    }
+
+    /** Exceptional correction fallback requires a real qualified durable decision, even for a clean ref. */
+    private suspend fun resolvedParentEligibleForV6Correction(ref: ProductRemoteRef): Boolean {
+        if (ref.lastRemoteAppliedAt == null) return false
         val decision = effectiveCatalogDecision(ref) ?: return false
         if (decision.decision?.remote?.row?.deletedAt != null || decision.decision?.remote?.row == null) return false
         val entries = readLocalBusinessEntries(db, decision.scope.owner, decision.scope.store)
