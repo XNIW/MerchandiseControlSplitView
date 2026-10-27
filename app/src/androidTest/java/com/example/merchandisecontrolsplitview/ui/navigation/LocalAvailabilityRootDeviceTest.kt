@@ -233,9 +233,11 @@ class LocalAvailabilityRootDeviceTest {
                 if (contextualRoute != null) nativeView.set(androidx.compose.ui.platform.LocalView.current)
                 val state by liveTracker.businessDataScopeState.collectAsState()
                 val progress by liveTracker.state.collectAsState()
+                val authState by ownedAuth.state.collectAsState()
+                val shopContext by shops.state.collectAsState()
                 val rootContent: @androidx.compose.runtime.Composable () -> Unit = {
                     if (visible.value) AppNavGraphContent(ownedApp, excelVM, databaseVM, true,
-                        ownedAuth.state.value, progress, shops.state.value, state)
+                        authState, progress, shopContext, state)
                 }
                 if (accessibility == null) MerchandiseControlTheme(darkTheme = false, content = rootContent)
                 else accessibility.Content(uiStrings, content = rootContent)
