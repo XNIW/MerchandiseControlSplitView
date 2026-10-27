@@ -146,6 +146,13 @@ interface ProductDao {
     )
     suspend fun getCatalogPushCandidates(): List<ProductCatalogPushCandidate>
 
+    /** The caller supplies only revisions established by the strict local resolution ledger. */
+    suspend fun getEffectiveCatalogPushCandidates(resolved: Set<Pair<String, Int>>): List<ProductCatalogPushCandidate> =
+        getCatalogPushCandidates().filter { candidate -> candidate.remoteRef?.let {
+            (it.remoteId to it.localChangeRevision) !in resolved
+        } ?: true }
+
+
     @Query("SELECT id FROM products WHERE supplierId = :supplierId")
     suspend fun getIdsForSupplier(supplierId: Long): List<Long>
 

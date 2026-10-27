@@ -33,6 +33,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryDisplayEntry
+import com.example.merchandisecontrolsplitview.data.PilotCommitTrace
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
@@ -348,7 +351,7 @@ fun HistoryScreen(
             )
         }
 
-        DatePickerDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) DatePickerDialog(
             onDismissRequest = { dismissCustomRangePicker() },
             confirmButton = {
                 TextButton(
@@ -399,7 +402,7 @@ fun HistoryScreen(
     }
 
     if (showRenameDialog && entryToRename != null) {
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = { showRenameDialog = false },
             title = { Text(stringResource(R.string.rename_file)) },
             text = {
@@ -422,6 +425,8 @@ fun HistoryScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                        entryToRename?.uid ?: 0L,"b6-source:history:history-rename-confirm")
                     entryToRename?.let { onRename(it, renameText) }
                     showRenameDialog = false
                 }) { Text(stringResource(R.string.confirm)) }
@@ -433,7 +438,7 @@ fun HistoryScreen(
     }
 
     if (showDeleteDialog && entryToDelete != null) {
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text(stringResource(R.string.delete_confirm)) },
             confirmButton = {
@@ -485,18 +490,19 @@ private fun HistoryFilterSheet(
 ) {
     val spacing = MaterialTheme.appSpacing
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val filterScrollState = rememberScrollState()
     val navBarPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var showSupplierPicker by remember { mutableStateOf(false) }
     var showCategoryPicker by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(filterScrollState)
                 .padding(horizontal = spacing.xl)
                 .padding(bottom = navBarPadding + spacing.xl),
             verticalArrangement = Arrangement.spacedBy(spacing.lg)
@@ -685,7 +691,7 @@ private fun HistoryValuePickerDialog(
         else options.filter { it.contains(searchQuery, ignoreCase = true) }
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -895,6 +901,8 @@ private fun HistoryRow(
     ) {
         Card(
             modifier = Modifier
+                .observeMobileSyncDraw(MobileSyncInteractionTestHooks.Event.HISTORY_DRAW,entry.uid,
+                    PilotCommitTrace.b6HistoryRenderDetail(entry,displayTitle,metadataSegments.joinToString(detailsSeparator)))
                 .fillMaxWidth()
                 .clickable(onClick = onClick),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)

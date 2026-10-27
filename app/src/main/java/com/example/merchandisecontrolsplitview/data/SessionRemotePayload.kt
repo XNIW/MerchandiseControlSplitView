@@ -182,11 +182,17 @@ private fun normalizedHistoryTimestamp(rawValue: String): String {
 private fun formatHistoryInstant(instant: Instant): String =
     historyTimestampFormatter.format(instant.atOffset(ZoneOffset.UTC))
 
-private fun sha256Hex(value: String): String =
-    MessageDigest
-        .getInstance("SHA-256")
-        .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+private fun sha256Hex(value: String): String {
+    val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+    val digits = "0123456789abcdef"
+    val encoded = CharArray(bytes.size * 2)
+    for (index in bytes.indices) {
+        val unsigned = bytes[index].toInt() and 0xff
+        encoded[index * 2] = digits[unsigned ushr 4]
+        encoded[index * 2 + 1] = digits[unsigned and 0x0f]
+    }
+    return String(encoded)
+}
 
 /**
  * Costruisce il [SessionRemotePayload] da questa entry e dal suo [remoteId] già persistito.

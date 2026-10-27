@@ -22,12 +22,15 @@ import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
 import java.io.File
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import org.junit.Assert.assertEquals
@@ -46,7 +49,7 @@ import org.robolectric.Shadows.shadowOf
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(application = Application::class, sdk = [33])
 class ExcelViewModelTest {
 
     @get:Rule
@@ -1611,4 +1614,93 @@ class ExcelViewModelTest {
         val complete: List<Boolean>,
         val headerTypes: List<String>
     )
+    @Test
+    fun `managed history consumers do not open DAO streams until admitted and cancel on withdrawal`() = runTest {
+        val owner = "history-read-owner"
+        val selected = com.example.merchandisecontrolsplitview.data.SelectedShop("history-shop", null, "History shop", "owner", "active", true)
+        val shop = kotlinx.coroutines.flow.MutableStateFlow(com.example.merchandisecontrolsplitview.data.ShopContext(
+            owner, emptyList(), selected, syncAllowed = false, localAccessAllowed = true))
+        val identity = kotlinx.coroutines.flow.MutableStateFlow<com.example.merchandisecontrolsplitview.data.LocalAuthIdentity?>(
+            com.example.merchandisecontrolsplitview.data.LocalAuthIdentity(owner, 1))
+        val auth = kotlinx.coroutines.flow.MutableStateFlow<com.example.merchandisecontrolsplitview.data.AuthState>(
+            com.example.merchandisecontrolsplitview.data.AuthState.Checking)
+        val bound = com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope(owner, selected)
+        val denied = com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState(
+            com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus.CHECKING,
+            boundScope = bound, localReadsAllowed = false, localWritesAllowed = false)
+        val tracker = com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker(denied)
+        val manager = mockk<com.example.merchandisecontrolsplitview.data.SupabaseAuthManager>()
+        every { manager.state } returns auth
+        every { manager.localIdentity } returns identity
+        every { manager.isCurrentLocalIdentity(any()) } answers { firstArg<com.example.merchandisecontrolsplitview.data.LocalAuthIdentity>() == identity.value }
+        val shops = mockk<com.example.merchandisecontrolsplitview.data.ShopContextRepository>()
+        every { shops.state } returns shop
+        val owned = mockk<com.example.merchandisecontrolsplitview.MerchandiseControlApplication>(relaxed = true)
+        every { owned.authManager } returns manager
+        every { owned.shopContextRepository } returns shops
+        every { owned.catalogSyncStateTracker } returns tracker
+        every { owned.applicationContext } returns app
+        var activeSources = 0
+        fun <T> source(value: T) = kotlinx.coroutines.flow.flow {
+            activeSources++
+            try { emit(value); kotlinx.coroutines.awaitCancellation() } finally { activeSources-- }
+        }
+        every { repository.getFilteredHistoryListFlow(any()) } returns source(emptyList<HistoryEntryListItem>())
+        every { repository.getFilteredHistoryFlow(any()) } returns source(emptyList<HistoryEntry>())
+        every { repository.hasHistoryEntriesFlow() } returns source(false)
+        every { repository.observeHistoryEntryByUid(any()) } returns source<HistoryEntry?>(null)
+        val vm = ExcelViewModel(owned, repository)
+        val store = androidx.lifecycle.ViewModelStore().apply { put("managed-history", vm) }
+        val listJob = backgroundScope.launch { vm.historyDisplayEntries.collect { } }
+        val countJob = backgroundScope.launch { vm.hasHistoryEntries.collect { } }
+        try {
+            vm.loadHistoryEntry(1L)
+            runCurrent()
+            assertEquals(0, activeSources)
+            vm.updateHistoryEntry(1L)
+            vm.renameHistoryEntry(1L, "Must stay draft")
+            vm.deleteHistoryEntry(1L)
+            vm.markCurrentEntryAsExported(1L)
+            vm.markCurrentEntryAsSyncedSuccessfully(1L)
+            vm.generateFilteredWithOldPrices("S", "C") { error("Denied generation must not complete") }
+            assertFalse(vm.saveCurrentStateToHistory(1L))
+            runCurrent()
+            coVerify(exactly = 0) { repository.getHistoryEntryByUid(any()) }
+            coVerify(exactly = 0) { repository.getPreviousPricesForBarcodes(any(), any()) }
+            coVerify(exactly = 0) { repository.insertHistoryEntry(any()) }
+            coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+            coVerify(exactly = 0) { repository.deleteHistoryEntry(any()) }
+            verify(exactly = 0) { repository.getFilteredHistoryListFlow(any()) }
+            verify(exactly = 0) { repository.getFilteredHistoryFlow(any()) }
+            verify(exactly = 0) { repository.hasHistoryEntriesFlow() }
+            verify(exactly = 0) { repository.observeHistoryEntryByUid(any()) }
+            tracker.updateBusinessDataScopeState(denied.copy(localAccessScope = bound, localReadsAllowed = true, localWritesAllowed = true))
+            runCurrent()
+            assertEquals(4, activeSources)
+            tracker.updateBusinessDataScopeState(denied)
+            runCurrent()
+            assertEquals(0, activeSources)
+            verify(exactly = 1) { repository.getFilteredHistoryListFlow(any()) }
+            verify(exactly = 1) { repository.getFilteredHistoryFlow(any()) }
+            verify(exactly = 1) { repository.hasHistoryEntriesFlow() }
+            verify(exactly = 1) { repository.observeHistoryEntryByUid(any()) }
+            val readEntered = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val readRelease = kotlinx.coroutines.CompletableDeferred<Unit>()
+            coEvery { repository.getHistoryEntryByUid(1L) } coAnswers {
+                readEntered.complete(Unit)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { readRelease.await() }
+                historyEntry(uid = 1L)
+            }
+            tracker.updateBusinessDataScopeState(denied.copy(localAccessScope = bound, localReadsAllowed = true, localWritesAllowed = true))
+            vm.updateHistoryEntry(1L)
+            runCurrent()
+            assertTrue(readEntered.isCompleted)
+            tracker.updateBusinessDataScopeState(denied)
+            readRelease.complete(Unit)
+            runCurrent()
+            coVerify(exactly = 1) { repository.getHistoryEntryByUid(1L) }
+            coVerify(exactly = 0) { repository.updateHistoryEntry(any()) }
+        } finally { listJob.cancel(); countJob.cancel(); store.clear(); runCurrent() }
+    }
+
 }

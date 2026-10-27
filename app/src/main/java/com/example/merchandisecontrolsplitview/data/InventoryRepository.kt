@@ -15,6 +15,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -44,6 +45,16 @@ import java.time.format.DateTimeFormatter
 import java.time.LocalDateTime
 import java.util.Locale
 import kotlin.math.abs
+
+internal data class PreparedCatalogResolutionResidual(
+    val original: SyncEventOutboxEntry,
+    val row: InventoryProductRow,
+    val revision: BusinessWriteRevision,
+    val ref: ProductRemoteRef,
+    val local: Product,
+    val remote: QualifiedCatalogConflictRemote,
+    val provenBaseFingerprint: String
+)
 
 // ⬇️ aggiungi subito sotto gli import esistenti (prima dell'interfaccia)
 data class PriceHistoryExportRow(
@@ -116,6 +127,17 @@ interface InventoryRepository {
     suspend fun findProductsByBarcodes(barcodes: List<String>): List<Product>
     suspend fun getAllProducts(): List<Product>
     suspend fun getProductDetailsById(productId: Long): ProductWithDetails?
+    /** A review read is scoped to the active local store and never opens a stale editor snapshot. */
+    suspend fun getProductForEditorReview(productId: Long): Product? =
+        throw UnsupportedOperationException("Scoped product review is not supported")
+    suspend fun findPersistedCatalogConflictProductIds(ownerUserId: String, shopId: String): List<Long> = emptyList()
+    suspend fun preparePersistedCatalogConflict(
+        productId: Long, ownerUserId: String, shopId: String
+    ): PersistedCatalogConflictContext =
+        throw UnsupportedOperationException("Persisted catalog conflict review is not supported")
+    suspend fun resolvePersistedCatalogConflict(
+        context: PersistedCatalogConflictContext, choice: PersistedCatalogConflictChoice
+    ): PersistedCatalogConflictResult = PersistedCatalogConflictResult.Blocked("resolution_not_supported")
     /** Mapping bounded remote identity -> righe locali, nell'ordine remoto richiesto. */
     suspend fun getProductsWithDetailsByRemoteIds(
         remoteIds: List<String>
@@ -140,6 +162,11 @@ interface InventoryRepository {
     suspend fun updateProductFromEditor(baseline: Product, product: Product) {
         throw UnsupportedOperationException("Product editor concurrency is not supported")
     }
+    suspend fun updateProductFromEditor(baseline: Product, product: Product,
+        onCommitted: (ProductEditorSaveReceipt) -> Unit) {
+        updateProductFromEditor(baseline, product)
+    }
+
     suspend fun deleteProduct(product: Product)
     suspend fun applyImport(request: ImportApplyRequest): ImportApplyResult
 
@@ -351,6 +378,153 @@ internal object DefaultInventoryRepositoryTestHooks {
     var localProductMutationNow: (() -> LocalDateTime)? = null
 }
 
+/** Same-database arbitration; all monitor bodies are non-suspending and contain no I/O. */
+internal class OrdinaryNoWorkReceiptPriority {
+    private val lock = Any()
+    private val writers = linkedSetOf<Writer>()
+    private val attempts = linkedSetOf<Attempt>()
+
+    internal class Writer internal constructor(internal val scope: Task126OwnerStoreScope)
+
+    internal class Attempt internal constructor(
+        internal val owner: OrdinaryNoWorkReceiptPriority,
+        internal val lease: Task126BusinessDataScopeLease,
+        internal val guard: Task126BusinessDataScopeRuntimeGuard,
+        internal val ownerJob: kotlinx.coroutines.Job
+    ) {
+        @Volatile internal var requested = false
+        internal fun checkRequested() {
+            if (requested) throw OrdinaryNoWorkReceiptDeferred.from(this)
+        }
+    }
+
+    // Test-only observer of the actual scoped path, outside the monitor. Null in production.
+    @Volatile internal var checkpointForTest: (suspend (String) -> Unit)? = null
+    // Timestamp-only test observer; no payload, assertion, deliberate wait, or I/O.
+    @Volatile internal var traceForTest: ((String) -> Unit)? = null
+
+    private fun sameScope(a: Task126OwnerStoreScope, b: Task126OwnerStoreScope): Boolean =
+        Task126OwnerStoreGate.validate(a, b) == Task126OwnerStoreGateDecision.Allowed
+
+    internal fun reserveWriter(lease: Task126BusinessDataScopeLease?): Writer? {
+        if (lease == null || lease.unmanaged) return null
+        val writer = Writer(requireNotNull(lease.boundScope))
+        synchronized(lock) {
+            writers.add(writer)
+            attempts.filter { sameScope(requireNotNull(it.lease.boundScope), writer.scope) }
+                .forEach { it.requested = true }
+        }
+        return writer
+    }
+
+    internal fun releaseWriter(writer: Writer?) {
+        if (writer != null) synchronized(lock) { check(writers.remove(writer)) }
+    }
+
+    internal fun register(
+        lease: Task126BusinessDataScopeLease,
+        guard: Task126BusinessDataScopeRuntimeGuard,
+        ownerJob: kotlinx.coroutines.Job
+    ): Attempt = synchronized(lock) {
+        check(!lease.unmanaged && !lease.localOnly)
+        val scope = requireNotNull(lease.boundScope)
+        Attempt(this, lease, guard, ownerJob).also { attempt ->
+            attempt.requested = writers.any { sameScope(it.scope, scope) }
+            attempts.add(attempt)
+        }
+    }
+
+    internal fun accept(attempt: Attempt) = synchronized(lock) {
+        check(attempt.owner === this && attempts.contains(attempt))
+        attempt.checkRequested()
+        // This linearizes proof acceptance against a later Save reservation.
+        check(attempts.remove(attempt))
+    }
+
+    internal fun retire(attempt: Attempt) = synchronized(lock) {
+        check(attempt.owner === this)
+        attempts.remove(attempt)
+        Unit
+    }
+}
+
+/** Scheduling outcome only. It is neither cancellation, recovery, nor a successful receipt. */
+internal class OrdinaryNoWorkReceiptDeferred private constructor(
+    private val guard: Task126BusinessDataScopeRuntimeGuard,
+    private val signal: Task126BusinessDataScopeSignalToken
+) : IllegalStateException("ordinary_no_work_receipt_deferred_local_writer") {
+    internal fun scopeStillCurrent(): Boolean = guard.isCurrentBusinessDataScopeSignal(signal)
+
+    companion object {
+        internal fun from(attempt: OrdinaryNoWorkReceiptPriority.Attempt) =
+            OrdinaryNoWorkReceiptDeferred(attempt.guard, Task126BusinessDataScopeSignalToken(attempt.lease))
+    }
+}
+
+private object AutomaticNoWorkReceiptPreemption :
+    kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    object Key : kotlin.coroutines.CoroutineContext.Key<AutomaticNoWorkReceiptPreemption>
+}
+
+/** Only consumers with an explicit deferred outcome opt in; manual/UI callers keep their contract. */
+internal suspend fun <T> withAutomaticNoWorkReceiptPreemption(block: suspend () -> T): T =
+    withContext(AutomaticNoWorkReceiptPreemption) { block() }
+
+private class OrdinaryNoWorkReceiptContext(val attempt: OrdinaryNoWorkReceiptPriority.Attempt) :
+    kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<OrdinaryNoWorkReceiptContext>
+}
+
+/** Polling cannot interrupt an in-flight raw SQL statement; the SQL tail remains unbounded here. */
+internal suspend fun checkOrdinaryNoWorkReceiptPriority(db: AppDatabase, stage: String) {
+    // Passive startup observation reuses existing proof checkpoints; priority/cancellation logic below is unchanged.
+    coroutineContext[LocalStartupTrace]?.checkpoint(stage)
+    val attempt = coroutineContext[OrdinaryNoWorkReceiptContext]?.attempt ?: return
+    if (attempt.owner !== db.ordinaryNoWorkReceiptPriority) return
+    coroutineContext.ensureActive()
+    attempt.owner.traceForTest?.invoke(stage)
+    fun poll() {
+        if (attempt.requested) {
+            attempt.owner.traceForTest?.invoke("preemption_observed")
+            attempt.checkRequested()
+        }
+    }
+    poll()
+    attempt.owner.checkpointForTest?.invoke(stage)
+    coroutineContext.ensureActive()
+    poll()
+}
+
+private suspend fun <T> withOrdinaryNoWorkReceiptPriority(
+    db: AppDatabase,
+    guard: Task126BusinessDataScopeRuntimeGuard,
+    block: suspend () -> T
+): T {
+    if (coroutineContext[AutomaticNoWorkReceiptPreemption.Key] == null) return block()
+    val lease = coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease
+    if (lease == null || lease.unmanaged) return block()
+    guard.requireCloudBusinessDataScope()
+    val attempt = db.ordinaryNoWorkReceiptPriority.register(
+        lease, guard, checkNotNull(coroutineContext[kotlinx.coroutines.Job])
+    )
+    try {
+        return withContext(OrdinaryNoWorkReceiptContext(attempt)) {
+            checkOrdinaryNoWorkReceiptPriority(db, "before_transaction")
+            val result = try {
+                block()
+            } finally {
+                attempt.owner.traceForTest?.invoke("transaction_unwound")
+            }
+            coroutineContext.ensureActive()
+            guard.requireCurrentBusinessDataScope()
+            db.ordinaryNoWorkReceiptPriority.accept(attempt)
+            result
+        }
+    } finally {
+        db.ordinaryNoWorkReceiptPriority.retire(attempt)
+    }
+}
+
 internal data class ShopSyncRecoveryStageApplyResult(
     val businessRowsApplied: Int,
     val skippedParentRows: Int = 0,
@@ -437,6 +611,13 @@ class DefaultInventoryRepository(
         val count: Int,
         val remoteIds: List<String>
     )
+
+    /** Per-pass diagnostics only; no authority or persistent retry state. */
+    private class CatalogLocalTextRejections {
+        val supplierIds = mutableSetOf<Long>()
+        val categoryIds = mutableSetOf<Long>()
+        var firstFailure: CatalogTextValidationException? = null
+    }
 
     private data class ProductPushCandidatePrepared(
         val product: Product,
@@ -619,6 +800,16 @@ class DefaultInventoryRepository(
         result
     }
 
+    private suspend fun b6CurrentLease(): PilotCommitTrace.B6LeaseStamp? =
+        PilotCommitTrace.b6LeaseStamp(coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease)
+
+    private suspend fun b6BeginSource(kind: String, localID: Long?): PilotCommitTrace.B6Ticket? {
+        if (!PilotCommitTrace.b6IsArmed()) return null
+        val scope = coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease?.boundScope
+        return PilotCommitTrace.b6BeginKind(kind, localID,
+            scope?.let { PilotCommitTrace.hash(it.ownerHash + "\n" + it.storeId) }, lease = b6CurrentLease())
+    }
+
     private suspend fun <T> businessScopedRemoteCall(
         block: suspend () -> Result<T>
     ): Result<T> {
@@ -685,37 +876,414 @@ class DefaultInventoryRepository(
         recordAcknowledgedLocalBodies(db, attempt)
     }
 
-    private suspend fun sendCatalogBusinessWrite(remote: CatalogRemoteDataSource, attempt: BusinessWriteAttempt): Result<Unit> =
+    private suspend fun sendCatalogBusinessWrite(remote: CatalogRemoteDataSource, attempt: BusinessWriteAttempt): Result<BusinessWriteConfirmation> =
         businessScopedRemoteCall {
-            when(attempt.payload.kind) {
-                "PRODUCTS" -> remote.upsertProducts(attempt.payload.products,attempt.shop)
-                "SUPPLIERS" -> remote.upsertSuppliers(attempt.payload.suppliers,attempt.shop)
-                "CATEGORIES" -> remote.upsertCategories(attempt.payload.categories,attempt.shop)
-                "PATCH" -> remote.patchProduct(requireNotNull(attempt.payload.patchId),attempt.owner,
-                    attempt.shop,requireNotNull(attempt.payload.patch))
-                else -> Result.failure(IllegalStateException("business_write_catalog_kind_invalid"))
+            val p = attempt.payload
+            if (p.kind == "PATCH_CONDITIONAL") {
+                remote.patchProductConditionally(requireNotNull(p.patchId), attempt.owner, attempt.shop,
+                    requireNotNull(p.patch), requireNotNull(p.expectedUpdatedAt), p.expectedDeletedAt).mapCatching { rows ->
+                    require(rows.size <= 1) { "conditional_ack_multiple_rows" }
+                    val row = rows.singleOrNull() ?: throw BusinessWriteConditionalNoMatch(
+                        readQualifiedCatalogConflictRemote(attempt.owner, requireNotNull(attempt.shop), requireNotNull(p.patchId)))
+                    BusinessWriteConfirmation.ConditionalProduct(row)
+                }
+            } else {
+                when (p.kind) {
+                    "PRODUCTS" -> remote.upsertProducts(p.products, attempt.shop)
+                    "SUPPLIERS" -> remote.upsertSuppliers(p.suppliers, attempt.shop)
+                    "CATEGORIES" -> remote.upsertCategories(p.categories, attempt.shop)
+                    "PATCH" -> remote.patchProduct(requireNotNull(p.patchId), attempt.owner, attempt.shop, requireNotNull(p.patch))
+                    else -> Result.failure(IllegalStateException("business_write_catalog_kind_invalid"))
+                }.map { BusinessWriteConfirmation.LegacyAccepted }
             }
         }
+
+    private suspend fun catalogResolutionScope(owner: String, shop: String): Pair<BusinessResolutionScope, SyncRecoveryBaseline> {
+        requireCurrentBusinessDataScope()
+        val binding = requireNotNull(db.businessDataScopeBindingDao().get()) { "resolution_binding_missing" }
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get()) { "resolution_baseline_missing" }
+        val device = requireNotNull(db.syncEventDeviceStateDao().get()).deviceId
+        require(owner.isNotBlank() && shop.isNotBlank() && binding.ownerHash == task126OwnerHash(owner) &&
+            binding.storeId == "shop:$shop" && baseline.ownerHash == binding.ownerHash &&
+            baseline.storeScope == binding.storeId && baseline.shopId == shop && baseline.deviceId == device) {
+            "resolution_scope_mismatch"
+        }
+        return BusinessResolutionScope(owner, binding.storeId, shop, binding.localStoreId,
+            binding.syncProtocolVersion, binding.schemaVersion, binding.storeEpoch, device) to baseline
+    }
+
+    /** One qualified targeted read under the existing local lease, including during same-scope recovery.
+     * It grants no cloud-write or ACK authority. The same binding, publication and lease survive every await.
+     */
+    private suspend fun readQualifiedCatalogConflictRemote(owner: String, shop: String, remoteId: String): QualifiedCatalogConflictRemote {
+        val captured = catalogResolutionScope(owner, shop)
+        val reader = requireNotNull(shopSyncReadRemoteDataSource?.takeIf { it.isConfigured }) { "resolution_reader_unavailable" }
+        suspend fun current() {
+            coroutineContext.ensureActive()
+            requireCurrentBusinessDataScope()
+            require(catalogResolutionScope(owner, shop) == captured) { "resolution_publication_changed" }
+        }
+        current()
+        val checkpoint = reader.checkpoint(ShopSyncRpcContext(owner, shop, captured.first.device)).getOrThrow()
+        current()
+        validateRecoveryScopeIdentity(checkpoint.scope, owner, captured.first.device)
+        validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
+        require(checkpoint.status == "ready" && checkpoint.shopId == shop && checkpoint.integrity.totalViolationCount == 0L) {
+            "resolution_checkpoint_invalid"
+        }
+        val fence = requireNotNull(checkpoint.syncEvents.domainMaxIds[SyncEventDomains.CATALOG])
+        val result = reader.rowsByIds(shopSyncTargetedContext(owner, shop, captured.first.device,
+            checkpoint.scope, checkpoint.syncEvents.maxId, checkpoint.syncEvents.domainMaxIds, SyncEventDomains.CATALOG),
+            ShopSyncRowDomain.PRODUCTS, listOf(remoteId)).getOrThrow()
+        current()
+        val rows = (result.rows as? ShopSyncRows.Products)?.values ?: error("resolution_row_domain_invalid")
+        require(result.shopId == shop && result.scope == checkpoint.scope && result.domain == ShopSyncRowDomain.PRODUCTS &&
+            result.schemaVersion == "shop-sync-rows-by-ids-v1" && result.asOfEventMaxId == checkpoint.syncEvents.maxId &&
+            result.minimumDomainEventMaxId == fence && result.domainScope == checkpoint.scope.kind &&
+            parseShopSyncMaxEventId(result.currentScopeEventMaxId) >= parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) &&
+            parseShopSyncMaxEventId(result.materializedDomainEventMaxId) >= parseShopSyncMaxEventId(fence) &&
+            result.requestedCount == 1 && rows.size <= 1 &&
+            ((rows.size == 1 && result.missingIds.isEmpty()) || (rows.isEmpty() && result.missingIds == listOf(remoteId))) &&
+            rows.all { it.id == remoteId && it.ownerUserId == owner && it.shopId == shop && !it.updatedAt.isNullOrBlank() }) {
+            "resolution_targeted_read_unqualified"
+        }
+        return QualifiedCatalogConflictRemote(rows.singleOrNull(), result.schemaVersion, result.scope,
+            result.asOfEventMaxId, result.currentScopeEventMaxId, result.minimumDomainEventMaxId,
+            result.materializedDomainEventMaxId, result.domainScope, result.missingIds)
+    }
+
+    private val resolutionJson = Json { encodeDefaults = true }
+
+    private suspend fun resolutionLedger(scope: BusinessResolutionScope, baseline: SyncRecoveryBaseline,
+        entries: List<SyncEventOutboxEntry>? = null): BusinessResolutionLedger.Snapshot {
+        val currentEntries = entries ?: readLocalBusinessEntries(db, scope.owner, scope.store)
+        return (loadBusinessResolutionSnapshot(db, scope.owner, scope.store, currentEntries) ?:
+            BusinessResolutionLedger.evaluate(emptyList(), scope, baseline.generationId,
+                decodeRecoveryCheckpointJson(baseline.checkpointJson).checkpointDigest,
+                currentEntries.filter { it.eventType == BUSINESS_WRITE_EVENT })).requireValid()
+    }
+
+    private fun decodeResolutionAttempt(entry: SyncEventOutboxEntry): BusinessWriteAttempt {
+        val attempt = resolutionJson.decodeFromString<BusinessWriteAttempt>(entry.metadataJson)
+        validateBusinessWritePayload(attempt)
+        val key = "business-write-v1:" + MessageDigest.getInstance("SHA-256").digest(entry.metadataJson.encodeToByteArray())
+            .joinToString("") { "%02x".format(it) }
+        require(entry.eventType == BUSINESS_WRITE_EVENT && entry.clientEventId == key &&
+            entry.ownerUserId == attempt.owner && entry.storeScope == attempt.store && entry.sourceDeviceId == attempt.device &&
+            entry.domain == attempt.payload.kind) { "resolution_original_seal_invalid" }
+        return attempt
+    }
+
+    override suspend fun findPersistedCatalogConflictProductIds(ownerUserId: String, shopId: String): List<Long> =
+        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+            withContext(Dispatchers.IO) {
+                db.withTransaction {
+                    val (scope, baseline) = catalogResolutionScope(ownerUserId, shopId)
+                    val entries = readLocalBusinessEntries(db, scope.owner, scope.store)
+                    val ledger = resolutionLedger(scope, baseline, entries)
+                    val candidates = entries.filter { it.eventType == BUSINESS_WRITE_EVENT }.flatMap { entry ->
+                        val attempt = decodeResolutionAttempt(entry)
+                        if (ledger.supersededAttempt(entry)) emptyList() else attempt.payload.revisions.filter {
+                            it.domain == "PRODUCT" && (entry.lastErrorType != null || entry.attemptCount > 0)
+                        }.map { it.remoteId }
+                    }.distinct()
+                    productRemoteRefDao.getByRemoteIds(candidates).filter {
+                        it.localChangeRevision > it.lastSyncedLocalRevision && ledger.effectiveRevision(it.remoteId, it.localChangeRevision) == BusinessResolutionLedger.EffectiveRevision.Active
+                    }.map { it.productId }.also { requireCurrentBusinessDataScope() }
+                }
+            }
+        }
+
+    private suspend fun projectQualifiedRemote(row: InventoryProductRow, local: Product): Product {
+        val supplier = row.supplierId?.let { requireNotNull(supplierRemoteRefDao.getByRemoteId(it)) {
+            "resolution_supplier_mapping_missing" }.supplierId }
+        val category = row.categoryId?.let { requireNotNull(categoryRemoteRefDao.getByRemoteId(it)) {
+            "resolution_category_mapping_missing" }.categoryId }
+        return CatalogTextCanonicalizer.product(local.copy(barcode = row.barcode, itemNumber = row.itemNumber,
+            productName = row.productName, secondProductName = row.secondProductName, purchasePrice = row.purchasePrice,
+            retailPrice = row.retailPrice, supplierId = supplier, categoryId = category, stockQuantity = row.stockQuantity,
+            primaryImageVersionId = row.primaryImageVersionId, primaryImageUpdatedAt = row.primaryImageUpdatedAt)).product
+    }
+
+    override suspend fun preparePersistedCatalogConflict(productId: Long, ownerUserId: String, shopId: String): PersistedCatalogConflictContext =
+        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+            businessWriteOutbox.withResolutionOwner { prepareCatalogConflictUnderOwner(productId, ownerUserId, shopId) }
+        }
+
+    private suspend fun prepareCatalogResiduals(owner: String, shop: String, target: ProductRemoteRef,
+        captured: Pair<BusinessResolutionScope, SyncRecoveryBaseline>): Pair<List<PreparedCatalogResolutionResidual>, String?> {
+        val entries = readLocalBusinessEntries(db, owner, captured.first.store)
+        val ledger = resolutionLedger(captured.first, captured.second, entries)
+        val batches = entries.filter { it.eventType == BUSINESS_WRITE_EVENT }.filter { entry ->
+            val attempt = decodeResolutionAttempt(entry)
+            attempt.payload.revisions.size > 1 && attempt.payload.revisions.any {
+                it.domain == "PRODUCT" && it.remoteId == target.remoteId &&
+                    ledger.effectiveRevision(it.remoteId, Math.toIntExact(it.revision)) == BusinessResolutionLedger.EffectiveRevision.Active
+            }
+        }
+        val prepared = mutableListOf<PreparedCatalogResolutionResidual>()
+        for (entry in batches) {
+            val attempt = decodeResolutionAttempt(entry)
+            if (attempt.payload.kind != "PRODUCTS" || !BusinessResolutionLedger.hasNoCommitProof(entry)) {
+                return emptyList<PreparedCatalogResolutionResidual>() to "resolution_batch_outcome_unconfirmed"
+            }
+            for (revision in attempt.payload.revisions.filter { it.remoteId != target.remoteId }) {
+                if (revision.domain != "PRODUCT" || revision.revision !in 1..Int.MAX_VALUE.toLong()) {
+                    return emptyList<PreparedCatalogResolutionResidual>() to "resolution_batch_member_invalid"
+                }
+                if (ledger.effectiveRevision(revision.remoteId, revision.revision.toInt()) == BusinessResolutionLedger.EffectiveRevision.SupersededLocally ||
+                    ledger.hasActualAcknowledgement(entry, revision)) continue
+                // A residual already named by an earlier decision is immutable and must not be duplicated.
+                if (ledger.decisions.any { record -> record.decision!!.residuals.any {
+                    it.originalOperationKey == entry.clientEventId && it.remoteId == revision.remoteId && it.revision == revision.revision.toInt()
+                } }) continue
+                if (prepared.any { it.revision.remoteId == revision.remoteId && it.revision.revision == revision.revision }) {
+                    return emptyList<PreparedCatalogResolutionResidual>() to "resolution_batch_duplicate_member"
+                }
+                val row = attempt.payload.products.singleOrNull { it.id == revision.remoteId }
+                    ?: return emptyList<PreparedCatalogResolutionResidual>() to "resolution_batch_member_missing"
+                val ref = productRemoteRefDao.getByRemoteId(revision.remoteId)
+                    ?: return emptyList<PreparedCatalogResolutionResidual>() to "resolution_residual_mapping_missing"
+                val local = productDao.getById(ref.productId)
+                    ?: return emptyList<PreparedCatalogResolutionResidual>() to "resolution_residual_product_missing"
+                val base = ref.lastRemotePayloadFingerprint
+                if (row.deletedAt != null || row.primaryImageVersionId != null || row.primaryImageUpdatedAt != null ||
+                    base.isNullOrBlank() || ref.lastSyncedLocalRevision >= revision.revision ||
+                    ref.localChangeRevision < revision.revision || ref.remoteUpdatedAt != revision.remoteUpdatedAt) {
+                    return emptyList<PreparedCatalogResolutionResidual>() to "resolution_residual_base_unproven"
+                }
+                val remote = readQualifiedCatalogConflictRemote(owner, shop, revision.remoteId)
+                val current = remote.row
+                val provenanceBase = ledger.intents.singleOrNull { it.remoteId == revision.remoteId &&
+                    it.intent!!.revision == revision.revision.toInt() }?.intent?.provenBase
+                if (current == null || current.deletedAt != null || fingerprintProductInbound(current) != base ||
+                    (provenanceBase != null && fingerprintProductInbound(provenanceBase) != base)) {
+                    return emptyList<PreparedCatalogResolutionResidual>() to "resolution_residual_remote_changed"
+                }
+                require(catalogResolutionScope(owner, shop) == captured &&
+                    productRemoteRefDao.getByProductId(ref.productId) == ref && productDao.getById(ref.productId) == local) {
+                    "resolution_residual_context_changed"
+                }
+                prepared += PreparedCatalogResolutionResidual(entry, row, revision, ref, local, remote, base)
+            }
+        }
+        return prepared to null
+    }
+
+    private suspend fun prepareCatalogConflictUnderOwner(productId: Long, owner: String, shop: String): PersistedCatalogConflictContext {
+        val captured = catalogResolutionScope(owner, shop)
+        val ref = requireNotNull(productRemoteRefDao.getByProductId(productId)) { "resolution_product_mapping_missing" }
+        val local = requireNotNull(productDao.getById(productId)) { "resolution_product_missing" }
+        val remote = readQualifiedCatalogConflictRemote(owner, shop, ref.remoteId)
+        val (residuals, residualBlock) = prepareCatalogResiduals(owner, shop, ref, captured)
+        return withContext(Dispatchers.IO) {
+            db.withTransaction {
+                require(catalogResolutionScope(owner, shop) == captured &&
+                    productRemoteRefDao.getByProductId(productId) == ref && productDao.getById(productId) == local) {
+                    "resolution_context_changed"
+                }
+                val (scope, baseline) = captured
+                val entries = readLocalBusinessEntries(db, owner, scope.store)
+                val ledger = resolutionLedger(scope, baseline, entries)
+                val originals = entries.filter { entry ->
+                    entry.eventType == BUSINESS_WRITE_EVENT &&
+                        decodeResolutionAttempt(entry).payload.revisions.any { it.domain == "PRODUCT" && it.remoteId == ref.remoteId &&
+                            it.revision > ref.lastSyncedLocalRevision && ledger.effectiveRevision(it.remoteId, Math.toIntExact(it.revision)) == BusinessResolutionLedger.EffectiveRevision.Active }
+                }
+                val provenance = entries.filter { entry -> entry.eventType == BUSINESS_RESOLUTION_EVENT &&
+                    BusinessResolutionLedger.decode(entry).let { record -> record.kind == "intent_provenance" &&
+                        record.remoteId == ref.remoteId && record.recordId in ledger.intents.map { it.recordId } &&
+                        record.intent!!.revision in (ref.lastSyncedLocalRevision + 1)..ref.localChangeRevision }
+                }
+                require(residuals.all { productRemoteRefDao.getByProductId(it.ref.productId) == it.ref &&
+                    productDao.getById(it.ref.productId) == it.local && entries.singleOrNull { entry -> entry.id == it.original.id } == it.original }) {
+                    "resolution_residual_context_changed"
+                }
+                val neverSent = originals.all { it.attemptCount == 0 && it.lastAttemptAtMs == null } &&
+                    provenance.all { BusinessResolutionLedger.decode(it).intent!!.dispatchOperationKeys.isEmpty() } &&
+                    provenance.any { BusinessResolutionLedger.decode(it).intent!!.let { intent ->
+                        intent.revision == ref.localChangeRevision && intent.dispatchOperationKeys.isEmpty() } }
+                val knownRejected = originals.isNotEmpty() && originals.all {
+                    (it.attemptCount == 0 && it.lastAttemptAtMs == null) || BusinessResolutionLedger.hasNoCommitProof(it)
+                } && (originals.any { decodeResolutionAttempt(it).payload.revisions.any { r -> r.revision == ref.localChangeRevision.toLong() } } ||
+                    provenance.any { BusinessResolutionLedger.decode(it).intent!!.let { p -> p.revision == ref.localChangeRevision && p.dispatchOperationKeys.isEmpty() } })
+                val blocked = when {
+                    ref.localChangeRevision <= ref.lastSyncedLocalRevision -> "resolution_revision_not_pending"
+                    ledger.effectiveRevision(ref.remoteId, ref.localChangeRevision) != BusinessResolutionLedger.EffectiveRevision.Active -> "resolution_revision_already_withdrawn"
+                    remote.row == null -> "resolution_remote_absent"
+                    residualBlock != null -> residualBlock
+                    !neverSent && !knownRejected -> "resolution_outcome_unconfirmed"
+                    else -> null
+                }
+                val projected = remote.row?.takeIf { it.deletedAt == null }?.let { projectQualifiedRemote(it, local) }
+                PersistedCatalogConflictContext(java.util.UUID.randomUUID().toString(), productId, ref.remoteId,
+                    ref.localChangeRevision, local, projected,
+                    projected?.let { productChangedFields(it, local) }.orEmpty(), remote.row?.deletedAt != null,
+                    blocked == null, blocked, PersistedCatalogConflictEvidence(scope, baseline.generationId,
+                        decodeRecoveryCheckpointJson(baseline.checkpointJson).checkpointDigest, ref, local, remote,
+                        originals, provenance, coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease, residuals))
+            }
+        }
+    }
+
+    override suspend fun resolvePersistedCatalogConflict(context: PersistedCatalogConflictContext,
+        choice: PersistedCatalogConflictChoice): PersistedCatalogConflictResult = withLocalBusinessMutation {
+        businessWriteOutbox.withResolutionOwner {
+            val evidence = context.evidence
+            val (scope, baseline) = catalogResolutionScope(evidence.scope.owner, evidence.scope.shop)
+            if (scope != evidence.scope || baseline.generationId != evidence.generationId ||
+                coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease != evidence.lease) {
+                return@withResolutionOwner PersistedCatalogConflictResult.Blocked("resolution_scope_changed")
+            }
+            val duplicate = syncEventOutboxDao.getByOperationKey(scope.owner, "business-resolution-v1:${context.decisionId}")
+            if (duplicate != null) {
+                val ledger = resolutionLedger(scope, baseline)
+                val saved = ledger.decisions.singleOrNull { it.recordId == context.decisionId }
+                    ?: return@withResolutionOwner PersistedCatalogConflictResult.Blocked("resolution_receipt_invalid")
+                val decision = requireNotNull(saved.decision)
+                return@withResolutionOwner PersistedCatalogConflictResult.Resolved(decision.successorRevision,
+                    decision.successorRevision == null)
+            }
+            val fresh = prepareCatalogConflictUnderOwner(context.productId, scope.owner, scope.shop)
+            if (fresh.evidence.ref != evidence.ref || fresh.local != context.local || fresh.evidence.remote.row != evidence.remote.row ||
+                fresh.evidence.originals != evidence.originals || fresh.evidence.provenance != evidence.provenance ||
+                fresh.evidence.residuals != evidence.residuals) {
+                return@withResolutionOwner PersistedCatalogConflictResult.Changed(fresh)
+            }
+            if (!fresh.canResolve) return@withResolutionOwner PersistedCatalogConflictResult.Blocked(
+                fresh.blockingReason ?: "resolution_unqualified")
+            val remote = requireNotNull(fresh.evidence.remote.row)
+            val selected = (choice as? PersistedCatalogConflictChoice.SelectedFields)?.fields.orEmpty().toSet()
+            val fields = setOf("barcode", "itemnumber", "productname", "secondproductname", "purchaseprice",
+                "retailprice", "supplier", "category", "stockquantity")
+            if (!fields.containsAll(selected)) return@withResolutionOwner PersistedCatalogConflictResult.Blocked("resolution_fields_invalid")
+            if ((choice is PersistedCatalogConflictChoice.AdoptRemoteTombstone) != (remote.deletedAt != null)) {
+                return@withResolutionOwner PersistedCatalogConflictResult.Blocked("resolution_tombstone_choice_required")
+            }
+            val result = withContext(Dispatchers.IO) {
+                val committed = db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    require(catalogResolutionScope(scope.owner, scope.shop).let { it.first == scope && it.second == baseline } &&
+                        productRemoteRefDao.getByProductId(context.productId) == evidence.ref &&
+                        productDao.getById(context.productId) == evidence.local) { "resolution_local_cas_changed" }
+                    val currentEntries = readLocalBusinessEntries(db, scope.owner, scope.store)
+                    resolutionLedger(scope, baseline, currentEntries)
+                    require(evidence.originals.all { old -> currentEntries.singleOrNull { it.id == old.id } == old } &&
+                        evidence.provenance.all { old -> currentEntries.singleOrNull { it.id == old.id } == old }) { "resolution_original_changed" }
+                    require(evidence.residuals.all { productRemoteRefDao.getByProductId(it.ref.productId) == it.ref &&
+                        productDao.getById(it.ref.productId) == it.local && currentEntries.singleOrNull { entry -> entry.id == it.original.id } == it.original }) {
+                        "resolution_residual_local_cas_changed"
+                    }
+                    val desired = if (remote.deletedAt == null) {
+                        val base = projectQualifiedRemote(remote, evidence.local)
+                        val proposal = (choice as? PersistedCatalogConflictChoice.SelectedFields)?.desired
+                        if (proposal == null) base else {
+                            require(proposal.id == context.productId) { "resolution_proposal_identity_invalid" }
+                            CatalogTextCanonicalizer.product(base.copy(
+                                barcode = if ("barcode" in selected) proposal.barcode else base.barcode,
+                                itemNumber = if ("itemnumber" in selected) proposal.itemNumber else base.itemNumber,
+                                productName = if ("productname" in selected) proposal.productName else base.productName,
+                                secondProductName = if ("secondproductname" in selected) proposal.secondProductName else base.secondProductName,
+                                purchasePrice = if ("purchaseprice" in selected) proposal.purchasePrice else base.purchasePrice,
+                                retailPrice = if ("retailprice" in selected) proposal.retailPrice else base.retailPrice,
+                                supplierId = if ("supplier" in selected) proposal.supplierId else base.supplierId,
+                                categoryId = if ("category" in selected) proposal.categoryId else base.categoryId,
+                                stockQuantity = if ("stockquantity" in selected) proposal.stockQuantity else base.stockQuantity)).product
+                        }
+                    } else null
+                    if (desired == null) {
+                        val hasChildren = db.openHelper.writableDatabase.query("SELECT 1 FROM product_prices WHERE productId=? LIMIT 1",
+                            arrayOf<Any>(context.productId)).use { it.moveToFirst() }
+                        val hasPriceAttempt = currentEntries.filter { it.eventType == BUSINESS_WRITE_EVENT }.any {
+                            decodeResolutionAttempt(it).payload.prices.any { row -> row.productId == context.remoteId }
+                        }
+                        if (hasChildren || hasPriceAttempt) return@withTransaction PersistedCatalogConflictResult.Blocked("resolution_tombstone_has_dependencies")
+                    }
+                    val delta = if (desired == null) emptySet() else productChangedFields(projectQualifiedRemote(remote, evidence.local), desired) intersect selected
+                    val successorRevision = if (delta.isEmpty()) null else Math.addExact(evidence.ref.localChangeRevision, 1)
+                    if (desired == null) productDao.delete(evidence.local) else {
+                        productDao.update(desired)
+                        require(productRemoteRefDao.updateResolutionProjection(context.productId, context.remoteId,
+                            evidence.ref.localChangeRevision, evidence.ref.lastSyncedLocalRevision,
+                            successorRevision ?: evidence.ref.localChangeRevision, encodeProductChangedFields(delta),
+                            fingerprintProductInbound(remote), requireNotNull(remote.updatedAt), System.currentTimeMillis()) == 1) {
+                            "resolution_local_cas_changed"
+                        }
+                    }
+                    val successor = if (successorRevision != null) {
+                        val ref = requireNotNull(productRemoteRefDao.getByProductId(context.productId))
+                        val patch = requireNotNull(buildProductPatch(requireNotNull(desired), ref, false)) { "resolution_dependency_unqualified" }
+                        val seal = businessWriteOutbox.seal(scope.owner, scope.shop, BusinessWritePayload("PATCH_CONDITIONAL",
+                            patchId = context.remoteId, patch = patch, revisions = listOf(productWriteRevision(desired, ref, scope.owner, scope.shop)),
+                            expectedUpdatedAt = remote.updatedAt, expectedDeletedAt = remote.deletedAt)).first
+                        val requestedAt = LocalDateTime.now().format(tSFMT)
+                        if ("purchaseprice" in delta) desired.purchasePrice?.let { priceDao.insertIfChanged(context.productId,
+                            "PURCHASE", it, uniquePriceEffectiveAtLocked(context.productId, "PURCHASE", requestedAt), "MANUAL") }
+                        if ("retailprice" in delta) desired.retailPrice?.let { priceDao.insertIfChanged(context.productId,
+                            "RETAIL", it, uniquePriceEffectiveAtLocked(context.productId, "RETAIL", requestedAt), "MANUAL") }
+                        seal.clientEventId
+                    } else null
+                    val residualMappings = evidence.residuals.map { residual ->
+                        val row = residual.row
+                        val patch = InventoryProductPatch(fields, row.barcode, row.itemNumber, row.productName,
+                            row.secondProductName, row.purchasePrice, row.retailPrice, row.supplierId, row.categoryId, row.stockQuantity)
+                        val seal = businessWriteOutbox.seal(scope.owner, scope.shop, BusinessWritePayload("PATCH_CONDITIONAL",
+                            patchId = row.id, patch = patch, revisions = listOf(residual.revision),
+                            expectedUpdatedAt = requireNotNull(residual.remote.row?.updatedAt), expectedDeletedAt = null)).first
+                        CatalogResolutionResidual(residual.original.clientEventId, row.id, Math.toIntExact(residual.revision.revision),
+                            seal.clientEventId, seal.metadataJson, residual.remote, residual.provenBaseFingerprint)
+                    }
+                    val provenance = evidence.provenance.map(BusinessResolutionLedger::decode)
+                    val withdrawn = (evidence.originals.flatMap { decodeResolutionAttempt(it).payload.revisions.filter { r ->
+                        r.domain == "PRODUCT" && r.remoteId == context.remoteId }.map { r -> Math.toIntExact(r.revision) } } +
+                        provenance.map { it.intent!!.revision }).distinct().sorted()
+                    require(context.conflictRevision in withdrawn) { "resolution_lineage_unproven" }
+                    val decision = BusinessResolutionRecord(kind = "decision", recordId = context.decisionId, scope = scope,
+                        generationId = baseline.generationId, checkpointDigest = evidence.checkpointDigest,
+                        productId = context.productId, remoteId = context.remoteId, decision = CatalogResolutionDecision(
+                            conflictRevision = context.conflictRevision, acknowledgedRevision = evidence.ref.lastSyncedLocalRevision,
+                            originalMask = evidence.ref.localChangedFields, originalFingerprint = evidence.ref.lastRemotePayloadFingerprint,
+                            originalDesired = CatalogProductSnapshot.from(evidence.local), provenBase = provenance.singleOrNull { it.intent?.revision == context.conflictRevision }?.intent?.provenBase,
+                            remote = fresh.evidence.remote,
+                            disposition = if (evidence.originals.any { it.attemptCount > 0 }) "proven_no_commit" else "never_dispatched",
+                            originalSeals = evidence.originals.map { CatalogResolutionOriginalSeal(it.id, it.clientEventId, it.metadataJson,
+                                it.attemptCount, it.lastAttemptAtMs, it.lastErrorType) },
+                            provenanceKeys = evidence.provenance.map { it.clientEventId }, withdrawnRevisions = withdrawn,
+                            choice = if (desired == null) "adopt_remote_tombstone" else if (successor == null) "adopt_remote" else "selected_fields",
+                            selectedFields = if (successor == null) emptyList() else delta.sorted(), projection = desired?.let(CatalogProductSnapshot::from),
+                            successorRevision = successorRevision, successorOperationKey = successor, residuals = residualMappings))
+                    val receipt = BusinessResolutionLedger.entry(decision, System.currentTimeMillis())
+                    require(syncEventOutboxDao.insert(receipt) > 0L) { "resolution_duplicate_decision" }
+                    resolutionLedger(scope, baseline)
+                    PersistedCatalogConflictResult.Resolved(successorRevision, successorRevision == null)
+                }
+                if (committed is PersistedCatalogConflictResult.Resolved) notifyProductCatalogChanged(context.productId)
+                committed
+            }
+            result
+        }
+    }
 
     private suspend fun productWriteRevision(product: Product, ref: ProductRemoteRef,
         owner: String, shop: String?): BusinessWriteRevision {
         val semantic = requireNotNull(buildProductPushRow(product,ref,owner,shop)).copy(
             updatedAt=ref.remoteUpdatedAt, primaryImageVersionId=product.primaryImageVersionId,
             primaryImageUpdatedAt=product.primaryImageUpdatedAt)
+        if (PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6PreparedProduct(product, ref, semantic, lease = b6CurrentLease())
         return BusinessWriteRevision("PRODUCT",ref.remoteId,ref.localChangeRevision.toLong(),
             fingerprintProductInbound(semantic),ref.remoteUpdatedAt)
     }
 
     private suspend fun writeCatalogProducts(remote: CatalogRemoteDataSource, owner: String,
         shop: String?, prepared: List<ProductPushCandidatePrepared>): Result<Unit> =
-        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("PRODUCTS",
+        businessWriteOutbox.executeVerified(owner,shop,BusinessWritePayload("PRODUCTS",
             products=prepared.map { it.row }, revisions=prepared.map {
                 productWriteRevision(it.product,it.ref,owner,shop)
             })) { sendCatalogBusinessWrite(remote,it) }
 
     private suspend fun writeSupplier(remote: CatalogRemoteDataSource, owner: String, shop: String?,
         row: InventorySupplierRow, ref: SupplierRemoteRef): Result<Unit> =
-        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("SUPPLIERS",suppliers=listOf(row),
+        businessWriteOutbox.executeVerified(owner,shop,BusinessWritePayload("SUPPLIERS",suppliers=listOf(row),
             revisions=listOf(BusinessWriteRevision("SUPPLIER",row.id,ref.localChangeRevision.toLong(),
                 fingerprintSupplierInbound(row.copy(updatedAt=ref.remoteUpdatedAt)),ref.remoteUpdatedAt)))) {
             sendCatalogBusinessWrite(remote,it)
@@ -723,7 +1291,7 @@ class DefaultInventoryRepository(
 
     private suspend fun writeCategory(remote: CatalogRemoteDataSource, owner: String, shop: String?,
         row: InventoryCategoryRow, ref: CategoryRemoteRef): Result<Unit> =
-        businessWriteOutbox.execute(owner,shop,BusinessWritePayload("CATEGORIES",categories=listOf(row),
+        businessWriteOutbox.executeVerified(owner,shop,BusinessWritePayload("CATEGORIES",categories=listOf(row),
             revisions=listOf(BusinessWriteRevision("CATEGORY",row.id,ref.localChangeRevision.toLong(),
                 fingerprintCategoryInbound(row.copy(updatedAt=ref.remoteUpdatedAt)),ref.remoteUpdatedAt)))) {
             sendCatalogBusinessWrite(remote,it)
@@ -762,6 +1330,13 @@ class DefaultInventoryRepository(
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
     override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
         withContext(Dispatchers.IO) { productDao.getDetailsById(productId) }
+    override suspend fun getProductForEditorReview(productId: Long): Product? =
+        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+            requireCurrentBusinessDataScope()
+            val product = withContext(Dispatchers.IO) { productDao.getById(productId) }
+            requireCurrentBusinessDataScope()
+            product
+        }
     override suspend fun getProductsWithDetailsByRemoteIds(
         remoteIds: List<String>
     ): List<ProductWithDetails> = withContext(Dispatchers.IO) {
@@ -782,7 +1357,39 @@ class DefaultInventoryRepository(
         }
 
     override fun observeProductCloudConfirmed(productId: Long): Flow<Boolean> =
-        productRemoteRefDao.observeProductCloudConfirmed(productId)
+        db.invalidationTracker.createFlow("products", "product_remote_refs", "product_prices",
+            "product_price_remote_refs", "sync_event_outbox", "business_data_scope_binding", "sync_recovery_baseline",
+            emitInitialState = true).map {
+            withContext(Dispatchers.IO) {
+                try {
+                    businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+                        db.withTransaction {
+                            if (!productRemoteRefDao.isProductCloudConfirmationCandidate(productId)) return@withTransaction false
+                            val ref = productRemoteRefDao.getByProductId(productId) ?: return@withTransaction false
+                            val identity = localResolutionIdentity()
+                            if (identity == null) {
+                                // Legacy unqualified scope has no resolution authority; retain its conservative raw guard.
+                                return@withTransaction !db.openHelper.readableDatabase.query(
+                                    "SELECT 1 FROM sync_event_outbox WHERE eventType=? AND domain IN ('PRODUCTS','PATCH','PATCH_CONDITIONAL','PRICES') " +
+                                        "AND instr(metadataJson,?)>0 LIMIT 1",
+                                    arrayOf(BUSINESS_WRITE_EVENT, "\"${ref.remoteId}\"")).use { it.moveToFirst() }
+                            }
+                            val entries = readLocalBusinessEntries(db, identity.first.owner, identity.first.store)
+                            val effective = loadBusinessResolutionSnapshot(db, identity.first.owner, identity.first.store, entries)
+                            entries.filter { entry -> entry.eventType == BUSINESS_WRITE_EVENT && effective?.supersededAttempt(entry) != true }
+                                .none { entry -> decodeResolutionAttempt(entry).payload.let { payload ->
+                                    payload.revisions.any { r -> r.domain == "PRODUCT" && r.remoteId == ref.remoteId } ||
+                                        payload.prices.any { row -> row.productId == ref.remoteId }
+                                } }
+                        }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false // Invalid or unavailable evidence must never promote cloud confirmation.
+                }
+            }
+        }
     override suspend fun getSyncedProductRemoteIds(productIds: List<Long>): Map<Long, String> =
         withContext(Dispatchers.IO) {
             if (productIds.isEmpty()) emptyMap()
@@ -804,7 +1411,8 @@ class DefaultInventoryRepository(
         DefaultInventoryRepositoryTestHooks.beforeLocalProductInsert?.invoke()
         requireCurrentBusinessDataScope()
         val persistedId = withContext(Dispatchers.IO) {
-            db.withTransaction {
+            val b6Ticket = b6BeginSource("create", null)
+            val insertedID = try { db.withTransaction {
                 productDao.insert(canonicalProduct)
                 DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
                 val persisted = requireNotNull(productDao.findByBarcode(canonicalProduct.barcode)) {
@@ -834,7 +1442,15 @@ class DefaultInventoryRepository(
                 }
                 touchProductDirty(persisted.id)
                 persisted.id
+            } } catch (error: Throwable) {
+                PilotCommitTrace.b6LocalEnd(b6Ticket,null,null,failed=true, lease = b6CurrentLease()); throw error
             }
+            val returnedNS = if (b6Ticket==null) 0L else PilotCommitTrace.now()
+            if (b6Ticket!=null) {
+                PilotCommitTrace.b6CaptureProduct(canonicalProduct.copy(id=insertedID))
+                PilotCommitTrace.b6KindEnd(b6Ticket,returnedNS,insertedID>0, lease = b6CurrentLease())
+            }
+            insertedID
         }
         notifyProductCatalogChanged(persistedId)
         persistedId
@@ -844,59 +1460,96 @@ class DefaultInventoryRepository(
     override suspend fun updateProductFromEditor(baseline: Product, product: Product) =
         persistProductUpdate(product, baseline)
 
-    private suspend fun persistProductUpdate(product: Product, baseline: Product? = null) = withLocalBusinessMutation {
+    override suspend fun updateProductFromEditor(baseline: Product, product: Product,
+        onCommitted: (ProductEditorSaveReceipt) -> Unit) = persistProductUpdate(product, baseline, onCommitted)
+
+    private suspend fun persistProductUpdate(product: Product, baseline: Product? = null,
+        onCommitted: ((ProductEditorSaveReceipt) -> Unit)? = null) = withLocalBusinessMutation {
         val canonicalProduct = CatalogTextCanonicalizer.product(product).product
         val canonicalBaseline = baseline?.let { CatalogTextCanonicalizer.product(it).product }
         require(canonicalBaseline == null || canonicalBaseline.id == canonicalProduct.id) {
             "Product editor baseline must match the saved product"
         }
-        val didWrite = withContext(Dispatchers.IO) {
-            db.withTransaction {
-                val existing = productDao.getById(canonicalProduct.id)
-                val updated = if (canonicalBaseline != null) {
-                    mergeProductEditorChanges(
-                        canonicalBaseline,
-                        canonicalProduct,
-                        existing ?: throw ProductEditConflictException()
-                    )
-                } else canonicalProduct
-                if (canonicalBaseline != null && existing == updated) return@withTransaction false
-                val changedFields = existing
-                    ?.let { productChangedFields(it, updated) }
-                    .orEmpty()
-                productDao.update(updated)
-                DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
-
-                val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
-                    ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
-
-                updated.purchasePrice?.takeIf {
-                    canonicalBaseline == null || "purchaseprice" in changedFields
-                }?.let {
-                    priceDao.insertIfChanged(
-                        updated.id,
-                        "PURCHASE",
-                        it,
-                        uniquePriceEffectiveAtLocked(updated.id, "PURCHASE", requestedAt),
-                        "MANUAL",
-                    )
-                }
-                updated.retailPrice?.takeIf {
-                    canonicalBaseline == null || "retailprice" in changedFields
-                }?.let {
-                    priceDao.insertIfChanged(
-                        updated.id,
-                        "RETAIL",
-                        it,
-                        uniquePriceEffectiveAtLocked(updated.id, "RETAIL", requestedAt),
-                        "MANUAL",
-                    )
-                }
-                if (changedFields.isNotEmpty()) {
-                    touchProductDirty(updated.id, changedFields)
-                }
-                true
+        val writer = db.ordinaryNoWorkReceiptPriority.reserveWriter(
+            coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease
+        )
+        val didWrite = try {
+            if (writer != null) {
+                db.ordinaryNoWorkReceiptPriority.traceForTest?.invoke("writer_reserved")
+                db.ordinaryNoWorkReceiptPriority.checkpointForTest?.invoke("writer_reserved")
             }
+            withContext(Dispatchers.IO) {
+                var committedProduct: Product? = null
+                val b6Ticket = if (!PilotCommitTrace.b6IsArmed()) null else {
+                    val b6Scope = coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease?.boundScope
+                    PilotCommitTrace.b6BeginLocal(canonicalProduct.id,
+                        b6Scope?.let { PilotCommitTrace.hash(it.ownerHash + "\n" + it.storeId) }, lease = b6CurrentLease())
+                }
+                val changed = try { db.withTransaction {
+                    val existing = productDao.getById(canonicalProduct.id)
+                    val updated = if (canonicalBaseline != null) {
+                        mergeProductEditorChanges(
+                            canonicalBaseline,
+                            canonicalProduct,
+                            existing ?: throw ProductEditConflictException(missingTarget = true)
+                        )
+                    } else canonicalProduct
+                    committedProduct = updated
+                    if (canonicalBaseline != null && existing == updated) return@withTransaction false
+                    val changedFields = existing
+                        ?.let { productChangedFields(it, updated) }
+                        .orEmpty()
+                    productDao.update(updated)
+                    DefaultInventoryRepositoryTestHooks.afterLocalProductWrite?.invoke()
+
+                    val requestedAt = (DefaultInventoryRepositoryTestHooks.localProductMutationNow
+                        ?.invoke() ?: LocalDateTime.now()).format(tSFMT)
+
+                    updated.purchasePrice?.takeIf {
+                        canonicalBaseline == null || "purchaseprice" in changedFields
+                    }?.let {
+                        priceDao.insertIfChanged(
+                            updated.id,
+                            "PURCHASE",
+                            it,
+                            uniquePriceEffectiveAtLocked(updated.id, "PURCHASE", requestedAt),
+                            "MANUAL",
+                        )
+                    }
+                    updated.retailPrice?.takeIf {
+                        canonicalBaseline == null || "retailprice" in changedFields
+                    }?.let {
+                        priceDao.insertIfChanged(
+                            updated.id,
+                            "RETAIL",
+                            it,
+                            uniquePriceEffectiveAtLocked(updated.id, "RETAIL", requestedAt),
+                            "MANUAL",
+                        )
+                    }
+                    if (changedFields.isNotEmpty()) {
+                        touchProductDirty(updated.id, changedFields, existing)
+                    }
+                    true
+                } } catch (error: Throwable) {
+                    PilotCommitTrace.b6LocalEnd(b6Ticket, null, null, failed = true, lease = b6CurrentLease())
+                    throw error
+                }
+                val b6ReturnedNS = if (b6Ticket==null) null else PilotCommitTrace.now()
+                if (b6Ticket!=null) committedProduct?.let(PilotCommitTrace::b6CaptureProduct)
+                PilotCommitTrace.b6LocalEnd(b6Ticket, changed,
+                    committedProduct?.let(PilotCommitTrace::b6ProductBodyHash), returnedNS=b6ReturnedNS, lease = b6CurrentLease())
+                // The optional observer reports only a returned Room commit, before the outer lease can cancel.
+                // Absence of this receipt never proves rollback when cancellation races the transaction return.
+                onCommitted?.let { observer ->
+                    val receipt = ProductEditorSaveReceipt(java.util.UUID.randomUUID().toString(),
+                        requireNotNull(committedProduct), changed)
+                    try { observer(receipt) } catch (_: Exception) { /* Observation cannot undo the commit. */ }
+                }
+                changed
+            }
+        } finally {
+            db.ordinaryNoWorkReceiptPriority.releaseWriter(writer)
         }
         if (didWrite) notifyProductCatalogChanged(canonicalProduct.id)
     }
@@ -905,8 +1558,9 @@ class DefaultInventoryRepository(
         val editedFields = productChangedFields(baseline, edited)
         val concurrentFields = productChangedFields(baseline, current)
         val differentValues = productChangedFields(current, edited)
-        if ((editedFields intersect concurrentFields intersect differentValues).isNotEmpty()) {
-            throw ProductEditConflictException()
+        val conflicts = editedFields intersect concurrentFields intersect differentValues
+        if (conflicts.isNotEmpty()) {
+            throw ProductEditConflictException(currentProduct = current, conflictingFields = conflicts)
         }
         // Historical prices and image metadata have separate owners; never restore their editor snapshot.
         return current.copy(
@@ -930,7 +1584,8 @@ class DefaultInventoryRepository(
         source: String?
     ): Product? = withLocalBusinessMutation {
         val result = withContext(Dispatchers.IO) {
-            db.withTransaction {
+            val b6Ticket=b6BeginSource("price",productId)
+            val updatedResult=try { db.withTransaction {
                 val current = productDao.getById(productId) ?: return@withTransaction null
                 val normalizedType = type.uppercase(Locale.ROOT)
                 val currentPrice = when (normalizedType) {
@@ -945,15 +1600,16 @@ class DefaultInventoryRepository(
                     else -> current
                 }
                 val effectiveAt = uniquePriceEffectiveAtLocked(productId, normalizedType, at)
-                val inserted = priceDao.insert(
-                    ProductPrice(
+                val priceIntent = ProductPrice(
                         productId = productId,
                         type = normalizedType,
                         price = price,
                         effectiveAt = effectiveAt,
                         source = source
                     )
-                ) > 0L
+                val priceID=priceDao.insert(priceIntent)
+                val inserted=priceID > 0L
+                if (b6Ticket!=null && inserted) PilotCommitTrace.b6CapturePrice(priceIntent.copy(id=priceID))
 
                 if (priceChanged) {
                     productDao.update(updated)
@@ -972,7 +1628,12 @@ class DefaultInventoryRepository(
                 }
 
                 if (priceChanged || inserted) updated else current
+            } } catch(error: Throwable) {
+                PilotCommitTrace.b6LocalEnd(b6Ticket,null,null,failed=true, lease = b6CurrentLease()); throw error
             }
+            val returnedNS=if(b6Ticket==null) 0L else PilotCommitTrace.now()
+            if(b6Ticket!=null) PilotCommitTrace.b6KindEnd(b6Ticket,returnedNS,updatedResult!=null, lease = b6CurrentLease())
+            updatedResult
         }
         if (result != null) {
             notifyProductCatalogChanged(productId)
@@ -986,20 +1647,25 @@ class DefaultInventoryRepository(
         withContext(Dispatchers.IO) { productDao.getWithDetailsPage(limit, offset) }
     override suspend fun deleteProduct(product: Product) = withLocalBusinessMutation {
         withContext(Dispatchers.IO) {
-            db.withTransaction {
+            val b6Ticket=b6BeginSource("delete",product.id)
+            try { db.withTransaction {
                 productRemoteRefDao.getByProductId(product.id)?.remoteId?.let { rid ->
-                    pendingCatalogTombstoneDao.insert(
-                        PendingCatalogTombstone(
+                    val intent=PendingCatalogTombstone(
                             entityType = PendingCatalogTombstoneEntityTypes.PRODUCT,
                             remoteId = rid,
                             enqueuedAtMs = System.currentTimeMillis(),
                             attemptCount = 0
                         )
-                    )
+                    val intentID=pendingCatalogTombstoneDao.insert(intent)
+                    if(b6Ticket!=null) PilotCommitTrace.b6CaptureDelete(product,intent.copy(id=intentID))
                     retireAcknowledgedPriceBodiesForProductDelete(db, product.id, rid)
                 }
                 productDao.delete(product)
+            } } catch(error: Throwable) {
+                PilotCommitTrace.b6LocalEnd(b6Ticket,null,null,failed=true, lease = b6CurrentLease());throw error
             }
+            val returnedNS=if(b6Ticket==null) 0L else PilotCommitTrace.now()
+            if(b6Ticket!=null) PilotCommitTrace.b6KindEnd(b6Ticket,returnedNS,true, lease = b6CurrentLease())
         }
         notifyProductCatalogChanged(product.id)
         notifyCatalogChanged()
@@ -1373,22 +2039,32 @@ class DefaultInventoryRepository(
     }
     override suspend fun updateHistoryEntry(entry: HistoryEntry) = withLocalBusinessMutation {
         withContext(Dispatchers.IO) {
-            val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
-            var payloadRelevant = false
-            if (bridgeRef != null) {
-                // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
-                // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
-                val old = historyDao.getByUid(entry.uid)
-                historyDao.update(entry)
-                payloadRelevant = old != null && isPayloadRelevantChange(old, entry)
-                if (payloadRelevant) {
-                    remoteRefDao.incrementLocalRevision(entry.uid)
+            val b6Ticket=b6BeginSource("history",entry.uid)
+            val payloadRelevant = try { db.withTransaction {
+                val bridgeRef = remoteRefDao.getByHistoryEntryUid(entry.uid)
+                var payloadRelevant = false
+                if (bridgeRef != null) {
+                    // Se esiste un bridge, confronta i campi payload-rilevanti prima di aggiornare.
+                    // Lettura esplicita dell'entry corrente per rilevare la divergenza in modo centralizzato.
+                    val old = historyDao.getByUid(entry.uid)
+                    historyDao.update(entry)
+                    payloadRelevant = old != null && isPayloadRelevantChange(old, entry)
+                    if (payloadRelevant) {
+                        remoteRefDao.incrementLocalRevision(entry.uid)
+                    }
+                } else {
+                    val old = historyDao.getByUid(entry.uid)
+                    historyDao.update(entry)
+                    payloadRelevant = old == null || isPayloadRelevantChange(old, entry)
                 }
-            } else {
-                val old = historyDao.getByUid(entry.uid)
-                historyDao.update(entry)
-                payloadRelevant = old == null || isPayloadRelevantChange(old, entry)
+                if(b6Ticket!=null && payloadRelevant) PilotCommitTrace.b6CaptureHistory(entry,
+                    bridgeRef?.let { it.localChangeRevision.toLong()+1 })
+                payloadRelevant
+            } } catch(error: Throwable) {
+                PilotCommitTrace.b6LocalEnd(b6Ticket,null,null,failed=true, lease = b6CurrentLease()); throw error
             }
+            val returnedNS=if(b6Ticket==null) 0L else PilotCommitTrace.now()
+            if(b6Ticket!=null) PilotCommitTrace.b6KindEnd(b6Ticket,returnedNS,payloadRelevant, lease = b6CurrentLease())
             if (payloadRelevant) notifyHistorySessionPayloadChanged(entry.uid)
         }
     }
@@ -1682,8 +2358,7 @@ class DefaultInventoryRepository(
             // restano allineati alla nuova shape di data, altrimenti ricostruisce default sicuri.
             // Chiama historyDao.update() direttamente (non updateHistoryEntry) per non incrementare
             // localChangeRevision: il remote apply non è una modifica locale.
-            historyDao.update(
-                existingEntry.copy(
+            val appliedEntry=existingEntry.copy(
                     displayName = incomingDisplayName,
                     timestamp = payload.timestamp,
                     supplier = payload.supplier,
@@ -1699,7 +2374,9 @@ class DefaultInventoryRepository(
                     syncStatus = SyncStatus.SYNCED_SUCCESSFULLY,
                     deletedAt = null
                 )
-            )
+            historyDao.update(appliedEntry)
+            if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6AppliedHistory(
+                coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,payload.remoteId,appliedEntry,existingRef.localChangeRevision)
             // Allinea la revisione: dopo l'apply remoto l'entry è di nuovo allineata.
             remoteRefDao.updateRemoteApplyState(
                 uid = existingRef.historyEntryUid,
@@ -1760,6 +2437,8 @@ class DefaultInventoryRepository(
                 )
             ) > 0L
         ) { "insert bridge ignorato per remoteId=${payload.remoteId}" }
+        if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6AppliedHistory(
+            coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,payload.remoteId,newEntry.copy(uid=newUid),0)
         return RemoteSessionApplyOutcome.Inserted
     }
 
@@ -2768,20 +3447,26 @@ class DefaultInventoryRepository(
         )
     }
 
-    override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean = withContext(Dispatchers.IO) {
-        if (pendingCatalogTombstoneDao.count() > 0) return@withContext true
-        if (supplierRemoteRefDao.hasPendingWork()) return@withContext true
-        if (categoryRemoteRefDao.hasPendingWork()) return@withContext true
-        if (productRemoteRefDao.hasPendingWork()) return@withContext true
-        if (priceDao.countPriceRowsPendingPriceBridge() > 0) return@withContext true
-        if (priceDao.countPriceRowsWithoutProductRemote() > 0) return@withContext true
-        if (supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0) {
-            return@withContext false
+    override suspend fun hasCatalogCloudPendingWorkInclusive(): Boolean =
+        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+            withContext(Dispatchers.IO) {
+                db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    if (pendingCatalogTombstoneDao.count() > 0) return@withTransaction true
+                    if (supplierRemoteRefDao.hasPendingWork()) return@withTransaction true
+                    if (categoryRemoteRefDao.hasPendingWork()) return@withTransaction true
+                    if (productRemoteRefDao.hasEffectivePendingWork(effectiveResolvedProductRevisions())) return@withTransaction true
+                    if (priceDao.countPriceRowsPendingPriceBridge() > 0) return@withTransaction true
+                    if (priceDao.countPriceRowsWithoutProductRemote() > 0) return@withTransaction true
+                    if (supplierDao.count() == 0 && categoryDao.count() == 0 && productDao.count() == 0) {
+                        return@withTransaction false
+                    }
+                    supplierRemoteRefDao.countRows() < supplierDao.count() ||
+                        categoryRemoteRefDao.countRows() < categoryDao.count() ||
+                        productRemoteRefDao.countRows() < productDao.count()
+                }
+            }
         }
-        supplierRemoteRefDao.countRows() < supplierDao.count() ||
-            categoryRemoteRefDao.countRows() < categoryDao.count() ||
-            productRemoteRefDao.countRows() < productDao.count()
-    }
 
     override suspend fun shouldRunCatalogBootstrap(ownerUserId: String): Boolean = withContext(Dispatchers.IO) {
         if (productDao.count() > 0) return@withContext false
@@ -2846,8 +3531,13 @@ class DefaultInventoryRepository(
         ownerUserId: String?,
         selectedShop: SelectedShop?
     ): LocalDatabaseStatusSnapshot =
-        withContext(Dispatchers.IO) {
-            readLocalDatabaseStatusSnapshot(ownerUserId, selectedShop)
+        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+            withContext(Dispatchers.IO) {
+                db.withTransaction {
+                    requireCurrentBusinessDataScope()
+                    readLocalDatabaseStatusSnapshot(ownerUserId, selectedShop)
+                }
+            }
         }
 
     private suspend fun readLocalDatabaseStatusSnapshot(
@@ -2864,7 +3554,7 @@ class DefaultInventoryRepository(
         )
         val pendingHistorySessions = historyDao.getUserVisibleSessionPushCandidateUids().size
         val outboxPending = ownerUserId
-            ?.let { syncEventOutboxDao.countPendingForScope(it, shopScopedStoreScope(selectedShop)) }
+            ?.let { effectivePendingOutboxCount(it, shopScopedStoreScope(selectedShop)) }
             ?: syncEventOutboxDao.countAll()
         val pendingTotal =
             breakdown.pendingCatalogTombstones +
@@ -3086,22 +3776,30 @@ class DefaultInventoryRepository(
 
     /** Read-only resolution: never binds/adopts a store just because cloud is unavailable. */
     internal suspend fun resolveOfflineBusinessDataScope(
-        activeScope: Task126OwnerStoreScope, canWrite: Boolean
-    ): Task126BusinessDataScopeState = withContext(Dispatchers.IO) {
+        activeScope: Task126OwnerStoreScope, canWrite: Boolean, startupTrace: LocalStartupTrace? = null
+    ): Task126BusinessDataScopeState = withContext(Dispatchers.IO + (startupTrace ?: kotlin.coroutines.EmptyCoroutineContext)) {
+        val trace = coroutineContext[LocalStartupTrace]
+        trace?.begin("transaction_wait")
         db.withTransaction {
-            val binding = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
-            val snapshot = readLocalDatabaseStatusSnapshot(null, null)
-            if (binding == null) return@withTransaction Task126BusinessDataScopeState(
-                status = if (snapshot.isCompletelyEmptyForBinding) Task126BusinessDataScopeStatus.CHECKING
-                    else Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND, localSnapshot = snapshot)
+            trace?.end("transaction_wait")
+            val binding = trace.span("binding") { businessDataScopeBindingDao.get()?.toOwnerStoreScope() }
+            val snapshot = trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
+            if (binding == null) {
+                trace?.event("scope_unavailable", "binding_missing")
+                return@withTransaction Task126BusinessDataScopeState(
+                    status = if (snapshot.isCompletelyEmptyForBinding) Task126BusinessDataScopeStatus.CHECKING
+                        else Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND, localSnapshot = snapshot)
+            }
             val decision = Task126OwnerStoreGate.validate(binding, activeScope)
             if (decision is Task126OwnerStoreGateDecision.Blocked) {
+                trace?.event("scope_unavailable", "owner_store_blocked")
                 return@withTransaction blockedBusinessDataScopeState(decision.reason, binding, snapshot)
             }
-            val journal = syncRecoveryJournalDao.get()
+            val journal = trace.span("journal") { syncRecoveryJournalDao.get() }
             val eligibleJournal = journal == null || (journal.ownerHash == binding.ownerHash &&
                 journal.storeScope == binding.storeId && journal.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE)
-            val usable = eligibleJournal && hasStructurallyUsableLocalSnapshot(binding)
+            val usable = (trace?.fact("journal_ineligible") { eligibleJournal } ?: eligibleJournal) &&
+                hasStructurallyUsableLocalSnapshot(binding)
             Task126BusinessDataScopeState(
                 status = Task126BusinessDataScopeStatus.CHECKING, boundScope = binding,
                 localSnapshot = snapshot, localAccessScope = binding.takeIf { usable },
@@ -3119,32 +3817,46 @@ class DefaultInventoryRepository(
 
     /** Local provenance and structure survive legitimate offline edits; cloud body digests do not. */
     private suspend fun hasStructurallyUsableLocalSnapshot(scope: Task126OwnerStoreScope): Boolean {
+        val trace = coroutineContext[LocalStartupTrace]
         val sql = db.openHelper.readableDatabase
-        if (!sql.query("PRAGMA quick_check(1)").use { it.moveToFirst() && it.getString(0) == "ok" }) return false
-        if (sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() }) return false
-        val baseline = syncRecoveryBaselineDao.get() ?: return true
+        val quickValid = trace.span("quick_check") {
+            sql.query("PRAGMA quick_check(1)").use { it.moveToFirst() && it.getString(0) == "ok" }
+        }
+        if (!quickValid) { trace?.event("scope_unavailable", "quick_check_failed"); return false }
+        val foreignKeyFailure = trace.span("foreign_key") { sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() } }
+        if (foreignKeyFailure) { trace?.event("scope_unavailable", "foreign_key_failed"); return false }
+        val baseline = trace.span("baseline") { syncRecoveryBaselineDao.get() } ?: return true
+        trace?.generation(baseline.generationId)
         if (baseline.ownerHash != scope.ownerHash || baseline.storeScope != scope.storeId ||
             shopIdFromStoreScope(scope.storeId)?.lowercase() != baseline.shopId.lowercase() ||
-            syncEventDeviceStateDao.get()?.deviceId != baseline.deviceId) return false
+            syncEventDeviceStateDao.get()?.deviceId != baseline.deviceId) {
+            trace?.event("scope_unavailable", "baseline_scope_mismatch"); return false
+        }
         return try {
             val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson)
             if (checkpoint.scope.accountKey != scope.ownerHash || checkpoint.scope.deviceKey != task126OwnerHash(baseline.deviceId) ||
                 checkpoint.scope.kind != baseline.scopeKind || checkpoint.scope.key != baseline.scopeKey ||
                 checkpoint.shopId.lowercase() != baseline.shopId.lowercase() ||
-                checkpoint.syncEvents.verifiedBaselineId != checkpoint.syncEvents.maxId) return false
-            val watermarkValid = sql.query("SELECT ownerUserId, lastSyncEventId FROM sync_event_watermarks WHERE storeScope=?",
-                arrayOf(scope.storeId)).use { c ->
-                c.moveToFirst() && task126OwnerHash(c.getString(0)) == scope.ownerHash &&
-                    c.getLong(1).toString() == checkpoint.syncEvents.maxId && !c.moveToNext()
+                checkpoint.syncEvents.verifiedBaselineId != checkpoint.syncEvents.maxId) {
+                trace?.event("scope_unavailable", "checkpoint_scope_mismatch"); return false
             }
-            if (!watermarkValid) return false
+            val watermarkValid = trace.span("watermark") {
+                sql.query("SELECT ownerUserId, lastSyncEventId FROM sync_event_watermarks WHERE storeScope=?",
+                    arrayOf(scope.storeId)).use { c ->
+                    c.moveToFirst() && task126OwnerHash(c.getString(0)) == scope.ownerHash &&
+                        c.getLong(1).toString() == checkpoint.syncEvents.maxId && !c.moveToNext()
+                }
+            }
+            if (!watermarkValid) { trace?.event("scope_unavailable", "watermark_invalid"); return false }
             validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
-            validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint)
-            validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
-                localOverlay=true, localAcknowledgements=true)
+            trace.span("receipt") { validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint) }
+            trace.span("physical") {
+                validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
+                    localOverlay=true, localAcknowledgements=true)
+            }
             true
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { false }
+        catch (_: Exception) { trace?.event("scope_unavailable", "validation_failed"); false }
     }
 
     private fun blockedBusinessDataScopeState(
@@ -3242,6 +3954,8 @@ class DefaultInventoryRepository(
                     continue
                 }
                 val payload = entry.toRemotePayload(remoteId)
+                if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6PreparedHistory(entry,ref,
+                    payload,ownerUserId,selectedShop?.shopId, lease = b6CurrentLease())
                 val overlayIssue = payload.outboundOverlayPushIssue()
                 if (overlayIssue != null) {
                     logOutboundOverlayPushIssue(entry, remoteId, overlayIssue)
@@ -3748,7 +4462,7 @@ class DefaultInventoryRepository(
                     realtimeSyncEventsAvailable = capabilities.realtimeSyncEventsAvailable,
                     syncEventsFallback044 = true,
                     syncEventsDisabled = true,
-                    syncEventOutboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+                    syncEventOutboxPending = effectivePendingOutboxCount(ownerUserId, storeScope)
                 )
             }
         }
@@ -3759,16 +4473,17 @@ class DefaultInventoryRepository(
             val watermarkBefore = currentSyncEventWatermark(ownerUserId, storeScope)
             val retryOutboxResult = retrySyncEventOutbox(syncEventRemote, ownerUserId, storeScope)
             val recoveryCache = CatalogConflictRecoveryCache(allowRemoteFetch = false)
+            val localTextRejections = CatalogLocalTextRejections()
             val tombstonedIds = measureCatalogSyncPhase(CatalogSyncStage.REALIGN, phaseDurationsMs) {
                 progressReporter.onProgress(CatalogSyncProgressState.running(CatalogSyncStage.REALIGN))
                 drainPendingCatalogTombstones(remote, ownerUserId, shopId)
             }
             val deferredPrices = priceDao.countPriceRowsWithoutProductRemote()
             val pushedSuppliers = measureCatalogSyncPhase(CatalogSyncStage.PUSH_SUPPLIERS, phaseDurationsMs) {
-                pushCatalogSuppliers(remote, ownerUserId, recoveryCache, progressReporter, shopId)
+                pushCatalogSuppliers(remote, ownerUserId, recoveryCache, progressReporter, shopId, localTextRejections)
             }
             val pushedCategories = measureCatalogSyncPhase(CatalogSyncStage.PUSH_CATEGORIES, phaseDurationsMs) {
-                pushCatalogCategories(remote, ownerUserId, recoveryCache, progressReporter, shopId)
+                pushCatalogCategories(remote, ownerUserId, recoveryCache, progressReporter, shopId, localTextRejections)
             }
             val pushedProducts = measureCatalogSyncPhase(CatalogSyncStage.PUSH_PRODUCTS, phaseDurationsMs) {
                 pushCatalogProducts(
@@ -3777,7 +4492,8 @@ class DefaultInventoryRepository(
                     recoveryCache = recoveryCache,
                     progressReporter = progressReporter,
                     shopId = shopId,
-                    allowCreatingDependencyRefs = false
+                    allowCreatingDependencyRefs = false,
+                    localTextRejections = localTextRejections
                 )
             }
             var pushedPrices = ProductPricePushResult(count = 0, remoteIds = emptyList())
@@ -3855,7 +4571,14 @@ class DefaultInventoryRepository(
                     priceIds = rawPriceIds.priceIds
                 )
             )
-            val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+            val outboxPending = effectivePendingOutboxCount(ownerUserId, storeScope)
+            if (!drain.manualFullSyncRequired) {
+                localTextRejections.firstFailure?.let { failure ->
+                    // ACKs/events and the admitted drain are real; unresolved local text still needs attention.
+                    notifyRemoteProductCatalogApplied(drain.remoteAppliedProductIds)
+                    throw failure
+                }
+            }
             logCatalogSyncPhaseDurations(
                 ok = true,
                 durationsMs = phaseDurationsMs,
@@ -3915,6 +4638,8 @@ class DefaultInventoryRepository(
                     syncEventsOrdinaryPending = drain.ordinaryPending
                 )
             )
+        } catch (deferred: OrdinaryNoWorkReceiptDeferred) {
+            Result.failure(deferred)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -3992,7 +4717,7 @@ class DefaultInventoryRepository(
                     realtimeSyncEventsAvailable = capabilities.realtimeSyncEventsAvailable,
                     syncEventsDisabled = true,
                     syncEventsFallback044 = true,
-                    syncEventOutboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+                    syncEventOutboxPending = effectivePendingOutboxCount(ownerUserId, storeScope)
                 )
             )
         }
@@ -4009,7 +4734,7 @@ class DefaultInventoryRepository(
                 progressReporter = progressReporter,
                 selectedShop = selectedShop
             )
-            val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+            val outboxPending = effectivePendingOutboxCount(ownerUserId, storeScope)
             logSyncEventSummary(
                 phase = "drain",
                 capabilities = capabilities,
@@ -4059,6 +4784,8 @@ class DefaultInventoryRepository(
                     syncEventsOrdinaryPending = drain.ordinaryPending
                 )
             )
+        } catch (deferred: OrdinaryNoWorkReceiptDeferred) {
+            Result.failure(deferred)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (t: Throwable) {
@@ -5041,7 +5768,7 @@ class DefaultInventoryRepository(
                     ownerHash = task126OwnerHash(ownerUserId),
                     storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
                 ) != null
-                val outboxPending = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+                val outboxPending = effectivePendingOutboxCount(ownerUserId, storeScope)
                 if (outboxPending > 0) {
                     skippedDirty += outboxPending
                 } else if (journalPending) {
@@ -5098,24 +5825,28 @@ class DefaultInventoryRepository(
                     val baseline = verifiedShopBaseline
                     if (captured != null && baseline != null) {
                         try {
-                            db.withTransaction {
-                                requireCurrentBusinessDataScope()
-                                if (syncRecoveryBaselineDao.get() != captured ||
-                                    businessDataScopeBindingDao.get() != verifiedShopBinding ||
-                                    syncEventDeviceStateDao.get() != verifiedShopDevice ||
-                                    syncEventWatermarkDao.get(ownerUserId, storeScope) != verifiedShopWatermark ||
-                                    syncRecoveryJournalDao.get() != null) {
-                                    throw ShopSyncContractException("ordinary_captured_publication_changed")
+                            withOrdinaryNoWorkReceiptPriority(db, businessDataScopeRuntimeGuard) {
+                                db.withTransaction {
+                                    checkOrdinaryNoWorkReceiptPriority(db, "transaction_acquired")
+                                    requireCurrentBusinessDataScope()
+                                    if (syncRecoveryBaselineDao.get() != captured ||
+                                        businessDataScopeBindingDao.get() != verifiedShopBinding ||
+                                        syncEventDeviceStateDao.get() != verifiedShopDevice ||
+                                        syncEventWatermarkDao.get(ownerUserId, storeScope) != verifiedShopWatermark ||
+                                        syncRecoveryJournalDao.get() != null) {
+                                        throw ShopSyncContractException("ordinary_captured_publication_changed")
+                                    }
+                                    val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
+                                    if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
+                                    validateShopSyncActiveReceipt(db, captured.generationId, baseline)
+                                    if (markerIsOrdinaryAdvanceFrom(marker, baseline, watermark)) {
+                                        advancedTooLarge = requireNotNull(marker?.syncEvents?.inspectedCount) > SHOP_SYNC_ORDINARY_MAX_EVENTS
+                                        ordinaryPending = !advancedTooLarge
+                                    }
+                                    coroutineContext.ensureActive()
+                                    checkOrdinaryNoWorkReceiptPriority(db, "transaction_proved")
+                                    requireCurrentBusinessDataScope()
                                 }
-                                val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
-                                if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
-                                validateShopSyncActiveReceipt(db, captured.generationId, baseline)
-                                if (markerIsOrdinaryAdvanceFrom(marker, baseline, watermark)) {
-                                    advancedTooLarge = requireNotNull(marker?.syncEvents?.inspectedCount) > SHOP_SYNC_ORDINARY_MAX_EVENTS
-                                    ordinaryPending = !advancedTooLarge
-                                }
-                                coroutineContext.ensureActive()
-                                requireCurrentBusinessDataScope()
                             }
                             localReceiptProved = true
                         } catch (cancelled: CancellationException) {
@@ -5215,7 +5946,13 @@ class DefaultInventoryRepository(
             check(cursor.moveToFirst())
             cursor.getInt(0)
         }
-        return Math.addExact(local, scopedOutbox)
+        val resolved = effectiveResolvedProductRevisions()
+        val resolvedPending = productRemoteRefDao.getPendingRefs().count { ref ->
+            require(ref.lastSyncedLocalRevision <= ref.localChangeRevision) { "resolution_revision_invalid" }
+            (ref.remoteId to ref.localChangeRevision) in resolved
+        }
+        require(resolvedPending <= local)
+        return Math.addExact(local - resolvedPending, effectivePendingOutboxCount(ownerUserId, storeScope))
     }
 
     /** Prepare a complete captured window, then publish physical data, full ledger, original C and watermark together. */
@@ -5358,7 +6095,12 @@ class DefaultInventoryRepository(
             var applied = 0
             var historyApplied = 0
             val appliedProductIds = linkedSetOf<Long>()
-            db.withTransaction {
+            val b6Ticket = if (!PilotCommitTrace.b6IsArmed()) null else PilotCommitTrace.b6BeginApply(
+                coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,
+                PilotCommitTrace.hash(task126OwnerHash(ownerUserId) + "\n" + storeScope),
+                window.rows.values.flatMap { it.ids() } +
+                    (window.rows[ShopSyncRowDomain.PRICES] as? ShopSyncRows.Prices)?.values.orEmpty().map { it.productId }, lease = b6CurrentLease())
+            try { db.withTransaction {
                 requireCapturedPublication()
                 val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
                 if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
@@ -5410,7 +6152,12 @@ class DefaultInventoryRepository(
                     }
                 requireCurrentBusinessDataScope()
                 coroutineContext.ensureActive()
+            } } catch (error: Throwable) {
+                PilotCommitTrace.b6ApplyEnd(b6Ticket, failed = true, lease = b6CurrentLease())
+                throw error
             }
+            val b6ApplyReturnedNS=if(b6Ticket==null) null else PilotCommitTrace.now()
+            PilotCommitTrace.b6ApplyEnd(b6Ticket,returnedNS=b6ApplyReturnedNS, lease = b6CurrentLease())
             val selfCount = events.count { it.sourceDeviceId == deviceId || it.sourceDeviceKey == syncEventDeviceKey(deviceId) }
             return result(processed = events.size - selfCount, skippedSelf = selfCount, after = maximum,
                 applied = applied, historyApplied = historyApplied, productIds = appliedProductIds)
@@ -5909,6 +6656,11 @@ class DefaultInventoryRepository(
                 val insertedIds = priceDao.insertAllReturningIds(newPriceRows)
                 for ((index, insertedId) in insertedIds.withIndex()) {
                     if (insertedId > 0L) {
+                        if(PilotCommitTrace.b6IsArmed()) {
+                            val remote=remotes.singleOrNull { it.id==newPriceRemoteIds[index] }
+                            if(remote!=null) PilotCommitTrace.b6AppliedPrice(
+                                coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,remote,newPriceRows[index].copy(id=insertedId))
+                        }
                         refsToInsert += ProductPriceRemoteRef(
                             productPriceId = insertedId,
                             remoteId = newPriceRemoteIds[index]
@@ -5983,6 +6735,7 @@ class DefaultInventoryRepository(
             )
         }
         is ShopSyncRows.History -> {
+            if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6RememberHistoryRows(rows.values)
             val result = applyRemoteSessionPayloadBatch(
                 rows.values.map { it.toSessionRemotePayload() }
             )
@@ -6574,7 +7327,12 @@ class DefaultInventoryRepository(
                 val bodies = syncEventPriceBodies(ids) ?: return null
                 val parents = bodies.values.map { it.productId }.distinct().sorted()
                 if (ids.productIds.isNotEmpty() && ids.productIds.toSet() != parents.toSet()) return null
-                for (parent in parents) if (!productAcknowledged(parent)) return null
+                for (parent in parents) {
+                    if (!productAcknowledged(parent)) {
+                        val ref = productRemoteRefDao.getByRemoteId(parent) ?: return null
+                        if (!resolvedParentEligibleForPrice(ref)) return null
+                    }
+                }
                 for ((id, body) in bodies) if (!acknowledged(ShopSyncRowDomain.PRICES, id, 0L,
                     localAcknowledgedPriceFingerprint(body))) return null
                 ids.copy(productIds=parents)
@@ -6621,7 +7379,7 @@ class DefaultInventoryRepository(
     }
 
     private fun syncEventRetryEligible(entry: SyncEventOutboxEntry, now: Long, waitedClaimID: String? = null): Boolean {
-        if (now < 0L || entry.attemptCount < 0 || entry.eventType == "LOCAL_BUSINESS_WRITE_V1") return false
+        if (now < 0L || entry.attemptCount < 0 || entry.eventType in setOf(BUSINESS_WRITE_EVENT, BUSINESS_RESOLUTION_EVENT)) return false
         val metadata = entry.lastErrorType?.let(SyncEventRetryMetadata::decode)
         if (metadata == null) {
             val legacyDue = legacySyncEventRetryDue(entry)
@@ -6786,7 +7544,7 @@ class DefaultInventoryRepository(
         ownerUserId: String,
         storeScope: String
     ): RetryOutboxResult {
-        val pendingBefore = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+        val pendingBefore = effectivePendingOutboxCount(ownerUserId, storeScope)
         val skippedMaxAttempts = syncEventOutboxDao.countPendingAtOrAboveAttemptsForScope(
             ownerUserId,
             storeScope,
@@ -6982,7 +7740,7 @@ class DefaultInventoryRepository(
                 )
             }
         }
-        val pendingAfter = syncEventOutboxDao.countPendingForScope(ownerUserId, storeScope)
+        val pendingAfter = effectivePendingOutboxCount(ownerUserId, storeScope)
         val result = RetryOutboxResult(
             pendingBefore = pendingBefore,
             pendingAfter = pendingAfter,
@@ -7139,7 +7897,7 @@ class DefaultInventoryRepository(
         }
         for (id in ids.productIds) {
             val ref = productRemoteRefDao.getByRemoteId(id)
-            if (ref != null && ref.localChangeRevision > ref.lastSyncedLocalRevision) dirty++
+            if (ref != null && ref.localChangeRevision > ref.lastSyncedLocalRevision && effectiveCatalogDecision(ref) == null) dirty++
         }
         for (id in ids.sessionIds) {
             val ref = remoteRefDao.getByRemoteId(canonicalSessionRemoteId(id))
@@ -7459,9 +8217,7 @@ class DefaultInventoryRepository(
         val rows = if (requireProductSynced) {
             candidates.filter { row ->
                 val ref = productRemoteRefDao.getByProductId(row.productId)
-                ref != null &&
-                    ref.lastRemoteAppliedAt != null &&
-                    ref.localChangeRevision <= ref.lastSyncedLocalRevision
+                ref != null && resolvedParentEligibleForPrice(ref)
             }
         } else {
             candidates
@@ -7487,7 +8243,7 @@ class DefaultInventoryRepository(
                 val rid = r.existingPriceRemoteId ?: java.util.UUID.randomUUID().toString()
                 r to rid
             }
-            val upsertRows = pairs.map { (r, rid) -> buildProductPricePushRow(r, rid, ownerUserId, shopId) }
+            val upsertRows = pairs.map { (r, rid) -> buildProductPricePushRow(r, rid, ownerUserId, shopId, b6Lease=b6CurrentLease()) }
             val batchStartedAt = System.currentTimeMillis()
             val result = businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PRICES",
                 prices=upsertRows,revisions=pairs.map { (r,id) -> BusinessWriteRevision("PRICE",id,0,null,localPriceId=r.id) })) {
@@ -7506,7 +8262,7 @@ class DefaultInventoryRepository(
                     "price_push_batch_fk_fallback rows=${chunk.size} requireProductSynced=$requireProductSynced"
                 )
                 for ((r, rid) in pairs) {
-                    val row = buildProductPricePushRow(r, rid, ownerUserId, shopId)
+                    val row = buildProductPricePushRow(r, rid, ownerUserId, shopId, b6Lease=b6CurrentLease())
                     val singleStartedAt = System.currentTimeMillis()
                     val single = businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PRICES",
                         prices=listOf(row),revisions=listOf(BusinessWriteRevision("PRICE",rid,0,null,localPriceId=r.id)))) {
@@ -7566,7 +8322,8 @@ class DefaultInventoryRepository(
         row: ProductPricePushRow,
         remoteId: String,
         ownerUserId: String,
-        shopId: String? = null
+        shopId: String? = null,
+        b6Lease: PilotCommitTrace.B6LeaseStamp? = null
     ): InventoryProductPriceRow =
         InventoryProductPriceRow(
             id = remoteId,
@@ -7579,7 +8336,7 @@ class DefaultInventoryRepository(
             source = row.source,
             note = row.note,
             createdAt = row.createdAt
-        )
+        ).also { if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6PreparedPrice(row,it,lease=b6Lease) }
 
     /**
      * Pull idempotente: dedup su `(productId,type,effectiveAt)` e su `remoteId`; nessun `insertIfChanged`;
@@ -7666,7 +8423,94 @@ class DefaultInventoryRepository(
         }
     }
 
-    private suspend fun touchProductDirty(productId: Long, changedFields: Set<String>? = null) {
+    private suspend fun effectiveResolvedProductRevisions(): Set<Pair<String, Int>> {
+        val (scope, _) = localResolutionIdentity() ?: return emptySet()
+        val ledger = loadBusinessResolutionSnapshot(db, scope.owner, scope.store) ?: return emptySet()
+        return ledger.decisions.flatMap { record -> record.decision!!.withdrawnRevisions.map { requireNotNull(record.remoteId) to it } }.toSet()
+    }
+
+    private suspend fun effectivePendingOutboxCount(owner: String, store: String): Int {
+        val count = syncEventOutboxDao.countPendingForScope(owner, store)
+        val entries = readLocalBusinessEntries(db, owner, store)
+        val ledger = loadBusinessResolutionSnapshot(db, owner, store, entries) ?: return count
+        val local = entries.count { it.eventType == BUSINESS_RESOLUTION_EVENT ||
+            (it.eventType == BUSINESS_WRITE_EVENT && ledger.supersededAttempt(it)) }
+        require(local <= count) { "resolution_outbox_count_invalid" }
+        return count - local
+    }
+
+    private suspend fun resolvedParentEligibleForPrice(ref: ProductRemoteRef): Boolean {
+        if (ref.lastRemoteAppliedAt == null) return false
+        if (ref.localChangeRevision <= ref.lastSyncedLocalRevision) return true
+        val decision = effectiveCatalogDecision(ref) ?: return false
+        if (decision.decision?.remote?.row?.deletedAt != null || decision.decision?.remote?.row == null) return false
+        val entries = readLocalBusinessEntries(db, decision.scope.owner, decision.scope.store)
+        val ledger = requireNotNull(loadBusinessResolutionSnapshot(db, decision.scope.owner, decision.scope.store, entries))
+        if (entries.filter { it.eventType == BUSINESS_WRITE_EVENT }.any { entry ->
+            !ledger.supersededAttempt(entry) && decodeResolutionAttempt(entry).payload.revisions.any {
+                it.domain == "PRODUCT" && it.remoteId == ref.remoteId
+            }
+        }) return false
+        val fresh = readQualifiedCatalogConflictRemote(decision.scope.owner, decision.scope.shop, ref.remoteId)
+        return fresh.row != null && fresh.row.deletedAt == null && productRemoteRefDao.getByProductId(ref.productId) == ref
+    }
+
+    private suspend fun localResolutionIdentity(): Pair<BusinessResolutionScope, SyncRecoveryBaseline>? {
+        val baseline = db.syncRecoveryBaselineDao().get() ?: run {
+            val hasEvidence = db.openHelper.readableDatabase.query(
+                "SELECT 1 FROM sync_event_outbox WHERE eventType=? LIMIT 1", arrayOf(BUSINESS_RESOLUTION_EVENT)).use { it.moveToFirst() }
+            require(!hasEvidence) { "resolution_baseline_missing" }
+            return null
+        }
+        val binding = requireNotNull(db.businessDataScopeBindingDao().get()) { "resolution_binding_missing" }
+        val owners = db.openHelper.readableDatabase.query(
+            "SELECT ownerUserId FROM sync_event_watermarks WHERE storeScope=?", arrayOf<Any>(baseline.storeScope)).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }.filter { task126OwnerHash(it) == binding.ownerHash }.distinct()
+        require(owners.size == 1) { "resolution_owner_provenance_missing" }
+        return catalogResolutionScope(owners.single(), baseline.shopId)
+    }
+
+    private suspend fun effectiveCatalogDecision(ref: ProductRemoteRef): BusinessResolutionRecord? {
+        val (scope, baseline) = localResolutionIdentity() ?: return null
+        val snapshot = loadBusinessResolutionSnapshot(db, scope.owner, scope.store) ?: return null
+        return snapshot.decisions.singleOrNull { it.remoteId == ref.remoteId &&
+            ref.localChangeRevision in it.decision!!.withdrawnRevisions }
+    }
+
+    private suspend fun recordCatalogIntentProvenance(previousRef: ProductRemoteRef?, current: ProductRemoteRef,
+        fields: Set<String>, previousProduct: Product?) {
+        val (scope, baseline) = localResolutionIdentity() ?: return
+        if (current.localChangeRevision <= 0) return // Legacy new-create revision zero is still sealed before any dispatch.
+        check(db.inTransaction()) { "resolution_intent_requires_transaction" }
+        val ledger = resolutionLedger(scope, baseline)
+        val prior = ledger.decisions.filter { it.remoteId == current.remoteId &&
+            it.decision!!.conflictRevision <= (previousRef?.localChangeRevision ?: 0) }
+        val resolved = prior.lastOrNull { previousRef?.localChangeRevision in it.decision!!.withdrawnRevisions }
+        // An ordinary write ACK has no server version. Only a versioned, fingerprint-matching
+        // physical base may qualify a later CAS; an earlier resolution does not freeze future reads.
+        val cleanBase = if (previousRef != null && previousProduct != null &&
+            (previousRef.localChangeRevision == previousRef.lastSyncedLocalRevision || resolved != null) &&
+            previousRef.lastRemoteAppliedAt != null && previousRef.remoteUpdatedAt?.let {
+                Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})$").matches(it) &&
+                    runCatching { java.time.OffsetDateTime.parse(it) }.isSuccess
+            } == true) {
+            buildProductPushRow(previousProduct, previousRef, scope.owner, scope.shop, false)?.copy(
+                updatedAt = previousRef.remoteUpdatedAt, primaryImageVersionId = previousProduct.primaryImageVersionId,
+                primaryImageUpdatedAt = previousProduct.primaryImageUpdatedAt)?.takeIf {
+                fingerprintProductInbound(it) == previousRef.lastRemotePayloadFingerprint }
+        } else null
+        val record = BusinessResolutionRecord(kind = "intent_provenance", recordId = java.util.UUID.randomUUID().toString(),
+            scope = scope, generationId = baseline.generationId,
+            checkpointDigest = decodeRecoveryCheckpointJson(baseline.checkpointJson).checkpointDigest,
+            productId = current.productId, remoteId = current.remoteId,
+            intent = CatalogIntentProvenance(current.localChangeRevision, previousRef?.localChangeRevision ?: 0,
+                CatalogProductSnapshot.from(requireNotNull(productDao.getById(current.productId))), fields.sorted(),
+                cleanBase, prior.map { it.recordId }))
+        require(syncEventOutboxDao.insert(BusinessResolutionLedger.entry(record, System.currentTimeMillis())) > 0)
+    }
+
+    private suspend fun touchProductDirty(productId: Long, changedFields: Set<String>? = null, previousProduct: Product? = null) {
         val ref = productRemoteRefDao.getByProductId(productId)
         if (ref == null) {
             productRemoteRefDao.insert(
@@ -7676,18 +8520,19 @@ class DefaultInventoryRepository(
                 )
             )
         } else {
+            val withdrawn = effectiveCatalogDecision(ref) != null
             val encoded = encodeProductChangedFields(changedFields)
             if (encoded == null) {
                 productRemoteRefDao.incrementLocalRevision(productId)
             } else {
                 val existingChangedFields =
                     if (
-                        ref.localChangedFields == null &&
+                        !withdrawn && ref.localChangedFields == null &&
                         ref.localChangeRevision > ref.lastSyncedLocalRevision
                     ) {
                         "__all__"
                     } else {
-                        ref.localChangedFields
+                        if (withdrawn) null else ref.localChangedFields
                     }
                 productRemoteRefDao.markLocalChanged(
                     productId,
@@ -7695,6 +8540,13 @@ class DefaultInventoryRepository(
                 )
             }
         }
+        val after = requireNotNull(productRemoteRefDao.getByProductId(productId))
+        val fields = changedFields?.takeUnless { it.isEmpty() || "__all__" in it } ?: setOf("barcode", "itemnumber",
+            "productname", "secondproductname", "purchaseprice", "retailprice", "supplier", "category", "stockquantity")
+        recordCatalogIntentProvenance(ref, after, fields, previousProduct)
+        // Existing persisted facts, no observer query or additional writer authority.
+        PilotCommitTrace.b6CaptureProductRef(after)
+        PilotCommitTrace.b6LocalIntent(productId, after.remoteId, after.localChangeRevision)
     }
 
     private fun productChangedFields(old: Product, new: Product): Set<String> =
@@ -7760,8 +8612,9 @@ class DefaultInventoryRepository(
     private fun categoryNeedsPush(ref: CategoryRemoteRef): Boolean =
         ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
 
-    private fun productNeedsPush(ref: ProductRemoteRef): Boolean =
-        ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision
+    private suspend fun productNeedsPush(ref: ProductRemoteRef): Boolean =
+        (ref.lastRemoteAppliedAt == null || ref.localChangeRevision > ref.lastSyncedLocalRevision) &&
+            effectiveCatalogDecision(ref) == null
 
     private suspend fun ensureSupplierRefForPush(supplierId: Long): SupplierRemoteRef {
         supplierRemoteRefDao.getBySupplierId(supplierId)?.let { return it }
@@ -7795,9 +8648,10 @@ class DefaultInventoryRepository(
         ownerUserId: String,
         recoveryCache: CatalogConflictRecoveryCache,
         progressReporter: CatalogSyncProgressReporter,
-        shopId: String?
+        shopId: String?,
+        localTextRejections: CatalogLocalTextRejections? = null
     ): CatalogEntityPushResult {
-        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("SUPPLIERS")) {
+        val replayed = businessWriteOutbox.replayVerified(ownerUserId,shopId,setOf("SUPPLIERS")) {
             sendCatalogBusinessWrite(remote,it)
         }
         var n = replayed.sumOf { it.payload.revisions.size }
@@ -7810,7 +8664,17 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_SUPPLIERS, current = 0, total = candidates.size)
         )
         for ((index, candidate) in candidates.withIndex()) {
-            val s = canonicalizeSupplierForCatalogPush(candidate.supplier)
+            val canonicalName = try {
+                CatalogTextCanonicalizer.supplierName(candidate.supplier.name)
+            } catch (failure: CatalogTextValidationException) {
+                if (localTextRejections == null) throw failure
+                localTextRejections.supplierIds += candidate.supplier.id
+                if (localTextRejections.firstFailure == null) localTextRejections.firstFailure = failure
+                progressReporter.onProgress(CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_SUPPLIERS, current = index + 1, total = candidates.size))
+                continue
+            }
+            val s = canonicalizeSupplierForCatalogPush(candidate.supplier, canonicalName)
             val ref = candidate.remoteRef ?: ensureSupplierRefForPush(s.id)
             if (supplierNeedsPush(ref)) {
                 dirty++
@@ -7843,9 +8707,10 @@ class DefaultInventoryRepository(
         ownerUserId: String,
         recoveryCache: CatalogConflictRecoveryCache,
         progressReporter: CatalogSyncProgressReporter,
-        shopId: String?
+        shopId: String?,
+        localTextRejections: CatalogLocalTextRejections? = null
     ): CatalogEntityPushResult {
-        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("CATEGORIES")) {
+        val replayed = businessWriteOutbox.replayVerified(ownerUserId,shopId,setOf("CATEGORIES")) {
             sendCatalogBusinessWrite(remote,it)
         }
         var n = replayed.sumOf { it.payload.revisions.size }
@@ -7858,7 +8723,17 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_CATEGORIES, current = 0, total = candidates.size)
         )
         for ((index, candidate) in candidates.withIndex()) {
-            val c = canonicalizeCategoryForCatalogPush(candidate.category)
+            val canonicalName = try {
+                CatalogTextCanonicalizer.categoryName(candidate.category.name)
+            } catch (failure: CatalogTextValidationException) {
+                if (localTextRejections == null) throw failure
+                localTextRejections.categoryIds += candidate.category.id
+                if (localTextRejections.firstFailure == null) localTextRejections.firstFailure = failure
+                progressReporter.onProgress(CatalogSyncProgressState.running(
+                    CatalogSyncStage.PUSH_CATEGORIES, current = index + 1, total = candidates.size))
+                continue
+            }
+            val c = canonicalizeCategoryForCatalogPush(candidate.category, canonicalName)
             val ref = candidate.remoteRef ?: ensureCategoryRefForPush(c.id)
             if (categoryNeedsPush(ref)) {
                 dirty++
@@ -7892,16 +8767,23 @@ class DefaultInventoryRepository(
         recoveryCache: CatalogConflictRecoveryCache,
         progressReporter: CatalogSyncProgressReporter,
         shopId: String?,
-        allowCreatingDependencyRefs: Boolean = true
+        allowCreatingDependencyRefs: Boolean = true,
+        localTextRejections: CatalogLocalTextRejections? = null
     ): CatalogEntityPushResult {
-        val replayed = businessWriteOutbox.replay(ownerUserId,shopId,setOf("PRODUCTS","PATCH")) {
+        val replayed = businessWriteOutbox.replayVerified(ownerUserId,shopId,setOf("PRODUCTS","PATCH","PATCH_CONDITIONAL"), continueIndependentProducts = true) {
             sendCatalogBusinessWrite(remote,it)
         }
         var dirty = 0
         var skippedMissingDependencyRef = 0
         var skippedAlreadySynced = 0
         val productTotal = productDao.count()
-        val candidates = productDao.getCatalogPushCandidates()
+        val entries = readLocalBusinessEntries(db, ownerUserId, shopId?.let { "shop:$it" }.orEmpty())
+        val effective = loadBusinessResolutionSnapshot(db, ownerUserId, shopId?.let { "shop:$it" }.orEmpty(), entries)
+        val suspendedIds = entries.filter { it.eventType == BUSINESS_WRITE_EVENT && effective?.supersededAttempt(it) != true }
+            .flatMap { decodeResolutionAttempt(it).payload.revisions.filter { revision -> revision.domain == "PRODUCT" }.map { it.remoteId } }.toSet()
+        val candidates = productDao.getEffectiveCatalogPushCandidates(effectiveResolvedProductRevisions()).filter {
+            it.remoteRef?.remoteId !in suspendedIds
+        }
         val prepared = mutableListOf<ProductPushCandidatePrepared>()
         val accumulator = ProductPushBatchAccumulator()
         accumulator.pushed += replayed.sumOf { it.payload.revisions.size }
@@ -7910,6 +8792,14 @@ class DefaultInventoryRepository(
             CatalogSyncProgressState.running(CatalogSyncStage.PUSH_PRODUCTS, current = 0, total = candidates.size)
         )
         for (candidate in candidates) {
+            // Existing sealed attempts were replayed above. This guard concerns only a fresh body.
+            if (localTextRejections != null &&
+                !hasAcknowledgedIsolatedDependencies(candidate.product, localTextRejections)) {
+                skippedMissingDependencyRef++
+                accumulator.completed++
+                reportProductPushProgress(progressReporter, accumulator.completed, candidates.size)
+                continue
+            }
             val p = canonicalizeProductForCatalogPush(candidate.product)
             val productForPush = p.copy(
                 purchasePrice = candidate.lastPurchase ?: p.purchasePrice,
@@ -7928,7 +8818,7 @@ class DefaultInventoryRepository(
                         skippedMissingDependencyRef++
                     } else if (!patch.isEmpty) {
                         val startedAt = System.currentTimeMillis()
-                        businessWriteOutbox.execute(ownerUserId,shopId,BusinessWritePayload("PATCH",
+                        businessWriteOutbox.executeVerified(ownerUserId,shopId,BusinessWritePayload("PATCH",
                             patchId=CatalogTextCanonicalizer.remoteId(ref.remoteId),patch=patch,
                             revisions=listOf(productWriteRevision(productForPush,ref,ownerUserId,shopId)))) {
                             sendCatalogBusinessWrite(remote,it)
@@ -8010,12 +8900,27 @@ class DefaultInventoryRepository(
         return CatalogEntityPushResult(count = accumulator.pushed, remoteIds = accumulator.remoteIds.distinct())
     }
 
+    private suspend fun hasAcknowledgedIsolatedDependencies(
+        product: Product, rejected: CatalogLocalTextRejections
+    ): Boolean {
+        product.supplierId?.takeIf { it in rejected.supplierIds }?.let { id ->
+            val ref = supplierRemoteRefDao.getBySupplierId(id)
+            if (ref?.lastRemoteAppliedAt == null || ref.lastRemotePayloadFingerprint.isNullOrBlank()) return false
+        }
+        product.categoryId?.takeIf { it in rejected.categoryIds }?.let { id ->
+            val ref = categoryRemoteRefDao.getByCategoryId(id)
+            if (ref?.lastRemoteAppliedAt == null || ref.lastRemotePayloadFingerprint.isNullOrBlank()) return false
+        }
+        return true
+    }
+
     /**
      * Repairs only the current pending/dirty candidate. The existing bridge
      * revision remains dirty and no outbox or PriceHistory row is created.
      */
-    private suspend fun canonicalizeSupplierForCatalogPush(supplier: Supplier): Supplier {
-        val canonicalName = CatalogTextCanonicalizer.supplierName(supplier.name)
+    private suspend fun canonicalizeSupplierForCatalogPush(
+        supplier: Supplier, canonicalName: String
+    ): Supplier {
         if (canonicalName == supplier.name) return supplier
         return db.withTransaction {
             requireCurrentBusinessDataScope()
@@ -8024,8 +8929,9 @@ class DefaultInventoryRepository(
         }
     }
 
-    private suspend fun canonicalizeCategoryForCatalogPush(category: Category): Category {
-        val canonicalName = CatalogTextCanonicalizer.categoryName(category.name)
+    private suspend fun canonicalizeCategoryForCatalogPush(
+        category: Category, canonicalName: String
+    ): Category {
         if (canonicalName == category.name) return category
         return db.withTransaction {
             requireCurrentBusinessDataScope()
@@ -8855,6 +9761,7 @@ class DefaultInventoryRepository(
                 deletedAt = deletedAt,
                 updatedAt = deletedAt
             )
+            PilotCommitTrace.b6DeleteDispatched(row,patch, lease = b6CurrentLease())
             val outcome = businessScopedRemoteCall {
                 when (row.entityType) {
                     PendingCatalogTombstoneEntityTypes.SUPPLIER -> remote.markSupplierTombstoned(patch, shopId)
@@ -8863,6 +9770,7 @@ class DefaultInventoryRepository(
                     else -> Result.success(Unit)
                 }
             }
+            PilotCommitTrace.b6DeleteResponse(row,outcome.isSuccess, lease = b6CurrentLease())
             outcome.onFailure {
                 requireCurrentBusinessDataScope()
                 pendingCatalogTombstoneDao.incrementAttempt(row.id)
@@ -8871,6 +9779,8 @@ class DefaultInventoryRepository(
             }
             requireCurrentBusinessDataScope()
             pendingCatalogTombstoneDao.deleteById(row.id)
+            val b6AckReturnedNS=if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.now() else 0L
+            PilotCommitTrace.b6DeleteAcknowledged(row,b6AckReturnedNS, lease = b6CurrentLease())
             when (row.entityType) {
                 PendingCatalogTombstoneEntityTypes.SUPPLIER -> suppliers += row.remoteId
                 PendingCatalogTombstoneEntityTypes.CATEGORY -> categories += row.remoteId
@@ -8952,9 +9862,16 @@ class DefaultInventoryRepository(
         if (row.deletedAt.isNullOrBlank()) return null
         val remoteId = CatalogTextCanonicalizer.remoteId(row.id)
         val ref = productRemoteRefDao.getByRemoteId(remoteId) ?: return null
-        if (ref.localChangeRevision > ref.lastSyncedLocalRevision) return null
+        if (ref.localChangeRevision > ref.lastSyncedLocalRevision) {
+            if (effectiveCatalogDecision(ref) == null) return null
+            val child = db.openHelper.readableDatabase.query("SELECT 1 FROM product_prices WHERE productId=? LIMIT 1",
+                arrayOf<Any>(ref.productId)).use { it.moveToFirst() }
+            if (child) throw ShopSyncContractException("resolution_tombstone_has_dependencies")
+        }
         val p = productDao.getById(ref.productId) ?: return null
         productDao.delete(p)
+        if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6AppliedDelete(
+            coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,row,ref.productId)
         return ref.productId
     }
 
@@ -9076,6 +9993,18 @@ class DefaultInventoryRepository(
         val fp = fingerprintProductInbound(canonicalRow)
         val existingRef = productRemoteRefDao.getByRemoteId(canonicalRow.id)
         if (existingRef != null) {
+            if (effectiveCatalogDecision(existingRef) != null) {
+                val current = requireNotNull(productDao.getById(existingRef.productId))
+                val projected = projectQualifiedRemote(canonicalRow, current)
+                productDao.update(projected)
+                require(productRemoteRefDao.updateResolutionProjection(existingRef.productId, existingRef.remoteId,
+                    existingRef.localChangeRevision, existingRef.lastSyncedLocalRevision, existingRef.localChangeRevision,
+                    null, fp, requireNotNull(canonicalRow.updatedAt), System.currentTimeMillis()) == 1)
+                if (PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6AppliedProduct(
+                    coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket, canonicalRow.id,
+                    projected, existingRef.localChangeRevision, canonicalRow.updatedAt, canonicalRow)
+                return existingRef.productId
+            }
             if (existingRef.localChangeRevision > existingRef.lastSyncedLocalRevision) {
                 // L'immagine e' un sottodominio remoto-autoritativo: applicarla non
                 // deve sovrascrivere i campi prodotto dirty ne' marcare la revisione synced.
@@ -9123,6 +10052,9 @@ class DefaultInventoryRepository(
                 fp,
                 canonicalRow.updatedAt
             )
+            if (PilotCommitTrace.b6IsArmed()) PilotCommitTrace.b6AppliedProduct(
+                coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket, canonicalRow.id,
+                merged, existingRef.localChangeRevision, canonicalRow.updatedAt, canonicalRow)
             return existingRef.productId
         }
         val supLocal = canonicalRow.supplierId
@@ -9132,6 +10064,7 @@ class DefaultInventoryRepository(
         val bc = canonicalRow.barcode
         val localByBarcode = productDao.findByBarcode(bc)
         val targetId: Long
+        var b6Written: Product? = null
         if (localByBarcode != null) {
             val other = productRemoteRefDao.getByProductId(localByBarcode.id)
             if (other != null && other.remoteId != canonicalRow.id) return null
@@ -9153,6 +10086,7 @@ class DefaultInventoryRepository(
             ).product
             try {
                 productDao.update(merged)
+                if(PilotCommitTrace.b6IsArmed()) b6Written=merged
             } catch (_: SQLiteConstraintException) {
                 return null
             }
@@ -9178,6 +10112,7 @@ class DefaultInventoryRepository(
                 return null
             }
             targetId = productDao.findByBarcode(bc)?.id ?: return null
+            if(PilotCommitTrace.b6IsArmed()) b6Written=inserted.copy(id=targetId)
         }
         if (productRemoteRefDao.getByProductId(targetId) != null) return null
         productRemoteRefDao.insert(
@@ -9191,6 +10126,8 @@ class DefaultInventoryRepository(
                 remoteUpdatedAt = canonicalRow.updatedAt
             )
         )
+        b6Written?.let { PilotCommitTrace.b6AppliedProduct(
+            coroutineContext[PilotCommitTrace.B6CycleContext]?.ticket,canonicalRow.id,it,0,canonicalRow.updatedAt,canonicalRow) }
         return targetId
     }
 }

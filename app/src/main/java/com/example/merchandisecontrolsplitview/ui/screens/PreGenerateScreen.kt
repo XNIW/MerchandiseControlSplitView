@@ -709,7 +709,7 @@ fun PreGenerateScreen(
             }
 
             if (showCustomHeaderDialog && headerDialogIndex != null) {
-                androidx.compose.material3.AlertDialog(
+                if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) androidx.compose.material3.AlertDialog(
                     onDismissRequest = {
                         showCustomHeaderDialog = false
                         customHeader = ""
@@ -756,7 +756,7 @@ fun PreGenerateScreen(
             headerDialogIndex?.let { columnIndex ->
                 val dialogColumn = columnUiModels.getOrNull(columnIndex)
                 val canRestoreOriginalHeader = originalHeaders.getOrNull(columnIndex)?.isNotBlank() == true
-                androidx.compose.material3.AlertDialog(
+                if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) androidx.compose.material3.AlertDialog(
                     onDismissRequest = { headerDialogIndex = null },
                     title = { Text(stringResource(R.string.select_column_type)) },
                     text = {

@@ -1,7 +1,9 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
+import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import android.util.Log
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,13 +24,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -49,7 +58,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.example.merchandisecontrolsplitview.LocalStoreAvailability
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
+import com.example.merchandisecontrolsplitview.viewmodel.qualifiedLocalBusinessOwner
+import com.example.merchandisecontrolsplitview.viewmodel.LocalBusinessPresentationKey
+import com.example.merchandisecontrolsplitview.viewmodel.localBusinessPresentationKey
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
@@ -74,6 +88,33 @@ fun AppNavGraph() {
 
     val app = context.applicationContext as? MerchandiseControlApplication
         ?: error("MerchandiseControlApplication non configurata nel Manifest")
+    // Value-only bootstrap surface: no business getter or ViewModel may precede this gate.
+    val storeAvailability by app.localStoreAvailability.collectAsState()
+    val authState by app.authManager.state.collectAsState()
+    val authScope = rememberCoroutineScope()
+    if (storeAvailability !is LocalStoreAvailability.Ready) {
+        OptionsScreen(
+            authState = authState,
+            authEnabled = app.authManager.isEnabled,
+            wechatAuthEnabled = app.authManager.isWeChatEnabled,
+            onSignIn = { activity -> authScope.launch { app.authManager.signInWithGoogle(activity) } },
+            onSignInWithWeChat = { activity -> authScope.launch { app.authManager.signInWithWeChat(activity) } },
+            onSignOut = { authScope.launch { app.authManager.signOut() } },
+            onDismissError = { app.authManager.dismissError() },
+            localStoreStatusMessage = stringResource(
+                if (storeAvailability is LocalStoreAvailability.Checking) R.string.local_store_open_checking
+                else R.string.local_store_open_unavailable
+            ),
+            localStoreStatusDetails = (storeAvailability as? LocalStoreAvailability.Unavailable)?.let { failure ->
+                stringResource(R.string.local_store_open_details,
+                    stringResource(if (failure.code == "local_store_open_failed") R.string.local_store_open_failed_reason
+                        else R.string.local_store_open_unknown_reason),
+                    com.example.merchandisecontrolsplitview.BuildConfig.VERSION_NAME)
+            }
+        )
+        return
+    }
+    val localIdentity by app.authManager.localIdentity.collectAsState()
     // Repository singleton dall'Application (task 010): owner unico, nessuna duplicazione.
     val repository = app.repository
     // Stato sync globale strutturato: fase corrente + conteggio opzionale.
@@ -89,11 +130,11 @@ fun AppNavGraph() {
         factory = DatabaseViewModel.factory(app, repository)
     )
 
-    // Auth state (task 011): unica fonte di verita' per lo stato sessione.
-    val authState by app.authManager.state.collectAsState()
     AppNavGraphContent(
         app, excelViewModel, dbViewModel, app.authManager.isEnabled, authState,
-        cloudSyncState, shopContext, businessDataScopeState
+        cloudSyncState, shopContext, businessDataScopeState,
+        localIdentity = localIdentity,
+        localIdentityCurrent = localIdentity?.let(app.authManager::isCurrentLocalIdentity) == true
     )
 }
 
@@ -107,10 +148,14 @@ internal fun AppNavGraphContent(
     authState: AuthState,
     cloudSyncState: CatalogSyncProgressState,
     shopContext: ShopContext,
-    businessDataScopeState: Task126BusinessDataScopeState
+    businessDataScopeState: Task126BusinessDataScopeState,
+    localIdentity: LocalAuthIdentity? = null,
+    localIdentityCurrent: Boolean = false
 ) {
     val context = LocalContext.current
     val navController = rememberNavController()
+    // RAM-only binding survives disposal/recomposition of the same back-stack entry.
+    val routePresentationBindings = remember { mutableStateMapOf<String, LocalBusinessPresentationKey>() }
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val authScope = rememberCoroutineScope()
 
@@ -118,15 +163,17 @@ internal fun AppNavGraphContent(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
+    val localOwner = qualifiedLocalBusinessOwner(authState, localIdentity, localIdentityCurrent,
+        shopContext, businessDataScopeState)
     val businessContentAllowed = businessContentAvailable(
         authEnabled = authEnabled,
         authState = authState,
         state = businessDataScopeState,
-        activeScope = (authState as? AuthState.SignedIn)?.takeIf {
-            shopContext.ownerUserId == it.userId && shopContext.localAccessAllowed
-        }?.let { task126ActiveOwnerStoreScope(it.userId, shopContext.selectedShop) }
+        activeScope = localOwner?.let { task126ActiveOwnerStoreScope(it, shopContext.selectedShop) },
+        locallyQualifiedOwner = localOwner
     )
-    val businessRouteBlocked = !businessContentAllowed && currentRoute != Screen.Options.route
+    val presentationKey = localBusinessPresentationKey(authState, localIdentity, localIdentityCurrent,
+        shopContext, businessDataScopeState)
     val showBottomBar = currentRootTab != null
     val showCloudSyncIndicator = businessContentAllowed && currentRoute != Screen.Options.route
     var pendingImportAnalysisExitCleanup by remember {
@@ -188,20 +235,6 @@ internal fun AppNavGraphContent(
         }
     }
 
-    LaunchedEffect(businessRouteBlocked, businessDataScopeState.status, currentRoute) {
-        if (
-            businessRouteBlocked &&
-            currentRoute != null && currentRootTab == null &&
-            businessDataScopeState.status != Task126BusinessDataScopeStatus.CHECKING
-        ) {
-            navController.navigate(Screen.Options.route) { launchSingleTop = true }
-        }
-    }
-    BackHandler(
-        enabled = !businessContentAllowed && currentRoute == Screen.Options.route
-    ) {
-        // Il database del vecchio scope non torna visibile finche il gate resta chiuso.
-    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -245,31 +278,34 @@ internal fun AppNavGraphContent(
         NavHost(
             navController = navController,
             startDestination = Screen.FilePicker.route,
-            modifier = Modifier
-                .fillMaxSize()
-                .then(
-                    if (businessRouteBlocked) {
-                        Modifier.clearAndSetSemantics { }
-                    } else {
-                        Modifier
-                    }
-                )
+            modifier = Modifier.fillMaxSize()
         ) {
-            composable(Screen.FilePicker.route) {
-                if (!businessContentAllowed) return@composable
+            composable(Screen.FilePicker.route) { backStackEntry ->
+                BusinessRouteContent(
+                    screen = Screen.FilePicker, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[backStackEntry.id],
+                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 FilePickerScreen(
                     contentPadding = innerPadding,
                     shopContext = shopContext,
                     onShopSelected = { shopId ->
-                        app.shopContextRepository.selectShop(shopId)
+                        if (businessContentAllowed) app.shopContextRepository.selectShop(shopId)
                     },
-                    onFilesPicked = { uris ->
+                    onFilesPicked = picked@ { uris ->
+                        if (!businessContentAllowed) return@picked
                         excelViewModel.resetState()
 
                         excelViewModel.loadFromMultipleUris(context, uris)
                         navController.navigate(Screen.PreGenerate.route)
                     },
-                    onManualAdd = {
+                    onManualAdd = manual@ {
+                        if (!businessContentAllowed) return@manual
                         excelViewModel.resetState()
 
                         excelViewModel.createManualEntry(context) { newUid ->
@@ -288,16 +324,27 @@ internal fun AppNavGraphContent(
                         }
                     }
                 )
+                }
             }
 
-            composable(Screen.PreGenerate.route) {
-                if (!businessContentAllowed) return@composable
+            composable(Screen.PreGenerate.route) { backStackEntry ->
+                BusinessRouteContent(
+                    screen = Screen.PreGenerate, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[backStackEntry.id],
+                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 val dbUiState by dbViewModel.uiState.collectAsState()
                 PreGenerateScreen(
                     excelViewModel = excelViewModel,
                     databaseUiState = dbUiState,
                     databaseViewModel = dbViewModel,
-                    onGenerate = { supplierName, categoryName ->
+                    onGenerate = generate@ { supplierName, categoryName ->
+                        if (!businessContentAllowed) return@generate
                         excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid ->
                             excelViewModel.noteGeneratedNavigationContext(
                                 isNew = true,
@@ -309,6 +356,7 @@ internal fun AppNavGraphContent(
                     },
                     onBack = { navController.popBackStack() }
                 )
+                }
             }
 
             composable(
@@ -325,7 +373,16 @@ internal fun AppNavGraphContent(
                     }
                 )
             ) { backStackEntry ->
-                if (!businessContentAllowed) return@composable
+                BusinessRouteContent(
+                    screen = Screen.Generated, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[backStackEntry.id],
+                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
                 val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
                 val isManualEntry = backStackEntry.arguments?.getBoolean("isManualEntry") ?: false
@@ -349,15 +406,16 @@ internal fun AppNavGraphContent(
                             excelViewModel = excelViewModel
                         )
                     }
-                    LaunchedEffect(entryUid, generatedOrigin, currentRoute) {
-                        navigateMissingSession()
+                    LaunchedEffect(entryUid, generatedOrigin, currentRoute, businessContentAllowed) {
+                        if (businessContentAllowed) navigateMissingSession()
                     }
                     RouteFallbackState(onNavigate = navigateMissingSession)
                 } else {
                     GeneratedScreen(
                         excelViewModel = excelViewModel,
                         databaseViewModel = dbViewModel,
-                        onExit = { exitReason ->
+                        onExit = exit@ { exitReason ->
+                            if (!businessContentAllowed) return@exit
                             navigateByGeneratedExitRequest(
                                 navController = navController,
                                 request = GeneratedExitRequest(
@@ -379,10 +437,20 @@ internal fun AppNavGraphContent(
                         isManualEntry = isManualEntry
                     )
                 }
+                }
             }
 
-            composable(Screen.History.route) {
-                if (!businessContentAllowed) return@composable
+            composable(Screen.History.route) { backStackEntry ->
+                BusinessRouteContent(
+                    screen = Screen.History, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[backStackEntry.id],
+                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 val historyList by excelViewModel.historyDisplayEntries.collectAsState()
                 val historyActionMessage by excelViewModel.historyActionMessage
                 val currentHistoryFilter by excelViewModel.historyFilter.collectAsState()
@@ -398,7 +466,8 @@ internal fun AppNavGraphContent(
                     historyActionMessage = historyActionMessage,
                     availableSuppliers = availableSuppliers,
                     availableCategories = availableCategories,
-                    onSelect = { entry ->
+                    onSelect = select@ { entry ->
+                        if (!businessContentAllowed) return@select
                         excelViewModel.loadHistoryEntry(entry.uid) {
                             excelViewModel.noteGeneratedNavigationContext(
                                 isNew = false,
@@ -414,19 +483,30 @@ internal fun AppNavGraphContent(
                             )
                         }
                     },
-                    onRename = { entry, newName -> excelViewModel.renameHistoryEntry(entry.uid, newName) },
-                    onDelete = { entry -> excelViewModel.deleteHistoryEntry(entry.uid) },
+                    onRename = { entry, newName -> if (businessContentAllowed) excelViewModel.renameHistoryEntry(entry.uid, newName) },
+                    onDelete = { entry -> if (businessContentAllowed) excelViewModel.deleteHistoryEntry(entry.uid) },
                     onHistoryActionMessageConsumed = { excelViewModel.consumeHistoryActionMessage() },
                     onSetFilter = { filter -> excelViewModel.setHistoryFilter(filter) }
                 )
+                }
             }
 
-            composable(Screen.Database.route) {
-                if (!businessContentAllowed) return@composable
+            composable(Screen.Database.route) { backStackEntry ->
+                BusinessRouteContent(
+                    screen = Screen.Database, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[backStackEntry.id],
+                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 DatabaseScreen(
                     contentPadding = innerPadding,
                     viewModel = dbViewModel
                 )
+                }
             }
 
             composable(Screen.Options.route) {
@@ -453,6 +533,25 @@ internal fun AppNavGraphContent(
                 LaunchedEffect(Unit) {
                     catalogSyncViewModel.onOptionsScreenVisible()
                 }
+                var showExistingDraftNotice by remember { mutableStateOf(false) }
+                if (showExistingDraftNotice) {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { showExistingDraftNotice = false },
+                        title = { Text(stringResource(R.string.catalog_conflict_review_title)) },
+                        text = { Text(stringResource(R.string.catalog_conflict_existing_draft)) },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(onClick = {
+                                showExistingDraftNotice = false
+                                navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Database })
+                            }) { Text(stringResource(R.string.catalog_conflict_return_to_draft)) }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(onClick = { showExistingDraftNotice = false }) {
+                                Text(stringResource(R.string.close))
+                            }
+                        }
+                    )
+                }
                 OptionsScreen(
                     contentPadding = innerPadding,
                     authState = authState,
@@ -477,7 +576,12 @@ internal fun AppNavGraphContent(
                     businessScopeMismatchIdentity = mismatchDialogEligibility.identity,
                     canReplaceMismatchedLocalData = mismatchDialogEligibility.canReplace,
                     catalogSyncUi = if (authEnabled) catalogSyncUi else null,
-                    localDatabaseStatusUi = localDatabaseStatusUi
+                    localDatabaseStatusUi = localDatabaseStatusUi,
+                    onReviewPersistedConflict = { target ->
+                        if (dbViewModel.requestPersistedCatalogConflict(target)) {
+                            navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Database })
+                        } else showExistingDraftNotice = true
+                    }
                 )
             }
 
@@ -490,7 +594,16 @@ internal fun AppNavGraphContent(
                     }
                 )
             ) { importBackStackEntry ->
-                if (!businessContentAllowed) return@composable
+                BusinessRouteContent(
+                    screen = Screen.ImportAnalysis, allowed = businessContentAllowed,
+                    currentKey = presentationKey,
+                    admittedKey = routePresentationBindings[importBackStackEntry.id],
+                    onAdmitted = { routePresentationBindings[importBackStackEntry.id] = it },
+                    state = businessDataScopeState, authState = authState,
+                    contentPadding = innerPadding,
+                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
+                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
+                ) {
                 val importOrigin = ImportNavOrigin.parse(
                     importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
                 )
@@ -527,9 +640,9 @@ internal fun AppNavGraphContent(
                     LaunchedEffect(
                         importOrigin,
                         isPreviewLoading,
-                        fallbackNavigationRequested
+                        fallbackNavigationRequested, businessContentAllowed
                     ) {
-                        if (!isPreviewLoading && !fallbackNavigationRequested) {
+                        if (businessContentAllowed && !isPreviewLoading && !fallbackNavigationRequested) {
                             navigateMissingPreview()
                         }
                     }
@@ -550,8 +663,8 @@ internal fun AppNavGraphContent(
                         mutableStateOf(false)
                     }
 
-                    LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid, importOrigin) {
-                        if (importFlowState is ImportFlowState.Success && !successNavigationRequested) {
+                    LaunchedEffect(importFlowState, analysis.errors.size, currentEntryUid, importOrigin, businessContentAllowed) {
+                        if (businessContentAllowed && importFlowState is ImportFlowState.Success && !successNavigationRequested) {
                             successNavigationRequested = true
                             if (hasGeneratedImportContext) {
                                 if (analysis.errors.isEmpty()) {
@@ -587,10 +700,12 @@ internal fun AppNavGraphContent(
                         importAnalysis = analysis,
                         importFlowState = importFlowState,
                         canReturnToGeneratedForCorrection = hasGeneratedImportContext && !isApplyError,
-                        onConfirm = { previewId, newProducts, updatedProducts ->
+                        onConfirm = confirm@ { previewId, newProducts, updatedProducts ->
+                            if (!businessContentAllowed) return@confirm
                             dbViewModel.importProducts(previewId, newProducts, updatedProducts, context)
                         },
-                        onCorrectRows = {
+                        onCorrectRows = correct@ {
+                            if (!businessContentAllowed) return@correct
                             excelViewModel.errorRowIndexes.value =
                                 analysis.errors.map { it.rowNumber }.toSet()
                             fallbackNavigationRequested = true
@@ -610,7 +725,8 @@ internal fun AppNavGraphContent(
                                 excelViewModel = excelViewModel
                             )
                         },
-                        onClose = {
+                        onClose = close@ {
+                            if (!businessContentAllowed) return@close
                             val flowState = importFlowState
                             if (flowState is ImportFlowState.Error && flowState.occurredDuringApply) {
                                 if (hasGeneratedImportContext) {
@@ -638,38 +754,83 @@ internal fun AppNavGraphContent(
                         },
                     )
                 }
-            }
-        }
-        if (businessRouteBlocked) {
-            val checkingPresentation = businessScopeCheckingPresentation(authState)
-            Surface(
-                modifier = Modifier.fillMaxSize().testTag("root-business-placeholder"),
-                color = MaterialTheme.colorScheme.background
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(innerPadding).padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    if (businessDataScopeState.status == Task126BusinessDataScopeStatus.CHECKING &&
-                        checkingPresentation.showProgress) CircularProgressIndicator()
-                    val message = when (businessDataScopeState.status) {
-                        Task126BusinessDataScopeStatus.CHECKING -> checkingPresentation.messageRes
-                        Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND -> R.string.business_scope_unbound_review_message
-                        Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH -> R.string.business_scope_account_mismatch_message
-                        Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH -> R.string.business_scope_shop_mismatch_message
-                        Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH -> R.string.business_scope_schema_mismatch_message
-                        else -> R.string.business_scope_recoverable_error
-                    }
-                    Text(stringResource(message), Modifier.padding(top = 16.dp), style = MaterialTheme.typography.bodyMedium)
-                    androidx.compose.material3.TextButton(onClick = {
-                        navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options })
-                    }) { Text(stringResource(R.string.business_scope_review_details)) }
                 }
             }
         }
+
         }
       }
+    }
+}
+
+
+/** Every route owns a context surface. Keeping RAM nodes does not retain read/write authority. */
+@Composable
+private fun BusinessRouteContent(
+    screen: Screen,
+    allowed: Boolean,
+    currentKey: LocalBusinessPresentationKey?,
+    admittedKey: LocalBusinessPresentationKey?,
+    onAdmitted: (LocalBusinessPresentationKey) -> Unit,
+    state: Task126BusinessDataScopeState,
+    authState: AuthState,
+    contentPadding: androidx.compose.foundation.layout.PaddingValues,
+    onBack: () -> Unit,
+    onDetails: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val samePresentation = admittedKey != null && admittedKey == currentKey
+    val showContent = allowed && currentKey != null && (admittedKey == null || samePresentation)
+    SideEffect { if (showContent && admittedKey == null) currentKey.let(onAdmitted) }
+    Box(Modifier.fillMaxSize()) {
+        // Cold blocked routes never mount business consumers. For a previously admitted
+        // same-identity route, paused read gates preserve only RAM inputs, focus and scroll.
+        // A different owner/shop/auth generation cannot remount the previous session body.
+        if (showContent || samePresentation) {
+            Box(Modifier.fillMaxSize()
+                .graphicsLayer { alpha = if (showContent) 1f else 0f }
+                .then(if (showContent) Modifier else Modifier.clearAndSetSemantics { })
+                .onPreviewKeyEvent { !showContent }) {
+                CompositionLocalProvider(LocalBusinessRouteVisible provides showContent) { content() }
+            }
+        }
+        if (!showContent) {
+            val checking = businessScopeCheckingPresentation(authState)
+            val foreignPresentation = admittedKey != null && admittedKey != currentKey
+            val message = when {
+                foreignPresentation -> R.string.business_scope_account_mismatch_message
+                state.status == Task126BusinessDataScopeStatus.CHECKING -> checking.messageRes
+                state.status == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND -> R.string.business_scope_unbound_review_message
+                state.status == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH -> R.string.business_scope_account_mismatch_message
+                state.status == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH -> R.string.business_scope_shop_mismatch_message
+                state.status == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH -> R.string.business_scope_schema_mismatch_message
+                else -> R.string.business_scope_recoverable_error
+            }
+            Surface(Modifier.fillMaxSize().testTag("route-context-${screen.route}")
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        // The topmost pointer node blocks hit-testing the hidden sibling;
+                        // do not consume child Back/Details gestures.
+                        while (true) awaitPointerEvent()
+                    }
+                }, color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().padding(contentPadding).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(when (screen) {
+                        Screen.FilePicker, Screen.Generated -> R.string.inventory_title
+                        Screen.PreGenerate -> R.string.preview_file_title
+                        Screen.Database -> R.string.database
+                        Screen.History -> R.string.history_root_title
+                        else -> R.string.import_analysis_title
+                    }), style = MaterialTheme.typography.headlineSmall)
+                    Text(stringResource(message), style = MaterialTheme.typography.bodyMedium)
+                    androidx.compose.material3.TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+                    androidx.compose.material3.TextButton(onClick = onDetails) {
+                        Text(stringResource(R.string.business_scope_review_details))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -682,13 +843,18 @@ internal fun businessContentAvailable(
     authEnabled: Boolean,
     authState: AuthState,
     state: com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState,
-    activeScope: com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope? = state.localAccessScope ?: state.boundScope
+    activeScope: com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope? = state.localAccessScope ?: state.boundScope,
+    locallyQualifiedOwner: String? = null
 ): Boolean {
     if (!authEnabled || authState is AuthState.SignedOut) return state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && state.boundScope == null
-    val signedIn = authState as? AuthState.SignedIn ?: return false
+    val owner = when (authState) {
+        is AuthState.SignedIn -> authState.userId
+        AuthState.Checking -> locallyQualifiedOwner
+        else -> null
+    }?.takeIf(String::isNotBlank) ?: return false
     if (state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED || !state.allowsLocalOperations || activeScope == null) return false
     val localScope = state.localAccessScope ?: state.boundScope ?: return false
-    return localScope.ownerHash == com.example.merchandisecontrolsplitview.data.task126OwnerHash(signedIn.userId) &&
+    return localScope.ownerHash == com.example.merchandisecontrolsplitview.data.task126OwnerHash(owner) &&
         com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGate.validate(localScope, activeScope) ==
         com.example.merchandisecontrolsplitview.data.Task126OwnerStoreGateDecision.Allowed
 }
@@ -851,10 +1017,15 @@ private fun RootNavigationBar(
             ) {
                 rootTabs.forEach { tab ->
                     NavigationBarItem(
-                        modifier = Modifier.testTag("root-tab-${tab.screen.route}"),
+                        modifier = Modifier.testTag("root-tab-${tab.screen.route}")
+                            .observeMobileSyncDraw(Event.ROOT_TAB_DRAW, detail = tab.screen.route,
+                                enabled = selectedTab?.screen == tab.screen),
                         selected = selectedTab?.screen == tab.screen,
                         enabled = true,
-                        onClick = { onTabSelected(tab) },
+                        onClick = {
+                            MobileSyncInteractionTestHooks.emit(Event.ROOT_TAB_CLICK, detail = tab.screen.route)
+                            onTabSelected(tab)
+                        },
                         icon = {
                             androidx.compose.material3.Icon(
                                 imageVector = tab.icon,

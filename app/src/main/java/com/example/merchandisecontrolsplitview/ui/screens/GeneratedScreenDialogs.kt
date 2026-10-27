@@ -49,7 +49,7 @@ fun GeneratedScreenDiscardDraftDialog(
     onCancel: () -> Unit,
 ) {
     if (!visible) return
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -98,7 +98,7 @@ fun GeneratedScreenSyncBeforeExitDialog(
     onCancel: () -> Unit,
 ) {
     if (!visible) return
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -153,16 +153,17 @@ fun GeneratedScreenSearchDialog(
     val searchFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    LaunchedEffect(visible) {
-        if (visible) {
-            onSearchTextChange("")
+    val routeWindowVisible = com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current
+    LaunchedEffect(visible) { if (visible) onSearchTextChange("") }
+    LaunchedEffect(visible, routeWindowVisible) {
+        if (visible && routeWindowVisible) {
             delay(50)
             searchFocusRequester.requestFocus()
             keyboardController?.show()
         }
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = {
             keyboardController?.hide()
             onDismiss()

@@ -28,6 +28,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import com.example.merchandisecontrolsplitview.data.PilotCommitTrace
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -118,7 +121,7 @@ internal fun LoadingDialog(
         currentOnSafetyTimeout()
     }
 
-    Dialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) Dialog(
         onDismissRequest = {},
         properties = DialogProperties(
             dismissOnBackPress = false,
@@ -198,7 +201,7 @@ internal fun DatabaseExportDialog(
         )
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -338,7 +341,7 @@ internal fun DeleteProductConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -398,7 +401,11 @@ internal fun DeleteProductConfirmationDialog(
         },
         confirmButton = {
             Button(
-                onClick = onConfirm,
+                onClick = {
+                    MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                        product.id,"b6-source:delete:product-delete-confirm")
+                    onConfirm()
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
             ) {
                 Text(stringResource(R.string.delete))
@@ -421,7 +428,7 @@ internal fun CatalogActionBottomSheet(
     onDelete: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -533,7 +540,7 @@ internal fun CatalogNameDialog(
     var value by remember(initialValue) { androidx.compose.runtime.mutableStateOf(initialValue) }
     val trimmedValue = value.trim()
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -579,7 +586,7 @@ internal fun CatalogDeleteConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -645,7 +652,7 @@ internal fun CatalogDeleteStrategyDialog(
     onClearAssignments: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -712,7 +719,7 @@ internal fun CatalogClearAssignmentsConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -771,7 +778,7 @@ internal fun CatalogReplacementPickerDialog(
         }
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -882,6 +889,7 @@ internal fun PriceHistoryBottomSheet(
     onUpdateCurrentPrice: ((String, Double) -> Unit)? = null
 ) {
     var tab by remember { mutableIntStateOf(0) }
+    val priceHistoryListState = androidx.compose.foundation.lazy.rememberLazyListState()
     var updateDialogType by remember { mutableStateOf<String?>(null) }
     val configuration = LocalConfiguration.current
     val locale = remember(configuration) {
@@ -892,7 +900,7 @@ internal fun PriceHistoryBottomSheet(
             .withLocale(locale)
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(product.productName ?: stringResource(R.string.unnamed_product), style = MaterialTheme.typography.titleMedium)
             SecondaryTabRow(selectedTabIndex = tab) {
@@ -921,7 +929,7 @@ internal fun PriceHistoryBottomSheet(
                         .padding(vertical = 16.dp)
                 )
             } else {
-                LazyColumn {
+                LazyColumn(state = priceHistoryListState) {
                     items(list) { pt ->
                         PriceHistoryRow(
                             pricePoint = pt,
@@ -935,6 +943,7 @@ internal fun PriceHistoryBottomSheet(
 
     updateDialogType?.let { type ->
         PriceHistoryUpdateCurrentDialog(
+            productId = product.id,
             initialType = type,
             purchasePrice = product.purchasePrice,
             retailPrice = product.retailPrice,
@@ -1001,6 +1010,7 @@ private fun PriceHistoryCurrentPricePanel(
 
 @Composable
 private fun PriceHistoryUpdateCurrentDialog(
+    productId: Long,
     initialType: String,
     purchasePrice: Double?,
     retailPrice: Double?,
@@ -1016,7 +1026,7 @@ private fun PriceHistoryUpdateCurrentDialog(
     val parsedPrice = parseUserPriceInput(priceText)
     val isInvalid = priceText.isNotBlank() && (parsedPrice == null || parsedPrice <= 0)
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.price_history_update_current_title)) },
         text = {
@@ -1058,6 +1068,8 @@ private fun PriceHistoryUpdateCurrentDialog(
             Button(
                 enabled = parsedPrice != null && parsedPrice > 0,
                 onClick = {
+                    MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                        productId,"b6-source:price:price-history-current-confirm")
                     parseUserPriceInput(priceText)
                         ?.takeIf { it > 0 }
                         ?.let { onConfirm(selectedType, it) }
@@ -1079,23 +1091,25 @@ private fun PriceHistoryRow(
     pricePoint: ProductPrice,
     dateTimeFormatter: DateTimeFormatter
 ) {
+    val displayedPrice=formatClPricePlainDisplay(pricePoint.price)
+    val displayedDateTime=formatPriceHistoryDateTime(pricePoint.effectiveAt,dateTimeFormatter)
+    val displayedSource=priceHistorySourceLabel(pricePoint.source)
     Column(
         modifier = Modifier
+            .observeMobileSyncDraw(MobileSyncInteractionTestHooks.Event.PRICE_HISTORY_DRAW,pricePoint.id,
+                PilotCommitTrace.b6PriceHistoryRenderDetail(pricePoint,displayedPrice,displayedDateTime,displayedSource))
             .fillMaxWidth()
             .padding(vertical = 12.dp)
     ) {
         Text(
-            text = formatClPricePlainDisplay(pricePoint.price),
+            text = displayedPrice,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
-            text = formatPriceHistoryDateTime(
-                rawEffectiveAt = pricePoint.effectiveAt,
-                dateTimeFormatter = dateTimeFormatter
-            ),
+            text = displayedDateTime,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
@@ -1103,7 +1117,7 @@ private fun PriceHistoryRow(
             modifier = Modifier.padding(top = 4.dp)
         )
         Text(
-            text = priceHistorySourceLabel(pricePoint.source),
+            text = displayedSource,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

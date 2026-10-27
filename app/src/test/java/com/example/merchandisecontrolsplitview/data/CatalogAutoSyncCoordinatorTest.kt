@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +22,126 @@ import org.robolectric.annotation.Config
 @Config(sdk = [33])
 @OptIn(ExperimentalCoroutinesApi::class)
 class CatalogAutoSyncCoordinatorTest {
+
+    @Test
+    fun localReceiptDeferIsIdleAndCoalescesOneRetryWithoutRemoteAdvanceSuccessor() = runTest {
+        val shop = selectedShop(SHOP_ID)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(
+            task126ActiveOwnerStoreScope(USER_ID, shop))).apply { updateNetworkAvailability(true) }
+        val priority = OrdinaryNoWorkReceiptPriority()
+        val lease = tracker.captureBusinessDataScopeSignal(USER_ID, SHOP_ID).lease
+        val attempt = priority.register(lease, tracker, kotlinx.coroutines.Job())
+        val writer = priority.reserveWriter(lease.copy(localOnly = true))
+        val deferred = runCatching { attempt.checkRequested() }.exceptionOrNull() as OrdinaryNoWorkReceiptDeferred
+        priority.releaseWriter(writer)
+        priority.retire(attempt)
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false; failDrain = deferred
+        }
+        val logs = mutableListOf<String>()
+        val confirmed = emptySummary(pulledProducts = 7)
+        tracker.publishSummary(USER_ID, CatalogSyncFlightOwner.SYNC_EVENTS, confirmed)
+        val coordinator = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote043(), FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "synthetic@example.test")),
+            selectedShopProvider = { shop }, syncStateTracker = tracker, scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE, logger = { logs += it })
+        try {
+            coordinator.runSyncEventDrainCycle("foreground_interval")
+            assertEquals(CatalogSyncStatus.IDLE, tracker.state.value.status)
+            assertEquals(confirmed, tracker.lastOutcome.value?.summary)
+            assertEquals(1, repository.drainCalls)
+            assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+            tracker.finish(CatalogSyncFlightOwner.MANUAL)
+            advanceTimeBy(1_001); runCurrent()
+            assertEquals(2, repository.drainCalls)
+            advanceTimeBy(10_000); runCurrent()
+            assertEquals("deferred retry must not recursively rearm", 2, repository.drainCalls)
+            assertTrue(logs.none { it.contains("reason=remote_advanced") || it.contains("outcome=fail") })
+            repository.failDrain = null
+            coordinator.runSyncEventDrainCycle("foreground_interval")
+            assertEquals(CatalogSyncStatus.COMPLETED, tracker.state.value.status)
+        } finally { coordinator.shutdown() }
+    }
+
+    @Test
+    fun localPushReceiptDeferRechecksDurablePendingEvenWhenSaveEmitsNoNotification() = runTest {
+        val shop = selectedShop(SHOP_ID)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(
+            task126ActiveOwnerStoreScope(USER_ID, shop))).apply { updateNetworkAvailability(true) }
+        val priority = OrdinaryNoWorkReceiptPriority()
+        val lease = tracker.captureBusinessDataScopeSignal(USER_ID, SHOP_ID).lease
+        val attempt = priority.register(lease, tracker, kotlinx.coroutines.Job())
+        val writer = priority.reserveWriter(lease.copy(localOnly = true))
+        val deferred = runCatching { attempt.checkRequested() }.exceptionOrNull() as OrdinaryNoWorkReceiptDeferred
+        priority.releaseWriter(writer); priority.retire(attempt)
+        val repository = FakeCatalogAutoSyncRepository043().apply {
+            shouldBootstrap = false; failQuickOnce = deferred
+        }
+        val logs = mutableListOf<String>()
+        val coordinator = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote043(), FakePriceRemote043(),
+            syncEventRemote = FakeSyncEventRemote043(),
+            authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "synthetic@example.test")),
+            selectedShopProvider = { shop }, syncStateTracker = tracker, scope = backgroundScope,
+            debounceMs = Long.MAX_VALUE, logger = { logs += it })
+        try {
+            coordinator.runPushCycle("local_commit")
+            assertEquals(CatalogSyncStatus.IDLE, tracker.state.value.status)
+            assertNull(tracker.lastOutcome.value)
+            assertEquals(1, repository.quickWithEventsCalls)
+            // Earlier outbound work is durable; the competing Save failed/no-oped, so no new notify follows.
+            repository.hasPendingWork = false
+            advanceTimeBy(251); runCurrent()
+            assertEquals(1, repository.quickWithEventsCalls)
+            assertTrue(logs.any { it.contains("reason=no_pending_catalog_work") && it.contains("local_commit_receipt_deferred") })
+            advanceTimeBy(750); runCurrent()
+            assertEquals(1, repository.drainCalls)
+            assertEquals(CatalogSyncStatus.COMPLETED, tracker.state.value.status)
+            advanceTimeBy(10_000); runCurrent()
+            assertEquals(1, repository.drainCalls)
+            assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+            tracker.finish(CatalogSyncFlightOwner.MANUAL)
+        } finally { coordinator.shutdown() }
+    }
+
+    @Test
+    fun externalCancellationAndRevokedReceiptAreNeverRelabelledAsLocalWriterDefer() = runTest {
+        for (revoke in listOf(false, true)) {
+            val shop = selectedShop(SHOP_ID)
+            val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(
+                task126ActiveOwnerStoreScope(USER_ID, shop))).apply { updateNetworkAvailability(true) }
+            val priority = OrdinaryNoWorkReceiptPriority()
+            val lease = tracker.captureBusinessDataScopeSignal(USER_ID, SHOP_ID).lease
+            val attempt = priority.register(lease, tracker, kotlinx.coroutines.Job())
+            val writer = priority.reserveWriter(lease.copy(localOnly = true))
+            val deferred = runCatching { attempt.checkRequested() }.exceptionOrNull() as OrdinaryNoWorkReceiptDeferred
+            priority.releaseWriter(writer); priority.retire(attempt)
+            if (revoke) tracker.withBusinessDataScopeTransition { }
+            val repository = FakeCatalogAutoSyncRepository043().apply {
+                shouldBootstrap = false
+                failDrain = if (revoke) deferred else CancellationException("external_test_cancellation")
+            }
+            val logs = mutableListOf<String>()
+            val coordinator = CatalogAutoSyncCoordinator(repository, FakeCatalogRemote043(), FakePriceRemote043(),
+                syncEventRemote = FakeSyncEventRemote043(),
+                authFlow = MutableStateFlow(AuthState.SignedIn(USER_ID, "synthetic@example.test")),
+                selectedShopProvider = { shop }, syncStateTracker = tracker, scope = backgroundScope,
+                debounceMs = Long.MAX_VALUE, logger = { logs += it })
+            try {
+                val error = runCatching { coordinator.runSyncEventDrainCycle("foreground_interval") }.exceptionOrNull()
+                if (revoke) {
+                    assertNull(error)
+                    assertTrue(logs.any { it.contains("business_scope_changed_during_receipt") })
+                } else assertTrue(error is CancellationException)
+                assertTrue(logs.none { it.contains("outcome=deferred") })
+                assertNull(tracker.lastOutcome.value)
+                assertTrue(tracker.tryBegin(CatalogSyncFlightOwner.MANUAL))
+                tracker.finish(CatalogSyncFlightOwner.MANUAL)
+                advanceTimeBy(2_000); runCurrent()
+                assertEquals(1, repository.drainCalls)
+            } finally { coordinator.shutdown() }
+        }
+    }
 
     @Test
     fun ordinaryAdvancedWindowGetsOnlyOneFreshSuccessorAfterEitherFlight() = runTest {

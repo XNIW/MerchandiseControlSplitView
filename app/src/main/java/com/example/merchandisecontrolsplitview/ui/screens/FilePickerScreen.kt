@@ -253,7 +253,7 @@ private fun ShopContextHeader(
                 contentDescription = null
             )
         }
-        DropdownMenu(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {

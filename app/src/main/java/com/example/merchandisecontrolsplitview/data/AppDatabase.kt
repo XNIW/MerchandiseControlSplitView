@@ -38,6 +38,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 )
 @TypeConverters(HistoryEntryConverters::class)
 abstract class AppDatabase : RoomDatabase() {
+    // Process-local priority only; never grants scope access or caches a receipt.
+    internal val ordinaryNoWorkReceiptPriority = OrdinaryNoWorkReceiptPriority()
+
     abstract fun productDao(): ProductDao
     abstract fun supplierDao(): SupplierDao
     abstract fun historyEntryDao(): HistoryEntryDao

@@ -68,6 +68,20 @@ class DeviceGuardedCatalogRemoteDataSource(
             delegate.patchProduct(id, ownerUserId, shopId, patch)
         }
 
+    override suspend fun patchProductConditionally(
+        id: String,
+        ownerUserId: String,
+        shopId: String?,
+        patch: InventoryProductPatch,
+        expectedUpdatedAt: String,
+        expectedDeletedAt: String?
+    ): Result<List<InventoryProductRow>> {
+        val sealedPatch = patch.copy(changedFields = patch.changedFields.toSet())
+        return guardedCloudWrite(authorization, "catalog_patch_product_conditional", shopId) {
+            delegate.patchProductConditionally(id, ownerUserId, shopId, sealedPatch, expectedUpdatedAt, expectedDeletedAt)
+        }
+    }
+
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         delegate.fetchCatalog()
 

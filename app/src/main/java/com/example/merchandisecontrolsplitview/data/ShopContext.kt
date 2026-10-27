@@ -1,6 +1,10 @@
 package com.example.merchandisecontrolsplitview.data
 
 import android.content.SharedPreferences
+import android.os.SystemClock
+import android.util.Log
+import com.example.merchandisecontrolsplitview.BuildConfig
+import java.security.MessageDigest
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
@@ -167,19 +171,23 @@ class ShopContextRepository(
 ) {
     private val refreshLock = Any()
     private var refreshGeneration = 0L
+    private var writeContextGeneration = 0L
     private val mutableState = MutableStateFlow(ShopContext.legacy())
     val state: StateFlow<ShopContext> = mutableState.asStateFlow()
 
-    /** Observation only; does not prevent a selection or grant sync authority. */
+    /** Write-context version; asynchronous refresh completion is still fenced by refreshGeneration. */
     internal fun diagnosticShopEpoch(): Long = synchronized(refreshLock) {
-        refreshGeneration
+        writeContextGeneration
     }
 
     suspend fun refresh(ownerUserId: String?) {
         val generation = synchronized(refreshLock) {
             if (currentOwnerUserId() != ownerUserId) return
-            refreshGeneration += 1L
-            refreshGeneration
+            observeEpochMutation("refresh", "REQUEST_STARTED") {
+                refreshGeneration += 1L
+                writeContextGeneration += 1L
+                refreshGeneration
+            }
         }
         if (ownerUserId.isNullOrBlank() || !remote.isConfigured) {
             synchronized(refreshLock) {
@@ -231,8 +239,11 @@ class ShopContextRepository(
 
     fun clear() {
         synchronized(refreshLock) {
-            refreshGeneration += 1L
-            mutableState.value = ShopContext.legacy()
+            observeEpochMutation("clear", "CLEAR") {
+                refreshGeneration += 1L
+                writeContextGeneration += 1L
+                mutableState.value = ShopContext.legacy()
+            }
         }
     }
 
@@ -244,10 +255,13 @@ class ShopContextRepository(
             if (current.isLoading || !current.syncAllowed) return false
             val linked = current.selectableShops.firstOrNull { it.shopId == shopId } ?: return false
             val selected = linked.toSelectedShop()
-            refreshGeneration += 1L
-            selectedShopStore.setSelectedShopId(ownerUserId, selected.shopId)
-            mutableState.value = applyDeviceDenial(current.copy(selectedShop = selected, localAccessAllowed = true))
-            selectedShopStore.setConfirmedContext(ownerUserId, mutableState.value)
+            observeEpochMutation("select_shop", "SELECTION_ACCEPTED") {
+                refreshGeneration += 1L
+                writeContextGeneration += 1L
+                selectedShopStore.setSelectedShopId(ownerUserId, selected.shopId)
+                mutableState.value = applyDeviceDenial(current.copy(selectedShop = selected, localAccessAllowed = true))
+                selectedShopStore.setConfirmedContext(ownerUserId, mutableState.value)
+            }
             return true
         }
     }
@@ -265,9 +279,12 @@ class ShopContextRepository(
         synchronized(refreshLock) {
             if (currentOwnerUserId() != ownerUserId || mutableState.value.ownerUserId != ownerUserId ||
                 mutableState.value.activeShopId != shopId) return
-            refreshGeneration += 1L
-            selectedShopStore.clearConfirmedContext(ownerUserId)
-            mutableState.value = ShopContext.blocked(ownerUserId, "shop_access_rejected")
+            observeEpochMutation("invalidate_local_authorization", "LOCAL_ACCESS_REJECTED") {
+                refreshGeneration += 1L
+                writeContextGeneration += 1L
+                selectedShopStore.clearConfirmedContext(ownerUserId)
+                mutableState.value = ShopContext.blocked(ownerUserId, "shop_access_rejected")
+            }
         }
     }
 
@@ -281,13 +298,84 @@ class ShopContextRepository(
             val denied = status in setOf("revoked", "retired", "suspended")
             val restored = status == "active" && canWrite
             if (!denied && !restored) return
-            selectedShopStore.setDeviceDenied(ownerUserId, shopId, deviceId, denied)
-            refreshGeneration += 1L
-            val membershipAllows = current.linkedShops.isEmpty() ||
-                current.selectableShops.any { it.shopId == shopId }
-            mutableState.value = current.copy(localAccessAllowed = !denied && membershipAllows,
-                errorMessage = if (denied) "device_access_rejected" else null)
+            val previouslyDenied = restored && selectedShopStore.isDeviceDenied(ownerUserId, shopId, deviceId)
+            observeEpochMutation("record_device_authorization", if (denied) "DEVICE_DENIED" else "DEVICE_ACTIVE_WRITE") {
+                selectedShopStore.setDeviceDenied(ownerUserId, shopId, deviceId, denied)
+                refreshGeneration += 1L
+                val membershipAllows = current.linkedShops.isEmpty() ||
+                    current.selectableShops.any { it.shopId == shopId }
+                val next = current.copy(localAccessAllowed = !denied && membershipAllows,
+                    errorMessage = if (denied) "device_access_rejected" else null)
+                // An exact active confirmation may retain write authority; it still fences older refreshes.
+                if (denied || previouslyDenied || next != current) writeContextGeneration += 1L
+                mutableState.value = next
+            }
         }
+    }
+
+    /** Passive diagnostic only. Every caller already holds refreshLock; original mutations run once. */
+    private inline fun <T> observeEpochMutation(origin: String, reason: String, block: () -> T): T {
+        val enabled = try {
+            if (!BuildConfig.DEBUG) false else {
+                val bytes = MessageDigest.getInstance("SHA-256").digest(BuildConfig.SUPABASE_URL.toByteArray(Charsets.UTF_8))
+                val digits = "0123456789abcdef"
+                val encoded = CharArray(bytes.size * 2)
+                for (index in bytes.indices) {
+                    val value = bytes[index].toInt() and 0xff
+                    encoded[index * 2] = digits[value ushr 4]
+                    encoded[index * 2 + 1] = digits[value and 0x0f]
+                }
+                String(encoded) == "42a5d0119a30cb5f291bff1912a46e1092c77b483bbfed663785ef165260c842"
+            }
+        } catch (_: Throwable) { false }
+        if (!enabled) return block()
+        val oldGeneration = refreshGeneration
+        val before = mutableState.value
+        try {
+            return block()
+        } finally {
+            // No diagnostic failure may replace an original return, exception or cancellation.
+            try {
+                val newGeneration = refreshGeneration
+                val after = mutableState.value
+                if (newGeneration != oldGeneration) {
+                    val line = epochDiagnosticLine(origin, reason, oldGeneration, newGeneration, before, after)
+                    Log.i("MerchandiseApp", "$line counter_kind=refresh_fence observation=locked_block_exit at_ns=${SystemClock.elapsedRealtimeNanos()}")
+                }
+            } catch (_: Throwable) { }
+        }
+    }
+
+    /** Describes only the observed fields, never whether an epoch change or a later re-audit is legitimate. */
+    private fun epochDiagnosticLine(origin: String, reason: String, oldGeneration: Long, newGeneration: Long,
+        before: ShopContext, after: ShopContext): String {
+        val known = when (origin) {
+            "refresh" -> reason == "REQUEST_STARTED"
+            "clear" -> reason == "CLEAR"
+            "select_shop" -> reason == "SELECTION_ACCEPTED"
+            "invalidate_local_authorization" -> reason == "LOCAL_ACCESS_REJECTED"
+            "record_device_authorization" -> reason == "DEVICE_DENIED" || reason == "DEVICE_ACTIVE_WRITE"
+            else -> false
+        }
+        require(known) { "shop_epoch_unknown_origin_or_reason" }
+        fun permissions(context: ShopContext): Map<List<Any?>, Int> = context.linkedShops
+            .groupingBy { listOf<Any?>(it.shopId, it.role, it.status, it.membershipStatus, it.shopStatus, it.selectable, it.canWrite) }
+            .eachCount()
+        val ownerChanged = before.ownerUserId != after.ownerUserId
+        val shopChanged = before.activeShopId != after.activeShopId
+        val selectedChanged = before.selectedShop?.role != after.selectedShop?.role ||
+            before.selectedShop?.status != after.selectedShop?.status || before.selectedShop?.canWrite != after.selectedShop?.canWrite
+        val membershipChanged = permissions(before) != permissions(after)
+        val loadingChanged = before.isLoading != after.isLoading
+        val syncChanged = before.syncAllowed != after.syncAllowed
+        val accessChanged = before.localAccessAllowed != after.localAccessAllowed
+        val semanticChanged = ownerChanged || shopChanged || selectedChanged || membershipChanged ||
+            loadingChanged || syncChanged || accessChanged
+        return "shop_epoch origin=$origin reason=$reason old_generation=$oldGeneration new_generation=$newGeneration" +
+            " context_value_changed=${before != after} context_semantic_change=$semanticChanged" +
+            " owner_changed=$ownerChanged active_shop_changed=$shopChanged selected_permission_changed=$selectedChanged" +
+            " membership_permission_changed=$membershipChanged loading_changed=$loadingChanged" +
+            " sync_allowed_changed=$syncChanged local_access_changed=$accessChanged"
     }
 
     private fun applyDeviceDenial(context: ShopContext): ShopContext {

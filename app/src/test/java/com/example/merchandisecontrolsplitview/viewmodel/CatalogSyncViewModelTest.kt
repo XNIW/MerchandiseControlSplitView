@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.res.Configuration
 import androidx.lifecycle.ViewModelStore
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
+import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CanonicalCatalogInboundRequired
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncRepository
@@ -299,6 +301,149 @@ class CatalogSyncViewModelTest {
         }
     }
 
+    @Test
+    fun persistedConflictTargetIsObservedAndRemovedWhenLocalScopeBecomesUnavailable() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3)) { f ->
+            val shopId = requireNotNull(f.shops.value.activeShopId)
+            coEvery { f.repository.findPersistedCatalogConflictProductIds(OWNER_VM_021, shopId) } returns listOf(144L)
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertEquals(144L, f.viewModel.uiState.value.persistedConflictTarget?.productId)
+            assertEquals(OWNER_VM_021, f.viewModel.uiState.value.persistedConflictTarget?.ownerUserId)
+            assertEquals(shopId, f.viewModel.uiState.value.persistedConflictTarget?.shopId)
+            assertEquals(1, f.viewModel.uiState.value.persistedConflictCount)
+            f.auth.value = AuthState.SignedOut
+            advanceUntilIdle()
+            assertNull(f.viewModel.uiState.value.persistedConflictTarget)
+            assertNull(f.viewModel.uiState.value.persistedConflictCount)
+        }
+    }
+
+    @Test
+    fun latePersistedConflictDiscoveryCannotPublishForANewerShop() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3)) { f ->
+            val oldShopId = requireNotNull(f.shops.value.activeShopId)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.repository.findPersistedCatalogConflictProductIds(OWNER_VM_021, oldShopId) } coAnswers {
+                entered.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+                listOf(144L)
+            }
+            try {
+                f.viewModel.onOptionsScreenVisible()
+                advanceUntilIdle()
+                assertTrue(entered.isCompleted)
+                val secondShop = dateOutcomeShop("00000000-0000-4000-8000-000000000247")
+                val secondScope = task126ActiveOwnerStoreScope(OWNER_VM_021, secondShop)
+                coEvery { f.repository.findPersistedCatalogConflictProductIds(OWNER_VM_021, secondShop.shopId) } returns emptyList()
+                f.shops.value = ShopContext(OWNER_VM_021, emptyList(), secondShop,
+                    syncAllowed = false, localAccessAllowed = true)
+                f.tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState(
+                    Task126BusinessDataScopeStatus.CHECKING, boundScope = secondScope, localAccessScope = secondScope))
+                advanceUntilIdle()
+                release.complete(Unit)
+                advanceUntilIdle()
+                assertNull(f.viewModel.uiState.value.persistedConflictTarget)
+                assertEquals(0, f.viewModel.uiState.value.persistedConflictCount)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun checkingWithCurrentLocalIdentityPresentsCountsAndConflictWithoutCloudAuthority() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3), sessionConfigured = true) { f ->
+            val shopId = requireNotNull(f.shops.value.activeShopId)
+            coEvery { f.repository.findPersistedCatalogConflictProductIds(OWNER_VM_021, shopId) } returns listOf(144L)
+            f.identities.value = LocalAuthIdentity(OWNER_VM_021, 7)
+            f.auth.value = AuthState.Checking
+            advanceUntilIdle()
+            f.viewModel.onOptionsScreenVisible()
+            advanceUntilIdle()
+            assertTrue(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            assertEquals(2, f.viewModel.localDatabaseStatusUi.value.productsCount)
+            assertEquals(144L, f.viewModel.uiState.value.persistedConflictTarget?.productId)
+            assertEquals(1, f.viewModel.uiState.value.persistedConflictCount)
+            assertFalse(f.tracker.businessDataScopeState.value.allowsCloudSync)
+            coVerify(exactly = 0) { f.repository.bootstrapHistorySessionsFromRemote(any()) }
+        }
+    }
+
+    @Test
+    fun checkingMissingStaleOrRevokedLocalIdentityNeverPublishesBusinessCounts() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3)) { f ->
+            f.auth.value = AuthState.Checking
+            advanceUntilIdle()
+            assertFalse(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            assertNull(f.viewModel.localDatabaseStatusUi.value.productsCount)
+            f.identityCurrent = false
+            f.identities.value = LocalAuthIdentity(OWNER_VM_021, 8)
+            advanceUntilIdle()
+            assertNull(f.viewModel.localDatabaseStatusUi.value.productsCount)
+            f.identityCurrent = true
+            f.identities.value = LocalAuthIdentity(OWNER_VM_021, 9)
+            f.shops.value = f.shops.value.copy(localAccessAllowed = false)
+            advanceUntilIdle()
+            assertFalse(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            assertNull(f.viewModel.uiState.value.persistedConflictCount)
+        }
+    }
+
+    @Test
+    fun lateConflictDiscoveryCannotPublishAcrossSameOwnerAuthenticationGeneration() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3)) { f ->
+            f.identities.value = LocalAuthIdentity(OWNER_VM_021, 20)
+            f.auth.value = AuthState.Checking
+            advanceUntilIdle()
+            val shopId = requireNotNull(f.shops.value.activeShopId)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var calls = 0
+            coEvery { f.repository.findPersistedCatalogConflictProductIds(OWNER_VM_021, shopId) } coAnswers {
+                calls += 1
+                if (calls == 1) {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    listOf(144L)
+                } else emptyList()
+            }
+            try {
+                f.viewModel.onOptionsScreenVisible()
+                advanceUntilIdle()
+                assertTrue(entered.isCompleted)
+                f.identities.value = LocalAuthIdentity(OWNER_VM_021, 21)
+                advanceUntilIdle()
+                release.complete(Unit)
+                advanceUntilIdle()
+                assertNull(f.viewModel.uiState.value.persistedConflictTarget)
+                assertEquals(0, f.viewModel.uiState.value.persistedConflictCount)
+            } finally { release.complete(Unit) }
+        }
+    }
+
+    @Test
+    fun checkingIdentityOnlyTransitionsRefreshPrimaryMessageInBothDirections() = runTest {
+        withOfflineOptionsFixture(optionsSnapshot(3)) { f ->
+            f.auth.value = AuthState.Checking
+            advanceUntilIdle()
+            val scopeBefore = f.tracker.businessDataScopeState.value
+            val shopBefore = f.shops.value
+            assertEquals(app.getString(R.string.account_checking), f.viewModel.uiState.value.primaryMessage)
+            assertFalse(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            f.identities.value = LocalAuthIdentity(OWNER_VM_021, 27)
+            advanceUntilIdle()
+            assertEquals(app.getString(R.string.catalog_cloud_state_offline), f.viewModel.uiState.value.primaryMessage)
+            assertTrue(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            f.identities.value = null
+            advanceUntilIdle()
+            assertEquals(app.getString(R.string.account_checking), f.viewModel.uiState.value.primaryMessage)
+            assertFalse(f.viewModel.localDatabaseStatusUi.value.localAccessAvailable)
+            assertEquals(AuthState.Checking, f.auth.value)
+            assertEquals(scopeBefore, f.tracker.businessDataScopeState.value)
+            assertEquals(shopBefore, f.shops.value)
+        }
+    }
+
     private fun optionsStateField(viewModel: CatalogSyncViewModel, name: String): Any? =
         (viewModel.javaClass.getDeclaredField(name).apply { isAccessible = true }
             .get(viewModel) as kotlinx.coroutines.flow.StateFlow<*>).value
@@ -316,6 +461,8 @@ class CatalogSyncViewModelTest {
         val releaseRead: CompletableDeferred<Unit> = CompletableDeferred()
     ) {
         lateinit var viewModel: CatalogSyncViewModel
+        val identities = MutableStateFlow<LocalAuthIdentity?>(null)
+        var identityCurrent = true
     }
 
     private suspend fun TestScope.withOfflineOptionsFixture(
@@ -344,10 +491,15 @@ class CatalogSyncViewModelTest {
             captured
         }
         tracker.syncOutcomeNowMs = { DATE_OUTCOME_T0_VM_144 }
+        val localAuth = mockk<SupabaseAuthManager>()
+        every { localAuth.localIdentity } returns fixture.identities
+        every { localAuth.isCurrentLocalIdentity(any()) } answers {
+            fixture.identityCurrent && firstArg<LocalAuthIdentity>() == fixture.identities.value
+        }
         val viewModel = CatalogSyncViewModel(application = app, repository = repository,
             remote = ViewModelCatalogRemote021(bootstrapBundleVm021(OWNER_VM_021)),
             priceRemote = ViewModelPriceRemote021(), sessionRemote = ViewModelSessionRemote024(sessionConfigured),
-            authFlow = auth, syncStateTracker = tracker, shopContextFlow = shops)
+            authFlow = auth, syncStateTracker = tracker, shopContextFlow = shops, localAuthManager = localAuth)
         fixture.viewModel = viewModel
         val store = ViewModelStore().apply { put("catalog", viewModel) }
         val ui = launch { viewModel.uiState.collect {} }

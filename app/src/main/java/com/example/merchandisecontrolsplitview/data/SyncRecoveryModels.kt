@@ -208,19 +208,67 @@ interface SyncRecoveryManifestDao {
         remoteIds: List<String>
     ): List<SyncRecoveryManifestRow>
 
-    @Query(
-        """
-        SELECT * FROM sync_recovery_manifest
-        WHERE generationId = :generationId AND domain = :domain
-          AND (:afterId IS NULL OR remoteId > :afterId)
-        ORDER BY remoteId
-        LIMIT :limit
-        """
-    )
+    // Preserve nullable caller semantics while allowing the non-null SQL branch to seek the cursor range.
     suspend fun page(
         generationId: String,
         domain: String,
         afterId: String?,
+        limit: Int
+    ): List<SyncRecoveryManifestRow> =
+        if (afterId == null) pageFirst(generationId, domain, limit)
+        else pageAfter(generationId, domain, afterId, limit)
+
+    @Query(
+        """
+        SELECT * FROM sync_recovery_manifest
+        WHERE generationId = :generationId AND domain = :domain
+        ORDER BY remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun pageFirst(
+        generationId: String,
+        domain: String,
+        limit: Int
+    ): List<SyncRecoveryManifestRow>
+
+    @Query(
+        """
+        SELECT * FROM sync_recovery_manifest
+        WHERE generationId = :generationId AND domain = :domain
+          AND remoteId > :afterId
+        ORDER BY remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun pageAfter(
+        generationId: String,
+        domain: String,
+        afterId: String,
+        limit: Int
+    ): List<SyncRecoveryManifestRow>
+
+    // Preserve nullable caller semantics while allowing the non-null SQL branch to seek the cursor range.
+    suspend fun pageActive(
+        generationId: String,
+        domain: String,
+        afterId: String?,
+        limit: Int
+    ): List<SyncRecoveryManifestRow> =
+        if (afterId == null) pageActiveFirst(generationId, domain, limit)
+        else pageActiveAfter(generationId, domain, afterId, limit)
+
+    @Query(
+        """
+        SELECT * FROM sync_recovery_manifest
+        WHERE generationId = :generationId AND domain = :domain AND active = 1
+        ORDER BY remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun pageActiveFirst(
+        generationId: String,
+        domain: String,
         limit: Int
     ): List<SyncRecoveryManifestRow>
 
@@ -228,15 +276,15 @@ interface SyncRecoveryManifestDao {
         """
         SELECT * FROM sync_recovery_manifest
         WHERE generationId = :generationId AND domain = :domain AND active = 1
-          AND (:afterId IS NULL OR remoteId > :afterId)
+          AND remoteId > :afterId
         ORDER BY remoteId
         LIMIT :limit
         """
     )
-    suspend fun pageActive(
+    suspend fun pageActiveAfter(
         generationId: String,
         domain: String,
-        afterId: String?,
+        afterId: String,
         limit: Int
     ): List<SyncRecoveryManifestRow>
 

@@ -422,6 +422,9 @@ class CatalogSyncStateTracker(
     internal fun isDiagnosticQuietStampCurrent(stamp: Task126DiagnosticQuietStamp): Boolean =
         businessDataScopeFlightGate.isDiagnosticQuietStampCurrent(stamp)
 
+    internal val localPresentationChanges: StateFlow<Long>
+        get() = businessDataScopeFlightGate.localPresentationChanges
+
     internal fun captureLocalPresentationStamp(
         expectedState: Task126BusinessDataScopeState
     ): Task126LocalPresentationStamp? = businessDataScopeFlightGate.captureLocalPresentationStamp(expectedState)

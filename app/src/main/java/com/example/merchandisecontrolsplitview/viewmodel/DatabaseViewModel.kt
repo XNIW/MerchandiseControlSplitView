@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.viewmodel
 
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
 import android.app.Application
 import android.content.Context
 import android.net.Uri
@@ -59,6 +61,7 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 sealed class UiState {
     data object Idle : UiState()
@@ -76,8 +79,29 @@ sealed interface ProductEditorOperationState {
     data object Idle : ProductEditorOperationState
     data object Saving : ProductEditorOperationState
     data object Saved : ProductEditorOperationState
-    data class Failed(val message: String) : ProductEditorOperationState
+    data class Failed(val message: String, val requiresReview: Boolean = false) : ProductEditorOperationState
 }
+
+internal data class DraftProductConflictReviewState(
+    val sessionId: Long,
+    val baseline: Product,
+    val desired: Product,
+    val current: Product? = null,
+    val missingTarget: Boolean = false,
+    val conflictingFields: Set<String> = emptySet(),
+    val loading: Boolean = false,
+    val message: String? = null
+)
+
+internal data class PersistedCatalogConflictReviewState(
+    val target: PersistedCatalogConflictTarget,
+    val context: PersistedCatalogConflictContext? = null,
+    val loading: Boolean = false,
+    val resolving: Boolean = false,
+    val resolved: Boolean = false,
+    val requiresRefresh: Boolean = false,
+    val message: String? = null
+)
 
 sealed interface StagedProductImageState {
     data object Empty : StagedProductImageState
@@ -294,7 +318,7 @@ private class ExportProgressTracker(
 private class FullImportAlreadyInProgressException : RuntimeException(null, null, false, false)
 
 private const val PRODUCT_DETAILS_OVERRIDE_LIMIT = 100
-private const val PRODUCT_SEARCH_DEBOUNCE_MS = 250L
+private const val PRODUCT_SEARCH_DEBOUNCE_MS = 75L
 private const val PRODUCT_IMAGE_VISIBLE_BATCH_WINDOW_MS = 16L
 private val PRICE_HISTORY_MANUAL_FORMATTER: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -341,6 +365,7 @@ class DatabaseViewModel(
         }
     }
 ) : AndroidViewModel(app) {
+    private val localReadGate = LocalBusinessReadGate(app)
     private val importMutex = Mutex()
     private val exportMutex = Mutex()
 
@@ -353,6 +378,13 @@ class DatabaseViewModel(
     private val _selectedHubTab = MutableStateFlow(DatabaseHubTab.PRODUCTS)
     val selectedHubTab: StateFlow<DatabaseHubTab> = _selectedHubTab.asStateFlow()
     private val _productEditorTarget = MutableStateFlow<Product?>(null)
+    private var productEditorBaseline: Product? = null
+    private val _draftProductConflictReview = MutableStateFlow<DraftProductConflictReviewState?>(null)
+    internal val draftProductConflictReview = _draftProductConflictReview.asStateFlow()
+    private var draftProductReviewJob: Job? = null
+    private var draftProductReviewEpoch = 0L
+    private val _productEditorRemoteChanged = MutableStateFlow(false)
+    internal val productEditorRemoteChanged = _productEditorRemoteChanged.asStateFlow()
     val productEditorTarget: StateFlow<Product?> = _productEditorTarget.asStateFlow()
     private val _productEditorSessionId = MutableStateFlow(0L)
     val productEditorSessionId: StateFlow<Long> = _productEditorSessionId.asStateFlow()
@@ -360,6 +392,13 @@ class DatabaseViewModel(
         MutableStateFlow<ProductEditorOperationState>(ProductEditorOperationState.Idle)
     val productEditorOperationState: StateFlow<ProductEditorOperationState> =
         _productEditorOperationState.asStateFlow()
+    private val _persistedCatalogConflictReview = MutableStateFlow<PersistedCatalogConflictReviewState?>(null)
+    internal val persistedCatalogConflictReview: StateFlow<PersistedCatalogConflictReviewState?> =
+        _persistedCatalogConflictReview.asStateFlow()
+    private var persistedCatalogReviewJob: Job? = null
+    private var persistedCatalogReviewScopeJob: Job? = null
+    private var persistedCatalogReviewEpoch = 0L
+
     private val _stagedProductImageState =
         MutableStateFlow<StagedProductImageState>(StagedProductImageState.Empty)
     val stagedProductImageState: StateFlow<StagedProductImageState> =
@@ -380,6 +419,63 @@ class DatabaseViewModel(
     private val appContext = getApplication<Application>().applicationContext
     private val merchandiseApplication =
         getApplication<Application>() as MerchandiseControlApplication
+    /** Freshness only: the repository still owns every read/write lease. */
+    private data class LocalEditorAuthorityObservation(
+        val identity: LocalAuthIdentity?, val identityCurrent: Boolean,
+        val owner: String?, val shopId: String?, val stamp: Task126LocalPresentationStamp?, val admitted: Boolean
+    )
+    private var draftReviewAuthority: LocalEditorAuthorityObservation? = null
+    private var persistedReviewAuthority: LocalEditorAuthorityObservation? = null
+    private var productEditorLocalOwner: String? = null
+
+    private fun localEditorAuthorityObservation(): LocalEditorAuthorityObservation {
+        val manager = merchandiseApplication.authManager
+        val identity = manager.localIdentity.value
+        val identityCurrent = identity?.let(manager::isCurrentLocalIdentity) == true
+        val shop = merchandiseApplication.shopContextRepository.state.value
+        val tracker = merchandiseApplication.catalogSyncStateTracker
+        val state = tracker.businessDataScopeState.value
+        val owner = qualifiedLocalBusinessOwner(manager.state.value, identity, identityCurrent, shop, state)
+        val admitted = state.allowsLocalOperations &&
+            (state.status == com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED || owner != null)
+        return LocalEditorAuthorityObservation(identity, identityCurrent, owner,
+            shop.activeShopId, tracker.captureLocalPresentationStamp(state), admitted)
+    }
+
+    private fun observeLocalEditorAuthority() {
+        viewModelScope.launch {
+            var previous: LocalEditorAuthorityObservation? = null
+            combine(merchandiseApplication.authManager.state, merchandiseApplication.authManager.localIdentity,
+                merchandiseApplication.shopContextRepository.state,
+                merchandiseApplication.catalogSyncStateTracker.businessDataScopeState) { _, _, _, _ ->
+                localEditorAuthorityObservation()
+            }.collect { current ->
+                val old = previous
+                previous = current
+                if (old == null || old == current) return@collect
+                // Withdraw only stale actions/results; the draft stays in its editor until a confirmed scope switch.
+                if (draftReviewAuthority != null && draftReviewAuthority != current) {
+                    draftProductReviewEpoch += 1
+                    draftProductReviewJob?.cancel()
+                    _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(loading = false,
+                        message = appContext.getString(R.string.catalog_conflict_scope_unavailable))
+                }
+                if (persistedReviewAuthority != null && persistedReviewAuthority != current) {
+                    persistedCatalogReviewEpoch += 1
+                    persistedCatalogReviewJob?.cancel()
+                    _persistedCatalogConflictReview.value = null
+                    persistedReviewAuthority = null
+                }
+                if (productEditorSaveJob?.isActive == true) {
+                    productEditorSaveJob?.cancel()
+                    productEditorSaveJob = null
+                    _productEditorOperationState.value = ProductEditorOperationState.Failed(
+                        appContext.getString(R.string.product_editor_save_interrupted), requiresReview = true)
+                }
+            }
+        }
+    }
+
     private var currentProductImageScope = ProductImageOwnerShopScope("", null)
     private var productImageScopeGeneration = 0L
     private val _productImageScopeEpoch = MutableStateFlow(0L)
@@ -456,7 +552,8 @@ class DatabaseViewModel(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    val pager = combine(
+    val pager = localReadGate.observe(PagingData.empty<ProductWithDetails>()) {
+      combine(
         appliedProductFilter,
         _storefrontListFilter,
         _storefrontFilteredProductIds,
@@ -467,7 +564,9 @@ class DatabaseViewModel(
     }.flatMapLatest { (filterStr, storefrontFilter, productIds) ->
         val remoteFilter = storefrontFilter.toSummaryFilter()
         val shopId = storefrontScopeProvider()?.second
+        val admission = localReadGate.snapshot()
         Pager(PagingConfig(pageSize = 20, initialLoadSize = 20)) {
+          localReadGate.pagingSource(admission) {
             if (remoteFilter != null &&
                 shopId != null &&
                 storefrontEnabled &&
@@ -487,12 +586,15 @@ class DatabaseViewModel(
                     if (storefrontFilter == StorefrontListFilter.CONFLICT) productIds else null
                 )
             }
-        }.flow.cachedIn(viewModelScope)
-    }
+          }
+        }.flow
+      }
+    }.cachedIn(viewModelScope)
 
     init {
         observeRemoteAppliedProductIds()
         observeProductImageScope()
+        observeLocalEditorAuthority()
     }
 
     fun canManageProductImages(): Boolean = productImageService.canWriteNow()
@@ -500,20 +602,253 @@ class DatabaseViewModel(
     fun productImagesConfigured(): Boolean = productImageService.isConfigured
 
     fun openProductEditor(product: Product) {
-        if (productEditorSaveJob?.isActive == true) return
+        MobileSyncInteractionTestHooks.emit(Event.EDITOR_OPEN, product.id)
+        if (productEditorSaveJob?.isActive == true || _productEditorTarget.value != null) return
         clearStagedProductImage(deleteFile = true)
+        productEditorBaseline = product
+        productEditorLocalOwner = localEditorAuthorityObservation().owner
+        _draftProductConflictReview.value = null
+        _productEditorRemoteChanged.value = false
         _productEditorTarget.value = product
         _productEditorSessionId.value += 1L
         _productEditorOperationState.value = ProductEditorOperationState.Idle
         loadStorefrontEditor(product)
     }
 
+    /** Only a fresh scoped repository read supplies the comparison; it does not rebase the form. */
+    internal fun reviewProductEditorDraft(desired: Product) {
+        val baseline = productEditorBaseline?.takeIf { it.id == desired.id && it.id > 0L } ?: return
+        if (productEditorSaveJob?.isActive == true) return
+        val session = _productEditorSessionId.value
+        val generation = productImageScopeGeneration
+        val authority = localEditorAuthorityObservation()
+        if (!authority.admitted || authority.stamp == null) return
+        draftReviewAuthority = authority
+        val disputed = _draftProductConflictReview.value?.conflictingFields.orEmpty()
+        val reviewEpoch = ++draftProductReviewEpoch
+        draftProductReviewJob?.cancel()
+        fun requestCurrent() = reviewEpoch == draftProductReviewEpoch &&
+            editorSessionCurrent(session, desired.id, generation, authority)
+        _draftProductConflictReview.value = DraftProductConflictReviewState(
+            session, baseline, desired, conflictingFields = disputed, loading = true)
+        draftProductReviewJob = viewModelScope.launch {
+            try {
+                val current = repository.getProductForEditorReview(desired.id)
+                if (!requestCurrent()) return@launch
+                _draftProductConflictReview.value = DraftProductConflictReviewState(
+                    session, baseline, desired, current = current, missingTarget = current == null,
+                    conflictingFields = disputed,
+                    message = if (current == null) appContext.getString(R.string.product_editor_missing) else null)
+            } catch (cancelled: CancellationException) {
+                if (requestCurrent()) {
+                    _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(
+                        loading = false, message = appContext.getString(R.string.catalog_conflict_read_failed))
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                if (requestCurrent()) {
+                    _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(
+                        loading = false, message = appContext.getString(R.string.catalog_conflict_read_failed))
+                }
+            }
+        }
+    }
+
+    /** A deliberate preparation of the next Save, never a business write or persisted resolution. */
+    internal fun prepareProductEditorDraftFromReview(selectedFields: Set<String>) {
+        val review = _draftProductConflictReview.value ?: return
+        val current = review.current ?: return
+        if (draftReviewAuthority != null && draftReviewAuthority != localEditorAuthorityObservation()) return
+        if (review.loading || review.missingTarget || review.message != null ||
+            review.sessionId != _productEditorSessionId.value || _productEditorTarget.value?.id != current.id ||
+            productEditorSaveJob?.isActive == true) return
+        val desired = com.example.merchandisecontrolsplitview.ui.screens.selectCatalogReviewFields(
+            current, review.desired, selectedFields)
+        productEditorBaseline = current
+        _productEditorTarget.value = desired
+        _productEditorSessionId.value += 1L
+        _productEditorOperationState.value = ProductEditorOperationState.Idle
+        _draftProductConflictReview.value = null
+        _productEditorRemoteChanged.value = false
+    }
+
+    internal fun dismissProductEditorDraftReview() {
+        draftProductReviewEpoch += 1L
+        draftProductReviewJob?.cancel()
+        _draftProductConflictReview.value = null
+        draftReviewAuthority = null
+    }
+
+    private fun editorSessionCurrent(session: Long, productId: Long, generation: Long,
+        authority: LocalEditorAuthorityObservation? = null): Boolean =
+        _productEditorSessionId.value == session && _productEditorTarget.value?.id == productId &&
+            productImageScopeGeneration == generation &&
+            (authority == null || authority == localEditorAuthorityObservation())
+
+    /** Opens the real durable revision review. A navigation hint never supplies authority. */
+    internal fun requestPersistedCatalogConflict(target: PersistedCatalogConflictTarget): Boolean {
+        val editor = _productEditorTarget.value
+        if (productEditorSaveJob?.isActive == true ||
+            (editor != null && editor.id != target.productId)) return false
+        val previous = _persistedCatalogConflictReview.value?.takeIf { it.target == target }
+        if (previous?.resolving == true) return true
+        val expectedEditorSession = _productEditorSessionId.value
+        val expectedEditorId = editor?.id
+        val epoch = ++persistedCatalogReviewEpoch
+        persistedCatalogReviewJob?.cancel()
+        if (!matchesPersistedCatalogReviewScope(target)) {
+            _persistedCatalogConflictReview.value = PersistedCatalogConflictReviewState(target,
+                requiresRefresh = true, message = appContext.getString(R.string.catalog_conflict_scope_unavailable))
+            return true
+        }
+        persistedReviewAuthority = localEditorAuthorityObservation()
+        _persistedCatalogConflictReview.value = PersistedCatalogConflictReviewState(target,
+            context = previous?.context, loading = true)
+        observePersistedCatalogReviewScope()
+        persistedCatalogReviewJob = viewModelScope.launch {
+            try {
+                val qualified = repository.preparePersistedCatalogConflict(
+                    target.productId, target.ownerUserId, target.shopId)
+                if (!persistedCatalogReviewCurrent(epoch, target)) return@launch
+                if (_productEditorSessionId.value != expectedEditorSession ||
+                    _productEditorTarget.value?.id != expectedEditorId) {
+                    _persistedCatalogConflictReview.value = null
+                    return@launch
+                }
+                check(qualified.productId == target.productId) { "Review target changed" }
+                // Reopening the same record preserves its existing draft and opening base.
+                if (_productEditorTarget.value == null) openProductEditor(qualified.local)
+                _persistedCatalogConflictReview.value = PersistedCatalogConflictReviewState(target,
+                    context = qualified,
+                    message = qualified.blockingReason?.let(::persistedCatalogConflictMessage))
+            } catch (cancelled: CancellationException) {
+                if (persistedCatalogReviewCurrent(epoch, target)) {
+                    _persistedCatalogConflictReview.value = _persistedCatalogConflictReview.value?.copy(
+                        loading = false, requiresRefresh = true,
+                        message = appContext.getString(R.string.catalog_conflict_read_failed))
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                if (persistedCatalogReviewCurrent(epoch, target)) {
+                    _persistedCatalogConflictReview.value = _persistedCatalogConflictReview.value?.copy(
+                        loading = false, requiresRefresh = true,
+                        message = appContext.getString(R.string.catalog_conflict_read_failed))
+                }
+            }
+        }
+        return true
+    }
+
+    internal fun refreshPersistedCatalogConflict() {
+        val state = _persistedCatalogConflictReview.value ?: return
+        if (!state.resolving) requestPersistedCatalogConflict(state.target)
+    }
+
+    internal fun resolvePersistedCatalogConflict(choice: PersistedCatalogConflictChoice) {
+        val state = _persistedCatalogConflictReview.value ?: return
+        val context = state.context ?: return
+        if (state.loading || state.resolving || state.resolved || state.requiresRefresh || !context.canResolve) return
+        if (!matchesPersistedCatalogReviewScope(state.target)) return
+        val epoch = ++persistedCatalogReviewEpoch
+        persistedReviewAuthority = localEditorAuthorityObservation()
+        val editorSession = _productEditorSessionId.value
+        val editorId = _productEditorTarget.value?.id
+        _persistedCatalogConflictReview.value = state.copy(resolving = true, message = null)
+        persistedCatalogReviewJob = viewModelScope.launch {
+            try {
+                val result = repository.resolvePersistedCatalogConflict(context, choice)
+                if (!persistedCatalogReviewCurrent(epoch, state.target)) return@launch
+                if (_productEditorSessionId.value != editorSession || _productEditorTarget.value?.id != editorId) {
+                    _persistedCatalogConflictReview.value = null
+                    return@launch
+                }
+                _persistedCatalogConflictReview.value = when (result) {
+                    is PersistedCatalogConflictResult.Changed -> state.copy(context = result.context,
+                        resolving = false, requiresRefresh = false,
+                        message = appContext.getString(R.string.catalog_conflict_changed))
+                    is PersistedCatalogConflictResult.Blocked -> state.copy(resolving = false,
+                        requiresRefresh = true, message = persistedCatalogConflictMessage(result.code))
+                    is PersistedCatalogConflictResult.Resolved -> {
+                        // Invalidate only this display override. A live editor draft is not rewritten.
+                        _productDetailsOverrides.update { it - context.productId }
+                        state.copy(resolving = false, resolved = true, message = appContext.getString(when {
+                            choice == PersistedCatalogConflictChoice.AdoptRemoteTombstone -> R.string.catalog_conflict_deletion_adopted
+                            result.adoptedRemote -> R.string.catalog_conflict_remote_adopted
+                            result.successorRevision != null -> R.string.catalog_conflict_choice_pending
+                            else -> R.string.catalog_conflict_choice_saved
+                        }))
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                if (persistedCatalogReviewCurrent(epoch, state.target)) {
+                    _persistedCatalogConflictReview.value = state.copy(resolving = false,
+                        requiresRefresh = true,
+                        message = appContext.getString(R.string.catalog_conflict_resolution_unconfirmed))
+                }
+                throw cancelled
+            } catch (_: Exception) {
+                if (persistedCatalogReviewCurrent(epoch, state.target)) {
+                    _persistedCatalogConflictReview.value = state.copy(resolving = false,
+                        requiresRefresh = true,
+                        message = appContext.getString(R.string.catalog_conflict_resolution_unconfirmed))
+                }
+            }
+        }
+    }
+
+    internal fun dismissPersistedCatalogConflict() {
+        if (_persistedCatalogConflictReview.value?.resolving == true) return
+        persistedCatalogReviewEpoch += 1L
+        persistedCatalogReviewJob?.cancel()
+        persistedCatalogReviewScopeJob?.cancel()
+        persistedCatalogReviewScopeJob = null
+        _persistedCatalogConflictReview.value = null
+        persistedReviewAuthority = null
+    }
+
+    private fun persistedCatalogReviewCurrent(epoch: Long, target: PersistedCatalogConflictTarget): Boolean =
+        persistedCatalogReviewEpoch == epoch && _persistedCatalogConflictReview.value?.target == target &&
+            matchesPersistedCatalogReviewScope(target) && persistedReviewAuthority == localEditorAuthorityObservation()
+
+    private fun matchesPersistedCatalogReviewScope(target: PersistedCatalogConflictTarget): Boolean {
+        val observation = localEditorAuthorityObservation()
+        return target.productId > 0L && observation.owner == target.ownerUserId &&
+            observation.shopId == target.shopId && observation.admitted && observation.stamp != null
+    }
+
+    private fun observePersistedCatalogReviewScope() {
+        if (persistedCatalogReviewScopeJob?.isActive == true) return
+        persistedCatalogReviewScopeJob = viewModelScope.launch {
+            combine(merchandiseApplication.authManager.state, merchandiseApplication.authManager.localIdentity,
+                merchandiseApplication.shopContextRepository.state,
+                merchandiseApplication.catalogSyncStateTracker.businessDataScopeState) { _, _, _, _ -> Unit }
+                .collect {
+                    val state = _persistedCatalogConflictReview.value ?: return@collect
+                    if (!matchesPersistedCatalogReviewScope(state.target)) {
+                        persistedCatalogReviewEpoch += 1L
+                        persistedCatalogReviewJob?.cancel()
+                        _persistedCatalogConflictReview.value = null
+                        persistedCatalogReviewScopeJob?.cancel()
+                        persistedCatalogReviewScopeJob = null
+                    }
+                }
+        }
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private fun persistedCatalogConflictMessage(code: String): String =
+        appContext.getString(R.string.catalog_conflict_blocked)
+
     fun dismissProductEditor() {
         if (productEditorSaveJob?.isActive == true &&
             _productEditorOperationState.value != ProductEditorOperationState.Saved
         ) return
         _productEditorTarget.value?.id?.takeIf { it > 0L }?.let(::closeProductImageEditor)
+        _productEditorTarget.value?.id?.let { id -> _productDetailsOverrides.update { it - id } }
         _productEditorTarget.value = null
+        productEditorBaseline = null
+        dismissProductEditorDraftReview()
+        _productEditorRemoteChanged.value = false
         _productEditorOperationState.value = ProductEditorOperationState.Idle
         clearStorefrontEditor()
         clearStagedProductImage(deleteFile = true)
@@ -1244,13 +1579,21 @@ class DatabaseViewModel(
         product: Product,
         save: suspend (Product) -> ProductEditorSaveResult = ::saveProductFromEditor
     ) {
-        if (productEditorSaveJob?.isActive == true) return
+        if (productEditorSaveJob?.isActive == true ||
+            (_productEditorOperationState.value as? ProductEditorOperationState.Failed)?.requiresReview == true) return
         val staged = if (product.id == 0L) {
             _stagedProductImageState.value as? StagedProductImageState.Ready
         } else {
             null
         }
-        val durableScope = resolveProductImageScope().also { currentProductImageScope = it }
+        val authority = localEditorAuthorityObservation()
+        if (!authority.admitted || authority.stamp == null) {
+            _productEditorOperationState.value = ProductEditorOperationState.Failed(
+                appContext.getString(R.string.catalog_conflict_scope_unavailable))
+            return
+        }
+        val durableScope = authority.owner?.let { ProductImageOwnerShopScope(it, authority.shopId) }
+            ?: resolveProductImageScope()
         if (staged != null && !pendingStagedImageStore.prepare(
                 fileUri = staged.fileUri,
                 barcode = product.barcode,
@@ -1263,19 +1606,27 @@ class DatabaseViewModel(
             )
             return
         }
+        val editorSession = _productEditorSessionId.value
+        val editorGeneration = productImageScopeGeneration
         _productEditorOperationState.value = ProductEditorOperationState.Saving
         productEditorSaveJob = viewModelScope.launch {
             val result = try {
                 save(product)
             } catch (cancelled: CancellationException) {
+                if (editorSessionCurrent(editorSession, product.id, editorGeneration, authority)) {
+                    _productEditorOperationState.value = ProductEditorOperationState.Failed(
+                        appContext.getString(R.string.product_editor_save_interrupted), requiresReview = true)
+                }
                 throw cancelled
             } catch (_: Exception) {
                 ProductEditorSaveResult.Failed(
                     appContext.getString(R.string.product_editor_save_failed)
                 )
             }
+            if (!editorSessionCurrent(editorSession, product.id, editorGeneration, authority)) return@launch
             when (result) {
                 is ProductEditorSaveResult.Saved -> {
+                    _productEditorOperationState.value = ProductEditorOperationState.Saved
                     if (staged != null) {
                         val persistedId = result.productId
                         if (persistedId == null || persistedId <= 0L) {
@@ -1304,7 +1655,6 @@ class DatabaseViewModel(
                             uploadPendingStagedProductImage(persistedId)
                         }
                     }
-                    _productEditorOperationState.value = ProductEditorOperationState.Saved
                 }
                 is ProductEditorSaveResult.Failed -> {
                     staged?.fileUri?.let(pendingStagedImageStore::remove)
@@ -1316,7 +1666,8 @@ class DatabaseViewModel(
     }
 
     fun resetProductEditorOperation() {
-        if (productEditorSaveJob?.isActive != true) {
+        if (productEditorSaveJob?.isActive != true &&
+            (_productEditorOperationState.value as? ProductEditorOperationState.Failed)?.requiresReview != true) {
             _productEditorOperationState.value = ProductEditorOperationState.Idle
         }
     }
@@ -1941,8 +2292,13 @@ class DatabaseViewModel(
                         _storefrontFilterLoading.value = false
                         _storefrontSummaries.value = emptyMap()
                         _storefrontImportSummary.value = null
-                        if (_productEditorTarget.value != null) {
+                        val sameQualifiedLocalDraft = productEditorLocalOwner == currentScope.accountId &&
+                            localEditorAuthorityObservation().let { it.owner == currentScope.accountId && it.shopId == currentScope.shopId }
+                        if (_productEditorTarget.value != null && !sameQualifiedLocalDraft) {
                             _productEditorTarget.value = null
+                            productEditorBaseline = null
+                            dismissProductEditorDraftReview()
+                            _productEditorRemoteChanged.value = false
                         }
                         clearStorefrontEditor()
                         recoverPendingStagedProductImages(
@@ -1957,6 +2313,9 @@ class DatabaseViewModel(
                     productEditorSaveJob?.cancel()
                     productEditorSaveJob = null
                     _productEditorTarget.value = null
+                    productEditorBaseline = null
+                    dismissProductEditorDraftReview()
+                    _productEditorRemoteChanged.value = false
                     _productEditorOperationState.value = ProductEditorOperationState.Idle
                     storefrontPublicationsByRemoteId.clear()
                     storefrontKnownUnpublishedRemoteIds.clear()
@@ -2031,11 +2390,10 @@ class DatabaseViewModel(
         _supplierInputText.value = query
     }
 
-    val suppliers: StateFlow<List<Supplier>> = _supplierInputText
-        .debounce(300L)
-        .distinctUntilChanged()
-        .flatMapLatest { query -> repository.observeSuppliersForHubSearch(query) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val suppliers: StateFlow<List<Supplier>> = localReadGate.observe(emptyList<Supplier>()) {
+        _supplierInputText.debounce(300L).distinctUntilChanged()
+            .flatMapLatest { query -> repository.observeSuppliersForHubSearch(query) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private val _categoryInputText = MutableStateFlow("")
     val categoryInputText: StateFlow<String> = _categoryInputText.asStateFlow()
@@ -2044,11 +2402,10 @@ class DatabaseViewModel(
         _categoryInputText.value = query
     }
 
-    val categories: StateFlow<List<Category>> = _categoryInputText
-        .debounce(300L)
-        .distinctUntilChanged()
-        .flatMapLatest { query -> repository.observeCategoriesForHubSearch(query) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val categories: StateFlow<List<Category>> = localReadGate.observe(emptyList<Category>()) {
+        _categoryInputText.debounce(300L).distinctUntilChanged()
+            .flatMapLatest { query -> repository.observeCategoriesForHubSearch(query) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private var pendingPriceHistory: List<ImportPriceHistoryEntry> = emptyList()
     private var pendingSupplierNames: Set<String> = emptySet()
@@ -2222,16 +2579,17 @@ class DatabaseViewModel(
     suspend fun getSupplierDisplayName(id: Long?): String? {
         if (id == null) return null
         if (id < 0L) return pendingTempSuppliers[id]
-        return repository.getSupplierById(id)?.name
+        return getSupplierById(id)?.name
     }
 
     suspend fun getCategoryDisplayName(id: Long?): String? {
         if (id == null) return null
         if (id < 0L) return pendingTempCategories[id]
-        return repository.getCategoryById(id)?.name
+        return getCategoryById(id)?.name
     }
 
     fun setFilter(text: String) {
+        MobileSyncInteractionTestHooks.emit(Event.FILTER_INPUT, detail = text)
         _filter.value = text.ifBlank { null }
     }
 
@@ -2244,7 +2602,8 @@ class DatabaseViewModel(
             .debounce(250L)
             .distinctUntilChanged()
 
-        return combine(debouncedQuery, refreshFlow) { query, _ -> query }
+        return localReadGate.observe(CatalogSectionUiState(isLoading = true)) {
+          combine(debouncedQuery, refreshFlow) { query, _ -> query }
             .flatMapLatest { query ->
                 val trimmedQuery = query.trim().takeIf { it.isNotEmpty() }
                 repository.observeCatalogItems(kind, trimmedQuery)
@@ -2264,7 +2623,8 @@ class DatabaseViewModel(
                             )
                         )
                     }
-            }.stateIn(
+            }
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = CatalogSectionUiState(isLoading = true)
@@ -2988,7 +3348,10 @@ class DatabaseViewModel(
      * transazione; un retry parte quindi da uno stato interamente precedente o successivo.
      */
     suspend fun saveProductFromEditor(product: Product): ProductEditorSaveResult {
-        val baseline = _productEditorTarget.value?.takeIf { it.id == product.id }
+        val authority = localEditorAuthorityObservation()
+        if (!authority.admitted || authority.stamp == null)
+            return ProductEditorSaveResult.Failed(appContext.getString(R.string.catalog_conflict_scope_unavailable))
+        val baseline = productEditorBaseline?.takeIf { it.id == product.id }
         if (product.id != 0L && baseline == null) {
             return ProductEditorSaveResult.Failed(appContext.getString(R.string.product_editor_conflict))
         }
@@ -3000,59 +3363,74 @@ class DatabaseViewModel(
         isNewProduct: Boolean,
         baseline: Product? = null
     ): ProductEditorSaveResult {
+        val expectedSession = _productEditorSessionId.value
+        val expectedGeneration = productImageScopeGeneration
+        val expectedAuthority = localEditorAuthorityObservation()
+        val editorOwned = _productEditorTarget.value?.id == product.id
+        val committed = AtomicReference<ProductEditorSaveReceipt?>(null)
+        var returnedProductId: Long? = null
+        fun confirmedProductId(): Long? = committed.get()?.takeIf {
+            it.product.id == product.id && it.mutationId.isNotBlank()
+        }?.product?.id ?: returnedProductId
+        fun savedResult(productId: Long): ProductEditorSaveResult {
+            // A late completion may describe a committed write, but never updates another editor/scope.
+            if (!editorOwned || editorSessionCurrent(expectedSession, product.id, expectedGeneration, expectedAuthority)) {
+                lastSavedProductId.value = productId
+                _uiState.value = UiState.Success(appContext.getString(
+                    if (isNewProduct) R.string.success_product_added else R.string.success_product_updated))
+            }
+            return ProductEditorSaveResult.Saved(productId)
+        }
         return try {
             if (isNewProduct) {
                 val productId = repository.addProductAndReturnId(product)
                 if (productId <= 0L) error("Inserted product id is unavailable")
-                lastSavedProductId.value=productId
-                _uiState.value = UiState.Success(
-                    appContext.getString(R.string.success_product_added)
-                )
-                return ProductEditorSaveResult.Saved(productId)
-            } else {
-                productDetailsOverrideMutex.withLock {
-                    if (baseline != null) repository.updateProductFromEditor(baseline, product)
-                    else repository.updateProduct(product)
+                returnedProductId = productId
+                MobileSyncInteractionTestHooks.emit(Event.SAVE_DURABLE_RETURN, productId)
+                return savedResult(productId)
+            }
+            productDetailsOverrideMutex.withLock {
+                if (baseline != null) repository.updateProductFromEditor(baseline, product) { receipt ->
+                    // The writer invokes this immediately after its Room transaction returns on IO.
+                    // Only capture immutable evidence here; Compose/Flow state remains on the caller.
+                    committed.set(receipt)
+                } else repository.updateProduct(product)
+                returnedProductId = product.id
+                MobileSyncInteractionTestHooks.emit(Event.SAVE_DURABLE_RETURN, product.id)
+                if (!editorOwned || editorSessionCurrent(expectedSession, product.id, expectedGeneration, expectedAuthority)) {
                     try {
                         refreshProductDetailsOverridesLocked(listOf(product.id))
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (refreshFailure: Exception) {
-                        // La write e la relativa history sono gia state confermate dalla
-                        // transazione repository. Un read-through secondario non deve
-                        // trasformare quel successo in un falso errore con retry duplicato.
                         _productDetailsOverrides.update { current -> current - product.id }
-                        Log.w(
-                            "DB_PRODUCT_SAVE",
-                            "Product saved; details override refresh deferred",
-                            refreshFailure
-                        )
+                        Log.w("DB_PRODUCT_SAVE", "Product saved; details override refresh deferred", refreshFailure)
                     }
                 }
             }
-            _uiState.value = UiState.Success(
-                appContext.getString(
-                    if (isNewProduct) R.string.success_product_added
-                    else R.string.success_product_updated
-                )
-            )
-            lastSavedProductId.value=product.id
-            ProductEditorSaveResult.Saved(product.id.takeIf { it > 0L })
+            savedResult(product.id)
         } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: ProductEditConflictException) {
-            ProductEditorSaveResult.Failed(appContext.getString(R.string.product_editor_conflict))
+            val confirmedId = confirmedProductId()
+            if (confirmedId != null) {
+                if (!editorOwned || editorSessionCurrent(expectedSession, product.id, expectedGeneration, expectedAuthority)) {
+                    _productDetailsOverrides.update { it - product.id }
+                }
+                savedResult(confirmedId)
+            } else throw cancelled // Absence of receipt is not evidence of rollback.
+        } catch (conflict: ProductEditConflictException) {
+            if (baseline != null && editorSessionCurrent(expectedSession, product.id, expectedGeneration, expectedAuthority)) {
+                draftReviewAuthority = expectedAuthority
+                _draftProductConflictReview.value = DraftProductConflictReviewState(
+                    expectedSession, baseline, product, conflict.currentProduct,
+                    conflict.missingTarget, conflict.conflictingFields)
+            }
+            ProductEditorSaveResult.Failed(appContext.getString(
+                if (conflict.missingTarget) R.string.product_editor_missing else R.string.product_editor_conflict))
         } catch (_: android.database.sqlite.SQLiteConstraintException) {
-            ProductEditorSaveResult.Failed(
-                appContext.getString(R.string.error_barcode_already_exists)
-            )
+            ProductEditorSaveResult.Failed(appContext.getString(R.string.error_barcode_already_exists))
         } catch (_: Exception) {
-            ProductEditorSaveResult.Failed(
-                appContext.getString(
-                    if (isNewProduct) R.string.error_product_added
-                    else R.string.error_product_updated
-                )
-            )
+            confirmedProductId()?.let { savedResult(it) } ?: ProductEditorSaveResult.Failed(
+                appContext.getString(if (isNewProduct) R.string.error_product_added else R.string.error_product_updated))
         }
     }
 
@@ -3099,6 +3477,7 @@ class DatabaseViewModel(
                 .map { productIds -> productIds.filter { it > 0L }.distinct() }
                 .filter { it.isNotEmpty() }
                 .collect { productIds ->
+                    if (_productEditorTarget.value?.id in productIds) _productEditorRemoteChanged.value = true
                     try {
                         refreshProductDetailsOverrides(productIds)
                         productIds.forEach { productId ->
@@ -3336,18 +3715,21 @@ class DatabaseViewModel(
     }
 
     suspend fun getSupplierById(id: Long): Supplier? {
-        return repository.getSupplierById(id)
+        val admission = localReadGate.snapshot()
+        return localReadGate.runIfCurrent(admission) { repository.getSupplierById(id) }
     }
 
     suspend fun getCategoryById(id: Long): Category? {
-        return repository.getCategoryById(id)
+        val admission = localReadGate.snapshot()
+        return localReadGate.runIfCurrent(admission) { repository.getCategoryById(id) }
     }
 
     suspend fun findProductByBarcode(barcode: String): Product? {
-        return repository.findProductByBarcode(barcode)
+        val admission = localReadGate.snapshot()
+        return localReadGate.runIfCurrent(admission) { repository.findProductByBarcode(barcode) }
     }
     fun getPriceSeries(productId: Long, type: String) =
-        repository.getPriceSeries(productId, type)
+        localReadGate.observe(emptyList<ProductPrice>()) { repository.getPriceSeries(productId, type) }
 
     // ⬇️ IMPORT COMPLETO: nuovo metodo pubblico
     fun startFullDbImport(

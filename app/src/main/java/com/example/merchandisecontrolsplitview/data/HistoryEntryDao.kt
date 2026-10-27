@@ -113,6 +113,15 @@ interface HistoryEntryDao {
     )
     suspend fun getAllUserVisibleSnapshot(): List<HistoryEntry>
 
+    // Preserve nullable caller semantics while allowing the non-null SQL branch to seek the cursor range.
+    suspend fun getRecoveryPhysicalPage(
+        afterRemoteId: String?,
+        limit: Int,
+        onlyClean: Boolean = false
+    ): List<HistoryRecoveryPhysicalRow> =
+        if (afterRemoteId == null) getRecoveryPhysicalPageFirst(limit, onlyClean)
+        else getRecoveryPhysicalPageAfter(afterRemoteId, limit, onlyClean)
+
     @Query(
         """
         SELECT h.*,
@@ -122,7 +131,28 @@ interface HistoryEntryDao {
                r.lastRemotePayloadFingerprint AS recoveryPayloadFingerprint
         FROM history_entries h
         INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
-        WHERE (:afterRemoteId IS NULL OR r.remoteId > :afterRemoteId)
+        WHERE (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
+               AND r.localChangeRevision = r.lastSyncedLocalRevision
+               AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
+        ORDER BY r.remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecoveryPhysicalPageFirst(
+        limit: Int,
+        onlyClean: Boolean
+    ): List<HistoryRecoveryPhysicalRow>
+
+    @Query(
+        """
+        SELECT h.*,
+               r.remoteId AS recoveryRemoteId,
+               r.localChangeRevision AS recoveryLocalRevision,
+               r.lastSyncedLocalRevision AS recoverySyncedRevision,
+               r.lastRemotePayloadFingerprint AS recoveryPayloadFingerprint
+        FROM history_entries h
+        INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE r.remoteId > :afterRemoteId
           AND (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
                AND r.localChangeRevision = r.lastSyncedLocalRevision
                AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
@@ -130,13 +160,22 @@ interface HistoryEntryDao {
         LIMIT :limit
         """
     )
-    suspend fun getRecoveryPhysicalPage(
-        afterRemoteId: String?,
+    suspend fun getRecoveryPhysicalPageAfter(
+        afterRemoteId: String,
         limit: Int,
-        onlyClean: Boolean = false
+        onlyClean: Boolean
     ): List<HistoryRecoveryPhysicalRow>
 
     /** Active projection for an ordinary receipt; retained shadows are proved separately. */
+    // Preserve nullable caller semantics while allowing the non-null SQL branch to seek the cursor range.
+    suspend fun getRecoveryActivePhysicalPage(
+        afterRemoteId: String?,
+        limit: Int,
+        onlyClean: Boolean = false
+    ): List<HistoryRecoveryPhysicalRow> =
+        if (afterRemoteId == null) getRecoveryActivePhysicalPageFirst(limit, onlyClean)
+        else getRecoveryActivePhysicalPageAfter(afterRemoteId, limit, onlyClean)
+
     @Query(
         """
         SELECT h.*,
@@ -147,7 +186,6 @@ interface HistoryEntryDao {
         FROM history_entries h
         INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
         WHERE h.deletedAt IS NULL
-          AND (:afterRemoteId IS NULL OR r.remoteId > :afterRemoteId)
           AND (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
                AND r.localChangeRevision = r.lastSyncedLocalRevision
                AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
@@ -155,10 +193,33 @@ interface HistoryEntryDao {
         LIMIT :limit
         """
     )
-    suspend fun getRecoveryActivePhysicalPage(
-        afterRemoteId: String?,
+    suspend fun getRecoveryActivePhysicalPageFirst(
         limit: Int,
-        onlyClean: Boolean = false
+        onlyClean: Boolean
+    ): List<HistoryRecoveryPhysicalRow>
+
+    @Query(
+        """
+        SELECT h.*,
+               r.remoteId AS recoveryRemoteId,
+               r.localChangeRevision AS recoveryLocalRevision,
+               r.lastSyncedLocalRevision AS recoverySyncedRevision,
+               r.lastRemotePayloadFingerprint AS recoveryPayloadFingerprint
+        FROM history_entries h
+        INNER JOIN history_entry_remote_refs r ON r.historyEntryUid = h.uid
+        WHERE h.deletedAt IS NULL
+          AND r.remoteId > :afterRemoteId
+          AND (:onlyClean = 0 OR (r.lastRemoteAppliedAt IS NOT NULL
+               AND r.localChangeRevision = r.lastSyncedLocalRevision
+               AND h.syncStatus = 'SYNCED_SUCCESSFULLY'))
+        ORDER BY r.remoteId
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecoveryActivePhysicalPageAfter(
+        afterRemoteId: String,
+        limit: Int,
+        onlyClean: Boolean
     ): List<HistoryRecoveryPhysicalRow>
 
     @Query(

@@ -854,4 +854,51 @@
     <string name="storefront_discard_pending">Descartar solicitud guardada</string>
     <string name="account_session_cleanup_failed">No se pudo verificar el cierre de sesión local. Inténtalo de nuevo.</string>
     <string name="product_save_cloud_confirmed">Este producto está confirmado en la nube.</string>
+    <!-- TASK-144: durable catalog conflict review. -->
+    <string name="catalog_conflict_review_title">Revisar el cambio guardado</string>
+    <string name="catalog_conflict_saved_local">El cambio está guardado en este dispositivo y requiere atención.</string>
+    <string name="catalog_conflict_verified_versions">Compara los valores verificados. Selecciona los campos locales que deseas conservar.</string>
+    <string name="catalog_conflict_local_value">En este dispositivo: %1$s</string>
+    <string name="catalog_conflict_remote_value">Versión remota: %1$s</string>
+    <string name="catalog_conflict_previous_choice">Tu propuesta: %1$s</string>
+    <string name="catalog_conflict_remote_deleted">La versión remota está eliminada. No se volverá a crear el producto.</string>
+    <string name="catalog_conflict_preserve_price_history">La decisión afecta a este cambio del catálogo. El historial de precios guardado se conserva.</string>
+    <string name="catalog_conflict_blocked">Es necesario verificar este cambio antes de aplicar una decisión.</string>
+    <string name="catalog_conflict_accept_remote_deletion">Aceptar eliminación remota</string>
+    <string name="catalog_conflict_adopt_remote">Usar versión remota</string>
+    <string name="catalog_conflict_keep_selected">Conservar campos seleccionados</string>
+    <string name="catalog_conflict_refresh_comparison">Actualizar comparación</string>
+    <string name="catalog_conflict_postpone">Decidir más tarde</string>
+    <string name="catalog_conflict_relation_unavailable">Registro relacionado no disponible</string>
+    <string name="catalog_conflict_changed">Hay otros cambios. Tu propuesta se conserva: revisa la comparación y decide de nuevo.</string>
+    <string name="catalog_conflict_read_failed">La comparación no está disponible. El cambio guardado se conserva.</string>
+    <string name="catalog_conflict_scope_unavailable">Este registro no está disponible en la cuenta o tienda actual.</string>
+    <string name="catalog_conflict_existing_draft">Hay un borrador abierto. Guárdalo o cancélalo antes de revisar otro registro.</string>
+    <string name="catalog_conflict_return_to_draft">Volver al borrador</string>
+    <string name="catalog_conflict_open_review">Revisar cambio guardado</string>
+    <string name="catalog_conflict_remote_adopted">Se ha adoptado la versión remota.</string>
+    <string name="catalog_conflict_deletion_adopted">Se ha aceptado la eliminación remota.</string>
+    <string name="catalog_conflict_choice_pending">Decisión guardada en este dispositivo · Pendiente de sincronización</string>
+    <string name="catalog_conflict_choice_saved">Decisión guardada en este dispositivo.</string>
+    <string name="catalog_conflict_resolution_unconfirmed">Es necesario verificar la decisión. El cambio guardado se conserva; actualiza la comparación antes de reintentar.</string>
+    <string name="catalog_conflict_history_blocks_delete">La eliminación requiere verificar el historial relacionado.</string>
+
+    <!-- TASK-144: review of an unsaved draft and truthful interrupted Save. -->
+    <string name="product_editor_missing">Este producto ya no está disponible. Los cambios no se guardaron.</string>
+    <string name="product_editor_save_interrupted">Guardado interrumpido. Tus cambios siguen aquí; el resultado requiere verificación.</string>
+    <string name="product_editor_review_title">Revisar cambios</string>
+    <string name="product_editor_review_explanation">Selecciona solo los campos del borrador que deseas conservar. Los demás valores seguirán la versión actual. Esto prepara el próximo Guardar.</string>
+    <string name="product_editor_disputed_field">Campo en conflicto</string>
+    <string name="product_editor_opening_value">Al abrir: %1$s</string>
+    <string name="product_editor_draft_value">Tu borrador: %1$s</string>
+    <string name="product_editor_current_value">Versión actual: %1$s</string>
+    <string name="product_editor_use_current">Usar versión actual</string>
+    <string name="product_editor_prepare_selected">Editar con campos elegidos</string>
+    <string name="product_editor_return_to_edit">Volver a editar</string>
+    <string name="product_editor_remote_changed">Este producto se actualizó. Tus cambios se conservan.</string>
+    <string name="local_store_open_checking">Abriendo la base de datos local…</string>
+    <string name="local_store_open_unavailable">No se pudo abrir la base de datos local. Los ajustes siguen disponibles.</string>
+    <string name="local_store_open_details">Fase: apertura de la base de datos local\nMotivo: %1$s\nVersión de la app: %2$s</string>
+    <string name="local_store_open_failed_reason">No se pudo acceder a la base de datos</string>
+    <string name="local_store_open_unknown_reason">Base de datos local no disponible</string>
 </resources>
