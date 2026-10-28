@@ -2672,6 +2672,7 @@ class ShopSyncRecoveryCoordinatorTest {
         tracker.updateNetworkAvailability(true)
         var legacyFetchCalls = 0
         var checkpointCalls = 0
+        var eventPageCalls = 0
         var markerCalls = 0
         val source = OrdinaryFencedReadFixture(remote)
         val reader = object : ShopSyncReadRemoteDataSource by source {
@@ -2679,6 +2680,13 @@ class ShopSyncRecoveryCoordinatorTest {
                 assertEquals(CatalogSyncStage.SYNC_EVENTS_DRAIN, tracker.state.value.stage)
                 checkpointCalls++
                 return source.checkpoint(context)
+            }
+            override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> {
+                assertEquals(CatalogSyncStage.SYNC_EVENTS_DRAIN, tracker.state.value.stage)
+                assertEquals(checkpointA.scope, context.expectedScope)
+                assertEquals(checkpointA.syncEvents.maxId, context.expectedEventMaxId)
+                eventPageCalls++
+                return source.eventPage(context, afterId, limit)
             }
             override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
                 markerCalls++
@@ -2714,12 +2722,12 @@ class ShopSyncRecoveryCoordinatorTest {
             val proofError = runCatching { validateShopSyncActiveReceipt(db, baseline.generationId, checkpointA) }
                 .exceptionOrNull() as? ShopSyncContractException
             val outcome = tracker.lastOutcome.value
-            println("TASK143_BOOTSTRAP_CONSUMER_WITNESS stage=returned legacyFetchCalls=$legacyFetchCalls checkpointCalls=$checkpointCalls markerCalls=$markerCalls samePhysical=${before == after} proofError=${proofError?.code ?: "none"} outcome=${outcome?.source} recoveryTriggers=${triggers.size}")
+            println("TASK143_BOOTSTRAP_CONSUMER_WITNESS stage=returned legacyFetchCalls=$legacyFetchCalls checkpointCalls=$checkpointCalls eventPageCalls=$eventPageCalls markerCalls=$markerCalls samePhysical=${before == after} proofError=${proofError?.code ?: "none"} outcome=${outcome?.source} recoveryTriggers=${triggers.size}")
             logs.filter { it.startsWith("cycle=catalog_bootstrap") || it.startsWith("cycle=sync_events_drain") }
                 .forEach(::println)
             assertTrue("BOOTSTRAP_CONSUMER_DESIRED: actual foreground bootstrap must preserve A and complete canonical drain without legacy inbound or recovery",
-                before == after && proofError == null && legacyFetchCalls == 0 && checkpointCalls == 1 &&
-                    markerCalls == 1 && remote.pageCalls == fullPages && triggers.isEmpty() &&
+                before == after && proofError == null && legacyFetchCalls == 0 && checkpointCalls == 0 &&
+                    eventPageCalls == 1 && markerCalls == 1 && remote.pageCalls == fullPages && triggers.isEmpty() &&
                     db.syncRecoveryJournalDao().get() == null && outcome != null && outcome.source == CatalogSyncFlightOwner.SYNC_EVENTS &&
                     !outcome.summary.manualFullSyncRequired && !outcome.summary.syncEventsGapDetected &&
                     !outcome.summary.syncEventsOrdinaryPending)
@@ -8331,6 +8339,51 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun ordinaryNoEventIneligiblePageCannotEscapeChangedCapturedPublication() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val source = OrdinaryFencedReadFixture(remote)
+        var pages = 0
+        var checkpoints = 0
+        var markers = 0
+        var afterFault: Map<String, List<List<String>>>? = null
+        val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> {
+                pages++
+                assertEquals("0", context.expectedEventMaxId)
+                val page = source.eventPage(context, afterId, limit).map { it.copy(scopeEventMaxId = "1") }
+                val binding = requireNotNull(db.businessDataScopeBindingDao().get())
+                db.businessDataScopeBindingDao().upsert(binding.copy(ownerHash = task126OwnerHash("another-owner")))
+                afterFault = ordinaryMarkerApplicationRows()
+                return page
+            }
+            override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
+                checkpoints++
+                return source.checkpoint(context)
+            }
+            override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                markers++
+                return source.convergenceMarker(context)
+            }
+        }
+
+        val result = drainOrdinary(reader)
+
+        assertTrue(result.isFailure)
+        assertEquals("ordinary_captured_publication_changed", (result.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(1, pages)
+        assertEquals(0, checkpoints)
+        assertEquals(0, markers)
+        assertEquals(requireNotNull(afterFault), ordinaryMarkerApplicationRows())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        reopenOrdinaryDatabase()
+        assertEquals(requireNotNull(afterFault), ordinaryMarkerApplicationRows())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
     fun ordinaryNoEventPreflightDoesNotSkipPendingProduct() = runTest {
         assertNoEventPreflightKeepsPending("product")
     }
@@ -8823,9 +8876,8 @@ class ShopSyncRecoveryCoordinatorTest {
         assertTrue(failed.isFailure)
         val observedFailure = failed.exceptionOrNull()
         assertEquals("failure_type=${observedFailure?.javaClass?.name ?: "absent"}; marker_calls=$markerCalls; " +
-            "watermark_present_last=$watermarkPresentAtLastMarker", IllegalArgumentException::class.java,
-            observedFailure?.javaClass)
-        assertEquals("resolution_owner_provenance_missing", observedFailure?.message)
+            "watermark_present_last=$watermarkPresentAtLastMarker", "ordinary_captured_publication_changed",
+            (observedFailure as? ShopSyncContractException)?.code)
         assertEquals(baseline, db.syncRecoveryBaselineDao().get())
         assertEquals(binding, db.businessDataScopeBindingDao().get())
         assertEquals(device, db.syncEventDeviceStateDao().get())
@@ -8866,6 +8918,10 @@ class ShopSyncRecoveryCoordinatorTest {
         val transportFailure = ShopSyncContractException("shop_sync_rpc_http_500")
         var markerCalls = 0
         val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> =
+                source.eventPage(context, afterId, limit).map { page ->
+                    page.copy(scopeEventMaxId = remote.checkpoints.last().syncEvents.maxId)
+                }
             override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
                 markerCalls++
                 assertEquals("1", context.verifiedBaselineId)

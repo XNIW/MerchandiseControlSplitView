@@ -5202,6 +5202,24 @@ class DefaultInventoryRepository(
         )
     }
 
+    /** Same captured-publication predicate as the final no-work transaction; this grants no authority. */
+    private suspend fun requireCapturedOrdinaryNoWorkPublication(
+        ownerUserId: String,
+        storeScope: String,
+        baseline: SyncRecoveryBaseline,
+        binding: BusinessDataScopeBinding?,
+        device: SyncEventDeviceState?,
+        watermark: SyncEventWatermark?
+    ) {
+        if (syncRecoveryBaselineDao.get() != baseline ||
+            businessDataScopeBindingDao.get() != binding ||
+            syncEventDeviceStateDao.get() != device ||
+            syncEventWatermarkDao.get(ownerUserId, storeScope) != watermark ||
+            syncRecoveryJournalDao.get() != null) {
+            throw ShopSyncContractException("ordinary_captured_publication_changed")
+        }
+    }
+
     /** Inspect only a returned RPC result: cloud/current-scope guards run outside this filter. */
     private fun <T : Any> ordinaryPreflightValue(result: Result<T>): T? {
         val failure = result.exceptionOrNull() ?: return result.getOrThrow()
@@ -5230,12 +5248,13 @@ class DefaultInventoryRepository(
         shopId: String,
         deviceId: String,
         baseline: ShopSyncRecoveryCheckpoint,
-        watermark: Long
+        watermark: Long,
+        requireCapturedPublication: suspend () -> Unit
     ): OrdinaryNoEventPreflight? {
         val fence = watermark.toString()
         // Keep the existing nonzero bootstrap fence. scopeEventMaxId is the fresh
         // scoped head; asOfEventMaxId is only the requested, already persisted C/W.
-        val page = ordinaryPreflightValue(businessScopedRemoteCall {
+        val pageResult = businessScopedRemoteCall {
             reader.eventPage(
                 context = ShopSyncRpcContext(
                     accountId = ownerUserId, shopId = shopId, deviceIdentifier = deviceId,
@@ -5243,7 +5262,9 @@ class DefaultInventoryRepository(
                 ),
                 afterId = watermark, limit = SYNC_EVENT_FETCH_LIMIT.toInt()
             )
-        }) ?: return null
+        }
+        requireCapturedPublication()
+        val page = ordinaryPreflightValue(pageResult) ?: return null
         if (page.schemaVersion != "shop-sync-event-page-v1" || page.shopId != baseline.shopId ||
             page.scope != baseline.scope || page.scopeEventMaxId != fence ||
             page.asOfEventMaxId != fence || page.asOfDomainEventMaxIds != baseline.syncEvents.domainMaxIds ||
@@ -5252,7 +5273,7 @@ class DefaultInventoryRepository(
         // This is the true full-checkpoint-backed final marker, every cycle.
         // A changed/unsafe successful result falls through to the original initial
         // checkpoint before apply; auth/transport/cancellation failures propagate.
-        val marker = ordinaryPreflightValue(businessScopedRemoteCall {
+        val markerResult = businessScopedRemoteCall {
             reader.convergenceMarker(
                 ShopSyncRpcContext(
                     accountId = ownerUserId, shopId = shopId, deviceIdentifier = deviceId,
@@ -5260,8 +5281,13 @@ class DefaultInventoryRepository(
                     expectedBaselineScopeKey = baseline.scope.key
                 )
             )
-        }) ?: return null
-        return if (markerProofAgainstBaseline(marker, baseline, watermark) == OrdinaryMarkerProof.PROVED)
+        }
+        requireCapturedPublication()
+        val marker = ordinaryPreflightValue(markerResult) ?: return null
+        // A legal advanced marker is only an observation for the original pending-A branch below.
+        // It is never promoted to a no-work proof or permission to apply a newer window here.
+        return if (markerProofAgainstBaseline(marker, baseline, watermark) == OrdinaryMarkerProof.PROVED ||
+            markerIsOrdinaryAdvanceFrom(marker, baseline, watermark))
             OrdinaryNoEventPreflight(page, marker) else null
     }
 
@@ -5360,7 +5386,10 @@ class DefaultInventoryRepository(
                             ownerHash = task126OwnerHash(ownerUserId),
                             storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
                         ) == null) {
-                        ordinaryNoEventPreflight(reader, ownerUserId, shopId, deviceId, baseline, watermark)
+                        ordinaryNoEventPreflight(reader, ownerUserId, shopId, deviceId, baseline, watermark) {
+                            requireCapturedOrdinaryNoWorkPublication(ownerUserId, storeScope,
+                                capturedBaseline, capturedBinding, capturedDevice, capturedWatermark)
+                        }
                     } else null
                     if (noEvent != null) {
                         // Reuse only this cycle's actual page and full marker. The
@@ -5933,13 +5962,8 @@ class DefaultInventoryRepository(
                                 db.withTransaction {
                                     checkOrdinaryNoWorkReceiptPriority(db, "transaction_acquired")
                                     requireCurrentBusinessDataScope()
-                                    if (syncRecoveryBaselineDao.get() != captured ||
-                                        businessDataScopeBindingDao.get() != verifiedShopBinding ||
-                                        syncEventDeviceStateDao.get() != verifiedShopDevice ||
-                                        syncEventWatermarkDao.get(ownerUserId, storeScope) != verifiedShopWatermark ||
-                                        syncRecoveryJournalDao.get() != null) {
-                                        throw ShopSyncContractException("ordinary_captured_publication_changed")
-                                    }
+                                    requireCapturedOrdinaryNoWorkPublication(ownerUserId, storeScope,
+                                        captured, verifiedShopBinding, verifiedShopDevice, verifiedShopWatermark)
                                     val commitPending = ordinaryShopSyncPendingCount(ownerUserId, storeScope)
                                     if (commitPending > 0) throw OrdinaryShopSyncDeferred(commitPending)
                                     validateShopSyncActiveReceipt(db, captured.generationId, baseline)

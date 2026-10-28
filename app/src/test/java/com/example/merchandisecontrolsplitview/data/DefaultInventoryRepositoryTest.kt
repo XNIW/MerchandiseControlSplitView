@@ -9419,8 +9419,8 @@ class DefaultInventoryRepositoryTest {
         assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
         assertEquals(productsBefore, db.productDao().count())
         assertEquals(pricesBefore, db.productPriceDao().countAll())
-        assertEquals("8", shopSyncReader.eventContexts.single().expectedEventMaxId)
-        assertEquals(scope, shopSyncReader.eventContexts.single().expectedScope)
+        assertEquals(listOf("7", "8"), shopSyncReader.eventContexts.map { it.expectedEventMaxId })
+        assertEquals(listOf(scope, scope), shopSyncReader.eventContexts.map { it.expectedScope })
         // A is a valid canonical receipt at 7. The negative remote fixture
         // captures max 8 with domain fences 7, then returns asOf domain fences 8.
         // That inconsistent captured window cannot publish C or idle/no-work;
