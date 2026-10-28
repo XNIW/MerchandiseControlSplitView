@@ -259,6 +259,51 @@ class PriceParentProjectionTest {
         }
     }
 
+    @Test
+    fun priceParentIdParserMatchesOriginalExactNineFieldSplitAndUuidOracle() {
+        fun line(id: String = ID, parent: String = OTHER_ID, tail: String = "unused") =
+            listOf(id, TIMESTAMP, parent, "type", "1.0", "effective", "source", "note", tail)
+                .joinToString("\u001f")
+        val valid = line()
+        val vectors = listOf(
+            ID to valid,
+            ID to line(tail = ""),
+            ID to line(tail = "opaque, non-consumed \u96ea"),
+            ID to line(parent = THIRD_ID),
+            ID to line(parent = OTHER_ID.uppercase()),
+            ID to line(parent = " $OTHER_ID"),
+            ID to line(parent = "$OTHER_ID "),
+            ID to line(parent = ""),
+            ID to line(parent = "not-a-uuid"),
+            ID to line(id = OTHER_ID),
+            ID to line(id = OTHER_ID, parent = "not-a-uuid"),
+            ID to "",
+            ID to valid.substringBeforeLast('\u001f'),
+            ID to (valid + "\u001fextra"),
+            ID to line(parent = OTHER_ID + "\u001fextra"),
+            "" to line(id = ""),
+            "not-a-price-uuid" to line(id = "not-a-price-uuid"),
+            ID to listOf(ID, "", OTHER_ID, "", "", "", "", "", "").joinToString("\u001f")
+        )
+        val method = facade.getDeclaredMethod("priceManifestParentId", SyncRecoveryManifestRow::class.java)
+            .apply { isAccessible = true }
+        for ((remoteId, versionLine) in vectors) {
+            val row = manifest(remoteId, versionLine = versionLine)
+            val original = parseOutcome {
+                val fields = row.versionLine.split('\u001f')
+                if (fields.size != 9 || fields[0] != row.remoteId) {
+                    throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+                }
+                val parent = invokeUnwrapped(facade.getDeclaredMethod("canonicalRecoveryEntityUuid", String::class.java)
+                    .apply { isAccessible = true }, fields[2]) as String
+                if (parent != fields[2]) throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+                parent
+            }
+            assertEquals("Exact old parser outcome for vector ${vectors.indexOf(remoteId to versionLine)}", original,
+                parseOutcome { invokeUnwrapped(method, row) as String })
+        }
+    }
+
     private data class ParseOutcome(val value: String?, val failureClass: String?, val failureMessage: String?)
 
     private fun parseOutcome(block: () -> String?): ParseOutcome =

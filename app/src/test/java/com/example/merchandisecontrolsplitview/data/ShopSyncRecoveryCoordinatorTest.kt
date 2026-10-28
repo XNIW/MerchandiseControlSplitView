@@ -8065,6 +8065,343 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun ordinaryNoEventPreflightZeroReadsFreshFullMarkerOnBothCycles() = runTest {
+        assertNoEventPreflightCycles(emptyZero = true)
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightPopulatedReadsFreshFullMarkerOnBothCycles() = runTest {
+        assertNoEventPreflightCycles(emptyZero = false)
+    }
+
+    private suspend fun assertNoEventPreflightCycles(emptyZero: Boolean) {
+        seedOldMismatchGeneration()
+        if (emptyZero) recoverAndReopenZeroOrdinaryFixture()
+        else recoverAndReopenOrdinaryFixture(targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson)
+        val watermark = if (emptyZero) 0L else 42L
+        val before = ordinaryMarkerApplicationRows()
+        val checkpoints = remote.checkpointCalls
+        val pages = remote.pageCalls
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+        repeat(2) { cycle ->
+            if (cycle == 1) reopenOrdinaryDatabase()
+            val summary = drainOrdinary(reader).getOrThrow()
+            assertFalse(summary.manualFullSyncRequired)
+            assertFalse(summary.syncEventsGapDetected)
+            assertEquals(0, summary.syncEventsFetched)
+            assertEquals(0, summary.syncEventsProcessed)
+            assertEquals(watermark, summary.syncEventsWatermarkAfter)
+            assertEquals(List(cycle + 1) { listOf("event", "marker") }.flatten(), reader.reads)
+            assertEquals(checkpoints, remote.checkpointCalls)
+            assertEquals(pages, remote.pageCalls)
+            assertTrue(reader.checkpointContexts.isEmpty())
+            assertTrue(reader.targetedContexts.isEmpty())
+            assertEquals(cycle + 1, reader.eventContexts.size)
+            assertEquals(cycle + 1, reader.markerContexts.size)
+            reader.eventContexts.forEach { context ->
+                assertEquals(checkpoint.scope, context.expectedScope)
+                assertEquals(watermark.toString(), context.expectedEventMaxId)
+            }
+            reader.markerContexts.forEach { context ->
+                assertEquals(checkpoint.scope, context.expectedScope)
+                assertEquals(watermark.toString(), context.verifiedBaselineId)
+                assertEquals(checkpoint.scope.key, context.expectedBaselineScopeKey)
+            }
+            assertEquals(List(cycle + 1) { watermark }, reader.afterIds)
+            assertEquals(before, ordinaryMarkerApplicationRows())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+            validateShopSyncActiveReceipt(db, baseline.generationId, checkpoint)
+            assertForeignKeysClean(db)
+        }
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightFreshHeadRaceUsesCheckpointBeforeApplyingRealDelta() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val before = ordinaryMarkerApplicationRows()
+        val delta = prepareFirstZeroHistoryDelta()
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+        reader.pageTransform = { call, page ->
+            if (call == 1) {
+                assertEquals("0", page.asOfEventMaxId)
+                page.copy(scopeEventMaxId = "1") // H is fresh; asOf is still the requested old W.
+            } else page
+        }
+        reader.beforeCheckpoint = { assertEquals(before, ordinaryMarkerApplicationRows()) }
+        reader.beforeTargeted = {
+            assertTrue(reader.checkpointContexts.isNotEmpty())
+            assertEquals(listOf("event", "checkpoint"), reader.reads.take(2))
+        }
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(listOf("event", "checkpoint"), reader.reads.take(2))
+        assertEquals(1, reader.checkpointContexts.size)
+        assertTrue(reader.targetedContexts.isNotEmpty())
+        assertEquals(1, summary.syncEventsFetched)
+        assertEquals(1, summary.syncEventsProcessed)
+        assertEquals(1L, summary.syncEventsWatermarkAfter)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertOrdinaryPublishedReceipt(baseline.generationId, delta.checkpoint, 1L)
+        assertEquals(1, db.historyEntryDao().countUserVisible())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightUnsafeSuccessfulPageFallsBackBeforeAnyMarker() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val before = ordinaryMarkerApplicationRows()
+        val unsafe = listOf("head", "asof", "domain", "scope", "shop", "rows", "terminal", "cursor", "schema", "limit")
+        for (kind in unsafe) {
+            val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+            reader.pageTransform = { call, page ->
+                if (call != 1) page else when (kind) {
+                    "head" -> page.copy(scopeEventMaxId = "1")
+                    "asof" -> page.copy(asOfEventMaxId = "1")
+                    "domain" -> page.copy(asOfDomainEventMaxIds = page.asOfDomainEventMaxIds + (SyncEventDomains.HISTORY to "1"))
+                    "scope" -> page.copy(scope = page.scope.copy(key = "f".repeat(64)))
+                    "shop" -> page.copy(shopId = OLD_ACCOUNT)
+                    "rows" -> page.copy(rows = listOf(ordinaryEvent(1L, SyncEventDomains.CATALOG,
+                        SyncEventTypes.CATALOG_CHANGED, SyncEventEntityIds()).copy(changedCount = 0)))
+                    "terminal" -> page.copy(hasMore = true, nextAfterId = 1L)
+                    "cursor" -> page.copy(nextAfterId = 1L)
+                    "schema" -> page.copy(schemaVersion = "unsupported-event-page")
+                    else -> page.copy(pageLimit = page.pageLimit + 1)
+                }
+            }
+            reader.beforeCheckpoint = { assertEquals(before, ordinaryMarkerApplicationRows()) }
+
+            val summary = drainOrdinary(reader).getOrThrow()
+
+            assertEquals(kind, listOf("event", "checkpoint"), reader.reads.take(2))
+            assertEquals(kind, 1, reader.checkpointContexts.size)
+            assertEquals(kind, 1, reader.markerContexts.size)
+            assertEquals(kind, 2, reader.eventContexts.size)
+            assertTrue(kind, reader.targetedContexts.isEmpty())
+            assertFalse(kind, summary.manualFullSyncRequired)
+            assertFalse(kind, summary.syncEventsGapDetected)
+            assertEquals(kind, 0, summary.syncEventsFetched)
+            assertEquals(kind, before, ordinaryMarkerApplicationRows())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        }
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightChangedDigestStillRequiresOriginalCheckpointAndRecovery() = runTest {
+        assertNoEventPreflightMarkerDrift(materialPrice = false)
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightChangedPriceMaterialStillRequiresOriginalCheckpointAndRecovery() = runTest {
+        assertNoEventPreflightMarkerDrift(materialPrice = true)
+    }
+
+    private suspend fun assertNoEventPreflightMarkerDrift(materialPrice: Boolean) {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val before = ordinaryMarkerApplicationRows()
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+        reader.markerTransform = { marker ->
+            if (materialPrice) marker.copy(prices = marker.prices.copy(versionDigest = "f".repeat(64)))
+            else marker.copy(checkpointDigest = "f".repeat(64))
+        }
+        reader.beforeCheckpoint = { assertEquals(before, ordinaryMarkerApplicationRows()) }
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(listOf("event", "marker", "checkpoint"), reader.reads.take(3))
+        assertEquals(1, reader.checkpointContexts.size)
+        assertEquals(2, reader.markerContexts.size)
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(0L, summary.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+        assertEquals(before.filterKeys { it != "sync_recovery_journal" },
+            ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
+        assertTrue(reader.targetedContexts.isEmpty())
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightRegressedDeletedEventHeadCannotPublishFalseNoWork() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val current = remote.fixture.checkpoint
+        remote.checkpoints += current.copy(syncEvents = current.syncEvents.copy(maxId = "0",
+            domainMaxIds = current.syncEvents.domainMaxIds.mapValues { "0" }))
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+        reader.pageTransform = { call, page -> if (call == 1) page.copy(scopeEventMaxId = "0") else page }
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(listOf("event", "checkpoint"), reader.reads.take(2))
+        assertEquals("42", reader.eventContexts.first().expectedEventMaxId)
+        assertEquals(42L, reader.afterIds.first())
+        assertTrue(summary.manualFullSyncRequired)
+        assertTrue(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED, db.syncRecoveryJournalDao().get()?.reason)
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightTransportAndAuthFailuresNeverRetryCheckpointOrMutateRoom() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val before = ordinaryMarkerApplicationRows()
+        for (atMarker in listOf(false, true)) {
+            for (failure in listOf(java.io.IOException("fixture_preflight_io"),
+                ShopSyncContractException("shop_sync_rpc_http_401"))) {
+                val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+                if (atMarker) reader.markerFailure = failure else reader.eventFailure = failure
+
+                val result = drainOrdinary(reader)
+
+                assertTrue(result.isFailure)
+                assertSame(failure, result.exceptionOrNull())
+                assertEquals(if (atMarker) listOf("event", "marker") else listOf("event"), reader.reads)
+                assertTrue(reader.checkpointContexts.isEmpty())
+                assertTrue(reader.targetedContexts.isEmpty())
+                assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+            }
+        }
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightCancellationNeverRetriesCheckpointOrMutatesRoom() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val before = ordinaryMarkerApplicationRows()
+        for (atMarker in listOf(false, true)) {
+            val cancellation = CancellationException("fixture_preflight_cancel")
+            val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+            if (atMarker) reader.markerFailure = cancellation else reader.eventFailure = cancellation
+
+            val thrown = runCatching { drainOrdinary(reader) }.exceptionOrNull()
+
+            assertTrue("Cancellation must propagate across the original IO coroutine boundary", thrown is CancellationException)
+            // Coroutine stack recovery may copy the exception while retaining the injected original as its cause.
+            var original: Throwable? = thrown
+            val visited = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+            while (original != null && original !== cancellation && visited.add(original)) original = original.cause
+            assertSame("The exact injected cancellation must remain in the cause chain", cancellation, original)
+            assertEquals(if (atMarker) listOf("event", "marker") else listOf("event"), reader.reads)
+            assertTrue(reader.checkpointContexts.isEmpty())
+            assertTrue(reader.targetedContexts.isEmpty())
+            assertActivatedZeroMarkerFailureUnchanged(baseline, before)
+        }
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightStillRejectsCapturedWatermarkRaceInsideOriginalTransaction() = runTest {
+        seedOldMismatchGeneration()
+        val baseline = recoverAndReopenZeroOrdinaryFixture()
+        val watermark = requireNotNull(db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        val successor = watermark.copy(lastSyncEventId = 1L)
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+        var afterRace: Map<String, List<List<String>>>? = null
+        reader.beforeMarker = {
+            db.syncEventWatermarkDao().upsert(successor)
+            afterRace = ordinaryMarkerApplicationRows()
+        }
+
+        val result = drainOrdinary(reader)
+
+        assertTrue(result.isFailure)
+        assertEquals("ordinary_captured_publication_changed", (result.exceptionOrNull() as? ShopSyncContractException)?.code)
+        assertEquals(listOf("event", "marker"), reader.reads)
+        assertTrue(reader.checkpointContexts.isEmpty())
+        assertEquals(requireNotNull(afterRace), ordinaryMarkerApplicationRows())
+        assertEquals(successor, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId))
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightDoesNotSkipPendingProduct() = runTest {
+        assertNoEventPreflightKeepsPending("product")
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightDoesNotSkipPendingHistory() = runTest {
+        assertNoEventPreflightKeepsPending("history")
+    }
+
+    @Test
+    fun ordinaryNoEventPreflightDoesNotSkipPendingOutbox() = runTest {
+        assertNoEventPreflightKeepsPending("outbox")
+    }
+
+    private suspend fun assertNoEventPreflightKeepsPending(kind: String) {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(if (kind == "history") v2HistoryFixture() else targetFixture())
+        remote.emptyTailConfigured = true
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        when (kind) {
+            "product" -> {
+                val original = db.productDao().getAll().single()
+                repository.updateProductFromEditor(original, original.copy(productName = "Pending during no-event preflight"))
+                val ref = requireNotNull(db.productRemoteRefDao().getByProductId(original.id))
+                assertTrue(ref.localChangeRevision > ref.lastSyncedLocalRevision)
+            }
+            "history" -> {
+                val history = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+                repository.deleteHistoryEntry(history)
+                val ref = requireNotNull(db.historyEntryRemoteRefDao().getByHistoryEntryUid(history.uid))
+                assertTrue(ref.localChangeRevision > ref.lastSyncedLocalRevision)
+            }
+            else -> {
+                // This case isolates retention of a genuinely deferred notification, not a retry-due send.
+                // Due sends/ACK and the inclusive retry floor remain covered by the original repository tests.
+                val deferred = SyncEventRetryMetadata(
+                    category = SyncErrorCategory.NetworkOfflineOrTimeout, phase = "cooldown", windowAttempts = 5,
+                    lastAttemptAtMs = 1L, lastCompletedAtMs = 1L, nextEligibleAtMs = Long.MAX_VALUE,
+                    claimID = "70000000-0000-4000-8000-000000000078")
+                val encoded = deferred.encode()
+                assertEquals(deferred, SyncEventRetryMetadata.decode(encoded))
+                db.syncEventOutboxDao().insert(SyncEventOutboxEntry(
+                    ownerUserId = ACCOUNT, storeScope = activeScope().storeId,
+                    domain = SyncEventDomains.CATALOG, eventType = SyncEventTypes.CATALOG_CHANGED,
+                    source = "fixture-preflight", sourceDeviceId = DEVICE, batchId = null,
+                    clientEventId = "70000000-0000-4000-8000-000000000077", changedCount = 0,
+                    entityIdsJson = "{}", metadataJson = "{}", createdAtMs = 1L,
+                    attemptCount = 5, lastAttemptAtMs = 1L, lastErrorType = encoded))
+                assertEquals(1, db.syncEventOutboxDao().countAll())
+            }
+        }
+        val pendingRows = ordinaryMarkerApplicationRows()
+        val reader = OrdinaryPreflightObservedReader(OrdinaryFencedReadFixture(remote))
+
+        val summary = drainOrdinary(reader).getOrThrow()
+
+        assertEquals(listOf("event", "marker"), reader.reads)
+        assertTrue(summary.syncEventsSkippedDirtyLocal > 0)
+        assertFalse(summary.manualFullSyncRequired)
+        assertFalse(summary.syncEventsGapDetected)
+        assertEquals(0, summary.syncEventsProcessed)
+        assertEquals(42L, summary.syncEventsWatermarkAfter)
+        assertEquals(pendingRows, ordinaryMarkerApplicationRows())
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        assertTrue(reader.checkpointContexts.isEmpty())
+        assertTrue(reader.targetedContexts.isEmpty())
+        assertForeignKeysClean(db)
+    }
+
+    @Test
     fun ordinaryNoEventCannotPublishNoWorkOverCleanPhysicalPriceTamper() = runTest {
         seedOldMismatchGeneration()
         recoverAndReopenOrdinaryFixture(targetFixture())
@@ -8464,11 +8801,16 @@ class ShopSyncRecoveryCoordinatorTest {
         }
         val source = OrdinaryFencedReadFixture(remote)
         var removedDuringRemote = false
+        var markerCalls = 0
+        var watermarkPresentAtLastMarker: Boolean? = null
         val racing = object : ShopSyncReadRemoteDataSource by source {
             override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+                markerCalls++
                 val marker = source.convergenceMarker(context)
                 assertTrue(marker.isSuccess)
-                assertEquals(0L, db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId)
+                val currentWatermark = db.syncEventWatermarkDao().get(ACCOUNT, activeScope().storeId)?.lastSyncEventId
+                watermarkPresentAtLastMarker = currentWatermark != null
+                assertEquals(0L, currentWatermark)
                 db.syncEventWatermarkDao().deleteAll()
                 removedDuringRemote = true
                 return marker
@@ -8479,7 +8821,11 @@ class ShopSyncRecoveryCoordinatorTest {
 
         assertTrue(removedDuringRemote)
         assertTrue(failed.isFailure)
-        assertEquals("ordinary_captured_publication_changed", (failed.exceptionOrNull() as? ShopSyncContractException)?.code)
+        val observedFailure = failed.exceptionOrNull()
+        assertEquals("failure_type=${observedFailure?.javaClass?.name ?: "absent"}; marker_calls=$markerCalls; " +
+            "watermark_present_last=$watermarkPresentAtLastMarker", IllegalArgumentException::class.java,
+            observedFailure?.javaClass)
+        assertEquals("resolution_owner_provenance_missing", observedFailure?.message)
         assertEquals(baseline, db.syncRecoveryBaselineDao().get())
         assertEquals(binding, db.businessDataScopeBindingDao().get())
         assertEquals(device, db.syncEventDeviceStateDao().get())
@@ -8588,7 +8934,7 @@ class ShopSyncRecoveryCoordinatorTest {
 
             val summary = drainOrdinary(reader).getOrThrow()
 
-            assertEquals(1, markerCalls)
+            assertEquals(2, markerCalls)
             assertTrue("Contract failure must retain the recovery latch (malformed=$malformed)", summary.manualFullSyncRequired)
             assertTrue(summary.syncEventsGapDetected)
             assertEquals(0L, summary.syncEventsWatermarkAfter)
@@ -8623,6 +8969,11 @@ class ShopSyncRecoveryCoordinatorTest {
             val source = OrdinaryFencedReadFixture(remote)
             var markerCalls = 0
             val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> =
+                    source.eventPage(context, afterId, limit).map { page ->
+                        // The current head is independent of the requested as-of fence and may advance past it.
+                        page.copy(scopeEventMaxId = remote.checkpoints.last().syncEvents.maxId)
+                    }
                 override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
                     markerCalls++
                     assertEquals(if (changed) "1" else "0", context.verifiedBaselineId)
@@ -8672,7 +9023,7 @@ class ShopSyncRecoveryCoordinatorTest {
             val summary = drainOrdinary(reader).getOrThrow()
 
             assertTrue(summary.manualFullSyncRequired)
-            assertEquals(1, markerCalls)
+            assertEquals(2, markerCalls)
             assertEquals(baseline, db.syncRecoveryBaselineDao().get())
             assertEquals(before.filterKeys { it != "sync_recovery_journal" },
                 ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
@@ -8711,7 +9062,7 @@ class ShopSyncRecoveryCoordinatorTest {
             val summary = drainOrdinary(reader).getOrThrow()
 
             assertTrue(summary.manualFullSyncRequired)
-            assertEquals(1, markerCalls)
+            assertEquals(2, markerCalls)
             assertEquals(baseline, db.syncRecoveryBaselineDao().get())
             assertEquals(listOf("ordinary_convergence_proof branch=no_work stage=recovery_required localReceipt=true " +
                 "markerEvaluated=true markerResult=false firstFalse=$expectedPredicate markerError=none localError=none"),
@@ -8740,7 +9091,7 @@ class ShopSyncRecoveryCoordinatorTest {
         val summary = drainOrdinary(reader).getOrThrow()
 
         assertTrue(summary.manualFullSyncRequired)
-        assertEquals(1, markerCalls)
+        assertEquals(2, markerCalls)
         assertEquals(baseline, db.syncRecoveryBaselineDao().get())
         assertEquals(before.filterKeys { it != "sync_recovery_journal" },
             ordinaryMarkerApplicationRows().filterKeys { it != "sync_recovery_journal" })
@@ -8752,7 +9103,7 @@ class ShopSyncRecoveryCoordinatorTest {
         )
         assertEquals(expected, ordinaryProofDiagnosticMessages())
         drainOrdinary(reader)
-        assertEquals("Existing recovery latch must not trigger an extra marker request", 1, markerCalls)
+        assertEquals("Existing recovery latch must not trigger an extra marker request", 2, markerCalls)
         assertEquals(expected, ordinaryProofDiagnosticMessages())
     }
 
@@ -8770,6 +9121,10 @@ class ShopSyncRecoveryCoordinatorTest {
             val source = OrdinaryFencedReadFixture(remote)
             var markerCalls = 0
             val reader = object : ShopSyncReadRemoteDataSource by source {
+                override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> =
+                    source.eventPage(context, afterId, limit).map {
+                        it.copy(scopeEventMaxId = remote.checkpoints.last().syncEvents.maxId)
+                    }
                 override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
                     markerCalls++
                     return source.convergenceMarker(context).map { it.copy(shopId = OLD_ACCOUNT) }
@@ -8813,7 +9168,9 @@ class ShopSyncRecoveryCoordinatorTest {
                     db.openHelper.writableDatabase.execSQL(if (publicationChanged)
                         "DELETE FROM sync_event_watermarks"
                     else "UPDATE product_remote_refs SET localChangeRevision = localChangeRevision + 1")
-                    return page
+                    return page.map {
+                        it.copy(scopeEventMaxId = remote.checkpoints.last().syncEvents.maxId)
+                    }
                 }
             }
             ShadowLog.clear()
@@ -9447,6 +9804,56 @@ private class OrdinaryFencedReadFixture(
         targetedContexts += context
         materializedFences += domain to materialized
         return Result.success(response.copy(materializedDomainEventMaxId = materialized))
+    }
+}
+
+/** Per-test observation only; the existing source still supplies every unmodified response. */
+private class OrdinaryPreflightObservedReader(
+    private val source: ShopSyncReadRemoteDataSource
+) : ShopSyncReadRemoteDataSource by source {
+    val reads = mutableListOf<String>()
+    val checkpointContexts = mutableListOf<ShopSyncRpcContext>()
+    val eventContexts = mutableListOf<ShopSyncRpcContext>()
+    val markerContexts = mutableListOf<ShopSyncRpcContext>()
+    val targetedContexts = mutableListOf<ShopSyncRpcContext>()
+    val afterIds = mutableListOf<Long>()
+    var pageTransform: (Int, ShopSyncEventPage) -> ShopSyncEventPage = { _, page -> page }
+    var markerTransform: (ShopSyncConvergenceMarker) -> ShopSyncConvergenceMarker = { it }
+    var eventFailure: Exception? = null
+    var markerFailure: Exception? = null
+    var beforeCheckpoint: (() -> Unit)? = null
+    var beforeTargeted: (() -> Unit)? = null
+    var beforeMarker: (suspend () -> Unit)? = null
+
+    override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
+        reads += "checkpoint"
+        checkpointContexts += context
+        beforeCheckpoint?.invoke()
+        return source.checkpoint(context)
+    }
+
+    override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> {
+        reads += "event"
+        eventContexts += context
+        afterIds += afterId
+        eventFailure?.let { return Result.failure(it) }
+        return source.eventPage(context, afterId, limit).map { pageTransform(eventContexts.size, it) }
+    }
+
+    override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> {
+        reads += "marker"
+        markerContexts += context
+        beforeMarker?.invoke()
+        markerFailure?.let { return Result.failure(it) }
+        return source.convergenceMarker(context).map(markerTransform)
+    }
+
+    override suspend fun rowsByIds(context: ShopSyncRpcContext, domain: ShopSyncRowDomain,
+        ids: List<String>): Result<ShopSyncTargetedRows> {
+        reads += "rows"
+        targetedContexts += context
+        beforeTargeted?.invoke()
+        return source.rowsByIds(context, domain, ids)
     }
 }
 

@@ -5202,6 +5202,69 @@ class DefaultInventoryRepository(
         )
     }
 
+    /** Inspect only a returned RPC result: cloud/current-scope guards run outside this filter. */
+    private fun <T : Any> ordinaryPreflightValue(result: Result<T>): T? {
+        val failure = result.exceptionOrNull() ?: return result.getOrThrow()
+        if (failure is CancellationException) throw failure
+        if (failure is Exception) {
+            val classification = SyncErrorClassifier.classify(failure)
+            val rpcHttpFailure = failure is ShopSyncContractException &&
+                failure.code.startsWith("shop_sync_rpc_http_")
+            if (!rpcHttpFailure && classification.httpStatus == null &&
+                classification.category !in setOf(SyncErrorCategory.NetworkOfflineOrTimeout,
+                    SyncErrorCategory.AuthSession, SyncErrorCategory.RemoteForbiddenRls,
+                    SyncErrorCategory.RateLimited, SyncErrorCategory.RemoteTransient)) return null
+        }
+        throw failure
+    }
+
+    /** Per-call observation only. Neither a durable proof cache nor authority for applying rows. */
+    private data class OrdinaryNoEventPreflight(
+        val page: ShopSyncEventPage,
+        val marker: ShopSyncConvergenceMarker
+    )
+
+    private suspend fun ordinaryNoEventPreflight(
+        reader: ShopSyncReadRemoteDataSource,
+        ownerUserId: String,
+        shopId: String,
+        deviceId: String,
+        baseline: ShopSyncRecoveryCheckpoint,
+        watermark: Long
+    ): OrdinaryNoEventPreflight? {
+        val fence = watermark.toString()
+        // Keep the existing nonzero bootstrap fence. scopeEventMaxId is the fresh
+        // scoped head; asOfEventMaxId is only the requested, already persisted C/W.
+        val page = ordinaryPreflightValue(businessScopedRemoteCall {
+            reader.eventPage(
+                context = ShopSyncRpcContext(
+                    accountId = ownerUserId, shopId = shopId, deviceIdentifier = deviceId,
+                    expectedScope = baseline.scope, expectedEventMaxId = fence
+                ),
+                afterId = watermark, limit = SYNC_EVENT_FETCH_LIMIT.toInt()
+            )
+        }) ?: return null
+        if (page.schemaVersion != "shop-sync-event-page-v1" || page.shopId != baseline.shopId ||
+            page.scope != baseline.scope || page.scopeEventMaxId != fence ||
+            page.asOfEventMaxId != fence || page.asOfDomainEventMaxIds != baseline.syncEvents.domainMaxIds ||
+            page.pageLimit != SYNC_EVENT_FETCH_LIMIT.toInt() || page.rows.isNotEmpty() ||
+            page.hasMore || page.nextAfterId != null) return null
+        // This is the true full-checkpoint-backed final marker, every cycle.
+        // A changed/unsafe successful result falls through to the original initial
+        // checkpoint before apply; auth/transport/cancellation failures propagate.
+        val marker = ordinaryPreflightValue(businessScopedRemoteCall {
+            reader.convergenceMarker(
+                ShopSyncRpcContext(
+                    accountId = ownerUserId, shopId = shopId, deviceIdentifier = deviceId,
+                    expectedScope = baseline.scope, verifiedBaselineId = fence,
+                    expectedBaselineScopeKey = baseline.scope.key
+                )
+            )
+        }) ?: return null
+        return if (markerProofAgainstBaseline(marker, baseline, watermark) == OrdinaryMarkerProof.PROVED)
+            OrdinaryNoEventPreflight(page, marker) else null
+    }
+
     private suspend fun drainSyncEventsInternal(
         remote: CatalogRemoteDataSource,
         priceRemote: ProductPriceRemoteDataSource,
@@ -5245,6 +5308,8 @@ class DefaultInventoryRepository(
         var verifiedShopBinding: BusinessDataScopeBinding? = null
         var verifiedShopDevice: SyncEventDeviceState? = null
         var verifiedShopWatermark: SyncEventWatermark? = null
+        var prefetchedShopPage: ShopSyncEventPage? = null
+        var prefetchedShopNoWorkMarker: ShopSyncConvergenceMarker? = null
 
         while (iterations < SYNC_EVENT_DRAIN_MAX_ITERATIONS) {
             var shopPageHasMore: Boolean? = null
@@ -5290,69 +5355,96 @@ class DefaultInventoryRepository(
                             manualFullSyncRequired = true
                         )
                     }
-                    val checkpoint = businessScopedRemoteCall {
-                        reader.checkpoint(
-                            ShopSyncRpcContext(
-                                accountId = ownerUserId,
-                                shopId = shopId,
-                                deviceIdentifier = deviceId,
-                                expectedScope = baseline?.scope,
-                                verifiedBaselineId = watermark.toString(),
-                                expectedBaselineScopeKey = baseline?.scope?.key
+                    val noEvent = if (baseline != null && capturedBaseline != null && capturedWatermark != null &&
+                        syncRecoveryJournalDao.getForScope(
+                            ownerHash = task126OwnerHash(ownerUserId),
+                            storeScope = Task126OwnerStoreScope.normalizedStoreId(storeScope)
+                        ) == null) {
+                        ordinaryNoEventPreflight(reader, ownerUserId, shopId, deviceId, baseline, watermark)
+                    } else null
+                    if (noEvent != null) {
+                        // Reuse only this cycle's actual page and full marker. The
+                        // existing pending/outbox/journal and local receipt transaction
+                        // below still decide no-work under all original current guards.
+                        prefetchedShopPage = noEvent.page
+                        prefetchedShopNoWorkMarker = noEvent.marker
+                        resolvedShopReadScope = noEvent.page.scope
+                        capturedShopEventMaxId = noEvent.page.asOfEventMaxId
+                        capturedShopDomainEventMaxIds = noEvent.page.asOfDomainEventMaxIds
+                        verifiedBaselineScopeKey = requireNotNull(baseline).scope.key
+                        verifiedShopBaseline = baseline
+                        verifiedShopBaselineEntity = capturedBaseline
+                        verifiedShopBinding = capturedBinding
+                        verifiedShopDevice = capturedDevice
+                        verifiedShopWatermark = capturedWatermark
+                    } else {
+                        val checkpoint = businessScopedRemoteCall {
+                            reader.checkpoint(
+                                ShopSyncRpcContext(
+                                    accountId = ownerUserId,
+                                    shopId = shopId,
+                                    deviceIdentifier = deviceId,
+                                    expectedScope = baseline?.scope,
+                                    verifiedBaselineId = watermark.toString(),
+                                    expectedBaselineScopeKey = baseline?.scope?.key
+                                )
                             )
-                        )
-                    }.getOrThrow()
-                    if (checkpoint.syncEvents.requiresFullRecovery) {
-                        recordShopSyncRecoveryRequiredWithoutEvent(
-                            ownerUserId = ownerUserId,
-                            storeScope = storeScope,
-                            shopId = shopId,
-                            deviceId = deviceId,
-                            reason = SyncEventApplyStatusReasons.MISSING_ENTITY_IDS,
-                            blockingEventId = checkpoint.syncEvents.oldestBlockingId
-                                ?.let(::parseShopSyncMaxEventId)
-                        )
-                        return SyncEventDrainResult(
-                            fetched = fetched,
-                            processed = processed,
-                            skippedSelf = skippedSelf,
-                            skippedDirtyLocal = skippedDirty,
-                            watermarkBefore = watermarkBefore,
-                            watermarkAfter = watermark,
-                            targetedProductsFetched = targetedProductsFetched,
-                            targetedPricesFetched = targetedPricesFetched,
-                            targetedHistoryFetched = targetedHistoryFetched,
-                            remoteUpdatesApplied = remoteUpdatesApplied,
-                            remoteHistoryUpdatesApplied = remoteHistoryUpdatesApplied,
-                            tooLarge = tooLarge,
-                            gapDetected = true,
-                            manualFullSyncRequired = true
-                        )
+                        }.getOrThrow()
+                        if (checkpoint.syncEvents.requiresFullRecovery ||
+                            parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) < watermark) {
+                            recordShopSyncRecoveryRequiredWithoutEvent(
+                                ownerUserId = ownerUserId,
+                                storeScope = storeScope,
+                                shopId = shopId,
+                                deviceId = deviceId,
+                                reason = if (checkpoint.syncEvents.requiresFullRecovery)
+                                    SyncEventApplyStatusReasons.MISSING_ENTITY_IDS
+                                else SyncEventApplyStatusReasons.CONVERGENCE_PROOF_REQUIRED,
+                                blockingEventId = checkpoint.syncEvents.oldestBlockingId
+                                    ?.let(::parseShopSyncMaxEventId)
+                            )
+                            return SyncEventDrainResult(
+                                fetched = fetched,
+                                processed = processed,
+                                skippedSelf = skippedSelf,
+                                skippedDirtyLocal = skippedDirty,
+                                watermarkBefore = watermarkBefore,
+                                watermarkAfter = watermark,
+                                targetedProductsFetched = targetedProductsFetched,
+                                targetedPricesFetched = targetedPricesFetched,
+                                targetedHistoryFetched = targetedHistoryFetched,
+                                remoteUpdatesApplied = remoteUpdatesApplied,
+                                remoteHistoryUpdatesApplied = remoteHistoryUpdatesApplied,
+                                tooLarge = tooLarge,
+                                gapDetected = true,
+                                manualFullSyncRequired = true
+                            )
+                        }
+                        if (baseline != null && capturedBaseline != null &&
+                            parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) > watermark) {
+                            return drainVerifiedShopSyncWindow(
+                                reader, ownerUserId, storeScope, shopId, deviceId, watermark,
+                                capturedBaseline, capturedBinding, capturedDevice, requireNotNull(capturedWatermark),
+                                baseline, checkpoint
+                            )
+                        }
+                        resolvedShopReadScope = checkpoint.scope
+                        // The checkpoint is the only authoritative bootstrap for
+                        // a non-zero watermark. Keep its opaque snapshot fence on
+                        // the first event-page request as well: omitting it is
+                        // rejected by the V6 reader and could otherwise turn a
+                        // valid post-recovery delta into a false no-work path.
+                        capturedShopEventMaxId = checkpoint.syncEvents.maxId
+                        capturedShopDomainEventMaxIds = checkpoint.syncEvents.domainMaxIds
+                        verifiedBaselineScopeKey = checkpoint.scope.key
+                        verifiedShopBaseline = baseline
+                        verifiedShopBaselineEntity = capturedBaseline
+                        verifiedShopBinding = capturedBinding
+                        verifiedShopDevice = capturedDevice
+                        verifiedShopWatermark = capturedWatermark
                     }
-                    if (baseline != null && capturedBaseline != null &&
-                        parseShopSyncMaxEventId(checkpoint.syncEvents.maxId) > watermark) {
-                        return drainVerifiedShopSyncWindow(
-                            reader, ownerUserId, storeScope, shopId, deviceId, watermark,
-                            capturedBaseline, capturedBinding, capturedDevice, requireNotNull(capturedWatermark),
-                            baseline, checkpoint
-                        )
-                    }
-                    resolvedShopReadScope = checkpoint.scope
-                    // The checkpoint is the only authoritative bootstrap for
-                    // a non-zero watermark. Keep its opaque snapshot fence on
-                    // the first event-page request as well: omitting it is
-                    // rejected by the V6 reader and could otherwise turn a
-                    // valid post-recovery delta into a false no-work path.
-                    capturedShopEventMaxId = checkpoint.syncEvents.maxId
-                    capturedShopDomainEventMaxIds = checkpoint.syncEvents.domainMaxIds
-                    verifiedBaselineScopeKey = checkpoint.scope.key
-                    verifiedShopBaseline = baseline
-                    verifiedShopBaselineEntity = capturedBaseline
-                    verifiedShopBinding = capturedBinding
-                    verifiedShopDevice = capturedDevice
-                    verifiedShopWatermark = capturedWatermark
                 }
-                val page = businessScopedRemoteCall {
+                val page = prefetchedShopPage?.also { prefetchedShopPage = null } ?: businessScopedRemoteCall {
                     reader.eventPage(
                         context = ShopSyncRpcContext(
                             accountId = ownerUserId,
@@ -5799,7 +5891,7 @@ class DefaultInventoryRepository(
                     }
                     var markerError = OrdinaryProofErrorCode.NONE
                     val marker = try {
-                        businessScopedRemoteCall {
+                        prefetchedShopNoWorkMarker ?: businessScopedRemoteCall {
                             reader.convergenceMarker(
                                 ShopSyncRpcContext(
                                     accountId = ownerUserId,

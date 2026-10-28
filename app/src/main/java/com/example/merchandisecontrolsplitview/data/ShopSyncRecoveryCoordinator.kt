@@ -2802,12 +2802,25 @@ private suspend fun activePriceParentIds(
 }
 
 private fun priceManifestParentId(row: SyncRecoveryManifestRow): String {
-    val fields = row.versionLine.split('\u001f')
-    if (fields.size != 9 || fields[0] != row.remoteId) {
+    val line = row.versionLine
+    var separator = -1
+    var first = -1
+    var second = -1
+    var third = -1
+    repeat(8) { index ->
+        separator = line.indexOf('\u001f', separator + 1)
+        if (separator < 0) throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
+        when (index) { 0 -> first = separator; 1 -> second = separator; 2 -> third = separator }
+    }
+    // The original unrestricted split requires exactly nine fields, including an
+    // empty trailing field. A ninth separator must still reject before UUID work.
+    if (line.indexOf('\u001f', separator + 1) >= 0 || first != row.remoteId.length ||
+        !line.regionMatches(0, row.remoteId, 0, row.remoteId.length)) {
         throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
     }
-    val parentId = canonicalRecoveryEntityUuid(fields[2])
-    if (parentId != fields[2]) {
+    val parentText = line.substring(second + 1, third)
+    val parentId = canonicalRecoveryEntityUuid(parentText)
+    if (parentId != parentText) {
         throw ShopSyncContractException("recovery_price_parent_manifest_invalid")
     }
     return parentId
