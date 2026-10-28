@@ -116,6 +116,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -201,6 +202,19 @@ open class MerchandiseControlApplication : Application() {
         val device: String,
         val selected: com.example.merchandisecontrolsplitview.data.SelectedShop?
     )
+    /** Ownership is acquired by a cancellable caller and handed to the admitted
+     * application proof without an unlock/relock gap. Release is idempotent for
+     * body-finally and the already-cancelled-appScope completion fallback. */
+    private class LocalProofAdmission(private val mutex: Mutex) {
+        private val owner = Any()
+        private val released = java.util.concurrent.atomic.AtomicBoolean(false)
+        suspend fun acquire() { mutex.lock(owner) }
+        fun isHeldBy(candidate: Mutex): Boolean = candidate === mutex && mutex.holdsLock(owner)
+        fun release() {
+            if (released.compareAndSet(false, true)) mutex.unlock(owner)
+        }
+    }
+
     private val localProofFlights = LocalStoreProofFlights<LocalProofKey>()
     private val businessRecoveryLock = Any()
     private val businessRecoveryExecutionMutex = Mutex()
@@ -847,6 +861,16 @@ open class MerchandiseControlApplication : Application() {
 
     /** Sharing is limited to callers registered before the owner's original transaction exits.
      * This is not a completed-proof cache; every later admission still runs the original resolver. */
+    private fun localProofAuthKey(
+        mode: LocalProofMode, auth: AuthState,
+        identity: com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
+    ): AuthState? {
+        if (auth !is AuthState.Checking && (auth !is AuthState.SignedIn || auth.userId != identity.userId)) return null
+        // Local authority is the current identity generation, not its progress
+        // from restore checking to cloud-ready. Cloud proofs retain exact auth.
+        return if (mode == LocalProofMode.OFFLINE) AuthState.Checking else auth
+    }
+
     private fun currentLocalProofKey(
         mode: LocalProofMode,
         context: com.example.merchandisecontrolsplitview.data.ShopContext,
@@ -854,11 +878,10 @@ open class MerchandiseControlApplication : Application() {
     ): LocalProofKey? {
         val auth = authManager.state.value
         val identity = authManager.localIdentity.value ?: return null
-        if (auth !is AuthState.Checking && auth !is AuthState.SignedIn) return null
-        if (auth is AuthState.SignedIn && auth.userId != identity.userId) return null
+        val proofAuth = localProofAuthKey(mode, auth, identity) ?: return null
         val epoch = shopContextRepository.diagnosticShopEpoch()
         val device = deviceInstallIdProvider.currentId ?: return null
-        val key = LocalProofKey(mode, database, auth, identity, context, epoch, device, selected)
+        val key = LocalProofKey(mode, database, proofAuth, identity, context, epoch, device, selected)
         return key.takeIf {
             authManager.state.value == auth && authManager.localIdentity.value == identity &&
                 authManager.isCurrentLocalIdentity(identity) && shopContextRepository.state.value == context &&
@@ -874,7 +897,8 @@ open class MerchandiseControlApplication : Application() {
         device: String
     ): LocalProofKey? {
         if (identity == null) return null
-        val captured = LocalProofKey(LocalProofMode.OFFLINE, database, auth, identity,
+        val proofAuth = localProofAuthKey(LocalProofMode.OFFLINE, auth, identity) ?: return null
+        val captured = LocalProofKey(LocalProofMode.OFFLINE, database, proofAuth, identity,
             context, epoch, device, context.selectedShop)
         // Never label an A-captured proof with a freshly observed replacement identity B.
         return captured.takeIf { currentLocalProofKey(LocalProofMode.OFFLINE, context) == it }
@@ -902,6 +926,49 @@ open class MerchandiseControlApplication : Application() {
     private suspend fun publishOfflineBusinessScope(
         context: com.example.merchandisecontrolsplitview.data.ShopContext, admissionReason: String
     ) {
+        val callerContext = currentCoroutineContext()
+        callerContext.ensureActive()
+        val joined = joinCurrentLocalProof(LocalProofMode.OFFLINE, context)
+        if (joined != null) {
+            // Reuse the original join path and its diagnostics without creating
+            // another application-owned job for a subscribing caller.
+            publishOfflineBusinessScopeOwned(context, admissionReason, joined)
+            return
+        }
+        // Waiting belongs to the caller. The acquired mutex remains held while
+        // its exact owner token is handed to the application-owned proof.
+        val admission = LocalProofAdmission(businessDataScopeMutex)
+        admission.acquire()
+        var handedOff = false
+        try {
+            callerContext.ensureActive()
+            val proof = appScope.async(callerContext.minusKey(Job), start = CoroutineStart.UNDISPATCHED) {
+                try { publishOfflineBusinessScopeOwned(context, admissionReason, admission = admission) }
+                finally { admission.release() }
+            }
+            // An already-cancelled appScope may never enter the body.
+            proof.invokeOnCompletion { admission.release() }
+            handedOff = true
+            proof.await()
+        } finally {
+            if (!handedOff) admission.release()
+        }
+    }
+
+    private suspend fun withLocalProofAdmission(admission: LocalProofAdmission?, block: suspend () -> Unit) {
+        if (admission == null) {
+            businessDataScopeMutex.withLock { block() }
+        } else {
+            check(admission.isHeldBy(businessDataScopeMutex))
+            try { block() } finally { admission.release() }
+        }
+    }
+
+    private suspend fun publishOfflineBusinessScopeOwned(
+        context: com.example.merchandisecontrolsplitview.data.ShopContext, admissionReason: String,
+        joinedProof: LocalStoreProofFlights.Entry<LocalProofKey>? = null,
+        admission: LocalProofAdmission? = null
+    ) {
         val trace = if (BuildConfig.DEBUG) LocalStartupTrace.start(LocalStartupTrace.hashIdentity(
             "owner:${context.ownerUserId.orEmpty()}\nshop:${context.selectedShop?.shopId.orEmpty()}")) else null
         trace?.admission(admissionReason)
@@ -910,14 +977,14 @@ open class MerchandiseControlApplication : Application() {
         var ownedFlight: LocalStoreProofFlights.Entry<LocalProofKey>? = null
         var ownedFailure: Throwable? = null
         try {
-            val joined = joinCurrentLocalProof(LocalProofMode.OFFLINE, context)
+            val joined = joinedProof ?: joinCurrentLocalProof(LocalProofMode.OFFLINE, context)
             if (joined != null) {
                 trace?.event("proof_joined")
                 joined.completion.await()
                 return
             }
             trace?.event("mutex_requested")
-            businessDataScopeMutex.withLock {
+            withLocalProofAdmission(admission) {
                 try {
                 trace?.event("mutex_acquired")
                 val authState = authManager.state.value
@@ -925,38 +992,34 @@ open class MerchandiseControlApplication : Application() {
                 if (authState is AuthState.SignedIn && !canStartOfflinePublication(identity)) {
                     trace?.event("scope_discarded", "local_identity_not_current")
                     traceOutcome = "discarded"
-                    return@withLock
+                    return@withLocalProofAdmission
                 }
                 val owner = currentLocalOwnerUserId() ?: run {
-                    trace?.event("scope_discarded", "owner_unavailable"); traceOutcome = "discarded"; return@withLock
+                    trace?.event("scope_discarded", "owner_unavailable"); traceOutcome = "discarded"; return@withLocalProofAdmission
                 }
                 val shopEpoch = shopContextRepository.diagnosticShopEpoch()
                 val device = deviceInstallIdProvider.currentId ?: run {
-                    trace?.event("scope_discarded", "device_unavailable"); traceOutcome = "discarded"; return@withLock
+                    trace?.event("scope_discarded", "device_unavailable"); traceOutcome = "discarded"; return@withLocalProofAdmission
                 }
                 fun fact(reason: String, block: () -> Boolean): Boolean = trace?.fact(reason, block) ?: block()
-                fun authorityCurrent(): Boolean = when (authState) {
-                    is AuthState.SignedIn -> fact("auth_state_changed") { authManager.state.value == authState } &&
-                        fact("local_identity_changed") {
-                            val currentIdentity = authManager.localIdentity.value
-                            trace?.localIdentityEquals(identity, currentIdentity) ?: (currentIdentity == identity)
-                        } &&
-                        fact("local_identity_not_current") { identity == null || authManager.isCurrentLocalIdentity(identity) }
-                    is AuthState.Checking -> if (identity == null) fact("local_identity_not_current") { false }
-                        else fact("auth_state_changed") { authManager.state.value is AuthState.Checking } &&
-                            fact("local_identity_not_current") { authManager.isCurrentLocalIdentity(identity) }
-                    else -> fact("auth_not_authorized") { false }
-                }
+                fun authorityCurrent(): Boolean = if (identity == null) {
+                    fact("local_identity_not_current") { false }
+                } else fact("auth_state_changed") {
+                    localProofAuthKey(LocalProofMode.OFFLINE, authManager.state.value, identity) != null
+                } && fact("local_identity_changed") {
+                    val currentIdentity = authManager.localIdentity.value
+                    trace?.localIdentityEquals(identity, currentIdentity) ?: (currentIdentity == identity)
+                } && fact("local_identity_not_current") { authManager.isCurrentLocalIdentity(identity) }
                 fun contextCurrent(): Boolean = authorityCurrent() &&
                     fact("shop_context_changed") { shopContextRepository.state.value == context } &&
                     fact("shop_epoch_changed") { shopContextRepository.diagnosticShopEpoch() == shopEpoch } &&
                     fact("device_changed") { deviceInstallIdProvider.currentId == device }
                 // Preserve the original OR short circuit: no owner comparison when current authority fails.
                 if (!contextCurrent()) {
-                    trace?.event("scope_discarded", "stale_result"); traceOutcome = "discarded"; return@withLock
+                    trace?.event("scope_discarded", "stale_result"); traceOutcome = "discarded"; return@withLocalProofAdmission
                 }
                 if (context.ownerUserId != owner) {
-                    trace?.event("scope_discarded", "context_owner_mismatch"); traceOutcome = "discarded"; return@withLock
+                    trace?.event("scope_discarded", "context_owner_mismatch"); traceOutcome = "discarded"; return@withLocalProofAdmission
                 }
                 val previous = catalogSyncStateTracker.businessDataScopeState.value
                 if (!context.localAccessAllowed) {
@@ -964,7 +1027,7 @@ open class MerchandiseControlApplication : Application() {
                         status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, localAccessScope = null,
                         errorCode = "shop_context_unavailable", localWritesAllowed = false, localReadsAllowed = false))
                     trace?.event("scope_unavailable", "local_access_disallowed"); traceOutcome = "unavailable"
-                    return@withLock
+                    return@withLocalProofAdmission
                 }
                 val activeScope = task126ActiveOwnerStoreScope(owner, context.selectedShop)
                 val key = capturedOfflineLocalProofKey(authState, identity, context, shopEpoch, device)

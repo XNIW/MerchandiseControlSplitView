@@ -334,6 +334,156 @@ class ApplicationLocalIdentityTest {
         }
     }
 
+    @Test
+    fun sameIdentitySdkPromotionKeepsTheOpenLocalProofAfterCheckingSubscriberCancellation() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, auth, controller, tracker, shops, db ->
+            checks.set(0)
+            val before = requireNotNull(auth.localIdentity.value)
+            val context = shops.state.value
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val holding = async(Dispatchers.IO) {
+                db.withTransaction { entered.complete(Unit); release.await() }
+            }
+            entered.await()
+            val checkingSubscriber = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+            var signedInSubscriber: Deferred<Unit>? = null
+            try {
+                val original = requireNotNull(currentProofEntry(app))
+                assertTrue(original.accepting)
+                controller.sessionUser = SupabaseSessionUser(OWNER, null)
+                controller.sessionStatus.value = SessionStatus.Authenticated(
+                    session = io.github.jan.supabase.auth.user.UserSession(
+                        accessToken = "synthetic-access-token", refreshToken = "synthetic-refresh-token",
+                        expiresIn = 3_600, tokenType = "bearer"),
+                    source = io.github.jan.supabase.auth.status.SessionSource.Storage)
+                runCurrent()
+                assertEquals(AuthState.SignedIn(OWNER, null), auth.state.value)
+                assertEquals("The SDK promotion is not a new account generation", before, auth.localIdentity.value)
+                checkingSubscriber.cancelAndJoin()
+                assertTrue(checkingSubscriber.isCancelled)
+                assertFalse("The current proof belongs to the app, not its cancelled subscriber", original.completion.isCompleted)
+                assertSame(original, currentProofEntry(app))
+                signedInSubscriber = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, context) }
+                assertFalse(signedInSubscriber.isCompleted)
+                assertSame(original, currentProofEntry(app))
+                assertEquals(0, checks.get())
+                release.complete(Unit); holding.await(); signedInSubscriber.await()
+                assertEquals("One actual Room proof across the same-identity promotion", 1, checks.get())
+                assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertFalse("Local publication never grants cloud access", tracker.businessDataScopeState.value.allowsCloudSync)
+                assertFalse(proofFlights(app).hasOpen()); assertNull(currentProofEntry(app))
+            } finally {
+                release.complete(Unit)
+                holding.cancelAndJoin(); checkingSubscriber.cancelAndJoin(); signedInSubscriber?.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun cancelledLocalAdmissionCannotLeaveAnApplicationOwnerQueuedBehindTheBusinessMutex() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, _, _, tracker, shops, _ ->
+            checks.set(0)
+            val mutex = MerchandiseControlApplication::class.java.getDeclaredField("businessDataScopeMutex")
+                .apply { isAccessible = true }.get(app) as kotlinx.coroutines.sync.Mutex
+            val ownerScope = MerchandiseControlApplication::class.java.getDeclaredField("appScope")
+                .apply { isAccessible = true }.get(app) as CoroutineScope
+            mutex.lock()
+            var released = false
+            val queued = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, shops.state.value) }
+            try {
+                assertFalse(queued.isCompleted)
+                assertNull(currentProofEntry(app))
+                queued.cancelAndJoin()
+                assertTrue(queued.isCancelled)
+                assertEquals("A cancelled admission must leave no app-owned queued request", 0,
+                    ownerScope.coroutineContext[Job]!!.children.count { it.isActive })
+                assertEquals(0, checks.get())
+                assertFalse(tracker.businessDataScopeState.value.allowsLocalOperations)
+                mutex.unlock(); released = true
+                publishOffline(app, shops.state.value)
+                assertEquals("A fresh legitimate caller runs exactly one proof after release", 1, checks.get())
+                assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertFalse(tracker.businessDataScopeState.value.allowsCloudSync)
+            } finally {
+                if (!released) mutex.unlock()
+                queued.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun twoWaitingAdmissionsCannotCreateAnAppOwnedQueuedProofForTheCancelledSecondCaller() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, _, _, tracker, shops, db ->
+            checks.set(0)
+            val mutex = MerchandiseControlApplication::class.java.getDeclaredField("businessDataScopeMutex")
+                .apply { isAccessible = true }.get(app) as kotlinx.coroutines.sync.Mutex
+            val ownerScope = MerchandiseControlApplication::class.java.getDeclaredField("appScope")
+                .apply { isAccessible = true }.get(app) as CoroutineScope
+            val entered = CompletableDeferred<Unit>(); val releaseRoom = CompletableDeferred<Unit>()
+            val holding = async(Dispatchers.IO) {
+                db.withTransaction { entered.complete(Unit); releaseRoom.await() }
+            }
+            entered.await()
+            mutex.lock()
+            var released = false
+            val first = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, shops.state.value) }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { publishOffline(app, shops.state.value) }
+            try {
+                assertFalse(first.isCompleted); assertFalse(second.isCompleted)
+                assertEquals(0, ownerScope.coroutineContext[Job]!!.children.count { it.isActive })
+                mutex.unlock(); released = true
+                runCurrent()
+                assertTrue("The admitted proof retains the actual mutex until its transaction ends", mutex.isLocked)
+                assertNotNull(currentProofEntry(app))
+                second.cancelAndJoin()
+                assertTrue(second.isCancelled)
+                assertEquals("Only the admitted first proof may belong to appScope", 1,
+                    ownerScope.coroutineContext[Job]!!.children.count { it.isActive })
+                assertEquals(0, checks.get())
+                releaseRoom.complete(Unit); holding.await(); first.await()
+                assertEquals("Cancelled second admission cannot run another structural proof", 1, checks.get())
+                assertTrue(tracker.businessDataScopeState.value.allowsLocalOperations)
+                assertFalse(mutex.isLocked)
+                assertEquals(0, ownerScope.coroutineContext[Job]!!.children.count { it.isActive })
+            } finally {
+                if (!released) mutex.unlock()
+                releaseRoom.complete(Unit)
+                holding.cancelAndJoin(); first.cancelAndJoin(); second.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test
+    fun alreadyCancelledApplicationScopeReleasesAcquiredAdmissionWithoutStartingTheProof() = runTest {
+        val checks = java.util.concurrent.atomic.AtomicInteger()
+        withOwnedFixture(onQuery = { sql ->
+            if (sql.trimStart().startsWith("PRAGMA quick_check", ignoreCase = true)) checks.incrementAndGet()
+        }) { app, _, _, tracker, shops, _ ->
+            checks.set(0)
+            val mutex = MerchandiseControlApplication::class.java.getDeclaredField("businessDataScopeMutex")
+                .apply { isAccessible = true }.get(app) as kotlinx.coroutines.sync.Mutex
+            val ownerScope = MerchandiseControlApplication::class.java.getDeclaredField("appScope")
+                .apply { isAccessible = true }.get(app) as CoroutineScope
+            ownerScope.coroutineContext[Job]!!.cancelAndJoin()
+            val failure = runCatching { publishOffline(app, shops.state.value) }.exceptionOrNull()
+            assertTrue(failure is CancellationException)
+            assertFalse("Completion fallback must release a lease whose worker body never ran", mutex.isLocked)
+            assertTrue(mutex.tryLock()); mutex.unlock()
+            assertEquals(0, checks.get())
+            assertNull(currentProofEntry(app))
+            assertFalse(tracker.businessDataScopeState.value.allowsLocalOperations)
+        }
+    }
+
     private fun proofFlights(app: MerchandiseControlApplication): LocalStoreProofFlights<*> =
         MerchandiseControlApplication::class.java.getDeclaredField("localProofFlights")
             .apply { isAccessible = true }.get(app) as LocalStoreProofFlights<*>
@@ -406,10 +556,11 @@ class ApplicationLocalIdentityTest {
             install("catalogSyncStateTracker", tracker)
             block(app, auth, controller, tracker, shops, db)
         } finally {
-            auth.shutdown(); ownedScope.cancel(); db.close()
+            auth.shutdown(); ownedScope.coroutineContext[Job]?.cancelAndJoin()
             val scope = MerchandiseControlApplication::class.java.getDeclaredField("appScope")
                 .apply { isAccessible = true }.get(app) as CoroutineScope
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
+            db.close()
         }
     }
 
@@ -427,7 +578,8 @@ class ApplicationLocalIdentityTest {
 
     private class WaitingIdentityController : SupabaseAuthSessionController {
         override val sessionStatus = MutableStateFlow<SessionStatus>(SessionStatus.Initializing)
-        override fun currentUserOrNull(): SupabaseSessionUser? = null
+        var sessionUser: SupabaseSessionUser? = null
+        override fun currentUserOrNull(): SupabaseSessionUser? = sessionUser
         override suspend fun persistedUserOrNull() = SupabaseSessionUser(OWNER, null)
         override suspend fun refreshStoredSession() = StoredSessionRefreshResult.Deferred
         override suspend fun clearSession() { sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true) }

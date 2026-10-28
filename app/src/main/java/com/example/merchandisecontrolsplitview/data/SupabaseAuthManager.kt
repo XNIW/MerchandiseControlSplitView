@@ -307,11 +307,16 @@ class SupabaseAuthManager private constructor(
                 return@launch
             }
             val attempt = BootstrapRestoreAttempt(generation)
+            var earlyIdentityReadAttempted = false
             try {
                 if (authGeneration.get() != generation) return@launch
                 bootstrapRestore.set(attempt)
                 Log.d(TAG, "restoreSession: waiting for session status (timeout ${RESTORE_TIMEOUT_MS}ms)")
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
+                    if (_state.value is AuthState.Checking) {
+                        earlyIdentityReadAttempted = true
+                        publishWaitingIdentity(controller, attempt)
+                    }
                     controller.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
                 Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
@@ -324,7 +329,8 @@ class SupabaseAuthManager private constructor(
                         val waiting = attempt.copy(awaitingSdk = true)
                         if (bootstrapRestore.compareAndSet(attempt, waiting)) {
                             _state.value = AuthState.Checking
-                            publishWaitingIdentity(controller, waiting)
+                            // Never repeat the early storage read outside its original SDK budget.
+                            if (!earlyIdentityReadAttempted) publishWaitingIdentity(controller, waiting)
                             Log.i(TAG, "Restore in attesa del completamento SDK (status=${status.safeLogLabel()})")
                             // Covers an SDK success that raced with arming the latch.
                             resumePendingBootstrap(controller)
@@ -345,7 +351,7 @@ class SupabaseAuthManager private constructor(
                     val waiting = attempt.copy(awaitingSdk = true)
                     if (bootstrapRestore.compareAndSet(attempt, waiting) && authGeneration.get() == generation) {
                         _state.value = AuthState.Checking
-                        publishWaitingIdentity(controller, waiting)
+                        if (!earlyIdentityReadAttempted) publishWaitingIdentity(controller, waiting)
                     }
                     Log.w(TAG, "Restore sessione fallito", e)
                 }

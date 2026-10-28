@@ -3,6 +3,10 @@ package com.example.merchandisecontrolsplitview
 import android.app.Activity
 import android.app.Instrumentation
 import android.graphics.Rect
+import android.content.Intent
+import android.os.Bundle
+import android.graphics.Bitmap
+import java.io.ByteArrayOutputStream
 import android.os.Process
 import android.os.SystemClock
 import android.system.Os
@@ -32,7 +36,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.*
 
-/** One opt-in G02-03 UI action in the existing Task103 process. No launch, setter or business call. */
+/** Opt-in G02-03: ordinary UI preparation followed by exactly one permit-gated real Save. */
 internal class NormalB6SingleSaveActor(
     private val instrumentation: Instrumentation,
     private val binding: PilotCommitTrace.B6Binding,
@@ -182,6 +186,101 @@ internal class NormalB6SingleSaveActor(
     fun ready(): org.json.JSONObject = org.json.JSONObject().put("source_save_adapter", SCHEMA)
         .put("instrumentation_uid", Process.myUid()).put("source_save_permit_path", permit.path)
         .put("source_save_latch_path", latch.path).put("source_save_result_path", result.path)
+        .put("native_ui_proof_path", File(directory,"native-ui-proof.json").path)
+        .put("native_ui_png_path", File(directory,"native-ui.png").path)
+        .put("native_ui_ax_path", File(directory,"native-ui.ax.txt").path)
+
+    /** Executes only ordinary accessibility actions; the original full qualifier remains the oracle. */
+    fun prepareNativeUI(deadlineNS: Long) {
+        val begin = SystemClock.elapsedRealtimeNanos()
+        fun guard() { check(SystemClock.elapsedRealtimeNanos() < deadlineNS && current() &&
+            !setupFrozen && !setupInvalid && saves == 0 && !consumed.get()) { "SAVE_UI_PREP_GUARD" } }
+        fun roots(): AccessibilityNodeInfo {
+            guard()
+            return requireNotNull(instrumentation.uiAutomation.rootInActiveWindow).also {
+                check(it.packageName?.toString() == PACKAGE) { "SAVE_UI_PREP_PACKAGE" }
+            }
+        }
+        fun clickLabel(resource: Int) {
+            val root=roots(); val label=instrumentation.targetContext.getString(resource)
+            val candidates=nodes(root).filter { it.isVisibleToUser &&
+                (it.text?.toString()==label || it.contentDescription?.toString()==label) }.mapNotNull { leaf ->
+                var node: AccessibilityNodeInfo?=leaf; var depth=0
+                while(node!=null && depth++<24 && !(node.isVisibleToUser && node.isClickable && node.isEnabled)) node=node.parent
+                node
+            }.distinct()
+            val target=candidates.single(); val bounds=rect(target)
+            val window=instrumentation.uiAutomation.windows.single { it.id==root.windowId && it.isActive && it.isFocused && it.type==AccessibilityWindowInfo.TYPE_APPLICATION }
+            check(target.windowId==window.id && !bounds.isEmpty && rect(root).contains(bounds) &&
+                instrumentation.uiAutomation.windows.none { other -> other.id!=window.id &&
+                    (other.layer>window.layer || other.isActive || other.isFocused) && Rect.intersects(bounds,Rect().also(other::getBoundsInScreen)) }) { "SAVE_UI_PREP_OVERLAY" }
+            guard(); check(target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "SAVE_UI_PREP_CLICK" }
+        }
+        fun waitForLabel(resource: Int) {
+            val label=instrumentation.targetContext.getString(resource)
+            while(true) {
+                guard()
+                if(nodes(roots()).any { it.isVisibleToUser && (it.text?.toString()==label || it.contentDescription?.toString()==label) }) return
+                Thread.sleep(20)
+            }
+        }
+        fun set(resource: Int, value: String) {
+            val title=instrumentation.targetContext.getString(resource)
+            fun find()=nodes(roots()).filter { it.className?.toString()=="android.widget.EditText" &&
+                (it.hintText?.toString()==title || fieldLabels(it).any { label -> label.text?.toString()==title }) }.single()
+            var node=find(); check(node.isEditable && node.isEnabled && node.error==null)
+            if(!node.isVisibleToUser) {
+                check(node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_ON_SCREEN.id)); node=find()
+                while(!node.isVisibleToUser) { guard(); Thread.sleep(20); node=find() }
+            }
+            check(node.isVisibleToUser && node.packageName?.toString()==PACKAGE)
+            if(node.text?.toString().orEmpty()!=value) {
+                guard(); check(node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,value)
+                })) { "SAVE_UI_PREP_SET_TEXT" }
+            }
+            while(find().text?.toString().orEmpty()!=value) { guard(); Thread.sleep(20) }
+        }
+        guard()
+        var active: List<Activity> = emptyList()
+        instrumentation.runOnMainSync { active=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).toList() }
+        if(active.isEmpty()) {
+            // Explicit ordinary launch only when the instrumentation has no foreground Activity.
+            instrumentation.startActivitySync(Intent(instrumentation.targetContext,MainActivity::class.java)
+                .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        activity=resumed()
+        check(editorOpens==0 && nodes(roots()).none { it.isVisibleToUser &&
+            it.text?.toString()==instrumentation.targetContext.getString(R.string.edit_product_title) }) { "SAVE_UI_PREEXISTING_DRAFT" }
+        clickLabel(R.string.database); waitForLabel(R.string.add_product)
+        check(editorOpens==0); clickLabel(R.string.add_product); waitForLabel(R.string.edit_product_title)
+        set(R.string.barcode_label,expected.barcode)
+        set(R.string.product_name_label,expected.productName.orEmpty())
+        set(R.string.second_product_name_label,expected.secondProductName.orEmpty())
+        set(R.string.item_code_label,expected.itemNumber.orEmpty())
+        set(R.string.purchase_price_label,formatClPriceInput(expected.purchasePrice))
+        set(R.string.retail_price_label,formatClPriceInput(expected.retailPrice))
+        set(R.string.header_stock_quantity,formatClQuantityInput(expected.stockQuantity))
+        val first=org.json.JSONObject(); qualifiedSave(first)
+        val png=ByteArrayOutputStream().also { bytes ->
+            val image=requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+            try { check(image.compress(Bitmap.CompressFormat.PNG,100,bytes)) } finally { image.recycle() }
+        }.toByteArray()
+        val ax=nodes(roots()).joinToString("\n") { it.toString() }.toByteArray(Charsets.UTF_8)
+        val second=org.json.JSONObject(); qualifiedSave(second)
+        guard(); check(first.toString()==second.toString() && png.size in 1..524288 && ax.size in 1..524288 &&
+            editorOpens==1 && editorDraws>0 && saves==0) { "SAVE_UI_CHANGED_DURING_CAPTURE" }
+        B6PublishedFile.publish(File(directory,"native-ui.png"),png)
+        B6PublishedFile.publish(File(directory,"native-ui.ax.txt"),ax)
+        val proof=org.json.JSONObject().put("schema","b6-native-ui-observation-v1").put("role","source")
+            .put("operation_id",binding.operationID).put("manifest_sha256",binding.manifestHash).put("nonce",binding.nonce)
+            .put("participant_pid",Process.myPid()).put("participant_uid",Process.myUid())
+            .put("artifact_sha256",sha(File(instrumentation.context.applicationInfo.sourceDir).readBytes()))
+            .put("begin_ns",begin).put("end_ns",SystemClock.elapsedRealtimeNanos()).put("first",first).put("second",second)
+            .put("editor_opens",editorOpens).put("save_count",saves).put("expected_local_body_sha256",binding.expectedLocalBodyHash)
+            .put("png_sha256",sha(png)).put("ax_sha256",sha(ax))
+        guard(); B6PublishedFile.publish(File(directory,"native-ui-proof.json"),bytes(proof.toString()+"\n")); guard()
+    }
 
     private fun resumed(): Activity {
         var active: List<Activity> = emptyList()
@@ -215,7 +314,7 @@ internal class NormalB6SingleSaveActor(
         @Suppress("DEPRECATION") val legacy = node.labeledBy
         return listOfNotNull(legacy)
     }
-    private fun qualifiedSave(): AccessibilityNodeInfo {
+    private fun qualifiedSave(observed: org.json.JSONObject? = null): AccessibilityNodeInfo {
         check(current() && resumed().let { activity == null || it === activity }) { "SAVE_AUTHORITY_OR_ACTIVITY_CHANGED" }
         val ui = instrumentation.uiAutomation
         val root = requireNotNull(ui.rootInActiveWindow); check(root.packageName?.toString() == PACKAGE)
@@ -230,12 +329,15 @@ internal class NormalB6SingleSaveActor(
             r.packageName?.toString() == PACKAGE && nodes(r).any { it.isVisibleToUser && it.text?.toString() == label(R.string.edit_product_title) }
         } == true }
         check(editorWindows.size == 1 && editorWindows.single().id == window.id) { "SAVE_MULTIPLE_EDITORS" }
+        val actualFields = org.json.JSONObject(); val expectedFields = org.json.JSONObject()
         fun field(resource: Int, value: String, editable: Boolean = true) {
             val title = label(resource)
             val candidates = all.filter { it.className?.toString() == "android.widget.EditText" &&
                 (it.hintText?.toString() == title || fieldLabels(it).any { labelled -> labelled.text?.toString() == title }) }
             val node = candidates.single(); check(node.windowId == window.id && node.packageName?.toString() == PACKAGE &&
                 (!editable || node.isEditable && node.isEnabled) && node.text?.toString().orEmpty() == value && node.error == null) { "SAVE_DRAFT_FIELD" }
+            actualFields.put(resource.toString(), node.text?.toString().orEmpty())
+            expectedFields.put(resource.toString(), value)
         }
         field(R.string.barcode_label, expected.barcode)
         field(R.string.product_name_label, expected.productName.orEmpty())
@@ -262,6 +364,11 @@ internal class NormalB6SingleSaveActor(
         check(!bounds.isEmpty && rect(root).contains(bounds) && windows.none { other -> other.id != window.id &&
             (other.layer > window.layer || other.isActive || other.isFocused) && Rect.intersects(bounds, Rect().also(other::getBoundsInScreen)) }) { "SAVE_OVERLAY_OR_VIEWPORT" }
         check(all.none { it.isVisibleToUser && it.text?.toString() in listOf(label(R.string.product_editor_review_title), label(R.string.product_editor_saving)) }) { "SAVE_REVIEW_OR_LOADING" }
+        observed?.put("actual_fields",actualFields)?.put("expected_fields",expectedFields)
+            ?.put("window_id",window.id)?.put("actual_title",exact(label(R.string.edit_product_title)).single { it.isVisibleToUser }.text.toString())
+            ?.put("save_bounds",org.json.JSONArray(listOf(bounds.left,bounds.top,bounds.right,bounds.bottom)))
+            ?.put("actual_image_state",emptyImages.single().stateDescription?.toString())
+            ?.put("expected_image_state",label(R.string.product_image_state_empty))
         return save
     }
 

@@ -347,6 +347,7 @@ class Task103AuthPreflightTest {
             singleSave?.let { setupHooks.observer=it.setupObserver }
             emit(ready)
             val waitEnd=android.os.SystemClock.elapsedRealtimeNanos()+30_000_000_000L
+            singleSave?.prepareNativeUI(waitEnd)
             while(!B6PublishedFile.isPublished(request) && android.os.SystemClock.elapsedRealtimeNanos()<waitEnd) Thread.sleep(20)
             require(B6PublishedFile.requireRead(request,64).contentEquals(binding.nonce.encodeToByteArray()) && current())
             singleSave?.freezeSetup(waitEnd)

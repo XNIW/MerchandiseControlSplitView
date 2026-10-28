@@ -4373,8 +4373,10 @@ private class CanonicalLineDigest {
     private var state = sha256("")
 
     fun add(line: String) {
-        val byteLength = line.toByteArray(Charsets.UTF_8).size
-        state = sha256("$state\u001f$byteLength:$line")
+        val payload = line.toByteArray(Charsets.UTF_8)
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("$state\u001f${payload.size}:".toByteArray(Charsets.UTF_8))
+        state = encodeLowercaseHex(digest.digest(payload))
     }
 
     fun finish(): String = state
@@ -4677,8 +4679,10 @@ private fun recoveryProductPayloadFingerprint(
     primaryImageUpdatedAt ?: "-"
 ).joinToString("\u001f")
 
-private fun sha256(value: String): String {
-    val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+private fun sha256(value: String): String =
+    encodeLowercaseHex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)))
+
+private fun encodeLowercaseHex(bytes: ByteArray): String {
     val digits = "0123456789abcdef"
     val encoded = CharArray(bytes.size * 2)
     for (index in bytes.indices) {
