@@ -6,6 +6,7 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
@@ -37,6 +38,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.robolectric.shadows.ShadowLog
+import org.robolectric.shadows.ShadowLooper
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.time.Duration.Companion.days
@@ -63,6 +65,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.experimental.LazyApplication
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -1172,47 +1175,85 @@ class MerchandiseControlApplicationTest {
 
     @Test
     @Config(application = UnconfiguredTestApplication::class)
+    @LazyApplication(LazyApplication.LazyLoad.ON)
     fun `139 viewmodel factory recovery callback reuses application single flight`() = runTest {
-        val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
-        application.catalogSyncStateTracker.updateBusinessDataScopeState(
-            Task126BusinessDataScopeState(
-                status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
-                errorCode = "sync_recovery_required"
-            )
-        )
-        val restoreAuthority = installRecoveryRequestAuthority(application)
-        val executionMutex = privateApplicationField<Mutex>(
-            application,
-            "businessRecoveryExecutionMutex"
-        )
-        executionMutex.lock()
-        var scheduled: Job? = null
+        // Install the shared scheduler before this lazy Application starts its original bootstrap.
+        Dispatchers.setMain(StandardTestDispatcher(mainDispatcherRule.dispatcher.scheduler))
         try {
-            val viewModel = CatalogSyncViewModel.factory(application)
-                .create(CatalogSyncViewModel::class.java)
-            val requester = privateApplicationField<(String) -> Unit>(
-                viewModel,
-                "onRecoveryRequired"
+            assertSame(android.os.Looper.getMainLooper().thread, Thread.currentThread())
+            val application = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+            // Qualify normal initialization before installing this scheduler-only authority fixture.
+            // This wait stays inside the existing runTest deadline; no deadline is raised.
+            println("TASK144_APP139_STAGE WAIT_READY")
+            while (application.localStoreAvailability.value is LocalStoreAvailability.Checking) {
+                ShadowLooper.idleMainLooper()
+                kotlinx.coroutines.yield()
+            }
+            assertEquals(LocalStoreAvailability.Ready,
+                application.localStoreAvailability.first { it !is LocalStoreAvailability.Checking })
+            println("TASK144_APP139_STAGE READY")
+            val restoreAuthority = installRecoveryRequestAuthority(application)
+            val executionMutex = privateApplicationField<Mutex>(
+                application,
+                "businessRecoveryExecutionMutex"
             )
+            val originalScope = privateApplicationField<CoroutineScope>(application, "appScope")
+            val queuedScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+            executionMutex.lock()
+            var scheduled: Job? = null
+            try {
+                // The single-flight oracle observes admitted queued work, not an unseeded journal's IO race.
+                setPrivateApplicationField(application, "appScope", queuedScope)
+                val viewModel = CatalogSyncViewModel.factory(application)
+                    .create(CatalogSyncViewModel::class.java)
+                val requester = privateApplicationField<(String) -> Unit>(
+                    viewModel,
+                    "onRecoveryRequired"
+                )
 
-            requester("manual_factory_test")
-            scheduled = privateApplicationField(application, "businessRecoveryJob")
-            assertNotNull(scheduled)
-            assertTrue(requireNotNull(scheduled).isActive)
+                application.catalogSyncStateTracker.updateBusinessDataScopeState(
+                    Task126BusinessDataScopeState(
+                        status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                        errorCode = "sync_recovery_required"
+                    )
+                )
+                val context = application.shopContextRepository.state.value
+                assertEquals("sync_recovery_required", application.catalogSyncStateTracker.businessDataScopeState.value.errorCode)
+                assertEquals(TRACE_OWNER, (application.authManager.state.value as? AuthState.SignedIn)?.userId)
+                assertEquals(TRACE_OWNER, context.ownerUserId)
+                assertEquals(TRACE_SHOP, context.selectedShop?.shopId)
+                assertFalse(context.isLoading)
+                assertTrue(context.syncAllowed)
+                assertNull(privateApplicationField<Any?>(application, "checkpointTraceReservation"))
+                println("TASK144_APP139_STAGE BODY")
+                requester("manual_factory_test")
+                scheduled = privateApplicationField(application, "businessRecoveryJob")
+                assertNotNull(scheduled)
+                assertTrue(requireNotNull(scheduled).isActive)
 
-            application.requestPendingBusinessRecovery("network_test")
-            assertSame(
-                scheduled,
-                privateApplicationField<Job?>(application, "businessRecoveryJob")
-            )
+                application.requestPendingBusinessRecovery("network_test")
+                assertSame(
+                    scheduled,
+                    privateApplicationField<Job?>(application, "businessRecoveryJob")
+                )
+            } finally {
+                println("TASK144_APP139_STAGE CLEANUP")
+                scheduled?.cancel()
+                restoreAuthority()
+                executionMutex.unlock()
+                try {
+                    queuedScope.cancel()
+                    testScheduler.runCurrent()
+                } finally {
+                    setPrivateApplicationField(application, "appScope", originalScope)
+                }
+                advanceUntilIdle()
+                application.catalogSyncStateTracker.updateBusinessDataScopeState(
+                    Task126BusinessDataScopeState.unmanagedAllowed()
+                )
+            }
         } finally {
-            scheduled?.cancel()
-            restoreAuthority()
-            executionMutex.unlock()
-            advanceUntilIdle()
-            application.catalogSyncStateTracker.updateBusinessDataScopeState(
-                Task126BusinessDataScopeState.unmanagedAllowed()
-            )
+            Dispatchers.setMain(mainDispatcherRule.dispatcher)
         }
     }
 

@@ -33,6 +33,7 @@ class PriceParentProjectionTest {
         val app: Application = RuntimeEnvironment.getApplication()
         db = Room.inMemoryDatabaseBuilder(app, AppDatabase::class.java)
             .allowMainThreadQueries()
+            .setQueryExecutor(Executor { it.run() })
             .setQueryCallback({ sql, _ -> queries.add(sql) }, Executor { it.run() })
             .build()
     }

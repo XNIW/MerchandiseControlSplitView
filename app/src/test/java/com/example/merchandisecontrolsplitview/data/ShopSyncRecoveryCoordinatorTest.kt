@@ -3093,7 +3093,12 @@ class ShopSyncRecoveryCoordinatorTest {
         tracker.updateNetworkAvailability(true)
         var markers = 0
         var successor = false
-        val reader = object : ShopSyncReadRemoteDataSource by OrdinaryFencedReadFixture(remote) {
+        val source = OrdinaryFencedReadFixture(remote)
+        val reader = object : ShopSyncReadRemoteDataSource by source {
+            override suspend fun eventPage(context: ShopSyncRpcContext, afterId: Long, limit: Int): Result<ShopSyncEventPage> =
+                source.eventPage(context, afterId, limit).map { page ->
+                    page.copy(scopeEventMaxId = remote.checkpoints.last().syncEvents.maxId)
+                }
             override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> {
                 if (markers == 1) {
                     successor = true
