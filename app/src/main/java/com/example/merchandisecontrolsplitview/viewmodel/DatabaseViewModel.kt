@@ -4,6 +4,8 @@ import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
 import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
 import android.app.Application
 import android.content.Context
+import android.content.res.Configuration
+import androidx.annotation.StringRes
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -60,6 +62,7 @@ import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
@@ -417,6 +420,15 @@ class DatabaseViewModel(
     }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5_000L),null)
 
     private val appContext = getApplication<Application>().applicationContext
+
+    private fun editorMessage(@StringRes id: Int): String {
+        val configuration = Configuration(appContext.resources.configuration)
+        appContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
+            .getString("lang", null)?.let { language ->
+                configuration.setLocale(Locale.forLanguageTag(language))
+            }
+        return appContext.createConfigurationContext(configuration).getString(id)
+    }
     private val merchandiseApplication =
         getApplication<Application>() as MerchandiseControlApplication
     /** Freshness only: the repository still owns every read/write lease. */
@@ -458,7 +470,7 @@ class DatabaseViewModel(
                     draftProductReviewEpoch += 1
                     draftProductReviewJob?.cancel()
                     _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(loading = false,
-                        message = appContext.getString(R.string.catalog_conflict_scope_unavailable))
+                        message = editorMessage(R.string.catalog_conflict_scope_unavailable))
                 }
                 if (persistedReviewAuthority != null && persistedReviewAuthority != current) {
                     persistedCatalogReviewEpoch += 1
@@ -470,7 +482,7 @@ class DatabaseViewModel(
                     productEditorSaveJob?.cancel()
                     productEditorSaveJob = null
                     _productEditorOperationState.value = ProductEditorOperationState.Failed(
-                        appContext.getString(R.string.product_editor_save_interrupted), requiresReview = true)
+                        editorMessage(R.string.product_editor_save_interrupted), requiresReview = true)
                 }
             }
         }
@@ -638,17 +650,17 @@ class DatabaseViewModel(
                 _draftProductConflictReview.value = DraftProductConflictReviewState(
                     session, baseline, desired, current = current, missingTarget = current == null,
                     conflictingFields = disputed,
-                    message = if (current == null) appContext.getString(R.string.product_editor_missing) else null)
+                    message = if (current == null) editorMessage(R.string.product_editor_missing) else null)
             } catch (cancelled: CancellationException) {
                 if (requestCurrent()) {
                     _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(
-                        loading = false, message = appContext.getString(R.string.catalog_conflict_read_failed))
+                        loading = false, message = editorMessage(R.string.catalog_conflict_read_failed))
                 }
                 throw cancelled
             } catch (_: Exception) {
                 if (requestCurrent()) {
                     _draftProductConflictReview.value = _draftProductConflictReview.value?.copy(
-                        loading = false, message = appContext.getString(R.string.catalog_conflict_read_failed))
+                        loading = false, message = editorMessage(R.string.catalog_conflict_read_failed))
                 }
             }
         }
@@ -698,7 +710,7 @@ class DatabaseViewModel(
         persistedCatalogReviewJob?.cancel()
         if (!matchesPersistedCatalogReviewScope(target)) {
             _persistedCatalogConflictReview.value = PersistedCatalogConflictReviewState(target,
-                requiresRefresh = true, message = appContext.getString(R.string.catalog_conflict_scope_unavailable))
+                requiresRefresh = true, message = editorMessage(R.string.catalog_conflict_scope_unavailable))
             return true
         }
         persistedReviewAuthority = localEditorAuthorityObservation()
@@ -725,14 +737,14 @@ class DatabaseViewModel(
                 if (persistedCatalogReviewCurrent(epoch, target)) {
                     _persistedCatalogConflictReview.value = _persistedCatalogConflictReview.value?.copy(
                         loading = false, requiresRefresh = true,
-                        message = appContext.getString(R.string.catalog_conflict_read_failed))
+                        message = editorMessage(R.string.catalog_conflict_read_failed))
                 }
                 throw cancelled
             } catch (_: Exception) {
                 if (persistedCatalogReviewCurrent(epoch, target)) {
                     _persistedCatalogConflictReview.value = _persistedCatalogConflictReview.value?.copy(
                         loading = false, requiresRefresh = true,
-                        message = appContext.getString(R.string.catalog_conflict_read_failed))
+                        message = editorMessage(R.string.catalog_conflict_read_failed))
                 }
             }
         }
@@ -765,13 +777,13 @@ class DatabaseViewModel(
                 _persistedCatalogConflictReview.value = when (result) {
                     is PersistedCatalogConflictResult.Changed -> state.copy(context = result.context,
                         resolving = false, requiresRefresh = false,
-                        message = appContext.getString(R.string.catalog_conflict_changed))
+                        message = editorMessage(R.string.catalog_conflict_changed))
                     is PersistedCatalogConflictResult.Blocked -> state.copy(resolving = false,
                         requiresRefresh = true, message = persistedCatalogConflictMessage(result.code))
                     is PersistedCatalogConflictResult.Resolved -> {
                         // Invalidate only this display override. A live editor draft is not rewritten.
                         _productDetailsOverrides.update { it - context.productId }
-                        state.copy(resolving = false, resolved = true, message = appContext.getString(when {
+                        state.copy(resolving = false, resolved = true, message = editorMessage(when {
                             choice == PersistedCatalogConflictChoice.AdoptRemoteTombstone -> R.string.catalog_conflict_deletion_adopted
                             result.adoptedRemote -> R.string.catalog_conflict_remote_adopted
                             result.successorRevision != null -> R.string.catalog_conflict_choice_pending
@@ -783,14 +795,14 @@ class DatabaseViewModel(
                 if (persistedCatalogReviewCurrent(epoch, state.target)) {
                     _persistedCatalogConflictReview.value = state.copy(resolving = false,
                         requiresRefresh = true,
-                        message = appContext.getString(R.string.catalog_conflict_resolution_unconfirmed))
+                        message = editorMessage(R.string.catalog_conflict_resolution_unconfirmed))
                 }
                 throw cancelled
             } catch (_: Exception) {
                 if (persistedCatalogReviewCurrent(epoch, state.target)) {
                     _persistedCatalogConflictReview.value = state.copy(resolving = false,
                         requiresRefresh = true,
-                        message = appContext.getString(R.string.catalog_conflict_resolution_unconfirmed))
+                        message = editorMessage(R.string.catalog_conflict_resolution_unconfirmed))
                 }
             }
         }
@@ -837,7 +849,7 @@ class DatabaseViewModel(
 
     @Suppress("UNUSED_PARAMETER")
     private fun persistedCatalogConflictMessage(code: String): String =
-        appContext.getString(R.string.catalog_conflict_blocked)
+        editorMessage(R.string.catalog_conflict_blocked)
 
     fun dismissProductEditor() {
         if (productEditorSaveJob?.isActive == true &&
@@ -1589,7 +1601,7 @@ class DatabaseViewModel(
         val authority = localEditorAuthorityObservation()
         if (!authority.admitted || authority.stamp == null) {
             _productEditorOperationState.value = ProductEditorOperationState.Failed(
-                appContext.getString(R.string.catalog_conflict_scope_unavailable))
+                editorMessage(R.string.catalog_conflict_scope_unavailable))
             return
         }
         val durableScope = authority.owner?.let { ProductImageOwnerShopScope(it, authority.shopId) }
@@ -1602,7 +1614,7 @@ class DatabaseViewModel(
             )
         ) {
             _productEditorOperationState.value = ProductEditorOperationState.Failed(
-                appContext.getString(R.string.product_editor_save_failed)
+                editorMessage(R.string.product_editor_save_failed)
             )
             return
         }
@@ -1615,12 +1627,12 @@ class DatabaseViewModel(
             } catch (cancelled: CancellationException) {
                 if (editorSessionCurrent(editorSession, product.id, editorGeneration, authority)) {
                     _productEditorOperationState.value = ProductEditorOperationState.Failed(
-                        appContext.getString(R.string.product_editor_save_interrupted), requiresReview = true)
+                        editorMessage(R.string.product_editor_save_interrupted), requiresReview = true)
                 }
                 throw cancelled
             } catch (_: Exception) {
                 ProductEditorSaveResult.Failed(
-                    appContext.getString(R.string.product_editor_save_failed)
+                    editorMessage(R.string.product_editor_save_failed)
                 )
             }
             if (!editorSessionCurrent(editorSession, product.id, editorGeneration, authority)) return@launch
@@ -1632,7 +1644,7 @@ class DatabaseViewModel(
                         if (persistedId == null || persistedId <= 0L) {
                             pendingStagedImageStore.remove(staged.fileUri)
                             _productEditorOperationState.value = ProductEditorOperationState.Failed(
-                                appContext.getString(R.string.product_editor_save_failed)
+                                editorMessage(R.string.product_editor_save_failed)
                             )
                             return@launch
                         }
@@ -3350,10 +3362,10 @@ class DatabaseViewModel(
     suspend fun saveProductFromEditor(product: Product): ProductEditorSaveResult {
         val authority = localEditorAuthorityObservation()
         if (!authority.admitted || authority.stamp == null)
-            return ProductEditorSaveResult.Failed(appContext.getString(R.string.catalog_conflict_scope_unavailable))
+            return ProductEditorSaveResult.Failed(editorMessage(R.string.catalog_conflict_scope_unavailable))
         val baseline = productEditorBaseline?.takeIf { it.id == product.id }
         if (product.id != 0L && baseline == null) {
-            return ProductEditorSaveResult.Failed(appContext.getString(R.string.product_editor_conflict))
+            return ProductEditorSaveResult.Failed(editorMessage(R.string.product_editor_conflict))
         }
         return persistProductFromEditor(product, isNewProduct = product.id == 0L, baseline = baseline)
     }
@@ -3376,7 +3388,7 @@ class DatabaseViewModel(
             // A late completion may describe a committed write, but never updates another editor/scope.
             if (!editorOwned || editorSessionCurrent(expectedSession, product.id, expectedGeneration, expectedAuthority)) {
                 lastSavedProductId.value = productId
-                _uiState.value = UiState.Success(appContext.getString(
+                _uiState.value = UiState.Success(editorMessage(
                     if (isNewProduct) R.string.success_product_added else R.string.success_product_updated))
             }
             return ProductEditorSaveResult.Saved(productId)
@@ -3424,13 +3436,13 @@ class DatabaseViewModel(
                     expectedSession, baseline, product, conflict.currentProduct,
                     conflict.missingTarget, conflict.conflictingFields)
             }
-            ProductEditorSaveResult.Failed(appContext.getString(
+            ProductEditorSaveResult.Failed(editorMessage(
                 if (conflict.missingTarget) R.string.product_editor_missing else R.string.product_editor_conflict))
         } catch (_: android.database.sqlite.SQLiteConstraintException) {
-            ProductEditorSaveResult.Failed(appContext.getString(R.string.error_barcode_already_exists))
+            ProductEditorSaveResult.Failed(editorMessage(R.string.error_barcode_already_exists))
         } catch (_: Exception) {
             confirmedProductId()?.let { savedResult(it) } ?: ProductEditorSaveResult.Failed(
-                appContext.getString(if (isNewProduct) R.string.error_product_added else R.string.error_product_updated))
+                editorMessage(if (isNewProduct) R.string.error_product_added else R.string.error_product_updated))
         }
     }
 

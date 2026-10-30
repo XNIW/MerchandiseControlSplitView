@@ -2284,6 +2284,44 @@ internal suspend fun validateShopSyncCanonicalReceipt(
     generationId: String,
     checkpoint: ShopSyncRecoveryCheckpoint
 ) {
+    validateCanonicalManifestReceipt(db, generationId, checkpoint)
+    // Standalone callers still prove all retained/active price parents here.
+    coroutineContext[LocalStartupTrace].cost(StartupCostStage.RECEIPT_PRICE_PARENTS) {
+        materializablePriceCount(db, generationId)
+    }
+}
+
+/**
+ * One complete admission inside the caller's original Room transaction. The physical
+ * PRICES expected stream validates every active canonical price and its parent before
+ * ACK replacement, pending intent, or tombstone filtering. It also scans retained
+ * prices with no physical row, so this complete path needs no preceding count-only walk.
+ * No proof value escapes this call or survives the transaction; standalone canonical
+ * callers above retain their independent complete parent validation.
+ */
+internal suspend fun validateShopSyncOrdinaryLocalProof(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    if (!db.inTransaction()) {
+        throw ShopSyncContractException("ordinary_complete_proof_transaction_required")
+    }
+    withPriceParentProjection(db, generationId) {
+        val trace = coroutineContext[LocalStartupTrace]
+        trace.span("receipt") { validateCanonicalManifestReceipt(db, generationId, checkpoint) }
+        trace.span("physical") {
+            validatePhysicalSnapshot(db, generationId, activeStoreHistory = true,
+                localOverlay = true, localAcknowledgements = true)
+        }
+    }
+}
+
+private suspend fun validateCanonicalManifestReceipt(
+    db: AppDatabase,
+    generationId: String,
+    checkpoint: ShopSyncRecoveryCheckpoint
+) {
     val startupTrace = coroutineContext[LocalStartupTrace]
     startupTrace.cost(StartupCostStage.RECEIPT_HEADER) {
         if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
@@ -2293,8 +2331,6 @@ internal suspend fun validateShopSyncCanonicalReceipt(
     }
     startupTrace.cost(StartupCostStage.RECEIPT_RELATIONAL) { validateRelationalManifest(db, generationId) }
     startupTrace.cost(StartupCostStage.RECEIPT_MANIFEST) { validateManifest(db, generationId, checkpoint) }
-    // Also prove every retained/active price parent in the same generation, without reading physical A bodies.
-    startupTrace.cost(StartupCostStage.RECEIPT_PRICE_PARENTS) { materializablePriceCount(db, generationId) }
 }
 
 /** Shared complete local proof; the active store deliberately retains History tombstone bodies. */
@@ -2980,22 +3016,47 @@ private suspend fun readPhysicalPage(
     return startupTrace.cost(StartupCostStage.PHYSICAL_QUERY_OPEN, domain) {
         db.openHelper.readableDatabase.query(scopedSql, args)
     }.use { cursor ->
+        // Pure parent-ID results only, scoped to this one fresh physical page.
+        val parentEntityIds = if (domain == ShopSyncRowDomain.PRODUCTS) PhysicalParentEntityIdMemo() else null
         buildList {
             while (startupTrace.cost(StartupCostStage.PHYSICAL_CURSOR_MOVE, domain) { cursor.moveToNext() }) {
                 checkOrdinaryNoWorkReceiptPriority(db, "physical_sql_row")
                 add(startupTrace.cost(StartupCostStage.PHYSICAL_PROJECTION, domain) {
-                    physicalRow(domain, cursor, includeLocalAckFingerprints, acknowledgedRemoteIds)
+                    physicalRow(domain, cursor, includeLocalAckFingerprints, acknowledgedRemoteIds, parentEntityIds)
                 })
             }
         }
     }
 }
 
+/** Memoizes only the unchanged pure string canonicalizer, never a DB row or proof.
+ * The caller owns one instance per product page; failed and oversized inputs stay uncached. */
+private class PhysicalParentEntityIdMemo {
+    private val accepted = HashMap<String, String>()
+
+    fun canonical(value: String): String {
+        if (value.length > 128) return canonicalRecoveryEntityUuid(value)
+        accepted[value]?.let { return it }
+        val result = canonicalRecoveryEntityUuid(value)
+        if (accepted.size < PHYSICAL_VERIFY_PAGE_SIZE) accepted[value] = result
+        return result
+    }
+}
+
+// Retain the original private shape as the uncached component oracle.
 private fun physicalRow(
     domain: ShopSyncRowDomain,
     cursor: Cursor,
     includeLocalAckFingerprints: Boolean,
     acknowledgedRemoteIds: Set<String>
+): PhysicalRecoveryRow = physicalRow(domain, cursor, includeLocalAckFingerprints, acknowledgedRemoteIds, null)
+
+private fun physicalRow(
+    domain: ShopSyncRowDomain,
+    cursor: Cursor,
+    includeLocalAckFingerprints: Boolean,
+    acknowledgedRemoteIds: Set<String>,
+    parentEntityIds: PhysicalParentEntityIdMemo?
 ): PhysicalRecoveryRow =
     when (domain) {
         ShopSyncRowDomain.SUPPLIERS -> {
@@ -3039,8 +3100,12 @@ private fun physicalRow(
         ShopSyncRowDomain.PRODUCTS -> {
             requireCleanPhysicalRef(cursor, 13, 14)
             val remoteId = canonicalRecoveryEntityUuid(cursor.getString(0))
-            val supplierId = cursor.nullableString(10)?.let(::canonicalRecoveryEntityUuid)
-            val categoryId = cursor.nullableString(11)?.let(::canonicalRecoveryEntityUuid)
+            val supplierId = cursor.nullableString(10)?.let {
+                parentEntityIds?.canonical(it) ?: canonicalRecoveryEntityUuid(it)
+            }
+            val categoryId = cursor.nullableString(11)?.let {
+                parentEntityIds?.canonical(it) ?: canonicalRecoveryEntityUuid(it)
+            }
             val imageId = cursor.nullableString(8)?.let(::canonicalUuid)
             val imageUpdatedAt = cursor.nullableString(9)
             val updatedAt = canonicalTimestamp(cursor.nullableString(12))
@@ -4370,16 +4435,42 @@ private fun validateImageVariant(
 }
 
 private class CanonicalLineDigest {
-    private var state = sha256("")
+    private val digest = MessageDigest.getInstance("SHA-256")
+    private var finishedState: String? = sha256("")
+    // 64 lowercase SHA-256 hex bytes, US, at most 10 decimal Int digits, colon.
+    private val header = ByteArray(76).apply {
+        finishedState!!.toByteArray(Charsets.US_ASCII).copyInto(this)
+        this[64] = 0x1f
+    }
 
     fun add(line: String) {
         val payload = line.toByteArray(Charsets.UTF_8)
-        val digest = MessageDigest.getInstance("SHA-256")
-        digest.update("$state\u001f${payload.size}:".toByteArray(Charsets.UTF_8))
-        state = encodeLowercaseHex(digest.digest(payload))
+        digest.update(header, 0, writeHeader(payload.size))
+        val nextState = digest.digest(payload)
+        val digits = "0123456789abcdef"
+        for (index in nextState.indices) {
+            val unsigned = nextState[index].toInt() and 0xff
+            header[index * 2] = digits[unsigned ushr 4].code.toByte()
+            header[index * 2 + 1] = digits[unsigned and 0x0f].code.toByte()
+        }
+        finishedState = null
     }
 
-    fun finish(): String = state
+    private fun writeHeader(byteCount: Int): Int {
+        var divisor = 1
+        while (byteCount / divisor >= 10) divisor *= 10
+        var index = 65
+        do {
+            header[index++] = ('0'.code + byteCount / divisor % 10).toByte()
+            divisor /= 10
+        } while (divisor > 0)
+        header[index++] = ':'.code.toByte()
+        return index
+    }
+
+    fun finish(): String = finishedState ?: String(header, 0, 64, Charsets.US_ASCII).also {
+        finishedState = it
+    }
 }
 
 /** Internal seam for the shared Admin/iOS/Android V6 golden-vector test. */

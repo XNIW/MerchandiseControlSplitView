@@ -76,6 +76,129 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun ordinaryCompleteLocalProofRejectsMalformedRetainedPriceWithoutPhysicalRows() = runTest {
+        seedOldMismatchGeneration()
+        remote = RecoveryRemoteFixture(retainedPriceForDeletedProductFixture())
+        val recovered = coordinator().recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(recovered.toString(), recovered is ShopSyncRecoveryResult.Activated)
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        reopenOrdinaryDatabase()
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertNull(db.syncRecoveryJournalDao().get())
+        // An empty catalog cannot authorize bootstrap suppression without a managed lease.
+        assertTrue(repository.shouldRunCatalogBootstrap(ACCOUNT))
+        assertEquals(0, db.productPriceDao().countAll())
+        assertCompleteLocalProofRejectsMalformedCanonicalPrice()
+    }
+
+    @Test
+    fun ordinaryCompleteLocalProofRejectsMalformedCanonicalPriceBehindPendingParent() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        repository.deleteProduct(requireNotNull(db.productDao().findByBarcode("target-barcode")))
+        assertEquals(1, db.pendingCatalogTombstoneDao().listPendingOrdered().size)
+        assertEquals(0, db.productPriceDao().countAll())
+        assertCompleteLocalProofRejectsMalformedCanonicalPrice()
+    }
+
+    @Test
+    fun ordinaryCompleteLocalProofRejectsMalformedCanonicalPriceAlongsideActualAck() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val prices = object : ProductPriceRemoteDataSource by NoOpPriceRemoteForRecoveryTest {
+            override suspend fun upsertProductPrices(rows: List<InventoryProductPriceRow>, shopId: String?) =
+                Result.success(Unit)
+        }
+        val catalog = object : CatalogRemoteDataSource by NoOpCatalogRemoteForRecoveryTest {
+            override suspend fun patchProduct(id: String, ownerUserId: String, shopId: String?,
+                patch: InventoryProductPatch) = Result.success(Unit)
+        }
+        val initial = requireNotNull(db.productDao().findByBarcode("target-barcode"))
+        repository.updateProduct(initial.copy(retailPrice = 31.0))
+        repository.pushDirtyCatalogDeltaToRemote(catalog, prices, ACCOUNT,
+            CatalogSyncProgressReporter { }, selectedShop()).getOrThrow()
+        reopenOrdinaryDatabase()
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val acknowledgements = db.syncRecoveryManifestDao().page(baseline.generationId,
+            LOCAL_ACK_BODY_PREFIX + ShopSyncRowDomain.PRICES.wireValue, null, 1000)
+        assertTrue(acknowledgements.isNotEmpty())
+        assertCompleteLocalProofRejectsMalformedCanonicalPrice()
+        assertEquals(acknowledgements, db.syncRecoveryManifestDao().page(baseline.generationId,
+            LOCAL_ACK_BODY_PREFIX + ShopSyncRowDomain.PRICES.wireValue, null, 1000))
+    }
+
+    private suspend fun assertCompleteLocalProofRejectsMalformedCanonicalPrice() {
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val original = db.syncRecoveryManifestDao().page(baseline.generationId,
+            ShopSyncRowDomain.PRICES.wireValue, null, 1000).single()
+        val malformed = original.copy(versionLine = original.versionLine + "\u001fextra")
+        db.syncRecoveryManifestDao().upsertAll(listOf(malformed))
+        // An independent fresh-engine oracle makes the complete canonical digest match.
+        // The expected failure must therefore come from the still-required parent parser.
+        val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson).copy(
+            prices = checkpointDomain(listOf(malformed.idLine), listOf(malformed.versionLine)))
+        val failure = runCatching {
+            db.withTransaction {
+                validateShopSyncOrdinaryLocalProof(db, baseline.generationId, checkpoint)
+            }
+        }.exceptionOrNull()
+        assertEquals("recovery_price_parent_manifest_invalid", (failure as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(listOf(malformed), db.syncRecoveryManifestDao().page(baseline.generationId,
+            ShopSyncRowDomain.PRICES.wireValue, null, 1000))
+    }
+
+    @Test
+    fun ordinaryCompleteLocalProofRejectsMissingParentAfterACompletePhysicalPage() = runTest {
+        seedOldMismatchGeneration()
+        val fixture = mixedRetainedPriceFixture() // 655 canonical prices, 95 retained, 560 materialized.
+        remote = RecoveryRemoteFixture(fixture)
+        val recovered = coordinator(recoveryRemote = PagedRecoveryRemoteFixture(remote))
+            .recover(ACCOUNT, selectedShop(), activeScope())
+        assertTrue(recovered.toString(), recovered is ShopSyncRecoveryResult.Activated)
+        assertEquals(6, remote.requestedPageLimits[ShopSyncRowDomain.PRICES]?.size)
+        assertTrue(remote.requestedPageLimits[ShopSyncRowDomain.PRICES].orEmpty().all { it == 120 })
+        reopenOrdinaryDatabase()
+        assertEquals(Task126BusinessDataScopeStatus.READY, repository.resolveBusinessDataScope(activeScope()).status)
+        assertNull(db.syncRecoveryJournalDao().get())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val prices = (fixture.rows.getValue(ShopSyncRowDomain.PRICES) as ShopSyncRows.Prices).values
+        assertTrue(db.productPriceDao().countAll() > 500)
+        val missingParent = "90000000-0000-4000-8000-000000000999"
+        assertNull(db.syncRecoveryManifestDao().get(baseline.generationId,
+            ShopSyncRowDomain.PRODUCTS.wireValue, missingParent))
+        val replaced = prices.sortedBy { it.id }.mapIndexed { index, row ->
+            if (index == prices.lastIndex) row.copy(productId = missingParent) else row
+        }
+        db.syncRecoveryManifestDao().upsertAll(ShopSyncRows.Prices(listOf(replaced.last()))
+            .toManifestRows(baseline.generationId, ShopSyncRowDomain.PRICES))
+        val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson).copy(
+            prices = checkpointDomain(replaced.map { it.id }, replaced.map(::testPriceVersion)))
+        val failure = runCatching {
+            db.withTransaction {
+                validateShopSyncOrdinaryLocalProof(db, baseline.generationId, checkpoint)
+            }
+        }.exceptionOrNull()
+        assertEquals("recovery_price_parent_manifest_missing", (failure as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        assertEquals(560, db.productPriceDao().countAll())
+    }
+
+    @Test
+    fun ordinaryCompleteLocalProofRequiresTheOriginalTransaction() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val failure = runCatching {
+            validateShopSyncOrdinaryLocalProof(db, baseline.generationId,
+                decodeRecoveryCheckpointJson(baseline.checkpointJson))
+        }.exceptionOrNull()
+        assertEquals("ordinary_complete_proof_transaction_required", (failure as? ShopSyncContractException)?.code)
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+    }
+
+    @Test
     fun activeReceiptKeepsSavedPendingProductSeparateFromRemoteBaseline() = runTest {
         seedOldMismatchGeneration()
         recoverAndReopenOrdinaryFixture(targetFixture())

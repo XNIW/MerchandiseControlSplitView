@@ -215,6 +215,214 @@ class Task103AuthPreflightTest {
             .put("terminal_labels",org.json.JSONArray(windowConfirmation.actualLabels))
     }
 
+    /** Opt-in G01 peer UI preparation only. Original peer trace/visibility/remote oracles remain unchanged. */
+    private fun prepareG01PeerNativeUI(binding: com.example.merchandisecontrolsplitview.data.PilotCommitTrace.B6Binding,
+        fixture: JSONObject, expected: JSONObject, dir: File, deadlineNS: Long, current: () -> Boolean) {
+        val instrumentation=InstrumentationRegistry.getInstrumentation(); val ui=instrumentation.uiAutomation
+        val begin=android.os.SystemClock.elapsedRealtimeNanos(); val oldFlags=ui.serviceInfo.flags
+        var peerActivity:android.app.Activity?=null;var peerActivityCount=0
+        fun guard()=check(android.os.SystemClock.elapsedRealtimeNanos()<deadlineNS && current()) { "G01_PEER_UI_DEADLINE_OR_SCOPE" }
+        fun label(resource:Int):String {
+            guard()
+            var resumed:List<android.app.Activity> = emptyList()
+            instrumentation.runOnMainSync { resumed=androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).toList() }
+            val activity=requireNotNull(peerActivity)
+            check(resumed.singleOrNull()===activity && activity.javaClass==MainActivity::class.java &&
+                !activity.isFinishing && !activity.isDestroyed) { "G01_PEER_RESOURCE_ACTIVITY_CHANGED" }
+            guard();return activity.getString(resource)
+        }
+        fun nodes(root:android.view.accessibility.AccessibilityNodeInfo):List<android.view.accessibility.AccessibilityNodeInfo> {
+            val pending=java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>();val all=ArrayList<android.view.accessibility.AccessibilityNodeInfo>();pending.add(root)
+            while(pending.isNotEmpty()) { check(all.size<512);val node=pending.removeFirst();all.add(node);for(index in 0 until node.childCount) node.getChild(index)?.let(pending::addLast) };return all
+        }
+        fun root():android.view.accessibility.AccessibilityNodeInfo { guard();return requireNotNull(ui.rootInActiveWindow).also { check(it.packageName?.toString()=="com.example.merchandisecontrolsplitview") } }
+        fun rect(node:android.view.accessibility.AccessibilityNodeInfo)=android.graphics.Rect().also(node::getBoundsInScreen)
+        fun click(resource:Int,stage:String) {
+            val active=root();val text=label(resource);val all=nodes(active)
+            val visibleLeaves=all.filter { it.isVisibleToUser && (it.text?.toString()==text || it.contentDescription?.toString()==text) }
+            val candidates=visibleLeaves.mapNotNull { leaf ->
+                var node:android.view.accessibility.AccessibilityNodeInfo?=leaf;var depth=0
+                while(node!=null && depth++<24 && !(node.isVisibleToUser && node.isEnabled && node.isClickable)) node=node.parent
+                node
+            }.distinct()
+            check(candidates.size==1) {
+                val activity=peerActivity
+                val targetText=instrumentation.targetContext.getString(resource)
+                val activityText=runCatching { activity?.getString(resource) }.getOrNull()
+                val activityLocale=runCatching { activity?.resources?.configuration?.locales?.toLanguageTags() }.getOrNull()
+                val targetMatches=all.count { it.text?.toString()==targetText || it.contentDescription?.toString()==targetText }
+                val activityMatches=activityText?.let { value -> all.count { it.isVisibleToUser &&
+                    (it.text?.toString()==value || it.contentDescription?.toString()==value) } } ?: -1
+                val reason=when { visibleLeaves.isEmpty()->"NO_VISIBLE_LABEL";candidates.isEmpty()->"NO_CLICKABLE_ANCESTOR";else->"AMBIGUOUS_CANDIDATES" }
+                "G01_PEER_CLICK_SELECTION stage=$stage resource=${instrumentation.targetContext.resources.getResourceEntryName(resource)} " +
+                    "reason=$reason nodes=${all.size} target_matches=$targetMatches visible_leaves=${visibleLeaves.size} candidates=${candidates.size} " +
+                    "target_text=$targetText target_locale=${instrumentation.targetContext.resources.configuration.locales.toLanguageTags()} " +
+                    "activity_text=$activityText activity_locale=$activityLocale activity_matches=$activityMatches activity_count=$peerActivityCount " +
+                    "activity_class=${activity?.javaClass?.name} activity_destroyed=${activity?.isDestroyed} window_id=${active.windowId} root_class=${active.className}"
+            }
+            val target=candidates.single();val bounds=rect(target)
+            val window=ui.windows.single { it.id==active.windowId && it.isActive && it.isFocused && it.type==android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+            check(!bounds.isEmpty && rect(active).contains(bounds) && ui.windows.none { other -> other.id!=window.id && other.layer>window.layer && android.graphics.Rect.intersects(bounds,android.graphics.Rect().also(other::getBoundsInScreen)) })
+            guard();check(target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        }
+        fun waitForLabel(resource:Int,stage:String) {
+            val waitBeginNS=android.os.SystemClock.elapsedRealtimeNanos()
+            var sampleBeginNS=0L;var sampleEndNS=0L;var samples=0;var windowID=-1;var navigation="UNSAMPLED"
+            try {
+                while(true) {
+                    val began=android.os.SystemClock.elapsedRealtimeNanos()
+                    val active=root();val text=label(resource);val all=nodes(active)
+                    val activity=requireNotNull(peerActivity)
+                    navigation=listOf(R.string.database,R.string.database_tab_products).joinToString(";") { id ->
+                        val value=activity.getString(id)
+                        val matches=all.filter { it.isVisibleToUser && (it.text?.toString()==value || it.contentDescription?.toString()==value) }
+                        "${activity.resources.getResourceEntryName(id)}:visible=${matches.size},selected=${matches.count { it.isSelected }},enabled=${matches.count { it.isEnabled }},clickable=${matches.count { it.isClickable }}"
+                    }
+                    sampleBeginNS=began;sampleEndNS=android.os.SystemClock.elapsedRealtimeNanos();samples++;windowID=active.windowId
+                    if(all.any { it.isVisibleToUser && (it.text?.toString()==text || it.contentDescription?.toString()==text) }) { guard();return }
+                    guard();Thread.sleep(20)
+                }
+            } catch(error:Throwable) {
+                error.addSuppressed(IllegalStateException("G01_PEER_NAVIGATION_LABEL_WAIT stage=$stage wait_begin_ns=$waitBeginNS " +
+                    "sample_begin_ns=$sampleBeginNS sample_end_ns=$sampleEndNS failed_ns=${android.os.SystemClock.elapsedRealtimeNanos()} " +
+                    "deadline_ns=$deadlineNS samples=$samples window_id=$windowID navigation=$navigation"))
+                throw error
+            }
+        }
+        fun productsRouteSample(requirePlaceholder:Boolean): Pair<Boolean, android.view.accessibility.AccessibilityNodeInfo?> {
+            // Main's exact three Material3 Role.Tab nodes expose selection as isSelected.
+            // Compose UI omits ACTION_CLICK for an already-selected Tab.
+            guard()
+            val active=root();val all=nodes(active)
+            val labels=listOf(R.string.database_tab_products,R.string.database_tab_suppliers,
+                R.string.database_tab_categories).map(::label)
+            check(labels.distinct().size==3) { "G01_PRODUCTS_TAB_LABELS" }
+            val leafGroups=labels.map { value -> all.filter { it.isVisibleToUser &&
+                (it.text?.toString()==value || it.contentDescription?.toString()==value) } }
+            fun chain(leaf:android.view.accessibility.AccessibilityNodeInfo):List<android.view.accessibility.AccessibilityNodeInfo> {
+                val result=ArrayList<android.view.accessibility.AccessibilityNodeInfo>()
+                var node:android.view.accessibility.AccessibilityNodeInfo?=leaf
+                while(node!=null && result.size<24) {
+                    val actual=node;check(!result.contains(actual)) { "G01_PRODUCTS_TAB_ANCESTOR_CYCLE" }
+                    result.add(actual);node=actual.parent
+                }
+                check(node==null) { "G01_PRODUCTS_TAB_ANCESTOR_LIMIT" }
+                return result
+            }
+            val pathGroups=leafGroups.map { group -> group.map(::chain) }
+            data class TabRoute(val row:android.view.accessibility.AccessibilityNodeInfo,
+                val leaves:List<android.view.accessibility.AccessibilityNodeInfo>,
+                val tabs:List<android.view.accessibility.AccessibilityNodeInfo>)
+            val routes=all.mapNotNull { candidate ->
+                val matches=pathGroups.map { group -> group.filter { it.indexOf(candidate)>0 } }
+                if(matches.any { it.size!=1 }) return@mapNotNull null
+                val paths=matches.map { it.single() }
+                val tabs=paths.map { path -> path[path.indexOf(candidate)-1] }
+                if(tabs.distinct().size!=3 || tabs.count { it.isSelected }!=1) return@mapNotNull null
+                TabRoute(candidate,paths.map { it.first() },tabs)
+            }
+            check(routes.size==1) { "G01_PRODUCTS_TAB_GROUP_AMBIGUOUS count=${routes.size}" }
+            val route=routes.single();val row=route.row;val leaves=route.leaves;val tabs=route.tabs
+            val windows=ui.windows
+            val window=windows.single { it.id==active.windowId && it.isActive && it.isFocused &&
+                it.type==android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+            fun qualify(node:android.view.accessibility.AccessibilityNodeInfo) {
+                val bounds=rect(node)
+                check(node.isVisibleToUser && node.isEnabled && node.packageName==active.packageName &&
+                    node.windowId==window.id && !bounds.isEmpty && rect(active).contains(bounds) &&
+                    windows.none { other -> other.id!=window.id && other.layer>window.layer &&
+                        android.graphics.Rect.intersects(bounds,android.graphics.Rect().also(other::getBoundsInScreen)) }) { "G01_PRODUCTS_ROUTE_WINDOW_OR_OVERLAY" }
+            }
+            qualify(row);leaves.forEach(::qualify);tabs.forEach(::qualify)
+            val products=tabs[0]
+            val advertisedClick=products.actionList.any { it.id==android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK }
+            val selected=products.isSelected
+            if(selected) check(!products.isClickable && !advertisedClick) { "G01_SELECTED_TAB_ACTION_SHAPE" }
+            else check(products.isClickable && advertisedClick) { "G01_UNSELECTED_TAB_ACTION_SHAPE" }
+            val fields=all.filter { it.isVisibleToUser && it.isEnabled && it.isEditable &&
+                it.className?.toString()=="android.widget.EditText" }
+            check(fields.size<=1) { "G01_PRODUCTS_ROUTE_AMBIGUOUS" }
+            val field=fields.singleOrNull()
+            field?.let(::qualify)
+            val hint=label(R.string.database_products_search_hint)
+            val placeholderQualified=if(!selected || field==null) false else if(!requirePlaceholder) true else {
+                val matches=nodes(field).filter { it.isVisibleToUser &&
+                    (it.text?.toString()==hint || it.contentDescription?.toString()==hint) }
+                check(matches.size<=1) { "G01_PRODUCTS_PLACEHOLDER_AMBIGUOUS" }
+                matches.singleOrNull()?.let(::qualify)
+                matches.size==1 && field.text?.toString().orEmpty().isEmpty()
+            }
+            guard();return selected to field.takeIf { selected && placeholderQualified }
+        }
+        fun ensureProductsTabSelected():android.view.accessibility.AccessibilityNodeInfo {
+            var observed=productsRouteSample(true)
+            if(!observed.first) {
+                // Original unique click/window/geometry/overlay/authority checks stay intact.
+                click(R.string.database_tab_products,"products-tab")
+                observed=productsRouteSample(true)
+            }
+            while(observed.second==null) { guard();Thread.sleep(20);observed=productsRouteSample(true) }
+            guard();return requireNotNull(observed.second)
+        }
+        try {
+            check(binding.role=="peer" && binding.category=="delete" && binding.sampleID=="T20-G01-01")
+            val info=ui.serviceInfo;info.flags=info.flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;ui.serviceInfo=info
+            var resumed:List<android.app.Activity> = emptyList()
+            instrumentation.runOnMainSync { resumed=androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).toList() }
+            peerActivityCount=resumed.size
+            if(resumed.isEmpty()) {
+                peerActivity=instrumentation.startActivitySync(android.content.Intent(instrumentation.targetContext,MainActivity::class.java).setAction(android.content.Intent.ACTION_MAIN).addCategory(android.content.Intent.CATEGORY_LAUNCHER).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                peerActivityCount=if(peerActivity==null) 0 else 1
+            } else peerActivity=resumed.singleOrNull()
+            val editorTitle=label(R.string.edit_product_title)
+            check(nodes(root()).none { it.isVisibleToUser && it.text?.toString()==editorTitle }) { "G01_PEER_PREEXISTING_DRAFT" }
+            click(R.string.database,"database-root")
+            waitForLabel(R.string.database_tab_products,"products-tab-after-database")
+            val initialSearch=ensureProductsTabSelected()
+            val searchWindowID=initialSearch.windowId;val searchBounds=rect(initialSearch)
+            val query=fixture.getString("barcode");check(query.isNotBlank() && query.length<=255)
+            var searchReadSequence=0
+            var searchSetTextAttempted=false
+            var searchSetTextReturned:Boolean?=null
+            fun search():android.view.accessibility.AccessibilityNodeInfo {
+                searchReadSequence++
+                val observed=productsRouteSample(false);val field=requireNotNull(observed.second)
+                val observedSearchWindowID=field.windowId
+                val observedSearchBounds=rect(field)
+                check(observed.first && observedSearchWindowID==searchWindowID && field==initialSearch) {
+                    "G01_PRODUCTS_SEARCH_REPLACED read=$searchReadSequence set_text_attempted=$searchSetTextAttempted set_text_returned=$searchSetTextReturned products_selected=${observed.first} node_same=${field==initialSearch} initial_window=$searchWindowID observed_window=$observedSearchWindowID initial_bounds=$searchBounds observed_bounds=$observedSearchBounds"
+                }
+                guard();return field
+            }
+            if(search().text?.toString().orEmpty()!=query) {
+                val target=search()
+                searchSetTextAttempted=true
+                val returned=target.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT,android.os.Bundle().apply { putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,query) })
+                searchSetTextReturned=returned
+                check(returned)
+            }
+            while(search().text?.toString().orEmpty()!=query) { guard();Thread.sleep(20) }
+            if(ui.windows.any { it.type==android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }) check(ui.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK))
+            var first=b6TypedVisibleQuery(expected,"delete",true)
+            while(!(first.context && first.before && !first.after)) { guard();Thread.sleep(20);first=b6TypedVisibleQuery(expected,"delete",true) }
+            val image=requireNotNull(ui.takeScreenshot());val png=java.io.ByteArrayOutputStream().use { stream -> try { check(image.compress(android.graphics.Bitmap.CompressFormat.PNG,100,stream));stream.toByteArray() } finally { image.recycle() } }
+            val ax=nodes(root()).joinToString("\n") { it.toString() }.encodeToByteArray();val second=b6TypedVisibleQuery(expected,"delete",true)
+            check(listOf(first,second).all { it.context && it.before && !it.after && it.foreground && it.uniqueRow && it.viewport && it.overlayAbsent && it.exactQuery })
+            check(first.bounds==second.bounds && first.windowBounds==second.windowBounds && first.actualLabels==second.actualLabels && search().text?.toString()==query && png.size in 1..524288 && ax.size in 1..524288);guard()
+            B6PublishedFile.publish(File(dir,"native-ui.png"),png);B6PublishedFile.publish(File(dir,"native-ui.ax.txt"),ax)
+            val observedQuery=search().text.toString();check(observedQuery==query);guard()
+            val proof=JSONObject().put("schema","b6-g01-peer-ui-proof-v1").put("role","peer").put("sample_id",binding.sampleID).put("category",binding.category)
+                .put("operation_id",binding.operationID).put("manifest_sha256",binding.manifestHash).put("nonce",binding.nonce)
+                .put("participant_pid",android.os.Process.myPid()).put("participant_uid",android.os.Process.myUid())
+                .put("artifact_sha256",liveHash(File(instrumentation.targetContext.applicationInfo.sourceDir).readBytes()))
+                .put("test_artifact_sha256",liveHash(File(instrumentation.context.applicationInfo.sourceDir).readBytes()))
+                .put("begin_ns",begin).put("end_ns",android.os.SystemClock.elapsedRealtimeNanos()).put("actual_query",observedQuery)
+                .put("first",b6QueryJSON(first,0,"native_preparation")).put("second",b6QueryJSON(second,1,"confirm_after_capture"))
+                .put("png_sha256",liveHash(png)).put("ax_sha256",liveHash(ax)).put("nativeAcceptance",false)
+            guard();B6PublishedFile.publish(File(dir,"native-ui-proof.json"),(proof.toString()+"\n").encodeToByteArray())
+        } finally { val info=ui.serviceInfo;info.flags=oldFlags;ui.serviceInfo=info }
+    }
+
     /** Ordinary observation; an additional explicit G02-03 config enables one guarded native UI Save. */
     @Test
     fun task144B6ObserveOrdinaryWindowWhenEnabled() = runBlocking {
@@ -336,6 +544,10 @@ class Task103AuthPreflightTest {
             .put("participant_pid",android.os.Process.myPid()).put("artifact_sha256",apkHash)
             .put("b6_publication_protocol",B6PublishedFile.PROTOCOL)
         singleSave?.ready()?.let { fields -> fields.keys().forEach { key -> ready.put(key,fields.get(key)) } }
+        val nativeG01PeerUI=args.getString("task144B6NativeG01PeerUI")=="true"
+        require(!nativeG01PeerUI || singleSave==null && causal && binding.role=="peer" && binding.category=="delete" && binding.sampleID=="T20-G01-01")
+        if(nativeG01PeerUI) ready.put("native_peer_ui_proof_path",File(dir,"native-ui-proof.json").path)
+            .put("native_peer_ui_png_path",File(dir,"native-ui.png").path).put("native_peer_ui_ax_path",File(dir,"native-ui.ax.txt").path)
         if(causal) ready.put("source_admission_request_path",sourceAdmission.path).put("source_idle_witness_path",sourceWitness.path)
             .put("causal_trace_preview_path",tracePreview.path).put("visibility_confirmation_request_path",visibilityConfirmation.path)
             .put("causal_positive_preview_path",positivePreview.path).put("causal_query_log_path",queryLog.path)
@@ -348,6 +560,24 @@ class Task103AuthPreflightTest {
             emit(ready)
             val waitEnd=android.os.SystemClock.elapsedRealtimeNanos()+30_000_000_000L
             singleSave?.prepareNativeUI(waitEnd)
+            if(nativeG01PeerUI) {
+                val raw=requireNotNull(args.getString("task144B6VisibleBinding"));require(raw.toByteArray().size<=8192 && liveHash(raw.encodeToByteArray())==fixture.getString("visible_fields_sha256"))
+                prepareG01PeerNativeUI(binding,fixture,JSONObject(raw),dir,waitEnd,::current)
+            }
+            if(args.getString("task144B6PreparationOnly")=="true") {
+                require(nativeG01PeerUI || singleSave!=null) { "PREPARATION_UI_DRIVER_REQUIRED" }
+                singleSave?.cancelPreparationOnly(waitEnd)
+                if(binding.role=="source" && binding.category=="create") require(app.database.productDao().findByBarcode(fixture.getString("barcode"))==null)
+                if(binding.role=="peer" && binding.category=="delete") require(app.database.productDao().getById(requireNotNull(binding.localProductID))!=null)
+                require(current() && android.os.SystemClock.elapsedRealtimeNanos()<waitEnd)
+                emit(JSONObject().put("stage","PREPARATION_UI_TERMINAL").put("operation_id",binding.operationID)
+                    .put("manifest_sha256",binding.manifestHash).put("status","NOT_B6_ACCEPTANCE").put("nativeAcceptance",false)
+                    .put("participant_pid",android.os.Process.myPid()).put("participant_uid",android.os.Process.myUid())
+                    .put("native_ui_proof_path",File(dir,"native-ui-proof.json").path)
+                    .put("native_ui_png_path",File(dir,"native-ui.png").path).put("native_ui_ax_path",File(dir,"native-ui.ax.txt").path)
+                    .put("cancel_verified",singleSave!=null).put("no_draft_created",singleSave==null))
+                return@runBlocking
+            }
             while(!B6PublishedFile.isPublished(request) && android.os.SystemClock.elapsedRealtimeNanos()<waitEnd) Thread.sleep(20)
             require(B6PublishedFile.requireRead(request,64).contentEquals(binding.nonce.encodeToByteArray()) && current())
             singleSave?.freezeSetup(waitEnd)

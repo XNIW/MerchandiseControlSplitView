@@ -39,6 +39,10 @@ internal object B6PublishedFile {
         check(OsConstants.S_ISDIR(value.st_mode) && value.st_uid == Process.myUid() &&
             (value.st_mode and 511) == DIR_MODE && (value.st_mode and 3584) in setOf(0,1024)) { "B6_READY_SHAPE" }
     }
+    private fun aliasDiagnosticPath(value: String): String = value.split('/').joinToString("/") {
+        if (it in setOf("", ".", "..", "data", "user", "user_de", "0", "cache",
+                "com.example.merchandisecontrolsplitview")) it else "<redacted>"
+    }
     private class Parent(file: File): Closeable {
         val parent = requireNotNull(file.absoluteFile.parentFile)
         val name = file.name.also { check(it.matches(Regex("[A-Za-z0-9_.-]{1,180}")) && it != "." && it != "..") }
@@ -47,7 +51,15 @@ internal object B6PublishedFile {
         val leaf: String
         val ready: String
         init {
-            check(file.path == file.absolutePath && parent.canonicalPath == parent.path) { "B6_PARENT_ALIAS" }
+            check(file.path == file.absolutePath) {
+                "B6_PARENT_ALIAS reason=FILE_NOT_ABSOLUTE path=${aliasDiagnosticPath(file.path)} " +
+                    "absolute=${aliasDiagnosticPath(file.absolutePath)} uid=${Process.myUid()} pid=${Process.myPid()}"
+            }
+            val canonicalParent = parent.canonicalPath
+            check(canonicalParent == parent.path) {
+                "B6_PARENT_ALIAS reason=PARENT_NOT_CANONICAL parent=${aliasDiagnosticPath(parent.path)} " +
+                    "canonical=${aliasDiagnosticPath(canonicalParent)} uid=${Process.myUid()} pid=${Process.myPid()}"
+            }
             before = requireNotNull(stat(parent.path))
             check(OsConstants.S_ISDIR(before.st_mode) && before.st_uid == Process.myUid()) { "B6_PARENT_SHAPE" }
             val original = Os.open(parent.path,OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW,0)

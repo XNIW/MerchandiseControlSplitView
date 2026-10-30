@@ -173,9 +173,10 @@ internal class NormalB6SingleSaveActor(
         info.flags = info.flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         ui.serviceInfo = info
         // A visible preexisting editor is not a CUA-owned new benchmark draft.
-        val title = instrumentation.targetContext.getString(R.string.edit_product_title)
-        check(ui.windows.mapNotNull { it.root }.none { root -> root.packageName?.toString() == PACKAGE &&
-            nodes(root).any { it.isVisibleToUser && it.text?.toString() == title } }) { "SAVE_PREEXISTING_EDITOR" }
+        val visible = ui.windows.mapNotNull { it.root }.filter { it.packageName?.toString() == PACKAGE }
+            .flatMap { nodes(it) }.filter { it.isVisibleToUser }
+        val title = if (visible.isEmpty()) null else preparationLabel(R.string.edit_product_title)
+        check(visible.none { it.text?.toString() == title }) { "SAVE_PREEXISTING_EDITOR" }
     }
     fun restoreWindowObservation() {
         previousWindowFlags?.let { flags ->
@@ -202,7 +203,7 @@ internal class NormalB6SingleSaveActor(
             }
         }
         fun clickLabel(resource: Int) {
-            val root=roots(); val label=instrumentation.targetContext.getString(resource)
+            val root=roots(); val label=preparationLabel(resource)
             val candidates=nodes(root).filter { it.isVisibleToUser &&
                 (it.text?.toString()==label || it.contentDescription?.toString()==label) }.mapNotNull { leaf ->
                 var node: AccessibilityNodeInfo?=leaf; var depth=0
@@ -217,7 +218,7 @@ internal class NormalB6SingleSaveActor(
             guard(); check(target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { "SAVE_UI_PREP_CLICK" }
         }
         fun waitForLabel(resource: Int) {
-            val label=instrumentation.targetContext.getString(resource)
+            val label=preparationLabel(resource)
             while(true) {
                 guard()
                 if(nodes(roots()).any { it.isVisibleToUser && (it.text?.toString()==label || it.contentDescription?.toString()==label) }) return
@@ -225,7 +226,7 @@ internal class NormalB6SingleSaveActor(
             }
         }
         fun set(resource: Int, value: String) {
-            val title=instrumentation.targetContext.getString(resource)
+            val title=preparationLabel(resource)
             fun find()=nodes(roots()).filter { it.className?.toString()=="android.widget.EditText" &&
                 (it.hintText?.toString()==title || fieldLabels(it).any { label -> label.text?.toString()==title }) }.single()
             var node=find(); check(node.isEditable && node.isEnabled && node.error==null)
@@ -250,8 +251,9 @@ internal class NormalB6SingleSaveActor(
                 .setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
         activity=resumed()
+        val editorTitle=preparationLabel(R.string.edit_product_title)
         check(editorOpens==0 && nodes(roots()).none { it.isVisibleToUser &&
-            it.text?.toString()==instrumentation.targetContext.getString(R.string.edit_product_title) }) { "SAVE_UI_PREEXISTING_DRAFT" }
+            it.text?.toString()==editorTitle }) { "SAVE_UI_PREEXISTING_DRAFT" }
         clickLabel(R.string.database); waitForLabel(R.string.add_product)
         check(editorOpens==0); clickLabel(R.string.add_product); waitForLabel(R.string.edit_product_title)
         set(R.string.barcode_label,expected.barcode)
@@ -280,6 +282,38 @@ internal class NormalB6SingleSaveActor(
             .put("editor_opens",editorOpens).put("save_count",saves).put("expected_local_body_sha256",binding.expectedLocalBodyHash)
             .put("png_sha256",sha(png)).put("ax_sha256",sha(ax))
         guard(); B6PublishedFile.publish(File(directory,"native-ui-proof.json"),bytes(proof.toString()+"\n")); guard()
+    }
+
+    fun cancelPreparationOnly(deadlineNS: Long) {
+        check(SystemClock.elapsedRealtimeNanos()<deadlineNS && current() && saves==0 && !consumed.get()) { "PREPARATION_CANCEL_GUARD" }
+        qualifiedSave()
+        val ui=instrumentation.uiAutomation
+        val root=requireNotNull(ui.rootInActiveWindow)
+        val label=preparationLabel(R.string.cancel)
+        val targets=nodes(root).filter { it.isVisibleToUser && (it.text?.toString()==label || it.contentDescription?.toString()==label) }.mapNotNull { leaf ->
+            var node:AccessibilityNodeInfo?=leaf;var depth=0
+            while(node!=null && depth++<24 && !(node.isVisibleToUser && node.isClickable && node.isEnabled)) node=node.parent
+            node
+        }.distinct()
+        val target=targets.single();val area=rect(target)
+        val window=ui.windows.single { it.id==root.windowId && it.isActive && it.isFocused && it.type==android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+        check(target.packageName?.toString()==PACKAGE && target.windowId==window.id && !area.isEmpty && rect(root).contains(area) &&
+            ui.windows.none { it.id!=window.id && it.layer>window.layer && Rect.intersects(area,Rect().also(it::getBoundsInScreen)) }) { "PREPARATION_CANCEL_TARGET" }
+        check(target.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        val title=preparationLabel(R.string.edit_product_title)
+        while(nodes(requireNotNull(ui.rootInActiveWindow)).any { it.isVisibleToUser && it.text?.toString()==title }) {
+            check(SystemClock.elapsedRealtimeNanos()<deadlineNS && current() && saves==0 && !consumed.get());Thread.sleep(20)
+        }
+        val restored=requireNotNull(ui.rootInActiveWindow)
+        val products=preparationLabel(R.string.database_tab_products)
+        check(restored.packageName?.toString()==PACKAGE && nodes(restored).count { it.isVisibleToUser && it.text?.toString()==products }==1 &&
+            SystemClock.elapsedRealtimeNanos()<deadlineNS && current() && saves==0 && !consumed.get())
+    }
+
+    private fun preparationLabel(resource: Int): String {
+        val currentActivity = resumed()
+        check(current() && (activity == null || currentActivity === activity)) { "SAVE_RESOURCE_ACTIVITY_CHANGED" }
+        return currentActivity.getString(resource)
     }
 
     private fun resumed(): Activity {

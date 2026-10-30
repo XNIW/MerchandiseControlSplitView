@@ -152,6 +152,117 @@ class DatabaseViewModelTest {
     }
 
     @Test
+    @Config(qualifiers = "en")
+    fun `editor save messages follow four selected languages without changing application locale`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val applicationConfiguration = android.content.res.Configuration(app.resources.configuration)
+        val defaultLocale = java.util.Locale.getDefault()
+        val product = sampleProduct(id = 9L, barcode = "LOCALE-SAVE")
+        coEvery { repository.updateProduct(product) } just runs
+        coEvery { repository.addProductAndReturnId(product.copy(id = 0L)) } returns 91L
+        val cases = listOf(
+            "zh" to "产品已保存在此设备上，等待云端确认。",
+            "es" to "Producto guardado en este dispositivo. Confirmación en la nube pendiente.",
+            "it" to "Prodotto salvato sul dispositivo. Conferma cloud in attesa.",
+            "en" to "Product saved on this device. Cloud confirmation pending."
+        )
+        try {
+            cases.forEach { (language, expected) ->
+                assertTrue(settings.edit().putString("lang", language).commit())
+                val preferencesBefore = settings.all.toMap()
+                viewModel.updateProduct(product)
+                advanceUntilIdle()
+                assertEquals(UiState.Success(expected), viewModel.uiState.value)
+                viewModel.addProduct(product.copy(id = 0L))
+                advanceUntilIdle()
+                assertEquals(UiState.Success(expected), viewModel.uiState.value)
+                assertEquals(preferencesBefore, settings.all)
+                assertEquals(applicationConfiguration, app.resources.configuration)
+                assertEquals(defaultLocale, java.util.Locale.getDefault())
+            }
+            assertTrue(settings.edit().remove("lang").commit())
+            viewModel.updateProduct(product)
+            advanceUntilIdle()
+            assertEquals(UiState.Success(app.getString(R.string.success_product_updated)), viewModel.uiState.value)
+            coVerify(exactly = 5) { repository.updateProduct(product) }
+            coVerify(exactly = 4) { repository.addProductAndReturnId(product.copy(id = 0L)) }
+        } finally {
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun `editor conflict and duplicate errors follow current selected language and preserve draft`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val baseline = sampleProduct(id = 33L, barcode = "LOCALE-CONFLICT", productName = "Base")
+        val desired = baseline.copy(productName = "Local")
+        viewModel.openProductEditor(baseline)
+        coEvery { repository.updateProductFromEditor(baseline, desired) } throws
+            com.example.merchandisecontrolsplitview.data.ProductEditConflictException()
+        try {
+            assertTrue(settings.edit().putString("lang", "zh").commit())
+            assertEquals(ProductEditorSaveResult.Failed("编辑期间商品已更改。请重新打开以查看最新数据。"),
+                viewModel.saveProductFromEditor(desired))
+            assertEquals(baseline, viewModel.productEditorTarget.value)
+            assertEquals(desired, viewModel.draftProductConflictReview.value?.desired)
+            coEvery { repository.updateProductFromEditor(baseline, desired) } throws SQLiteConstraintException("duplicate")
+            assertTrue(settings.edit().putString("lang", "es").commit())
+            assertEquals(ProductEditorSaveResult.Failed("Error: Ya existe un producto con este código de barras."),
+                viewModel.saveProductFromEditor(desired))
+            assertEquals(baseline, viewModel.productEditorTarget.value)
+            coVerify(exactly = 2) { repository.updateProductFromEditor(baseline, desired) }
+            coVerify(exactly = 0) { repository.updateProduct(any()) }
+            assertEquals(UiState.Idle, viewModel.uiState.value)
+        } finally {
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun `persisted conflict completion resolves current selected language after suspension`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val fixture = persistedReviewViewModel()
+        val store = ViewModelStore().apply { put("locale-review", fixture.first) }
+        val product = sampleProduct(144L, "LOCALE-R4", "Preserved")
+        val context = persistedReviewContext(product, revision = 1)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") } returns context
+        coEvery { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) } coAnswers {
+            started.complete(Unit)
+            release.await()
+            PersistedCatalogConflictResult.Resolved(null, adoptedRemote = true)
+        }
+        try {
+            assertTrue(settings.edit().putString("lang", "en").commit())
+            assertTrue(fixture.first.requestPersistedCatalogConflict(
+                PersistedCatalogConflictTarget(product.id, "r4-owner", "r4-shop")))
+            advanceUntilIdle()
+            fixture.first.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+            runCurrent()
+            assertTrue(started.isCompleted)
+            assertTrue(settings.edit().putString("lang", "zh").commit())
+            release.complete(Unit)
+            advanceUntilIdle()
+            assertTrue(fixture.first.persistedCatalogConflictReview.value?.resolved == true)
+            assertEquals("已采用远程版本。", fixture.first.persistedCatalogConflictReview.value?.message)
+            assertEquals(product, fixture.first.productEditorTarget.value)
+            coVerify(exactly = 1) { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) }
+            coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+            coVerify(exactly = 0) { repository.updateProduct(any()) }
+        } finally {
+            release.complete(Unit)
+            store.clear()
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
+    }
+
+    @Test
     fun `supplierCatalogSection emits loaded state from repository`() = runTest {
         every { repository.observeCatalogItems(CatalogEntityKind.SUPPLIER, null) } returns flowOf(
             listOf(

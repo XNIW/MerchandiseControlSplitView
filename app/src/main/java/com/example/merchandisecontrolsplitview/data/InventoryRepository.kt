@@ -3859,13 +3859,7 @@ class DefaultInventoryRepository(
             }
             if (!watermarkValid) { trace?.event("scope_unavailable", "watermark_invalid"); return false }
             validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
-            withPriceParentProjection(db, baseline.generationId) {
-                trace.span("receipt") { validateShopSyncCanonicalReceipt(db, baseline.generationId, checkpoint) }
-                trace.span("physical") {
-                    validatePhysicalSnapshot(db,baseline.generationId,activeStoreHistory=true,
-                        localOverlay=true, localAcknowledgements=true)
-                }
-            }
+            validateShopSyncOrdinaryLocalProof(db, baseline.generationId, checkpoint)
             true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { trace?.event("scope_unavailable", "validation_failed"); false }
