@@ -5,7 +5,11 @@ import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 
 /** Transaction-local overlay of existing local intent. No network, new keys, or durable second sync queue. */
-internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) {
+internal class SameScopeRecoveryOverlay(
+    private val sql: SupportSQLiteDatabase,
+    private val resolution: BusinessResolutionLedger.Snapshot? = null,
+    private val retiredAttemptIds: Set<Long> = emptySet()
+) {
     private data class Domain(val table: String, val key: String, val refs: String, val foreign: String)
     private val domains = listOf(
         Domain("suppliers", "id", "supplier_remote_refs", "supplierId"),
@@ -15,18 +19,26 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
         Domain("history_entries", "uid", "history_entry_remote_refs", "historyEntryUid")
     )
     private val tempTables = mutableListOf<String>()
+    private var captureCompleted = false
 
     fun capture() {
         temp("pending_outbox", "SELECT * FROM sync_event_outbox")
         temp("pending_tombstones", "SELECT * FROM pending_catalog_tombstones")
+        resolution?.requireValid()
+        sql.execSQL("CREATE TEMP TABLE mc_resolved_product_revisions(remoteId TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(remoteId,revision))")
+        tempTables += "mc_resolved_product_revisions"
+        resolution?.decisions?.forEach { record -> record.decision!!.withdrawnRevisions.forEach { revision ->
+            sql.execSQL("INSERT INTO mc_resolved_product_revisions VALUES(?,?)", arrayOf<Any>(requireNotNull(record.remoteId), revision))
+        } }
         prepareOwnedWriteProofs()
         for (d in domains) {
             temp("old_${d.refs}", "SELECT * FROM `${d.refs}`")
             sql.execSQL("CREATE UNIQUE INDEX mc_old_${d.refs}_foreign ON mc_old_${d.refs}(${d.foreign})")
             sql.execSQL("CREATE UNIQUE INDEX mc_old_${d.refs}_remote ON mc_old_${d.refs}(remoteId)")
-            val dirty = if (d.table == "product_prices") "r.id IS NULL" else
+            val rawDirty = if (d.table == "product_prices") "r.id IS NULL" else
                 "r.id IS NULL OR r.lastRemoteAppliedAt IS NULL OR r.localChangeRevision<>r.lastSyncedLocalRevision" +
                     if (d.table == "history_entries") " OR p.syncStatus<>'SYNCED_SUCCESSFULLY'" else ""
+            val dirty = if (d.table == "products") "($rawDirty) AND NOT EXISTS(SELECT 1 FROM mc_resolved_product_revisions x WHERE x.remoteId=r.remoteId AND x.revision=r.localChangeRevision)" else rawDirty
             temp("pending_${d.table}", "SELECT p.* FROM `${d.table}` p LEFT JOIN `${d.refs}` r ON r.${d.foreign}=p.${d.key} WHERE $dirty")
             val maximum = scalar("SELECT COALESCE(MAX(${d.key}),0) FROM `${d.table}`")
             val stageMaximum = scalar("SELECT COALESCE(MAX(${d.key}),0) FROM temp.`mc_recovery_source_${d.table}`")
@@ -56,7 +68,15 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
                 throw ShopSyncContractException("recovery_local_remote_conflict")
             }
         }
+        // The remote tombstone must not destroy an existing append-only child through the Product FK.
+        if (scalar("""SELECT COUNT(*) FROM mc_old_product_remote_refs r
+            JOIN mc_resolved_product_revisions x ON x.remoteId=r.remoteId AND x.revision=r.localChangeRevision
+            JOIN product_prices p ON p.productId=r.productId
+            WHERE NOT EXISTS(SELECT 1 FROM temp.mc_recovery_source_product_remote_refs n WHERE n.remoteId=r.remoteId)""") > 0) {
+            throw ShopSyncContractException("recovery_resolved_parent_tombstone_has_dependencies")
+        }
         prepareProductProjection()
+        captureCompleted = true
     }
 
     private fun prepareOwnedWriteProofs() {
@@ -75,9 +95,10 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
             if (it.moveToFirst()) it.getString(0) else null
         }
         sql.query("SELECT ownerUserId,storeScope,sourceDeviceId,clientEventId,metadataJson," +
-            "length(CAST(metadataJson AS BLOB)),domain FROM mc_pending_outbox WHERE eventType=?",
+            "length(CAST(metadataJson AS BLOB)),domain,id FROM mc_pending_outbox WHERE eventType=?",
             arrayOf(BUSINESS_WRITE_EVENT)).use { c ->
             while (c.moveToNext()) {
+                if (c.getLong(7) in retiredAttemptIds) continue
                 if (c.getLong(5) !in 1..BUSINESS_WRITE_MAX_BYTES.toLong())
                     throw ShopSyncContractException("recovery_owned_write_proof_invalid")
                 val raw = c.getString(4)
@@ -89,7 +110,7 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
                     binding.storeId==Task126OwnerStoreScope.normalizedStoreId(proof.store) && binding.schemaVersion==proof.schema &&
                     binding.localStoreId==proof.localStore && binding.syncProtocolVersion==proof.protocol && binding.storeEpoch==proof.epoch
                 val device = deviceId==proof.device
-                if (!bound || !device || proof.version!=1 || proof.owner!=c.getString(0) ||
+                if (!bound || !device || proof.version !in 1..2 || proof.owner!=c.getString(0) ||
                     proof.store!=c.getString(1) || proof.device!=c.getString(2) || key!=c.getString(3) ||
                     proof.store!=proof.shop?.let { "shop:$it" }.orEmpty() || proof.payload.kind!=c.getString(6))
                     throw ShopSyncContractException("recovery_owned_write_scope_invalid")
@@ -98,7 +119,7 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
                 }
                 for (revision in proof.payload.revisions) {
                     when(proof.payload.kind) {
-                        "PATCH","PRODUCTS" -> {
+                        "PATCH","PATCH_CONDITIONAL","PRODUCTS" -> {
                             if(revision.fingerprint?.startsWith("product-base-v2:")!=true)
                                 throw ShopSyncContractException("recovery_owned_write_revision_invalid")
                             sql.execSQL("INSERT INTO mc_product_write_proofs VALUES(?,?,?)",
@@ -277,7 +298,52 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
             throw ShopSyncContractException("recovery_local_intent_readback_failed")
     }
 
+    /**
+     * Optional SAME_SCOPE fast path, called after capture and before any active-table DML,
+     * in the same Room writer transaction. It is all-or-nothing across the five business
+     * tables: every physical SQL value and mapped primary key must already equal the
+     * incoming projection. Remote fingerprints, counts and receipt equality are not proof.
+     *
+     * Any captured local intent, tombstone or raw outbox entry uses the existing full
+     * replacement path. This includes unknown/sealed/R4 evidence; this method neither
+     * retires nor interprets it. References and all activation metadata still refresh.
+     */
+    fun unchangedBusinessTablesToRetain(): Set<String> {
+        check(captureCompleted && sql.inTransaction()) {
+            "Unchanged-body proof requires captured state in the activation transaction"
+        }
+        if (hasRow("SELECT 1 FROM mc_pending_outbox LIMIT 1") ||
+            hasRow("SELECT 1 FROM mc_pending_tombstones LIMIT 1") ||
+            domains.any { hasRow("SELECT 1 FROM mc_pending_${it.table} LIMIT 1") }) {
+            return emptySet()
+        }
+        for (domain in domains) {
+            val mapped = mappedRemoteRows(domain.table)
+            // Explicit BINARY avoids the categories.name NOCASE collation accepting
+            // a case-only physical change. IS keeps NULL distinct from every value.
+            val equal = mapped.columns.joinToString(" AND ") {
+                "a.`$it` COLLATE BINARY IS n.`$it` COLLATE BINARY"
+            }
+            if (hasRow("SELECT 1 FROM (${mapped.select}) n WHERE NOT EXISTS(" +
+                    "SELECT 1 FROM `${domain.table}` a WHERE a.`${domain.key}`=n.`${domain.key}` AND $equal) LIMIT 1") ||
+                hasRow("SELECT 1 FROM `${domain.table}` a WHERE NOT EXISTS(" +
+                    "SELECT 1 FROM (${mapped.select}) n WHERE n.`${domain.key}`=a.`${domain.key}`) LIMIT 1")) {
+                return emptySet()
+            }
+        }
+        return domains.mapTo(linkedSetOf()) { it.table }
+    }
+
     fun copyRemoteTable(table: String) {
+        val mapped = mappedRemoteRows(table)
+        sql.execSQL("INSERT INTO `$table` (${mapped.columns.quoted()}) ${mapped.select}")
+    }
+
+    private data class MappedRemoteRows(val columns: List<String>, val select: String)
+
+    // One projection for both the original INSERT and the optional physical-equality
+    // proof. ID allocation, FK mapping and resolved-revision semantics are unchanged.
+    private fun mappedRemoteRows(table: String): MappedRemoteRows {
         val columns = columns(table)
         val domain = domains.firstOrNull { it.table == table || it.refs == table }
             ?: throw ShopSyncContractException("recovery_overlay_table_invalid")
@@ -293,6 +359,8 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
             when {
                 ref && column == "id" -> "COALESCE(o.id,s.id+$maxRef)"
                 ref && column == domain.foreign -> "m.targetId"
+                table == "product_remote_refs" && column in setOf("localChangeRevision", "lastSyncedLocalRevision") ->
+                    "CASE WHEN EXISTS(SELECT 1 FROM mc_resolved_product_revisions x WHERE x.remoteId=o.remoteId AND x.revision=o.localChangeRevision) THEN o.`$column` ELSE s.`$column` END"
                 !ref && column == domain.key -> "m.targetId"
                 table == "products" && column == "supplierId" -> "sm.targetId"
                 table == "products" && column == "categoryId" -> "cm.targetId"
@@ -307,7 +375,11 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
             if (table == "products") append(" LEFT JOIN mc_map_suppliers sm ON sm.sourceId=s.supplierId LEFT JOIN mc_map_categories cm ON cm.sourceId=s.categoryId")
             if (table == "product_prices") append(" JOIN mc_map_products pm ON pm.sourceId=s.productId")
         }
-        sql.execSQL("INSERT INTO `$table` (${columns.quoted()}) SELECT ${selections.joinToString(",")} FROM temp.`mc_recovery_source_$table` s $joins")
+        val aliased = selections.zip(columns).joinToString(",") { (selection, column) ->
+            "$selection AS `$column`"
+        }
+        return MappedRemoteRows(columns,
+            "SELECT $aliased FROM temp.`mc_recovery_source_$table` s $joins")
     }
 
     fun restorePending() {
@@ -351,6 +423,8 @@ internal class SameScopeRecoveryOverlay(private val sql: SupportSQLiteDatabase) 
         sql.execSQL("CREATE TEMP TABLE `$table` AS $select")
         tempTables += table
     }
+
+    private fun hasRow(query: String): Boolean = sql.query(query).use { it.moveToFirst() }
 
     private fun scalar(query: String): Long = sql.query(query).use {
         if (!it.moveToFirst()) throw ShopSyncContractException("recovery_overlay_scalar_missing")

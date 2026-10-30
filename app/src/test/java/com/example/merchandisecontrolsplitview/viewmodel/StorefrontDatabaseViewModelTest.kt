@@ -1,6 +1,16 @@
 package com.example.merchandisecontrolsplitview.viewmodel
 
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import android.app.Application
+import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
+import com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
+import com.example.merchandisecontrolsplitview.data.SelectedShop
+import com.example.merchandisecontrolsplitview.data.ShopContext
+import com.example.merchandisecontrolsplitview.data.ShopContextRepository
+import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.data.FileStorefrontPendingMutationStore
 import com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStore
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
@@ -25,6 +35,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -44,7 +55,7 @@ import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(application = Application::class, sdk = [33])
 class StorefrontDatabaseViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
@@ -58,11 +69,39 @@ class StorefrontDatabaseViewModelTest {
     private lateinit var imageService: ProductImageService
     private lateinit var remote: FakeStorefrontRemote
     private var network = true
+    private lateinit var localAuth: MutableStateFlow<AuthState>
+    private lateinit var localIdentity: MutableStateFlow<LocalAuthIdentity?>
+    private lateinit var localShop: MutableStateFlow<ShopContext>
+    private lateinit var localTracker: CatalogSyncStateTracker
+    private var localGeneration = 0L
     private var scope: Pair<String, String>? = ACCOUNT_ID to SHOP_ID
+        set(value) {
+            field = value
+            if (::localAuth.isInitialized) publishFixtureScope(value)
+        }
 
     @Before
     fun setup() {
-        app = RuntimeEnvironment.getApplication() as MerchandiseControlApplication
+        val context: Application = RuntimeEnvironment.getApplication()
+        localAuth = MutableStateFlow(AuthState.SignedOut)
+        localIdentity = MutableStateFlow(null)
+        localShop = MutableStateFlow(ShopContext.legacy())
+        localTracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.checking())
+        val manager = mockk<SupabaseAuthManager>()
+        every { manager.state } returns localAuth
+        every { manager.localIdentity } returns localIdentity
+        every { manager.isCurrentLocalIdentity(any()) } answers {
+            val value = firstArg<LocalAuthIdentity>()
+            value == localIdentity.value && scope?.first == value.userId
+        }
+        val shops = mockk<ShopContextRepository>()
+        every { shops.state } returns localShop
+        app = mockk(relaxed = true)
+        every { app.applicationContext } returns context
+        every { app.authManager } returns manager
+        every { app.shopContextRepository } returns shops
+        every { app.catalogSyncStateTracker } returns localTracker
+        publishFixtureScope(scope)
         repository = mockk(relaxed = true)
         imageService = mockk(relaxed = true)
         remote = FakeStorefrontRemote()
@@ -408,22 +447,27 @@ class StorefrontDatabaseViewModelTest {
         save(product(), "First")
         save(product().copy(id = LOCAL_ID + 1), "Second")
         scope = ACCOUNT_ID to OTHER_SHOP_ID
+        advanceUntilIdle()
         vm.openProductEditor(product())
         advanceUntilIdle()
         assertFalse(vm.storefrontEditorState.value.pendingConnection)
         save(product(), "Other shop")
         scope = OTHER_SHOP_ID to SHOP_ID
+        advanceUntilIdle()
         vm.openProductEditor(product())
         advanceUntilIdle()
         assertFalse(vm.storefrontEditorState.value.pendingConnection)
         scope = null
+        advanceUntilIdle()
         vm.openProductEditor(product())
         advanceUntilIdle()
         assertFalse(vm.storefrontEditorState.value.canAuthor)
         scope = ACCOUNT_ID to SHOP_ID
+        advanceUntilIdle()
         vm.openProductEditor(product())
         advanceUntilIdle()
         assertEquals("First", vm.storefrontEditorState.value.draft.publicName)
+        vm.dismissProductEditor() // A new record is opened only after the current editor is closed.
         vm.openProductEditor(product().copy(id = LOCAL_ID + 1))
         advanceUntilIdle()
         assertEquals("Second", vm.storefrontEditorState.value.draft.publicName)
@@ -750,6 +794,24 @@ class StorefrontDatabaseViewModelTest {
                 } else Result.success(response)
             }
         }
+    }
+
+    /** Real read-gate inputs: withdraw before a confirmed scope change, then publish its bound state. */
+    private fun publishFixtureScope(value: Pair<String, String>?) {
+        localTracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+        localGeneration += 1L
+        if (value == null) {
+            localIdentity.value = null
+            localAuth.value = AuthState.SignedOut
+            localShop.value = ShopContext.legacy()
+            return
+        }
+        val selected = SelectedShop(value.second, null, "Owned storefront fixture", "owner", "active", true)
+        localIdentity.value = LocalAuthIdentity(value.first, localGeneration)
+        localAuth.value = AuthState.SignedIn(value.first, null)
+        localShop.value = ShopContext(value.first, emptyList(), selected)
+        localTracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.ready(
+            task126ActiveOwnerStoreScope(value.first, selected)))
     }
 
     private fun viewModel() = DatabaseViewModel(

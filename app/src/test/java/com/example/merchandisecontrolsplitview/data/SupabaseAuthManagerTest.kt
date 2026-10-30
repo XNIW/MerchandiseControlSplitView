@@ -51,6 +51,222 @@ class SupabaseAuthManagerTest {
     }
 
     @Test
+    fun `bootstrap exposes only persisted local identity while SDK initialization is held`() = runTest {
+        val stored = SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null)
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed).apply { persistedUser = stored }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            assertEquals(0L, testScheduler.currentTime)
+            assertEquals(SessionStatus.Initializing, controller.sessionStatus.value)
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertFalse("Checking cannot admit the SignedIn cloud branch", manager.state.value is AuthState.SignedIn)
+            val identity = requireNotNull(manager.localIdentity.value)
+            assertEquals(stored.id, identity.userId)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertEquals(0, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS)
+            runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(identity, manager.localIdentity.value)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertEquals(0, controller.refreshCalls)
+
+            controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+            runCurrent()
+            assertEquals(null, manager.localIdentity.value)
+            assertFalse(manager.isCurrentLocalIdentity(identity))
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            controller.sessionStatus.value = authenticatedStatus()
+            runCurrent()
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            assertEquals(0, controller.refreshCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `bootstrap keeps persisted local identity in checking while validation refresh is held`() = runTest {
+        val stored = SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null)
+        val refresh = CompletableDeferred<StoredSessionRefreshResult>()
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(),
+            StoredSessionRefreshResult.Refreshed).apply {
+            persistedUser = stored
+            refreshHandler = { refresh.await() }
+        }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertFalse("A suspended validation must not publish SignedIn cloud authority", manager.state.value is AuthState.SignedIn)
+            val identity = requireNotNull(manager.localIdentity.value)
+            assertEquals(stored.id, identity.userId)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertEquals(1, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+
+            refresh.complete(StoredSessionRefreshResult.Refreshed)
+            advanceUntilIdle()
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            assertTrue(manager.isCurrentLocalIdentity(requireNotNull(manager.localIdentity.value)))
+            assertEquals(1, controller.refreshCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `SDK denial during early persisted read cannot publish a local identity`() = runTest {
+        val persisted = CompletableDeferred<SupabaseSessionUser?>()
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed).apply { persistedUserHandler = { persisted.await() } }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+            runCurrent()
+            persisted.complete(SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null))
+            advanceUntilIdle()
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            assertEquals(0, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `account switch intent supersedes an early persisted read before SDK admission`() = runTest {
+        val persisted = CompletableDeferred<SupabaseSessionUser?>()
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed).apply { persistedUserHandler = { persisted.await() } }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            assertFalse(manager.signInWithGoogle(stubContext()))
+            persisted.complete(SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null))
+            runCurrent()
+            controller.sessionStatus.value = authenticatedStatus()
+            advanceUntilIdle()
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            assertEquals(0, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `cancelled early persisted read cannot publish identity or resume on later SDK success`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed).apply {
+            persistedUserHandler = { throw CancellationException("synthetic persisted read cancellation") }
+        }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
+            controller.sessionStatus.value = authenticatedStatus()
+            advanceUntilIdle()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(0, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `restore already signed in preserves its identity while another refresh is held`() = runTest {
+        val stored = SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null)
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(),
+            StoredSessionRefreshResult.Refreshed).apply { persistedUser = stored }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            advanceUntilIdle()
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            val identity = requireNotNull(manager.localIdentity.value)
+            val refresh = CompletableDeferred<StoredSessionRefreshResult>()
+            controller.persistedUser = null
+            controller.refreshHandler = { refresh.await() }
+
+            manager.restoreSession()
+            runCurrent()
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            assertEquals(identity, manager.localIdentity.value)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertEquals(2, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+
+            refresh.complete(StoredSessionRefreshResult.Refreshed)
+            advanceUntilIdle()
+            assertEquals(identity, manager.localIdentity.value)
+            assertEquals(2, controller.refreshCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `held early persisted read shares the SDK deadline and cannot delay later SDK recovery`() = runTest {
+        val persisted = CompletableDeferred<SupabaseSessionUser?>()
+        var reads = 0
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed).apply {
+            persistedUserHandler = {
+                reads += 1
+                persisted.await()
+            }
+        }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            assertEquals(1, reads)
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS - 1)
+            runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(0, controller.refreshCalls)
+
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(SupabaseAuthManager.RESTORE_TIMEOUT_MS, testScheduler.currentTime)
+            assertEquals(1, reads)
+            assertFalse(persisted.isCompleted)
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
+
+            // SDK recovery must enter validation while the cancelled storage read is still held.
+            controller.sessionStatus.value = authenticatedStatus()
+            runCurrent()
+            assertEquals(1, controller.refreshCalls)
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            val identity = requireNotNull(manager.localIdentity.value)
+            assertEquals(controller.sessionUser?.id, identity.userId)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertFalse(persisted.isCompleted)
+
+            persisted.complete(SupabaseSessionUser("00000000-0000-4000-8000-000000000140", null))
+            advanceUntilIdle()
+            assertEquals(identity, manager.localIdentity.value)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            assertEquals(1, reads)
+            assertEquals(1, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
     fun `restore refreshes the persisted session before publishing signed in`() = runTest {
         val controller = FakeSupabaseAuthSessionController(
             initialStatus = authenticatedStatus(),
@@ -168,6 +384,100 @@ class SupabaseAuthManagerTest {
         } finally {
             managerScope.cancel()
         }
+    }
+
+    @Test
+    fun `restore timeout is waiting auth and never a synthetic signed out decision`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing, StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS + 1)
+            runCurrent()
+            assertFalse("R4-T13: timeout is not logout or definitive denial", manager.state.value is AuthState.SignedOut)
+            assertFalse("Unqualified SDK state must not admit cloud work", manager.state.value is AuthState.SignedIn)
+            assertEquals(0, controller.clearCalls)
+            controller.sessionStatus.value = authenticatedStatus()
+            advanceUntilIdle()
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            assertEquals(1, controller.refreshCalls)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `bootstrap refresh transport failure preserves waiting authority until SDK resolves`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing, StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession()
+            runCurrent()
+            controller.sessionStatus.value = SessionStatus.RefreshFailure(RefreshFailureCause.NetworkError(IOException("synthetic offline")))
+            runCurrent()
+            assertFalse("R4-T13: transient transport failure is not a signed-out decision", manager.state.value is AuthState.SignedOut)
+            assertFalse(manager.state.value is AuthState.SignedIn)
+            assertEquals(0, controller.clearCalls)
+            controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+            runCurrent()
+            assertEquals(AuthState.SignedOut, manager.state.value)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `waiting bootstrap projects only persisted identity and revokes it on SDK signout`() = runTest {
+        val stored = SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null)
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing,
+            StoredSessionRefreshResult.Refreshed, sessionUser = null).apply { persistedUser = stored }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession(); runCurrent()
+            controller.sessionStatus.value = SessionStatus.RefreshFailure(RefreshFailureCause.NetworkError(IOException("synthetic offline")))
+            runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            val identity = requireNotNull(manager.localIdentity.value)
+            assertEquals(stored.id, identity.userId)
+            assertTrue(manager.isCurrentLocalIdentity(identity))
+            controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+            runCurrent()
+            assertEquals(null, manager.localIdentity.value)
+            assertFalse(manager.isCurrentLocalIdentity(identity))
+            assertEquals(AuthState.SignedOut, manager.state.value)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `waiting bootstrap never invents local authority from current user without persisted proof`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing, StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession(); runCurrent()
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS + 1); runCurrent()
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
+        } finally { managerScope.cancel() }
+    }
+
+    @Test
+    fun `late persisted identity load cannot restore authority after explicit signout`() = runTest {
+        val persisted = CompletableDeferred<SupabaseSessionUser?>()
+        val controller = FakeSupabaseAuthSessionController(SessionStatus.Initializing, StoredSessionRefreshResult.Refreshed)
+            .apply { persistedUserHandler = { persisted.await() } }
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        try {
+            manager.restoreSession(); runCurrent()
+            advanceTimeBy(SupabaseAuthManager.RESTORE_TIMEOUT_MS + 1); runCurrent()
+            val logout = managerScope.launch { manager.signOut() }
+            runCurrent()
+            persisted.complete(SupabaseSessionUser("00000000-0000-4000-8000-000000000139", null))
+            advanceUntilIdle(); logout.join()
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(AuthState.SignedOut, manager.state.value)
+        } finally { managerScope.cancel() }
     }
 
     @Test
@@ -440,12 +750,25 @@ class SupabaseAuthManagerTest {
             runCurrent()
             controller.sessionStatus.value = authenticatedStatus()
             advanceUntilIdle()
+            // Cancellation is not an SDK denial. It must neither sign in nor fabricate logout.
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
             val session = authenticatedStatus().session
             controller.sessionStatus.value = SessionStatus.Authenticated(session, SessionSource.Refresh(session))
             advanceUntilIdle()
 
-            assertEquals(AuthState.SignedOut, manager.state.value)
+            assertEquals(AuthState.Checking, manager.state.value)
+            assertEquals(null, manager.localIdentity.value)
             assertEquals(1, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+
+            // The cancelled automatic latch is retired, but a new explicit restore remains usable.
+            controller.refreshHandler = { StoredSessionRefreshResult.Refreshed }
+            manager.restoreSession()
+            advanceUntilIdle()
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            assertEquals(controller.sessionUser?.id, manager.localIdentity.value?.userId)
+            assertEquals(2, controller.refreshCalls)
             assertEquals(0, controller.clearCalls)
         } finally {
             managerScope.cancel()
@@ -690,6 +1013,9 @@ private class FakeSupabaseAuthSessionController(
         private set
 
     override fun currentUserOrNull() = sessionUser
+    var persistedUser: SupabaseSessionUser? = null
+    var persistedUserHandler: (suspend () -> SupabaseSessionUser?)? = null
+    override suspend fun persistedUserOrNull(): SupabaseSessionUser? = persistedUserHandler?.invoke() ?: persistedUser
 
     override suspend fun refreshStoredSession(): StoredSessionRefreshResult {
         refreshCalls += 1

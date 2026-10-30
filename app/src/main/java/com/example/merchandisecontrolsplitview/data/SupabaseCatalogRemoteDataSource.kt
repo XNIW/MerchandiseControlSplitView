@@ -5,6 +5,7 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 
 /**
@@ -113,6 +114,78 @@ class SupabaseCatalogRemoteDataSource(
                 }
             )
         }
+
+    override suspend fun patchProductConditionally(
+        id: String,
+        ownerUserId: String,
+        shopId: String?,
+        patch: InventoryProductPatch,
+        expectedUpdatedAt: String,
+        expectedDeletedAt: String?
+    ): Result<List<InventoryProductRow>> = runCatching {
+        // Copy the field set before suspension: request and response validation share one immutable intent.
+        val sealedPatch = patch.copy(changedFields = patch.changedFields.toSet())
+        require(isConditionalUuid(id) && isConditionalUuid(ownerUserId) &&
+            (shopId == null || isConditionalUuid(shopId))) { "Invalid conditional catalog scope" }
+        require(CONDITIONAL_TIMESTAMP.matches(expectedUpdatedAt) &&
+            (expectedDeletedAt == null || CONDITIONAL_TIMESTAMP.matches(expectedDeletedAt))) {
+            "Invalid conditional catalog version"
+        }
+        require(sealedPatch.changedFields.isNotEmpty() &&
+            CONDITIONAL_FIELDS.containsAll(sealedPatch.changedFields) &&
+            (!sealedPatch.includes("barcode") || sealedPatch.barcode != null)) { "Invalid conditional catalog field mask" }
+        val rows = requireClient().postgrest["inventory_products"].update(
+            update = {
+                if (sealedPatch.includes("barcode")) set("barcode", sealedPatch.barcode)
+                if (sealedPatch.includes("itemnumber")) set("item_number", sealedPatch.itemNumber)
+                if (sealedPatch.includes("productname")) set("product_name", sealedPatch.productName)
+                if (sealedPatch.includes("secondproductname")) set("second_product_name", sealedPatch.secondProductName)
+                if (sealedPatch.includes("purchaseprice")) set("purchase_price", sealedPatch.purchasePrice)
+                if (sealedPatch.includes("retailprice")) set("retail_price", sealedPatch.retailPrice)
+                if (sealedPatch.includes("supplier")) set("supplier_id", sealedPatch.supplierId)
+                if (sealedPatch.includes("category")) set("category_id", sealedPatch.categoryId)
+                if (sealedPatch.includes("stockquantity")) set("stock_quantity", sealedPatch.stockQuantity)
+            },
+            request = {
+                select(Columns.raw(CONDITIONAL_PRODUCT_COLUMNS))
+                filter {
+                    eq("id", id)
+                    eq("owner_user_id", ownerUserId)
+                    if (shopId == null) filter("shop_id", FilterOperator.IS, null) else eq("shop_id", shopId)
+                    eq("updated_at", expectedUpdatedAt)
+                    if (expectedDeletedAt == null) filter("deleted_at", FilterOperator.IS, null)
+                    else eq("deleted_at", expectedDeletedAt)
+                }
+            }
+        ).decodeList<InventoryProductRow>()
+        require(rows.size <= 1 && rows.all { row ->
+            row.id == id && row.ownerUserId == ownerUserId && row.shopId == shopId &&
+                row.updatedAt?.let(CONDITIONAL_TIMESTAMP::matches) == true &&
+                (row.deletedAt?.let(CONDITIONAL_TIMESTAMP::matches) ?: true) &&
+                (row.deletedAt == null) == (expectedDeletedAt == null) &&
+                conditionalValuesMatch(sealedPatch, row)
+        }) { "Unqualified conditional catalog response" }
+        rows
+    }
+
+    private fun conditionalValuesMatch(patch: InventoryProductPatch, row: InventoryProductRow): Boolean =
+        patch.changedFields.all { field ->
+            when (field) {
+                "barcode" -> row.barcode == patch.barcode
+                "itemnumber" -> row.itemNumber == patch.itemNumber
+                "productname" -> row.productName == patch.productName
+                "secondproductname" -> row.secondProductName == patch.secondProductName
+                "purchaseprice" -> row.purchasePrice == patch.purchasePrice
+                "retailprice" -> row.retailPrice == patch.retailPrice
+                "supplier" -> row.supplierId == patch.supplierId
+                "category" -> row.categoryId == patch.categoryId
+                "stockquantity" -> row.stockQuantity == patch.stockQuantity
+                else -> false
+            }
+        }
+
+    private fun isConditionalUuid(value: String): Boolean =
+        runCatching { java.util.UUID.fromString(value).toString().equals(value, ignoreCase = true) }.getOrDefault(false)
 
     override suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle> =
         runCatching {
@@ -304,6 +377,10 @@ class SupabaseCatalogRemoteDataSource(
     }
 
     private companion object {
+        val CONDITIONAL_FIELDS = setOf("barcode", "itemnumber", "productname", "secondproductname",
+            "purchaseprice", "retailprice", "supplier", "category", "stockquantity")
+        val CONDITIONAL_TIMESTAMP = Regex("""^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$""")
+        const val CONDITIONAL_PRODUCT_COLUMNS = "id,owner_user_id,shop_id,barcode,item_number,product_name,second_product_name,purchase_price,retail_price,supplier_id,category_id,stock_quantity,updated_at,deleted_at,primary_image_version_id,primary_image_updated_at"
         const val TARGETED_FETCH_CHUNK = 80
         const val TASK087_PREFIX = "TASK087_"
         val TASK087_BARCODES = setOf("TASK087_BAR_A", "TASK087_BAR_I")

@@ -860,4 +860,51 @@
     <string name="storefront_discard_pending">Scarta richiesta salvata</string>
     <string name="account_session_cleanup_failed">Impossibile verificare il logout locale. Riprova.</string>
     <string name="product_save_cloud_confirmed">Questo prodotto è confermato nel cloud.</string>
+    <!-- TASK-144: durable catalog conflict review. -->
+    <string name="catalog_conflict_review_title">Rivedi la modifica salvata</string>
+    <string name="catalog_conflict_saved_local">La modifica è salvata sul dispositivo e richiede attenzione.</string>
+    <string name="catalog_conflict_verified_versions">Confronta i valori verificati. Seleziona esplicitamente i campi locali da conservare.</string>
+    <string name="catalog_conflict_local_value">Sul dispositivo: %1$s</string>
+    <string name="catalog_conflict_remote_value">Versione remota: %1$s</string>
+    <string name="catalog_conflict_previous_choice">La tua proposta: %1$s</string>
+    <string name="catalog_conflict_remote_deleted">La versione remota risulta eliminata. Non verrà ricreato il prodotto.</string>
+    <string name="catalog_conflict_preserve_price_history">La scelta riguarda questa modifica del catalogo. Lo storico dei prezzi già salvato resta conservato.</string>
+    <string name="catalog_conflict_blocked">Questa modifica deve essere verificata prima di applicare una scelta.</string>
+    <string name="catalog_conflict_accept_remote_deletion">Accetta cancellazione remota</string>
+    <string name="catalog_conflict_adopt_remote">Usa versione remota</string>
+    <string name="catalog_conflict_keep_selected">Conserva i campi selezionati</string>
+    <string name="catalog_conflict_refresh_comparison">Aggiorna confronto</string>
+    <string name="catalog_conflict_postpone">Rimanda</string>
+    <string name="catalog_conflict_relation_unavailable">Relazione non disponibile</string>
+    <string name="catalog_conflict_changed">Sono presenti altre modifiche. La tua proposta è conservata: rivedi il confronto e scegli di nuovo.</string>
+    <string name="catalog_conflict_read_failed">Il confronto non è disponibile. La modifica salvata resta conservata.</string>
+    <string name="catalog_conflict_scope_unavailable">Questo record non è disponibile nel contesto attuale.</string>
+    <string name="catalog_conflict_existing_draft">Hai una bozza aperta. Salvala o annullala prima di rivedere un altro record.</string>
+    <string name="catalog_conflict_return_to_draft">Torna alla bozza</string>
+    <string name="catalog_conflict_open_review">Rivedi modifica salvata</string>
+    <string name="catalog_conflict_remote_adopted">Versione remota adottata.</string>
+    <string name="catalog_conflict_deletion_adopted">Cancellazione remota acquisita.</string>
+    <string name="catalog_conflict_choice_pending">Scelta salvata sul dispositivo · In attesa di sincronizzazione</string>
+    <string name="catalog_conflict_choice_saved">Scelta salvata sul dispositivo.</string>
+    <string name="catalog_conflict_resolution_unconfirmed">Esito della scelta da verificare. La modifica salvata è conservata; aggiorna il confronto prima di riprovare.</string>
+    <string name="catalog_conflict_history_blocks_delete">La cancellazione richiede la verifica dello storico collegato.</string>
+
+    <!-- TASK-144: review of an unsaved draft and truthful interrupted Save. -->
+    <string name="product_editor_missing">Questo prodotto non è più disponibile. Le modifiche non sono state salvate.</string>
+    <string name="product_editor_save_interrupted">Salvataggio interrotto. Le modifiche sono ancora qui; il risultato richiede verifica.</string>
+    <string name="product_editor_review_title">Rivedi modifiche</string>
+    <string name="product_editor_review_explanation">Scegli solo i campi della bozza da mantenere. Gli altri valori seguiranno la versione corrente. La scelta prepara il prossimo Salva.</string>
+    <string name="product_editor_disputed_field">Campo in conflitto</string>
+    <string name="product_editor_opening_value">All’apertura: %1$s</string>
+    <string name="product_editor_draft_value">La tua bozza: %1$s</string>
+    <string name="product_editor_current_value">Versione corrente: %1$s</string>
+    <string name="product_editor_use_current">Usa versione aggiornata</string>
+    <string name="product_editor_prepare_selected">Modifica con i campi scelti</string>
+    <string name="product_editor_return_to_edit">Torna alla modifica</string>
+    <string name="product_editor_remote_changed">Il prodotto è stato aggiornato. Le tue modifiche sono conservate.</string>
+    <string name="local_store_open_checking">Apertura del database locale…</string>
+    <string name="local_store_open_unavailable">Impossibile aprire il database locale. Le impostazioni restano disponibili.</string>
+    <string name="local_store_open_details">Fase: apertura del database locale\nMotivo: %1$s\nVersione app: %2$s</string>
+    <string name="local_store_open_failed_reason">Accesso al database non riuscito</string>
+    <string name="local_store_open_unknown_reason">Database locale non disponibile</string>
 </resources>

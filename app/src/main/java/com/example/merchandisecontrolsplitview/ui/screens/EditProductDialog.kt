@@ -1,5 +1,8 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
+import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -163,10 +166,14 @@ internal fun EditProductDialog(
     var retailPriceError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
     var stockQuantityError by rememberSaveable(sessionId) { mutableStateOf<String?>(null) }
     val editorOperation by viewModel.productEditorOperationState.collectAsState()
+    val draftReview by viewModel.draftProductConflictReview.collectAsState()
+    val remoteChanged by viewModel.productEditorRemoteChanged.collectAsState()
+    var showDraftReview by rememberSaveable(sessionId) { mutableStateOf(false) }
     val stagedImageState by viewModel.stagedProductImageState.collectAsState()
     val storefrontState by viewModel.storefrontEditorState.collectAsState()
     val isSaving = editorOperation == ProductEditorOperationState.Saving
     val saveError = (editorOperation as? ProductEditorOperationState.Failed)?.message
+    val saveRequiresReview = (editorOperation as? ProductEditorOperationState.Failed)?.requiresReview == true
     var supplierQuickCreateState by remember(product.id) { mutableStateOf(QuickCreateUiState()) }
     var categoryQuickCreateState by remember(product.id) { mutableStateOf(QuickCreateUiState()) }
     val supplierQuickCreateInFlight = remember(product.id) { AtomicBoolean(false) }
@@ -208,7 +215,17 @@ internal fun EditProductDialog(
     val lastRetail = retailSeries.getOrNull(0)?.price
     val prevRetail = retailSeries.getOrNull(1)?.price
     var showPriceHistorySheet by rememberSaveable(sessionId) { mutableStateOf(false) }
-    val retailFocusRequester = remember { FocusRequester() }
+    val routeVisible = com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current
+    val editorScrollState = rememberScrollState()
+    val editorFocusRequesters = remember(sessionId) {
+        listOf("barcode", "productName", "secondProductName", "itemNumber", "purchasePrice", "retailPrice", "stockQuantity")
+            .associateWith { FocusRequester() }
+    }
+    var lastFocusedEditorField by remember(sessionId) { mutableStateOf<String?>(null) }
+    val editorFieldSelections = remember(sessionId) { androidx.compose.runtime.mutableStateMapOf<String, TextFieldValue>() }
+    fun retainedFieldValue(field: String, text: String): TextFieldValue =
+        editorFieldSelections[field]?.takeIf { it.text == text } ?: TextFieldValue(text, TextRange(text.length))
+    val retailFocusRequester = editorFocusRequesters.getValue("retailPrice")
     val keyboardController = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
     var askedKeyboard by rememberSaveable(sessionId) { mutableStateOf(false) }
@@ -404,12 +421,6 @@ internal fun EditProductDialog(
         }
     }
 
-    LaunchedEffect(product.id) {
-        if (product.id != 0L) {
-            delay(60)
-            retailFocusRequester.requestFocus()
-        }
-    }
 
     fun productForPriceHistory(): Product = product.copy(
         barcode = barcode.trim().ifBlank { product.barcode },
@@ -422,6 +433,22 @@ internal fun EditProductDialog(
         categoryId = categoryId,
         stockQuantity = parseUserQuantityInput(stockQuantity)
     )
+
+    if (showDraftReview && draftReview != null) {
+        val reviewSuppliers by viewModel.suppliers.collectAsState()
+        val reviewCategories by viewModel.categories.collectAsState()
+        DraftProductConflictReview(
+            review = requireNotNull(draftReview), suppliers = reviewSuppliers, categories = reviewCategories,
+            onPrepare = { fields ->
+                viewModel.prepareProductEditorDraftFromReview(fields)
+                showDraftReview = false
+            },
+            onDismiss = {
+                showDraftReview = false
+                viewModel.dismissProductEditorDraftReview()
+            }
+        )
+    }
 
     if (showSupplierSelectionDialog) {
         SupplierSelectionDialog(
@@ -533,7 +560,7 @@ internal fun EditProductDialog(
         )
     }
 
-    Dialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) Dialog(
         onDismissRequest = {
             if (!isSaving && !imageMutationBusy) {
                 onDismiss()
@@ -541,12 +568,23 @@ internal fun EditProductDialog(
         },
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        LaunchedEffect(Unit) {
+            val field = lastFocusedEditorField ?: "retailPrice".takeIf { product.id != 0L }
+            if (field != null && !showPriceHistorySheet && !showSupplierSelectionDialog && !showCategorySelectionDialog) {
+                delay(60)
+                if (routeVisible) {
+                    editorFocusRequesters.getValue(field).requestFocus()
+                    keyboardController?.show()
+                }
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .imePadding()
                 .navigationBarsPadding()
-                .testTag("task141.edit.dialog-root"),
+                .testTag("task141.edit.dialog-root")
+                .observeMobileSyncDraw(Event.EDITOR_DRAW, product.id),
             contentAlignment = Alignment.Center
         ) {
             Card(
@@ -567,7 +605,7 @@ internal fun EditProductDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .verticalScroll(rememberScrollState()),
+                            .verticalScroll(editorScrollState),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
                     Text(
@@ -644,10 +682,13 @@ internal fun EditProductDialog(
                     )
 
                     OutlinedTextField(
-                        value = barcode,
-                        onValueChange = { barcode = it; validate() },
+                        value = retainedFieldValue("barcode", barcode),
+                        onValueChange = { changedValue ->
+                            editorFieldSelections["barcode"] = changedValue
+                            val it = changedValue.text; barcode = it; validate() },
                         label = { Text(stringResource(R.string.barcode_label)) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.focusRequester(editorFocusRequesters.getValue("barcode"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "barcode" }.fillMaxWidth(),
                         isError = barcodeError != null,
                         supportingText = { barcodeError?.let { Text(it) } },
                         trailingIcon = {
@@ -670,17 +711,23 @@ internal fun EditProductDialog(
                     )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = productName,
-                        onValueChange = { productName = it; validate() },
+                        value = retainedFieldValue("productName", productName),
+                        onValueChange = { changedValue ->
+                            editorFieldSelections["productName"] = changedValue
+                            val it = changedValue.text; productName = it; validate() },
                         label = { Text(stringResource(R.string.product_name_label)) },
-                        modifier = Modifier
+                        modifier = Modifier.focusRequester(editorFocusRequesters.getValue("productName"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "productName" }
                             .fillMaxWidth()
                             .testTag("product-editor-name"),
                         isError = productNameError != null,
                         supportingText = { productNameError?.let { Text(it) } }
                     )
                     if (showSecondNameField) {
-                        OutlinedTextField(value = secondProductName, onValueChange = { secondProductName = it; validate() }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = retainedFieldValue("secondProductName", secondProductName), onValueChange = { changedValue ->
+                            editorFieldSelections["secondProductName"] = changedValue
+                            val it = changedValue.text; secondProductName = it; validate() }, label = { Text(stringResource(R.string.second_product_name_label)) }, modifier = Modifier.focusRequester(editorFocusRequesters.getValue("secondProductName"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "secondProductName" }.fillMaxWidth())
                     } else {
                         TextButton(onClick = { showSecondNameField = true }) { Text(stringResource(R.string.add_second_name)) }
                     }
@@ -691,19 +738,22 @@ internal fun EditProductDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedTextField(
-                        value = purchasePrice,
-                        onValueChange = {
+                        value = retainedFieldValue("purchasePrice", purchasePrice),
+                        onValueChange = { changedValue ->
+                            editorFieldSelections["purchasePrice"] = changedValue
+                            val it = changedValue.text;
                             purchasePrice = it
                             if (purchasePriceError != null) {
                                 purchasePriceError = purchasePriceValidationMessage(it)
                             }
                         },
                         label = { CompactFieldLabel(R.string.purchase_price_label) },
-                        modifier = Modifier
+                        modifier = Modifier.focusRequester(editorFocusRequesters.getValue("purchasePrice"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "purchasePrice" }
                             .weight(1f)
                             .testTag("task141.edit.purchase-price")
                             .onFocusChanged { state ->
-                                if (!state.isFocused) {
+                                if (!state.isFocused && routeVisible) {
                                     purchasePrice = normalizeClPriceInput(purchasePrice)
                                     if (purchasePriceError != null) {
                                         purchasePriceError = purchasePriceValidationMessage(purchasePrice)
@@ -733,11 +783,12 @@ internal fun EditProductDialog(
                             .weight(1f)
                             .testTag("product-editor-retail-price")
                             .focusRequester(retailFocusRequester)
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "retailPrice" }
                             .onFocusChanged { state ->
                                 if (state.isFocused && !askedKeyboard) {
                                     askedKeyboard = true
                                     keyboardController?.show()
-                                } else if (!state.isFocused) {
+                                } else if (!state.isFocused && routeVisible) {
                                     normalizeRetailPriceField()
                                 }
                             },
@@ -773,30 +824,36 @@ internal fun EditProductDialog(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         OutlinedTextField(
-                            value = itemNumber,
-                            onValueChange = { itemNumber = it },
+                            value = retainedFieldValue("itemNumber", itemNumber),
+                            onValueChange = { changedValue ->
+                            editorFieldSelections["itemNumber"] = changedValue
+                            val it = changedValue.text; itemNumber = it },
                             label = { CompactFieldLabel(R.string.item_code_label) },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.focusRequester(editorFocusRequesters.getValue("itemNumber"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "itemNumber" }.weight(1f),
                             singleLine = true
                         )
 
                         OutlinedTextField(
-                            value = stockQuantity,
-                            onValueChange = {
+                            value = retainedFieldValue("stockQuantity", stockQuantity),
+                            onValueChange = { changedValue ->
+                            editorFieldSelections["stockQuantity"] = changedValue
+                            val it = changedValue.text;
                                 stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '-' }
                                 if (stockQuantityError != null) {
                                     stockQuantityError = stockQuantityValidationMessage(stockQuantity)
                                 }
                             },
                             label = { CompactFieldLabel(R.string.header_stock_quantity) },
-                            modifier = Modifier
+                            modifier = Modifier.focusRequester(editorFocusRequesters.getValue("stockQuantity"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "stockQuantity" }
                                 .weight(1f)
                                 .testTag("task141.edit.stock-quantity")
                                 .semantics {
                                     stockQuantityError?.let(::error)
                                 }
                                 .onFocusChanged { state ->
-                                    if (!state.isFocused) {
+                                    if (!state.isFocused && routeVisible) {
                                         stockQuantity = normalizeClQuantityInput(stockQuantity)
                                         if (stockQuantityError != null) {
                                             stockQuantityError = stockQuantityValidationMessage(stockQuantity)
@@ -811,19 +868,22 @@ internal fun EditProductDialog(
                 } else {
                     TextButton(onClick = { showItemNumberField = true }) { Text(stringResource(R.string.add_item_code)) }
                     OutlinedTextField(
-                        value = stockQuantity,
-                        onValueChange = {
+                        value = retainedFieldValue("stockQuantity", stockQuantity),
+                        onValueChange = { changedValue ->
+                            editorFieldSelections["stockQuantity"] = changedValue
+                            val it = changedValue.text;
                             stockQuantity = it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '-' }
                             if (stockQuantityError != null) {
                                 stockQuantityError = stockQuantityValidationMessage(stockQuantity)
                             }
                         },
                         label = { CompactFieldLabel(R.string.header_stock_quantity) },
-                        modifier = Modifier
+                        modifier = Modifier.focusRequester(editorFocusRequesters.getValue("stockQuantity"))
+                            .onFocusChanged { if (it.isFocused) lastFocusedEditorField = "stockQuantity" }
                             .fillMaxWidth()
                             .testTag("task141.edit.stock-quantity")
                             .onFocusChanged { state ->
-                                if (!state.isFocused) {
+                                if (!state.isFocused && routeVisible) {
                                     stockQuantity = normalizeClQuantityInput(stockQuantity)
                                     if (stockQuantityError != null) {
                                         stockQuantityError = stockQuantityValidationMessage(stockQuantity)
@@ -920,6 +980,20 @@ internal fun EditProductDialog(
                             }
                     )
                 }
+                if (product.id > 0L && (remoteChanged || saveError != null || draftReview != null)) {
+                    if (remoteChanged) Text(stringResource(R.string.product_editor_remote_changed))
+                    TextButton(
+                        enabled = !isSaving && !imageMutationBusy,
+                        modifier = Modifier.testTag("product-editor-review-draft"),
+                        onClick = {
+                            // Preserve invalid input in the form; never silently normalize it into a decision.
+                            if (validate()) {
+                                viewModel.reviewProductEditorDraft(productForPriceHistory())
+                                showDraftReview = true
+                            }
+                        }
+                    ) { Text(stringResource(R.string.product_editor_review_title)) }
+                }
                 Row(modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 2.dp), horizontalArrangement = Arrangement.End) {
@@ -929,9 +1003,10 @@ internal fun EditProductDialog(
                     ) { Text(stringResource(R.string.cancel)) }
                     Spacer(Modifier.width(8.dp))
                     Button(
-                        enabled = !isSaving && !imageMutationBusy,
+                        enabled = !isSaving && !imageMutationBusy && !saveRequiresReview,
                         modifier = Modifier.testTag("product-editor-save"),
                         onClick = {
+                        MobileSyncInteractionTestHooks.emit(Event.SAVE_CLICK, product.id)
                         if (validate()) {
                             val productToSave = runCatching {
                                 CatalogTextCanonicalizer.product(
@@ -979,6 +1054,7 @@ internal fun EditProductDialog(
                 }
             }
         }
+    }
 
             if (showPriceHistorySheet) {
                 PriceHistoryBottomSheet(
@@ -1010,7 +1086,7 @@ internal fun EditProductDialog(
                 )
             }
             if (confirmImageRemoval) {
-                AlertDialog(
+                if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
                     onDismissRequest = { confirmImageRemoval = false },
                     title = { Text(stringResource(R.string.product_image_remove_confirm_title)) },
                     text = { Text(stringResource(R.string.product_image_remove_confirm_body)) },
@@ -1043,7 +1119,6 @@ internal fun EditProductDialog(
                     })
                 )
             }
-    }
 }
 
 @Composable
@@ -1467,7 +1542,7 @@ internal fun StorefrontEditorSection(
     }
 
     if (showCategoryPicker) {
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = { showCategoryPicker = false },
             title = { Text(stringResource(R.string.storefront_choose_category)) },
             text = {
@@ -1492,7 +1567,7 @@ internal fun StorefrontEditorSection(
     }
 
     if (showAvailabilityPicker) {
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = { showAvailabilityPicker = false },
             title = { Text(stringResource(R.string.storefront_choose_availability)) },
             text = {
@@ -1517,7 +1592,7 @@ internal fun StorefrontEditorSection(
     }
 
     if (state.previewVisible) {
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = onDismissPreview,
             title = { Text(state.draft.publicName.ifBlank { product.productName.orEmpty() }) },
             text = {
@@ -1945,7 +2020,7 @@ private fun SupplierSelectionDialog(
     LaunchedEffect(Unit) { viewModel.onSupplierSearchQueryChanged("") }
     val quickCreateBusy = quickCreateState.status == QuickCreateStatus.SAVING
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = {
             if (!quickCreateBusy) {
                 onDismiss()
@@ -2063,7 +2138,7 @@ private fun CategorySelectionDialog(
     }
     val quickCreateBusy = quickCreateState.status == QuickCreateStatus.SAVING
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = {
             if (!quickCreateBusy) {
                 onDismiss()

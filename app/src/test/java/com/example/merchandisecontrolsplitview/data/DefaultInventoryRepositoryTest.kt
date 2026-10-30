@@ -6225,10 +6225,278 @@ class DefaultInventoryRepositoryTest {
     }
 
     @Test
-    fun exhaustedLegacyEventRowsNeverInventTransientRenewalFromElapsedTime() = runTest {
+    fun legacyNetworkOutboxUpgradeReopensAtCooldownBoundaryWithOriginalEnvelope() = runTest {
+        withLegacyNetworkOutbox("boundary") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 299_999L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val claimed = mutableListOf<SyncEventOutboxEntry>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                claimed += requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+                deployedV6ShopEventContract(owner, payload)
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            val products = db.productDao().getAll()
+            val baseline = db.syncRecoveryBaselineDao().get()
+            repeat(3) { drain() }
+            assertTrue("Poll cannot shorten the legacy completion cooldown", calls.isEmpty())
+            assertEquals(legacy, db.syncEventOutboxDao().getById(legacy.id))
+            now++
+            val resumed = drain()
+            assertEquals("Upgrade must resume the old typed network failure through the actual V6 drain", 1, calls.size)
+            assertEquals(originalWire, calls.single())
+            assertEquals(1, resumed.syncEventOutboxRetried)
+            val claim = claimed.single()
+            assertEquals("The historical diagnostic retry count is preserved and incremented", 6, claim.attemptCount)
+            assertEquals("Legacy diagnostic has no unproven attempts left after this send", 5,
+                SyncEventRetryMetadata.decode(requireNotNull(claim.lastErrorType))?.windowAttempts)
+            assertEquals(legacy.copy(attemptCount = claim.attemptCount, lastAttemptAtMs = claim.lastAttemptAtMs,
+                lastErrorType = claim.lastErrorType), claim)
+            assertNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals(products, db.productDao().getAll())
+            assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradePersistsNewWindowAndStopsForFreshStableFailure() = runTest {
+        withLegacyNetworkOutbox("stable-after-upgrade") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                Result.failure(SerializationException("current stable payload rejection"))
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            drain()
+            assertEquals("The admitted legacy attempt must reach the transport exactly once", listOf(originalWire), calls)
+            val blocked = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(blocked.lastErrorType)))
+            assertEquals(6, blocked.attemptCount)
+            assertEquals(5, metadata.windowAttempts)
+            assertEquals("blocked", metadata.phase)
+            assertEquals(SyncErrorCategory.PayloadValidation, metadata.category)
+            now += 86_400_000L
+            repeat(3) { drain() }
+            assertEquals(1, calls.size)
+            assertEquals(blocked, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeRejectsAmbiguousMetadataTimesAndAuthority() = runTest {
+        withLegacyNetworkOutbox("invalid") { owner, shop, tracker, catalog, legacy, _, completedAt ->
+            repository.syncEventRetryNowMs = { completedAt + 86_400_000L }
+            var calls = 0
+            val events = guardedV6Events(shop.shopId, tracker) { _, _ -> calls++; error("Invalid legacy row sent") }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            for (invalid in listOf(legacy.copy(lastErrorType = "Unknown"),
+                legacy.copy(lastErrorType = "RemoteForbiddenRls"), legacy.copy(lastErrorType = "RemoteSchemaUnexpected"),
+                legacy.copy(lastErrorType = "NetworkOfflineOrTimeout "),
+                legacy.copy(lastErrorType = "{\"v\":2}"), legacy.copy(lastErrorType = null),
+                legacy.copy(lastAttemptAtMs = null), legacy.copy(lastAttemptAtMs = -1),
+                legacy.copy(lastAttemptAtMs = legacy.createdAtMs - 1),
+                legacy.copy(lastAttemptAtMs = Long.MAX_VALUE), legacy.copy(attemptCount = 6))) {
+                db.syncEventOutboxDao().update(invalid)
+                drain()
+                assertEquals("Invalid legacy evidence remains byte-for-byte intact", invalid,
+                    db.syncEventOutboxDao().getById(legacy.id))
+            }
+            db.syncEventOutboxDao().update(legacy)
+            val foreign = runCatching { tracker.withBusinessDataScopeFlight(
+                "00000000-0000-4000-8000-000000000899", shop) { drain() } }
+            assertTrue(foreign.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            tracker.updateBusinessDataScopeState(Task126BusinessDataScopeState.checking())
+            assertTrue(runCatching { drain() }.exceptionOrNull() is Task126BusinessDataScopeChangedException)
+            assertEquals(0, calls)
+            assertEquals(legacy, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeCancellationConsumesOnlyDiagnosticOpportunityAfterReopen() = runTest {
+        withLegacyNetworkOutbox("cancel") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val calls = mutableListOf<JsonObject>()
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                throw CancellationException("diagnostic response unavailable")
+            }
+            val first = runCatching { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertTrue(first.exceptionOrNull() is CancellationException)
+            assertEquals(listOf(originalWire), calls)
+            val consumed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals(6, consumed.attemptCount)
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(consumed.lastErrorType)))
+            assertEquals(SyncErrorCategory.Unknown, metadata.category)
+            assertTrue(metadata.phase in setOf("uncertain", "in_flight"))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-cancel.db").allowMainThreadQueries().build()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            now += 86_400_000L
+            repository.syncEventRetryNowMs = { now }
+            val healthy = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                deployedV6ShopEventContract(owner, payload)
+            }
+            repeat(3) { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), healthy, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertEquals("Uncertain legacy diagnostic never receives another unproven retry budget", 1, calls.size)
+            assertEquals(consumed, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeInterruptedClaimCannotRestartAfterReopen() = runTest {
+        withLegacyNetworkOutbox("interrupted") { owner, shop, tracker, catalog, legacy, _, completedAt ->
+            var now = completedAt + 300_000L
+            repository.syncEventRetryNowMs = { now }
+            val entered = CompletableDeferred<Unit>()
+            val hold = CompletableDeferred<Unit>()
+            var calls = 0
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls++
+                entered.complete(Unit)
+                hold.await()
+                deployedV6ShopEventContract(owner, payload)
+            }
+            val flight = async { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            entered.await()
+            val claimed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            assertEquals("in_flight", SyncEventRetryMetadata.decode(requireNotNull(claimed.lastErrorType))?.phase)
+            flight.cancel()
+            flight.join()
+            assertEquals("Interrupted transport preserves its already consumed durable claim", claimed,
+                db.syncEventOutboxDao().getById(legacy.id))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-interrupted.db").allowMainThreadQueries().build()
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            now += 86_400_000L
+            repository.syncEventRetryNowMs = { now }
+            val healthy = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls++
+                deployedV6ShopEventContract(owner, payload)
+            }
+            repeat(3) { tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), healthy, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            } }
+            assertEquals("A reopened in-flight diagnostic never gains another send", 1, calls)
+            assertEquals(claimed, db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    @Test
+    fun legacyNetworkOutboxUpgradeFreshTransientRequiresNewCooldownAndServerFloor() = runTest {
+        withLegacyNetworkOutbox("fresh-transient") { owner, shop, tracker, catalog, legacy, originalWire, completedAt ->
+            var now = completedAt + 300_000L
+            val probeAt = now
+            repository.syncEventRetryNowMs = { now }
+            repository.syncEventRetryJitter = { 1.0 }
+            val calls = mutableListOf<JsonObject>()
+            var failure = true
+            val events = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                if (failure) Result.failure(q01RetryAfterException("601"))
+                else deployedV6ShopEventContract(owner, payload)
+            }
+            suspend fun drain() = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.drainSyncEventsFromRemote(catalog, RecordingPriceRemote016(false), events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            drain()
+            assertEquals(listOf(originalWire), calls)
+            val completed = requireNotNull(db.syncEventOutboxDao().getById(legacy.id))
+            val metadata = requireNotNull(SyncEventRetryMetadata.decode(requireNotNull(completed.lastErrorType)))
+            assertEquals("A fresh transient completes the single diagnostic opportunity", "cooldown", metadata.phase)
+            assertEquals(probeAt + 601_000L, metadata.nextEligibleAtMs)
+            failure = false
+            for (time in listOf(probeAt + 299_999L, probeAt + 300_000L, probeAt + 600_999L)) {
+                now = time
+                drain()
+                assertEquals("Current server floor is never shortened by cooldown or polling", 1, calls.size)
+                assertEquals(completed, db.syncEventOutboxDao().getById(legacy.id))
+            }
+            now = probeAt + 601_000L
+            drain()
+            assertEquals(listOf(originalWire, originalWire), calls)
+            assertNull(db.syncEventOutboxDao().getById(legacy.id))
+        }
+    }
+
+    private suspend fun withLegacyNetworkOutbox(
+        scenario: String,
+        block: suspend (String, SelectedShop, CatalogSyncStateTracker, FakeCatalogRemote016,
+            SyncEventOutboxEntry, JsonObject, Long) -> Unit
+    ) {
+        withQualifiedQ01CatalogOutbox("legacy-$scenario") { owner, shop, tracker, catalog ->
+            val completedAt = System.currentTimeMillis() + 10_000L
+            repository.syncEventRetryNowMs = { completedAt }
+            val calls = mutableListOf<JsonObject>()
+            val failing = guardedV6Events(shop.shopId, tracker) { _, payload ->
+                calls += payload
+                assertTrue(deployedV6ShopEventContract(owner, payload).isSuccess)
+                Result.failure(IOException("synthetic historical network failure"))
+            }
+            repository.addProduct(Product(barcode = "legacy-$scenario", productName = "Acknowledged legacy $scenario"))
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, RecordingPriceRemote016(false), failing, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            assertEquals(1, calls.size)
+            assertFalse(db.productRemoteRefDao().hasPendingWork())
+            val produced = db.syncEventOutboxDao().listPending(owner, 10).single()
+            // Pre-PR30 persisted the classifier enum plus the failure completion timestamp, not JSON.
+            db.openHelper.writableDatabase.execSQL(
+                "UPDATE sync_event_outbox SET attemptCount=5, lastAttemptAtMs=?, lastErrorType='NetworkOfflineOrTimeout' WHERE id=?",
+                arrayOf<Any>(completedAt, produced.id))
+            val legacy = requireNotNull(db.syncEventOutboxDao().getById(produced.id))
+            assertNull(SyncEventRetryMetadata.decode(requireNotNull(legacy.lastErrorType)))
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-legacy-$scenario.db").allowMainThreadQueries().build()
+            assertEquals("The upgrade fixture must survive a physical Room reopen", legacy,
+                db.syncEventOutboxDao().getById(legacy.id))
+            val reopened = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader)
+            val currentTracker = CatalogSyncStateTracker(reopened.resolveBusinessDataScope(task126ActiveOwnerStoreScope(owner, shop)))
+            assertEquals(Task126BusinessDataScopeStatus.READY, currentTracker.businessDataScopeState.value.status)
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = currentTracker)
+            block(owner, shop, currentTracker, catalog, legacy, calls.single(), completedAt)
+        }
+    }
+
+    @Test
+    fun exhaustedLegacyUnclassifiedAndStableEventRowsNeverInventTransientRenewalFromElapsedTime() = runTest {
         val owner = "00000000-0000-4000-8000-000000000751"
-        val categories = listOf(SyncErrorCategory.NetworkOfflineOrTimeout.name, SyncErrorCategory.Unknown.name,
-            SyncErrorCategory.PayloadValidation.name)
+        val categories = listOf(SyncErrorCategory.Unknown.name, SyncErrorCategory.PayloadValidation.name)
         categories.forEachIndexed { index, category ->
             db.syncEventOutboxDao().insert(testSyncEventOutboxEntry(ownerUserId = owner,
                 clientEventId = "task144-exhausted-legacy-$index", createdAtMs = index + 1L,
@@ -6240,7 +6508,7 @@ class DefaultInventoryRepositoryTest {
         val summary = repository.drainSyncEventsFromRemote(FakeCatalogRemote016(), RecordingPriceRemote016(configured = false),
             events, owner, progressReporter = CatalogSyncProgressReporter { }).getOrThrow()
 
-        assertTrue("Raw legacy categories lack a structured window/claim proof and cannot renew", events.allRecordAttempts.isEmpty())
+        assertTrue("Unclassified or stable legacy categories cannot renew", events.allRecordAttempts.isEmpty())
         assertEquals(0, summary.syncEventOutboxRetried)
         assertEquals(before, db.syncEventOutboxDao().listPending(owner, 10))
     }
@@ -6410,6 +6678,585 @@ class DefaultInventoryRepositoryTest {
             if (db.isOpen) db.close()
             context.deleteDatabase(databaseName)
             db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).allowMainThreadQueries().build()
+        }
+    }
+
+    @Test
+    fun legacyInvalidSupplierRetainsDependentProductAndAcknowledgesIndependentSiblingInSamePush() = runTest {
+        withQualifiedQ01CatalogOutbox("t11-local-text-dependent-independent") { owner, shop, tracker, catalog ->
+            // All three business rows are genuine local writes in a qualified same-shop Room store.
+            // Creation legitimately starts at revision 0/0 with appliedAt null; perform real edits
+            // to establish the strictly newer revisions asserted below, without replacing identities.
+            assertNull(repository.onCatalogChanged)
+            assertNull(repository.onProductCatalogChanged)
+            val createdSupplier = requireNotNull(repository.addSupplier("T11 rejected supplier draft"))
+            repository.addProduct(Product(barcode = "t11-dependent", productName = "Dependent product draft",
+                supplierId = createdSupplier.id))
+            repository.addProduct(Product(barcode = "t11-independent", productName = "Independent sibling draft"))
+            val createdDependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
+            val createdIndependent = requireNotNull(repository.findProductByBarcode("t11-independent"))
+            val supplierIdentity = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(createdSupplier.id)).remoteId
+            val dependentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id))
+            val independentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id))
+            val dependentIdentity = dependentCreatedRef.remoteId
+            val independentIdentity = independentCreatedRef.remoteId
+            repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, createdSupplier.id, "T11 rejected supplier")
+            repository.updateProduct(createdDependent.copy(productName = "Dependent product"))
+            repository.updateProduct(createdIndependent.copy(productName = "Independent sibling"))
+            // Synthetic persisted legacy input only: the real repository writes above already
+            // established identity and a pending revision. No fake dirty flag or extra row is added.
+            val legacyInvalidName = "X".repeat(CatalogTextPolicy.Limits.SUPPLIER_NAME + 1)
+            db.supplierDao().rename(createdSupplier.id, legacyInvalidName)
+            val supplier = requireNotNull(repository.getSupplierById(createdSupplier.id))
+            val dependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
+            val independent = requireNotNull(repository.findProductByBarcode("t11-independent"))
+            val supplierBefore = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            val dependentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(dependent.id))
+            val independentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+            assertEquals(createdSupplier.id, supplier.id)
+            assertEquals(createdDependent.id, dependent.id)
+            assertEquals(createdIndependent.id, independent.id)
+            assertEquals(supplierIdentity, supplierBefore.remoteId)
+            assertEquals(dependentIdentity, dependentBefore.remoteId)
+            assertEquals(independentIdentity, independentBefore.remoteId)
+            assertEquals(1, db.supplierDao().count())
+            assertEquals(2, db.productDao().count())
+            val productsBefore = db.productDao().getAll().sortedBy { it.id }
+            val baselineBefore = requireNotNull(db.syncRecoveryBaselineDao().get())
+            val bindingBefore = requireNotNull(db.businessDataScopeBindingDao().get())
+            assertEquals(supplier.id, dependent.supplierId)
+            assertNull(independent.supplierId)
+            assertNull(supplierBefore.lastRemoteAppliedAt)
+            assertNull(dependentBefore.lastRemoteAppliedAt)
+            assertNull(independentBefore.lastRemoteAppliedAt)
+            assertTrue(supplierBefore.localChangeRevision > supplierBefore.lastSyncedLocalRevision)
+            assertTrue(dependentBefore.localChangeRevision > dependentBefore.lastSyncedLocalRevision)
+            assertTrue(independentBefore.localChangeRevision > independentBefore.lastSyncedLocalRevision)
+            // Genuine edits append local intent evidence; these rows are neither cloud work nor ACKs.
+            val intentEntriesBefore = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, intentEntriesBefore.size)
+            assertEquals(intentEntriesBefore.size, db.syncEventOutboxDao().countAll())
+            assertTrue(intentEntriesBefore.all { it.eventType == BUSINESS_RESOLUTION_EVENT })
+            val intentsBefore = intentEntriesBefore.map { BusinessResolutionLedger.decode(it) }
+            assertEquals(setOf("intent_provenance"), intentsBefore.map { it.kind }.toSet())
+            assertEquals(setOf(dependent.id, independent.id), intentsBefore.map { it.productId }.toSet())
+            assertEquals(2, intentsBefore.map { it.recordId }.distinct().size)
+            val expectedIntentScope = BusinessResolutionScope(owner, bindingBefore.storeId, shop.shopId,
+                bindingBefore.localStoreId, bindingBefore.syncProtocolVersion, bindingBefore.schemaVersion,
+                bindingBefore.storeEpoch, baselineBefore.deviceId)
+            for ((product, currentRef, createdRef) in listOf(
+                Triple(dependent, dependentBefore, dependentCreatedRef),
+                Triple(independent, independentBefore, independentCreatedRef)
+            )) {
+                val record = intentsBefore.single { it.productId == product.id }
+                assertEquals(expectedIntentScope, record.scope)
+                assertEquals(baselineBefore.generationId, record.generationId)
+                assertEquals(decodeRecoveryCheckpointJson(baselineBefore.checkpointJson).checkpointDigest,
+                    record.checkpointDigest)
+                assertEquals(currentRef.remoteId, record.remoteId)
+                assertEquals(CatalogIntentProvenance(currentRef.localChangeRevision, createdRef.localChangeRevision,
+                    CatalogProductSnapshot.from(product), listOf("productname"), null, emptyList()), record.intent)
+                assertNull(record.decision)
+                assertNull(record.transfer)
+                assertNull(record.acknowledgement)
+            }
+
+            val localRejection = runCatching { CatalogTextCanonicalizer.supplierName(supplier.name) }.exceptionOrNull()
+            assertTrue(localRejection is CatalogTextValidationException)
+            localRejection as CatalogTextValidationException
+            assertEquals(CatalogTextField.SUPPLIER_NAME, localRejection.rejection.field)
+            assertEquals(CatalogTextPolicy.RejectionReason.TOO_LONG, localRejection.rejection.reason)
+            val supplierAttempts = mutableListOf<List<InventorySupplierRow>>()
+            val productAttempts = mutableListOf<List<InventoryProductRow>>()
+            val order = mutableListOf<String>()
+            var independentReceiptAtTransport: SyncEventOutboxEntry? = null
+            val remote = object : CatalogRemoteDataSource by catalog {
+                override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
+                    supplierAttempts += rows.toList()
+                    order += "supplier_sent_unexpectedly"
+                    return catalog.upsertSuppliers(rows)
+                }
+                override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertSuppliers(rows)
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+                    productAttempts += rows.toList()
+                    order += "products_acknowledged"
+                    assertTrue(rows.all { it.ownerUserId == owner && it.shopId == shop.shopId })
+                    // Do not filter the dependent row here: the production admission must exclude it.
+                    val receipt = db.syncEventOutboxDao().listPending(owner, 10)
+                        .single { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "PRODUCTS" }
+                    val attempt = Json.decodeFromString<BusinessWriteAttempt>(receipt.metadataJson)
+                    validateBusinessWritePayload(attempt)
+                    assertEquals(owner, attempt.owner)
+                    assertEquals(shop.shopId, attempt.shop)
+                    assertEquals(bindingBefore.storeId, attempt.store)
+                    assertEquals(baselineBefore.generationId, attempt.generation)
+                    assertEquals(baselineBefore.deviceId, attempt.device)
+                    assertEquals(rows, attempt.payload.products)
+                    assertEquals(listOf(independentBefore.remoteId), attempt.payload.revisions.map { it.remoteId })
+                    assertEquals("PRODUCT", attempt.payload.revisions.single().domain)
+                    assertEquals(independentBefore.localChangeRevision.toLong(), attempt.payload.revisions.single().revision)
+                    assertEquals(1, receipt.attemptCount)
+                    independentReceiptAtTransport = receipt
+                    return catalog.upsertProducts(rows)
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertProducts(rows)
+                }
+            }
+            val events = FakeSyncEventRemote()
+            val prices = RecordingPriceRemote016(configured = false)
+            val result = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop)
+            }
+            val supplierAfter = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            val dependentAfter = requireNotNull(db.productRemoteRefDao().getByProductId(dependent.id))
+            val independentAfter = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+            val retained = db.syncEventOutboxDao().listPending(owner, 10)
+            val pendingProductIds = db.productDao().getCatalogPushCandidates().map { it.product.id }.toSet()
+            println("t11_local_typed result=${result.exceptionOrNull()?.javaClass?.simpleName ?: "success"} " +
+                "supplierAttempts=${supplierAttempts.size} productAttemptIds=${productAttempts.flatten().map { it.id }} " +
+                "acceptedProductIds=${catalog.upsertedProducts.flatten().map { it.id }} " +
+                "pendingProductIds=$pendingProductIds retainedKinds=${retained.map { it.domain }}")
+
+            // The exact local typed failure must survive the independent work; no false success.
+            val failure = result.exceptionOrNull()
+            assertTrue(failure is CatalogTextValidationException)
+            failure as CatalogTextValidationException
+            assertEquals(localRejection.rejection, failure.rejection)
+            assertEquals(0, supplierAttempts.size)
+            assertTrue("Text validation must not manufacture a supplier business receipt",
+                retained.none { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "SUPPLIERS" })
+            assertEquals(supplierBefore, supplierAfter)
+            assertEquals(dependentBefore, dependentAfter)
+            assertTrue("A dependent product must never reach transport while its supplier is rejected",
+                productAttempts.flatten().none { it.id == dependentBefore.remoteId })
+            assertTrue(catalog.upsertedSuppliers.isEmpty())
+
+            // Positive: Q receives a real repository ACK in this SAME invocation; no second push or Retry.
+            // The aggregate failure was asserted above; only Q is acknowledged here.
+            assertEquals("T11 independent sibling must progress despite a local typed supplier rejection; order=$order",
+                listOf(independentBefore.remoteId), catalog.upsertedProducts.flatten().map { it.id })
+            assertEquals(listOf("products_acknowledged"), order)
+            assertEquals(1, productAttempts.size)
+            assertEquals(independentBefore.localChangeRevision, independentAfter.localChangeRevision)
+            assertEquals(independentBefore.localChangeRevision, independentAfter.lastSyncedLocalRevision)
+            assertNotNull(independentAfter.lastRemoteAppliedAt)
+            assertNotNull(independentAfter.lastRemotePayloadFingerprint)
+            assertNull(independentAfter.localChangedFields)
+            assertEquals(setOf(dependent.id), pendingProductIds)
+            // Initial provenance is immutable; only Q's genuine dispatch appends its exact lineage successor.
+            val initialIntentIds = intentEntriesBefore.map { it.id }.toSet()
+            assertEquals(intentEntriesBefore.sortedBy { it.id },
+                retained.filter { it.id in initialIntentIds }.sortedBy { it.id })
+            val dispatchedIntentEntry = retained.single { it.id !in initialIntentIds }
+            val dispatchedIntent = BusinessResolutionLedger.decode(dispatchedIntentEntry)
+            val independentIntent = intentsBefore.single { it.remoteId == independentBefore.remoteId }
+            val acknowledgedReceipt = requireNotNull(independentReceiptAtTransport)
+            assertEquals(independentIntent.copy(recordId = dispatchedIntent.recordId,
+                intent = requireNotNull(independentIntent.intent).copy(
+                    dispatchOperationKeys = listOf(acknowledgedReceipt.clientEventId),
+                    supersedesProvenanceId = independentIntent.recordId)), dispatchedIntent)
+            assertEquals(intentEntriesBefore.size + 1, retained.size)
+            assertEquals(retained.size, db.syncEventOutboxDao().countAll())
+            assertNull(db.syncEventOutboxDao().getById(acknowledgedReceipt.id))
+            val notification = events.recordedParams.single { it.domain == SyncEventDomains.CATALOG }
+            assertEquals(SyncEventEntityIds(productIds = listOf(independentBefore.remoteId)), notification.entityIds)
+            assertEquals(1, events.recordedParams.size)
+            assertEquals(1, events.emittedRows.size)
+            assertEquals(productsBefore, db.productDao().getAll().sortedBy { it.id })
+            assertEquals(listOf(supplier), db.supplierDao().getAll())
+            assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
+            assertEquals(bindingBefore, db.businessDataScopeBindingDao().get())
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertEquals(0, db.productPriceDao().countAll())
+            assertEquals(0, db.historyEntryDao().countUserVisible())
+            assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+            db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use {
+                assertFalse("The persisted supplier relation remains valid", it.moveToFirst())
+            }
+        }
+    }
+
+    @Test
+    fun supplierResponseDecodeAfterCommitRetainsReceiptAndStopsProtectedPush() = runTest {
+        withQualifiedQ01CatalogOutbox("t11-response-decode-global") { owner, shop, tracker, catalog ->
+            // All three business rows are genuine local writes in a qualified same-shop Room store.
+            // Creation legitimately starts at revision 0/0 with appliedAt null; perform real edits
+            // to establish the strictly newer revisions asserted below, without replacing identities.
+            assertNull(repository.onCatalogChanged)
+            assertNull(repository.onProductCatalogChanged)
+            val createdSupplier = requireNotNull(repository.addSupplier("T11 rejected supplier draft"))
+            repository.addProduct(Product(barcode = "t11-dependent", productName = "Dependent product draft",
+                supplierId = createdSupplier.id))
+            repository.addProduct(Product(barcode = "t11-independent", productName = "Independent sibling draft"))
+            val createdDependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
+            val createdIndependent = requireNotNull(repository.findProductByBarcode("t11-independent"))
+            val supplierIdentity = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(createdSupplier.id)).remoteId
+            val dependentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdDependent.id))
+            val independentCreatedRef = requireNotNull(db.productRemoteRefDao().getByProductId(createdIndependent.id))
+            val dependentIdentity = dependentCreatedRef.remoteId
+            val independentIdentity = independentCreatedRef.remoteId
+            repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, createdSupplier.id, "T11 rejected supplier")
+            repository.updateProduct(createdDependent.copy(productName = "Dependent product"))
+            repository.updateProduct(createdIndependent.copy(productName = "Independent sibling"))
+            val supplier = requireNotNull(repository.getSupplierById(createdSupplier.id))
+            val dependent = requireNotNull(repository.findProductByBarcode("t11-dependent"))
+            val independent = requireNotNull(repository.findProductByBarcode("t11-independent"))
+            val supplierBefore = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            val dependentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(dependent.id))
+            val independentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+            assertEquals(createdSupplier.id, supplier.id)
+            assertEquals(createdDependent.id, dependent.id)
+            assertEquals(createdIndependent.id, independent.id)
+            assertEquals(supplierIdentity, supplierBefore.remoteId)
+            assertEquals(dependentIdentity, dependentBefore.remoteId)
+            assertEquals(independentIdentity, independentBefore.remoteId)
+            assertEquals(1, db.supplierDao().count())
+            assertEquals(2, db.productDao().count())
+            val productsBefore = db.productDao().getAll().sortedBy { it.id }
+            val baselineBefore = requireNotNull(db.syncRecoveryBaselineDao().get())
+            val bindingBefore = requireNotNull(db.businessDataScopeBindingDao().get())
+            assertEquals(supplier.id, dependent.supplierId)
+            assertNull(independent.supplierId)
+            assertNull(supplierBefore.lastRemoteAppliedAt)
+            assertNull(dependentBefore.lastRemoteAppliedAt)
+            assertNull(independentBefore.lastRemoteAppliedAt)
+            assertTrue(supplierBefore.localChangeRevision > supplierBefore.lastSyncedLocalRevision)
+            assertTrue(dependentBefore.localChangeRevision > dependentBefore.lastSyncedLocalRevision)
+            assertTrue(independentBefore.localChangeRevision > independentBefore.lastSyncedLocalRevision)
+            // Genuine edits append local intent evidence; these rows are neither cloud work nor ACKs.
+            val intentEntriesBefore = db.syncEventOutboxDao().listPending(owner, 10)
+            assertEquals(2, intentEntriesBefore.size)
+            assertEquals(intentEntriesBefore.size, db.syncEventOutboxDao().countAll())
+            assertTrue(intentEntriesBefore.all { it.eventType == BUSINESS_RESOLUTION_EVENT })
+            val intentsBefore = intentEntriesBefore.map { BusinessResolutionLedger.decode(it) }
+            assertEquals(setOf("intent_provenance"), intentsBefore.map { it.kind }.toSet())
+            assertEquals(setOf(dependent.id, independent.id), intentsBefore.map { it.productId }.toSet())
+            assertEquals(2, intentsBefore.map { it.recordId }.distinct().size)
+            val expectedIntentScope = BusinessResolutionScope(owner, bindingBefore.storeId, shop.shopId,
+                bindingBefore.localStoreId, bindingBefore.syncProtocolVersion, bindingBefore.schemaVersion,
+                bindingBefore.storeEpoch, baselineBefore.deviceId)
+            for ((product, currentRef, createdRef) in listOf(
+                Triple(dependent, dependentBefore, dependentCreatedRef),
+                Triple(independent, independentBefore, independentCreatedRef)
+            )) {
+                val record = intentsBefore.single { it.productId == product.id }
+                assertEquals(expectedIntentScope, record.scope)
+                assertEquals(baselineBefore.generationId, record.generationId)
+                assertEquals(decodeRecoveryCheckpointJson(baselineBefore.checkpointJson).checkpointDigest,
+                    record.checkpointDigest)
+                assertEquals(currentRef.remoteId, record.remoteId)
+                assertEquals(CatalogIntentProvenance(currentRef.localChangeRevision, createdRef.localChangeRevision,
+                    CatalogProductSnapshot.from(product), listOf("productname"), null, emptyList()), record.intent)
+                assertNull(record.decision)
+                assertNull(record.transfer)
+                assertNull(record.acknowledgement)
+            }
+
+            val stableFailure = SerializationException("fixture response decode failed after supplier commit")
+            assertEquals(SyncErrorCategory.PayloadValidation, SyncErrorClassifier.classify(stableFailure).category)
+            val supplierAttempts = mutableListOf<List<InventorySupplierRow>>()
+            val productAttempts = mutableListOf<List<InventoryProductRow>>()
+            val order = mutableListOf<String>()
+            var supplierReceiptAtTransport: SyncEventOutboxEntry? = null
+            val remote = object : CatalogRemoteDataSource by catalog {
+                override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>): Result<Unit> {
+                    supplierAttempts += rows.toList()
+                    order += "supplier_committed_response_decode_failed"
+                    assertEquals(listOf(supplierBefore.remoteId), rows.map { it.id })
+                    assertTrue(rows.all { it.ownerUserId == owner && it.shopId == shop.shopId })
+                    // Observe the real sealed receipt before committing remotely and losing response decoding.
+                    val receipt = db.syncEventOutboxDao().listPending(owner, 10)
+                        .single { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "SUPPLIERS" }
+                    val attempt = Json.decodeFromString<BusinessWriteAttempt>(receipt.metadataJson)
+                    validateBusinessWritePayload(attempt)
+                    assertEquals(owner, attempt.owner)
+                    assertEquals(shop.shopId, attempt.shop)
+                    assertEquals("shop:${shop.shopId}", attempt.store)
+                    assertEquals(baselineBefore.generationId, attempt.generation)
+                    assertEquals(rows, attempt.payload.suppliers)
+                    assertEquals(supplierBefore.localChangeRevision.toLong(), attempt.payload.revisions.single().revision)
+                    assertEquals(1, receipt.attemptCount)
+                    supplierReceiptAtTransport = receipt
+                    catalog.upsertSuppliers(rows).getOrThrow()
+                    return Result.failure(stableFailure)
+                }
+                override suspend fun upsertSuppliers(rows: List<InventorySupplierRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertSuppliers(rows)
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+                    productAttempts += rows.toList()
+                    order += "products_acknowledged"
+                    assertTrue(rows.all { it.ownerUserId == owner && it.shopId == shop.shopId })
+                    // Do not filter the dependent row here: the production admission must exclude it.
+                    return catalog.upsertProducts(rows)
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertProducts(rows)
+                }
+            }
+            val events = FakeSyncEventRemote()
+            val prices = RecordingPriceRemote016(configured = false)
+            val result = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(remote, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop)
+            }
+            val supplierAfter = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            val dependentAfter = requireNotNull(db.productRemoteRefDao().getByProductId(dependent.id))
+            val independentAfter = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+            val retained = db.syncEventOutboxDao().listPending(owner, 10)
+            val pendingProductIds = db.productDao().getCatalogPushCandidates().map { it.product.id }.toSet()
+            println("t11_response_decode_global result=${result.exceptionOrNull()?.javaClass?.simpleName ?: "success"} " +
+                "supplierAttempts=${supplierAttempts.size} productAttemptIds=${productAttempts.flatten().map { it.id }} " +
+                "acceptedProductIds=${catalog.upsertedProducts.flatten().map { it.id }} " +
+                "pendingProductIds=$pendingProductIds retainedKinds=${retained.map { it.domain }}")
+
+            // Negative: S remains diagnosed and P cannot escape through a merely allocated supplier bridge.
+            assertEquals(1, supplierAttempts.size)
+            val originalReceipt = requireNotNull(supplierReceiptAtTransport)
+            val rejected = retained.single { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "SUPPLIERS" }
+            assertEquals(originalReceipt.clientEventId, rejected.clientEventId)
+            assertEquals(originalReceipt.metadataJson, rejected.metadataJson)
+            assertEquals(originalReceipt.entityIdsJson, rejected.entityIdsJson)
+            assertEquals(originalReceipt.sourceDeviceId, rejected.sourceDeviceId)
+            assertEquals(originalReceipt.storeScope, rejected.storeScope)
+            assertEquals(1, rejected.attemptCount)
+            assertFalse(rejected.lastErrorType.isNullOrBlank())
+            assertEquals(supplierBefore, supplierAfter)
+            assertEquals(dependentBefore, dependentAfter)
+            assertTrue("A dependent product must never reach transport while its supplier is rejected",
+                productAttempts.flatten().none { it.id == dependentBefore.remoteId })
+            assertEquals(listOf(supplierBefore.remoteId), catalog.upsertedSuppliers.flatten().map { it.id })
+            assertTrue(stableFailure === result.exceptionOrNull())
+            assertTrue("A response decode failure has unknown local ACK outcome, not a per-item noncommit proof",
+                productAttempts.isEmpty())
+            assertTrue(catalog.upsertedProducts.isEmpty())
+            assertEquals(listOf("supplier_committed_response_decode_failed"), order)
+            assertEquals(independentBefore, independentAfter)
+            assertEquals(setOf(dependent.id, independent.id), pendingProductIds)
+            val initialIntentIds = intentEntriesBefore.map { it.id }.toSet()
+            assertEquals(intentEntriesBefore.sortedBy { it.id },
+                retained.filter { it.id in initialIntentIds }.sortedBy { it.id })
+            assertEquals(listOf(rejected), retained.filterNot { it.id in initialIntentIds })
+            assertEquals(intentEntriesBefore.size + 1, db.syncEventOutboxDao().countAll())
+            assertTrue(events.recordedParams.isEmpty())
+            assertTrue(events.emittedRows.isEmpty())
+            assertEquals(productsBefore, db.productDao().getAll().sortedBy { it.id })
+            assertEquals(listOf(supplier), db.supplierDao().getAll())
+            assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
+            assertEquals(bindingBefore, db.businessDataScopeBindingDao().get())
+            assertNull(db.syncRecoveryJournalDao().get())
+            assertEquals(0, db.productPriceDao().countAll())
+            assertEquals(0, db.historyEntryDao().countUserVisible())
+            assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+            db.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use {
+                assertFalse("The persisted supplier relation remains valid", it.moveToFirst())
+            }
+        }
+    }
+
+    @Test
+    fun acknowledgedSupplierWithInvalidLocalRenameStillAllowsFreshDependentProduct() = runTest {
+        withQualifiedQ01CatalogOutbox("t11-acknowledged-supplier-invalid-rename") { owner, shop, tracker, catalog ->
+            val supplier = requireNotNull(repository.addSupplier("Previously acknowledged supplier"))
+            val events = FakeSyncEventRemote()
+            val prices = RecordingPriceRemote016(configured = false)
+            tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop).getOrThrow()
+            }
+            val acknowledged = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            assertNotNull(acknowledged.lastRemoteAppliedAt)
+            assertNotNull(acknowledged.lastRemotePayloadFingerprint)
+            assertEquals(1, catalog.upsertedSuppliers.size)
+            repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, "New valid local rename")
+            // Persisted legacy input; the real rename already established its dirty revision.
+            db.supplierDao().rename(supplier.id, "X".repeat(CatalogTextPolicy.Limits.SUPPLIER_NAME + 1))
+            val dirtySupplier = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            assertTrue(dirtySupplier.localChangeRevision > dirtySupplier.lastSyncedLocalRevision)
+            assertEquals(acknowledged.lastRemoteAppliedAt, dirtySupplier.lastRemoteAppliedAt)
+            assertEquals(acknowledged.lastRemotePayloadFingerprint, dirtySupplier.lastRemotePayloadFingerprint)
+            repository.addProduct(Product(barcode = "t11-prior-ack-dependent", productName = "Fresh dependent",
+                supplierId = supplier.id))
+            val product = requireNotNull(repository.findProductByBarcode("t11-prior-ack-dependent"))
+            val before = requireNotNull(db.productRemoteRefDao().getByProductId(product.id))
+            assertNull(before.lastRemoteAppliedAt)
+            val result = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(catalog, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop)
+            }
+            assertTrue(result.exceptionOrNull() is CatalogTextValidationException)
+            assertEquals("Dirty rename does not erase the supplier's prior remote existence proof",
+                listOf(before.remoteId), catalog.upsertedProducts.flatten().map { it.id })
+            assertEquals(acknowledged.remoteId, catalog.upsertedProducts.single().single().supplierId)
+            assertEquals(1, catalog.upsertedSuppliers.size)
+            val after = requireNotNull(db.productRemoteRefDao().getByProductId(product.id))
+            assertNotNull(after.lastRemoteAppliedAt)
+            assertEquals(before.localChangeRevision, after.lastSyncedLocalRevision)
+            assertEquals(dirtySupplier, db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            assertEquals(product, db.productDao().getById(product.id))
+            assertEquals(SyncEventEntityIds(productIds = listOf(before.remoteId)), events.recordedParams.last().entityIds)
+            assertTrue(db.productDao().getCatalogPushCandidates().isEmpty())
+            assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+        }
+    }
+
+    @Test
+    fun sealedProductWithoutSupplierReplaysAfterDatabaseReopenBeforeCurrentEditWithRejectedSupplier() = runTest {
+        val scenario = "t11-sealed-nil-a-related-b"
+        withQualifiedQ01CatalogOutbox(scenario) { owner, shop, tracker, catalog ->
+            repository.addProduct(Product(barcode = "t11-sealed-a", productName = "Sealed A"))
+            val productA = requireNotNull(repository.findProductByBarcode("t11-sealed-a"))
+            val refA = requireNotNull(db.productRemoteRefDao().getByProductId(productA.id))
+            var sentReceipt: SyncEventOutboxEntry? = null
+            val lostAck = object : CatalogRemoteDataSource by catalog {
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+                    sentReceipt = db.syncEventOutboxDao().listPending(owner, 10)
+                        .single { it.eventType == BUSINESS_WRITE_EVENT && it.domain == "PRODUCTS" }
+                    assertNull(rows.single().supplierId)
+                    catalog.upsertProducts(rows).getOrThrow()
+                    return Result.failure(IOException("synthetic committed A with lost ACK"))
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertProducts(rows)
+                }
+            }
+            val events = FakeSyncEventRemote()
+            val prices = RecordingPriceRemote016(configured = false)
+            val first = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(lostAck, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop)
+            }
+            assertTrue(first.exceptionOrNull() is IOException)
+            val wireA = catalog.upsertedProducts.single()
+            val retainedA = requireNotNull(db.syncEventOutboxDao().getById(requireNotNull(sentReceipt).id))
+            assertEquals(requireNotNull(sentReceipt).metadataJson, retainedA.metadataJson)
+            assertNull(db.productRemoteRefDao().getByProductId(productA.id)?.lastRemoteAppliedAt)
+
+            val supplierB = requireNotNull(repository.addSupplier("Supplier for current B"))
+            repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplierB.id, "Supplier B edited")
+            repository.updateProduct(productA.copy(productName = "Current B", supplierId = supplierB.id))
+            db.supplierDao().rename(supplierB.id, "X".repeat(CatalogTextPolicy.Limits.SUPPLIER_NAME + 1))
+            val bodyB = requireNotNull(repository.findProductByBarcode("t11-sealed-a"))
+            val refB = requireNotNull(db.productRemoteRefDao().getByProductId(productA.id))
+            val supplierRefB = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplierB.id))
+            assertTrue(refB.localChangeRevision > refA.localChangeRevision)
+            assertNull(supplierRefB.lastRemoteAppliedAt)
+            val context: Context = RuntimeEnvironment.getApplication()
+            db.close()
+            db = Room.databaseBuilder(context, AppDatabase::class.java,
+                "task144-q01-negative-$scenario.db").allowMainThreadQueries().build()
+            assertEquals(retainedA, db.syncEventOutboxDao().getById(retainedA.id))
+            repository = DefaultInventoryRepository(db = db, shopSyncReadRemoteDataSource = shopSyncReader,
+                businessDataScopeRuntimeGuard = tracker)
+            var replays = 0
+            val healthy = object : CatalogRemoteDataSource by catalog {
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>): Result<Unit> {
+                    val replay = requireNotNull(db.syncEventOutboxDao().getById(retainedA.id))
+                    assertEquals(retainedA.clientEventId, replay.clientEventId)
+                    assertEquals(retainedA.metadataJson, replay.metadataJson)
+                    assertEquals(retainedA.attemptCount + 1, replay.attemptCount)
+                    assertEquals(wireA, rows)
+                    assertNull(rows.single().supplierId)
+                    replays++
+                    return catalog.upsertProducts(rows)
+                }
+                override suspend fun upsertProducts(rows: List<InventoryProductRow>, shopId: String?): Result<Unit> {
+                    assertEquals(shop.shopId, shopId)
+                    return upsertProducts(rows)
+                }
+            }
+            val result = tracker.withBusinessDataScopeFlight(owner, shop) {
+                repository.syncCatalogQuickWithEvents(healthy, prices, events, owner,
+                    progressReporter = CatalogSyncProgressReporter { }, selectedShop = shop)
+            }
+            assertTrue(result.exceptionOrNull() is CatalogTextValidationException)
+            assertEquals("Replay admission for sealed A must not inspect B's new supplier", 1, replays)
+            assertEquals(listOf(wireA, wireA), catalog.upsertedProducts)
+            assertTrue(catalog.upsertedSuppliers.isEmpty())
+            val after = requireNotNull(db.productRemoteRefDao().getByProductId(productA.id))
+            assertEquals(refB.localChangeRevision, after.localChangeRevision)
+            assertEquals(refA.localChangeRevision, after.lastSyncedLocalRevision)
+            assertNotNull(after.lastRemoteAppliedAt)
+            assertEquals(refB.localChangedFields, after.localChangedFields)
+            assertEquals(bodyB, repository.findProductByBarcode("t11-sealed-a"))
+            assertEquals(supplierRefB, db.supplierRemoteRefDao().getBySupplierId(supplierB.id))
+            assertNull(db.syncEventOutboxDao().getById(retainedA.id))
+            assertEquals(setOf(productA.id), db.productDao().getCatalogPushCandidates().map { it.product.id }.toSet())
+            assertEquals(SyncEventEntityIds(productIds = listOf(refA.remoteId)), events.recordedParams.single().entityIds)
+            assertTrue(repository.hasCatalogCloudPendingWorkInclusive())
+        }
+    }
+
+    @Test
+    fun localTextRejectionCannotHideRecoveryRequiredFromActualPushCoordinator() = runTest {
+        withQualifiedQ01CatalogOutbox("t11-local-text-recovery-precedence") { owner, shop, tracker, catalog ->
+            val supplier = requireNotNull(repository.addSupplier("Recovery precedence supplier"))
+            repository.renameCatalogEntry(CatalogEntityKind.SUPPLIER, supplier.id, "Edited supplier")
+            repository.addProduct(Product(barcode = "t11-recovery-dependent", productName = "Dependent",
+                supplierId = supplier.id))
+            repository.addProduct(Product(barcode = "t11-recovery-independent", productName = "Independent"))
+            db.supplierDao().rename(supplier.id, "X".repeat(CatalogTextPolicy.Limits.SUPPLIER_NAME + 1))
+            val invalidSupplier = requireNotNull(repository.getSupplierById(supplier.id))
+            val supplierBefore = requireNotNull(db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+            val dependent = requireNotNull(repository.findProductByBarcode("t11-recovery-dependent"))
+            val independent = requireNotNull(repository.findProductByBarcode("t11-recovery-independent"))
+            val dependentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(dependent.id))
+            val independentBefore = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+            assertTrue(supplierBefore.localChangeRevision > supplierBefore.lastSyncedLocalRevision)
+            assertNull(supplierBefore.lastRemoteAppliedAt)
+            assertNull(independentBefore.lastRemoteAppliedAt)
+            assertTrue(runCatching { CatalogTextCanonicalizer.supplierName(invalidSupplier.name) }
+                .exceptionOrNull() is CatalogTextValidationException)
+            assertNull(db.syncRecoveryJournalDao().get())
+            val checkpoint = requireNotNull(shopSyncReader.checkpointFixture)
+            shopSyncReader.checkpointFixture = checkpoint.copy(syncEvents = checkpoint.syncEvents.copy(
+                requiresFullRecovery = true))
+            val triggers = mutableListOf<String>()
+            val events = FakeSyncEventRemote()
+            tracker.updateNetworkAvailability(true)
+            val auto = CatalogAutoSyncCoordinator(repository, catalog, RecordingPriceRemote016(configured = false),
+                syncEventRemote = events,
+                authFlow = MutableStateFlow<AuthState>(AuthState.SignedIn(owner, null)),
+                selectedShopProvider = { shop }, syncStateTracker = tracker,
+                scope = backgroundScope, debounceMs = Long.MAX_VALUE,
+                onRecoveryRequired = { triggers += it })
+            try {
+                auto.runPushCycle("local_commit")
+                // Qualify the whole causal path before the decisive callback assertion.
+                assertEquals(listOf(independentBefore.remoteId), catalog.upsertedProducts.flatten().map { it.id })
+                assertTrue(catalog.upsertedSuppliers.isEmpty())
+                assertEquals(supplierBefore, db.supplierRemoteRefDao().getBySupplierId(supplier.id))
+                assertEquals(dependentBefore, db.productRemoteRefDao().getByProductId(dependent.id))
+                val independentAfter = requireNotNull(db.productRemoteRefDao().getByProductId(independent.id))
+                assertNotNull(independentAfter.lastRemoteAppliedAt)
+                assertEquals(independentBefore.localChangeRevision, independentAfter.lastSyncedLocalRevision)
+                assertEquals(SyncEventEntityIds(productIds = listOf(independentBefore.remoteId)),
+                    events.recordedParams.single().entityIds)
+                val journal = requireNotNull(db.syncRecoveryJournalDao().get())
+                assertEquals(SyncRecoveryJournalPhases.REQUIRED, journal.phase)
+                assertEquals(SyncEventApplyStatusReasons.MISSING_ENTITY_IDS, journal.reason)
+                assertEquals(shop.shopId, journal.shopId)
+                println("t11_recovery_precedence independentAck=true journal=${journal.phase} " +
+                    "triggers=$triggers scope=${tracker.businessDataScopeState.value.status}")
+                assertEquals("A local text rejection must not hide the admitted global recovery request",
+                    listOf("catalog_push"), triggers)
+                assertTrue(requireNotNull(tracker.lastOutcome.value).summary.manualFullSyncRequired)
+                assertEquals(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, tracker.businessDataScopeState.value.status)
+                assertEquals("sync_recovery_required", tracker.businessDataScopeState.value.errorCode)
+                assertFalse(tracker.allowsBusinessDataScope(owner, shop))
+                assertEquals(CatalogSyncStatus.FAILED, tracker.state.value.status)
+                assertFalse(tracker.isSyncing.value)
+                assertEquals(invalidSupplier, repository.getSupplierById(supplier.id))
+            } finally { auto.shutdown() }
         }
     }
 
@@ -8572,8 +9419,8 @@ class DefaultInventoryRepositoryTest {
         assertEquals(baselineBefore, db.syncRecoveryBaselineDao().get())
         assertEquals(productsBefore, db.productDao().count())
         assertEquals(pricesBefore, db.productPriceDao().countAll())
-        assertEquals("8", shopSyncReader.eventContexts.single().expectedEventMaxId)
-        assertEquals(scope, shopSyncReader.eventContexts.single().expectedScope)
+        assertEquals(listOf("7", "8"), shopSyncReader.eventContexts.map { it.expectedEventMaxId })
+        assertEquals(listOf(scope, scope), shopSyncReader.eventContexts.map { it.expectedScope })
         // A is a valid canonical receipt at 7. The negative remote fixture
         // captures max 8 with domain fences 7, then returns asOf domain fences 8.
         // That inconsistent captured window cannot publish C or idle/no-work;

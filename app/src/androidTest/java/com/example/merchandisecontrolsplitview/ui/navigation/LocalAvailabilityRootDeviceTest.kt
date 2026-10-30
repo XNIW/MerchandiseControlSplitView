@@ -1,6 +1,16 @@
 package com.example.merchandisecontrolsplitview.ui.navigation
 
 import android.graphics.Bitmap
+import android.app.Application
+import android.os.SystemClock
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
+import com.example.merchandisecontrolsplitview.productimage.ProductImageApiClient
+import com.example.merchandisecontrolsplitview.productimage.ProductImageService
+import java.io.FileOutputStream
+import java.time.Instant
+import java.util.UUID
+import kotlinx.serialization.json.*
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -18,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -26,6 +37,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -63,15 +75,633 @@ class LocalAvailabilityRootDeviceTest {
     private var auto: CatalogAutoSyncCoordinator? = null
     private val release = CompletableDeferred<Unit>()
     private val visible = mutableStateOf(true)
+    private var ownsT20Fixture = false
+    private var talkBackCheckpoint: Task144TalkBackCheckpoint? = null
 
     @After fun cleanup() {
-        release.complete(Unit)
-        auto?.shutdown()
-        runBlocking { job.cancelAndJoin() }
-        compose.runOnUiThread { store.clear() }
-        database?.close()
-        context.deleteDatabase(DB_NAME)
-        ShopSyncRecoveryTestHooks.reset()
+        var primary: Throwable? = null
+        try {
+            release.complete(Unit)
+            auto?.shutdown()
+            runBlocking { job.cancelAndJoin() }
+            compose.runOnUiThread { store.clear() }
+            database?.close()
+            if (!ownsT20Fixture) context.deleteDatabase(DB_NAME)
+            MobileSyncInteractionTestHooks.observer = null
+            MobileSyncInteractionTestHooks.observationError = null
+            ShopSyncRecoveryTestHooks.reset()
+        } catch (error: Throwable) { primary = error; throw error }
+        finally {
+            try { talkBackCheckpoint?.close() }
+            catch (cleanup: Throwable) { val first = primary; if (first != null) first.addSuppressed(cleanup) else throw cleanup }
+        }
+    }
+
+
+    /** Native UI components only: this does not manufacture a process cold/warm launch. */
+    @Test fun largeLocalUiComponentsIdle() = runLargeLocalUiComponents(recovery = false)
+    @Test fun largeLocalUiComponentsDuringRecovery() = runLargeLocalUiComponents(recovery = true)
+
+    @Test fun filePickerContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.FilePicker.route)
+    @Test fun databaseContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.Database.route)
+    @Test fun historyContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.History.route)
+    @Test fun preGenerateContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.PreGenerate.route)
+    @Test fun generatedContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.Generated.route)
+    @Test fun importAnalysisContextSurvivesSameScopeRequalification() = runLargeLocalUiComponents(false, Screen.ImportAnalysis.route)
+
+    @Test fun databaseEditorWindowSuspendsAndRestoresDraftFocusAndSelection() =
+        runLargeLocalUiComponents(false, Screen.Database.route, editorWindow = true)
+
+    @Test fun preGenerateKeepsDraftAndRouteAcrossSameScopeRequalification() =
+        runLargeLocalUiComponents(recovery = false, routeRed = true)
+
+    private fun runLargeLocalUiComponents(recovery: Boolean, contextualRoute: String? = null, editorWindow: Boolean = false,
+        routeRed: Boolean = false) {
+        check(!routeRed || (contextualRoute == null && !editorWindow && !recovery)) {
+            "Exact route07 and matrix/window gates require separate invocations"
+        }
+        check(context.applicationContext.javaClass == Application::class.java) {
+            "T20 UI requires MobileSyncPerformanceTestRunner on a dedicated target"
+        }
+        val accessibility = Task144AccessibilityConfiguration.fromArguments(context)
+        ownsT20Fixture = true
+        val runRoot = File(context.cacheDir,
+            "mobile-sync-t20/ui-${if (recovery) "recovery" else "idle"}-${UUID.randomUUID()}")
+        check(runRoot.mkdirs())
+        val talkBack = Task144TalkBackCheckpoint.fromArguments(context, runRoot).also { talkBackCheckpoint = it }
+        val owned = T20IsolatedDatabaseContext(context, runRoot)
+        val uiStrings = accessibility?.localizedContext(owned) ?: owned
+        val db = Room.databaseBuilder(owned, AppDatabase::class.java, "t20-ui-active.db")
+            .addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray()).build()
+        val output = File(runRoot, "ui-component-samples.jsonl").also { check(it.createNewFile()) }
+        val clockId = "android-ui-process-${UUID.randomUUID()}"
+        fun append(row: JsonObject) {
+            FileOutputStream(output, true).use { stream ->
+                stream.write((row.toString() + "\n").toByteArray()); stream.fd.sync()
+            }
+            println("T20_UI_COMPONENT_SAMPLE $row")
+        }
+        var tracker: CatalogSyncStateTracker? = null
+        val fixture = T20NativeRecoveryFixture(owned, db, activationBoundary = { block ->
+            val activeTracker = tracker
+            if (activeTracker == null) block() else {
+                val observer = ShopSyncRecoveryTestHooks.activationBoundaryTiming
+                try {
+                    activeTracker.withBusinessDataScopeTransition {
+                        ShopSyncRecoveryTestHooks.observeTiming(observer, "acquired")
+                        block()
+                    }
+                } finally { ShopSyncRecoveryTestHooks.observeTiming(observer, "released") }
+            }
+        }, heldPageTimeoutMs = 90_000L)
+        var auth: SupabaseAuthManager? = null
+        var images: ProductImageService? = null
+        var appScope: CoroutineScope? = null
+        var activeSample: UiComponentTiming? = null
+        var cutoverTiming: T20ActivationTimingCapture? = null
+        val measured = mutableMapOf<String, MutableList<Double>>()
+        var currentIndex = 0
+        var currentKind = "fixture_setup"
+        val ownedViewModelJobs = mutableListOf<Job>()
+        var terminalFailure: Throwable? = null
+        try {
+            runBlocking { fixture.seedViaRecovery() }
+            val initial = DefaultInventoryRepository(db, shopSyncReadRemoteDataSource = fixture.remote)
+            val business = runBlocking { initial.resolveBusinessDataScope(fixture.scope) }
+            check(business.allowsLocalOperations)
+            val liveTracker = CatalogSyncStateTracker(business)
+            tracker = liveTracker
+            val repository = DefaultInventoryRepository(db, liveTracker, shopSyncReadRemoteDataSource = fixture.remote)
+            val ownedApp = object : MerchandiseControlApplication() {
+                fun attach() = attachBaseContext(uiStrings)
+            }.apply { attach() }
+            fun install(name: String, value: Any?) = MerchandiseControlApplication::class.java
+                .getDeclaredField(name).apply { isAccessible = true }.set(ownedApp, value)
+            val ownedScope: CoroutineScope = scopeSwitchField(ownedApp, "appScope")
+            appScope = ownedScope
+            val ownedAuth = SupabaseAuthManager(client = null, googleWebClientId = "", scope = ownedScope)
+            auth = ownedAuth
+            scopeSwitchField<MutableStateFlow<AuthState>>(ownedAuth, "_state").value =
+                AuthState.SignedIn(fixture.owner, "t20-ui@example.invalid")
+            val selected = object : SelectedShopStore {
+                override fun getSelectedShopId(ownerUserId: String) = fixture.shop
+                override fun setSelectedShopId(ownerUserId: String, shopId: String) { check(shopId == fixture.shop) }
+                override fun clearSelectedShopId(ownerUserId: String) = Unit
+            }
+            val linked = object : LinkedShopRemoteDataSource {
+                override val isConfigured = true
+                override suspend fun fetchLinkedShops() = Result.success(listOf(LinkedShop(
+                    fixture.shop, "T20", "T20 synthetic", "shop_owner", "active",
+                    membershipStatus = "active", shopStatus = "active", selectable = true, canWrite = true)))
+            }
+            val shops = ShopContextRepository(linked, selected, { fixture.owner }, { fixture.device })
+            runBlocking { shops.refresh(fixture.owner) }
+            check(shops.state.value.localAccessAllowed)
+            install("database\$delegate", lazyOf(db)); install("repository\$delegate", lazyOf(repository))
+            install("authManager\$delegate", lazyOf(ownedAuth)); install("shopContextRepository\$delegate", lazyOf(shops))
+            install("catalogSyncStateTracker\$delegate", lazyOf(liveTracker)); install("supabaseClient\$delegate", lazyOf(null))
+            install("shopSyncReadRemoteDataSource\$delegate", lazyOf(fixture.remote))
+            val ownedImages = ProductImageService(owned, db, ProductImageApiClient("", "", debugBuild = true),
+                accountIdProvider = { fixture.owner }, selectedShopProvider = { shops.state.value.selectedShop },
+                accessTokenProvider = { null }, businessDataScopeAllowed = liveTracker::allowsBusinessDataScope,
+                businessDataScopeRuntimeGuard = liveTracker)
+            images = ownedImages
+            install("productImageServiceDelegate", lazyOf(ownedImages))
+            lateinit var databaseVM: DatabaseViewModel
+            lateinit var excelVM: ExcelViewModel
+            compose.runOnUiThread {
+                databaseVM = DatabaseViewModel(ownedApp, repository); store.put("database", databaseVM)
+                excelVM = ExcelViewModel(ownedApp, repository); store.put("excel", excelVM)
+                databaseVM.viewModelScope.coroutineContext[Job]?.let(ownedViewModelJobs::add)
+                excelVM.viewModelScope.coroutineContext[Job]?.let(ownedViewModelJobs::add)
+            }
+            // The observer only writes primitive timestamps. No Room/JSON/files/AX work is timed.
+            val sampleRef = AtomicReference<UiComponentTiming?>(null)
+            MobileSyncInteractionTestHooks.observer = { event, id, detail, nanos ->
+                sampleRef.get()?.observe(event, id, detail, nanos)
+            }
+            var heldAt = 0L
+            if (recovery) {
+                runBlocking { fixture.beginHeldRecovery() }
+                heldAt = SystemClock.elapsedRealtimeNanos()
+                liveTracker.updateBusinessDataScopeState(runBlocking {
+                    repository.resolveOfflineBusinessDataScope(fixture.scope, true)
+                })
+            }
+            val nativeView = AtomicReference<android.view.View?>(null)
+            compose.setContent {
+                if (contextualRoute != null) nativeView.set(androidx.compose.ui.platform.LocalView.current)
+                val state by liveTracker.businessDataScopeState.collectAsState()
+                val progress by liveTracker.state.collectAsState()
+                val authState by ownedAuth.state.collectAsState()
+                val shopContext by shops.state.collectAsState()
+                val rootContent: @androidx.compose.runtime.Composable () -> Unit = {
+                    if (visible.value) AppNavGraphContent(ownedApp, excelVM, databaseVM, true,
+                        authState, progress, shopContext, state)
+                }
+                if (accessibility == null) MerchandiseControlTheme(darkTheme = false, content = rootContent)
+                else accessibility.Content(uiStrings, content = rootContent)
+            }
+            if (accessibility != null) {
+                compose.waitForIdle()
+                accessibility.writeWitness(File(runRoot, "accessibility-configuration.json"))
+            }
+            if (routeRed) {
+                currentKind = "pre_generate_route_requalification"
+                fun witness(phase: String, state: Task126BusinessDataScopeState) {
+                    append(buildJsonObject {
+                        put("kind", "route_witness"); put("phase", phase); put("status", "OBSERVED")
+                        put("expected_route", Screen.PreGenerate.route)
+                        put("options_tab_present", compose.onAllNodesWithTag("root-tab-optionsScreen").fetchSemanticsNodes().isNotEmpty())
+                        put("global_placeholder_present", compose.onAllNodesWithTag("root-business-placeholder").fetchSemanticsNodes().isNotEmpty())
+                        put("supplier_draft", databaseVM.supplierInputText.value)
+                        put("scope_status", state.status.name); put("local_reads_allowed", state.allowsLocalOperations)
+                        put("bound_scope_unchanged", state.boundScope == business.boundScope)
+                        put("at_ns", SystemClock.elapsedRealtimeNanos())
+                        put("acceptance_boundary", "actual NavHost + real owned file input; controlled capability transitions; no auth restore/live TEST claim")
+                    })
+                    val file = File(runRoot, "route-$phase.png")
+                    check(file.createNewFile())
+                    FileOutputStream(file).use { stream ->
+                        check(compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, stream))
+                        stream.fd.sync()
+                    }
+                }
+                val sourceFile = File(owned.filesDir, "r23-route-source.xlsx")
+                check(sourceFile.createNewFile())
+                org.apache.poi.xssf.usermodel.XSSFWorkbook().use { workbook ->
+                    val sheet = workbook.createSheet("Products")
+                    sheet.createRow(0).apply {
+                        createCell(0).setCellValue("Barcode")
+                        createCell(1).setCellValue("Product Name")
+                        createCell(2).setCellValue("Purchase Price")
+                        createCell(3).setCellValue("Retail Price")
+                    }
+                    sheet.createRow(1).apply {
+                        createCell(0).setCellValue("R23-ROUTE-ONE")
+                        createCell(1).setCellValue("Owned route input")
+                        createCell(2).setCellValue(3.0)
+                        createCell(3).setCellValue(5.0)
+                    }
+                    FileOutputStream(sourceFile).use { workbook.write(it) }
+                }
+                compose.waitForIdle()
+                compose.runOnUiThread {
+                    check(com.example.merchandisecontrolsplitview.MainActivity.ShareBus.uris.tryEmit(
+                        listOf(android.net.Uri.fromFile(sourceFile))))
+                }
+                compose.waitUntil(30_000L) {
+                    !excelVM.isLoading.value && (excelVM.excelData.size > 1 || excelVM.loadError.value != null)
+                }
+                check(excelVM.loadError.value == null) { "owned route XLSX did not load: ${excelVM.loadError.value}" }
+                check(excelVM.excelData.size > 1) { "owned route XLSX has no parsed row" }
+                compose.onNodeWithText(uiStrings.getString(R.string.preview_file_title)).assertExists()
+                // Lazy content may not yet contain the offscreen supplier field. Materialize its real item first.
+                compose.waitUntil(10_000L) {
+                    compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes().size == 1
+                }
+                witness("ready-before-supplier", business)
+                File(runRoot, "route-ready-semantics.txt").writeText(compose.onRoot().printToString())
+                compose.onNode(hasScrollToKeyAction()).performScrollToKey("supplier")
+                compose.onNode(hasSetTextAction() and hasText(uiStrings.getString(R.string.search_or_add_supplier)))
+                    .performClick().performTextReplacement("R23 route draft")
+                val draftField = hasSetTextAction() and hasText("R23 route draft")
+                compose.onNode(draftField).assertIsFocused()
+                val admittedError = business.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                    localAccessScope = requireNotNull(business.boundScope), errorCode = "controlled_transient")
+                check(admittedError.allowsLocalOperations)
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(admittedError) }
+                compose.onNode(draftField).assertIsDisplayed().assertIsFocused()
+                compose.onNodeWithTag("root-tab-optionsScreen").assertDoesNotExist()
+                witness("admitted-transient", admittedError)
+                // Requalification temporarily withdraws business reads, while owner/store identity stays unchanged.
+                val checking = business.copy(status = Task126BusinessDataScopeStatus.CHECKING,
+                    localAccessScope = null, localReadsAllowed = false, localWritesAllowed = false)
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(checking) }
+                compose.onNode(draftField).assertDoesNotExist() // no unqualified business render
+                compose.onNodeWithTag("root-tab-optionsScreen").assertDoesNotExist()
+                witness("checking", checking)
+                val waiting = checking.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                    errorCode = "controlled_requalification_transport_failure")
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(waiting) }
+                witness("requalification-error", waiting)
+                // This is the first behavioral RED in the old root: its effect forces a non-root route to Options.
+                compose.onNodeWithTag("root-tab-optionsScreen").assertDoesNotExist()
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(business) }
+                compose.onNodeWithText(uiStrings.getString(R.string.preview_file_title)).assertExists()
+                compose.onNode(draftField).assertIsDisplayed()
+                check(databaseVM.supplierInputText.value == "R23 route draft") { "same-scope requalification replaced the draft" }
+                witness("restored", business)
+                append(buildJsonObject {
+                    put("kind", "route_red_result"); put("status", "PASS")
+                    put("route", Screen.PreGenerate.route); put("draft_restored", true)
+                    put("six_route_matrix", "NOT_RUN_SEPARATE_DOWNSTREAM_GATE")
+                })
+                return
+            }
+            if (contextualRoute != null) {
+                currentKind = "contextual_route:$contextualRoute"
+                val inputText = if (contextualRoute == Screen.Database.route && !editorWindow) fixture.firstBarcode else "R23 unsaved route input"
+                var input: SemanticsMatcher? = null
+                val sourceFile = File(owned.filesDir, "contextual-route-source.xlsx")
+                if (contextualRoute == Screen.PreGenerate.route || contextualRoute == Screen.ImportAnalysis.route) {
+                    check(sourceFile.createNewFile())
+                    org.apache.poi.xssf.usermodel.XSSFWorkbook().use { workbook ->
+                        val sheet = workbook.createSheet("Products")
+                        sheet.createRow(0).apply {
+                            createCell(0).setCellValue("Barcode"); createCell(1).setCellValue("Product Name")
+                            createCell(2).setCellValue("Purchase Price"); createCell(3).setCellValue("Retail Price")
+                        }
+                        sheet.createRow(1).apply {
+                            createCell(0).setCellValue("R23-CONTEXT-ONE"); createCell(1).setCellValue("Contextual route input")
+                            createCell(2).setCellValue(3.0); createCell(3).setCellValue(5.0)
+                        }
+                        FileOutputStream(sourceFile).use { workbook.write(it) }
+                    }
+                }
+                when (contextualRoute) {
+                    Screen.FilePicker.route -> compose.onNodeWithText(uiStrings.getString(R.string.load_excel_file)).assertIsDisplayed()
+                    Screen.Database.route -> {
+                        compose.onNodeWithTag("root-tab-databaseScreen").performClick()
+                        compose.onNodeWithTag("database-search").performClick().performTextReplacement(if (editorWindow) fixture.firstBarcode else inputText)
+                        input = hasTestTag("database-search")
+                    }
+                    Screen.History.route -> compose.onNodeWithTag("root-tab-history").performClick()
+                    Screen.PreGenerate.route -> {
+                        compose.waitForIdle()
+                        compose.runOnUiThread { check(com.example.merchandisecontrolsplitview.MainActivity.ShareBus.uris
+                            .tryEmit(listOf(android.net.Uri.fromFile(sourceFile)))) }
+                        compose.waitUntil(30_000L) { !excelVM.isLoading.value && excelVM.excelData.size > 1 }
+                        check(excelVM.loadError.value == null)
+                        compose.onNodeWithText(uiStrings.getString(R.string.preview_file_title)).assertIsDisplayed()
+                        compose.waitUntil(10_000L) {
+                            compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes().size == 1
+                        }
+                        compose.onNode(hasScrollToKeyAction()).performScrollToKey("supplier")
+                        compose.onNode(hasSetTextAction() and hasText(uiStrings.getString(R.string.search_or_add_supplier)))
+                            .performClick().performTextReplacement(inputText)
+                        input = hasSetTextAction() and hasText(inputText)
+                    }
+                    Screen.Generated.route -> {
+                        compose.onNodeWithText(uiStrings.getString(R.string.add_products_manually)).performScrollTo().performClick()
+                        compose.waitUntil(30_000L) { excelVM.currentEntryStatus.value.third > 0L && excelVM.generated.value }
+                        compose.onNodeWithTag("root-tab-optionsScreen").assertDoesNotExist()
+                    }
+                    Screen.ImportAnalysis.route -> {
+                        // Same public command used by file-picker result; NavGraph's actual result effect navigates.
+                        compose.runOnUiThread { databaseVM.startImportAnalysis(owned, android.net.Uri.fromFile(sourceFile), ImportNavOrigin.DATABASE) }
+                        compose.waitUntil(30_000L) { databaseVM.importAnalysisResult.value != null }
+                        compose.onNodeWithText(uiStrings.getString(R.string.import_analysis_title)).assertIsDisplayed()
+                    }
+                    else -> error("Unregistered route probe")
+                }
+                compose.waitForIdle()
+                if (contextualRoute == Screen.Database.route) {
+                    compose.waitUntil(10_000L) { compose.onAllNodes(hasText(fixture.firstBarcode, substring = true) and
+                        hasAnyAncestor(hasTestTag("database-product-list"))).fetchSemanticsNodes().size == 1 }
+                }
+                val originalProduct = if (editorWindow) runBlocking {
+                    requireNotNull(repository.findProductByBarcode(fixture.firstBarcode))
+                } else null
+                if (editorWindow) {
+                    compose.onNode(hasText(fixture.firstBarcode, substring = true) and
+                        hasAnyAncestor(hasTestTag("database-product-list"))).performClick()
+                    compose.onNodeWithTag("task141.edit.dialog-root").assertIsDisplayed()
+                    compose.onNodeWithTag("product-editor-name").performScrollTo().performClick().performTextReplacement(inputText)
+                    compose.onNodeWithTag("product-editor-name")
+                        .performSemanticsAction(SemanticsActions.SetSelection) { check(it(3, 9, false)) }
+                    input = hasTestTag("product-editor-name")
+                }
+                val originalEntry = excelVM.currentEntryStatus.value.third
+                val originalPreview = databaseVM.importAnalysisResult.value
+                val originalSupplier = databaseVM.supplierInputText.value
+                fun scrollValues(): List<Float> = compose.onAllNodes(hasScrollAction()).fetchSemanticsNodes()
+                    .mapNotNull { it.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.value?.invoke() }
+                val originalScroll = scrollValues()
+                fun focusedInputWindow(): android.view.View? = if (!editorWindow) nativeView.get()?.rootView else {
+                    val activityRoot = nativeView.get()?.rootView
+                    android.view.inspector.WindowInspector.getGlobalWindowViews()
+                        .map { it.rootView }.distinct().singleOrNull {
+                            it !== activityRoot && it.visibility == android.view.View.VISIBLE && it.hasWindowFocus()
+                        }
+                }
+                fun keyboardShown() = focusedInputWindow()?.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true
+                fun witness(phase: String, state: Task126BusinessDataScopeState) {
+                    append(buildJsonObject {
+                        put("kind", "contextual_route_witness"); put("status", "OBSERVED"); put("route", contextualRoute)
+                        put("phase", phase); put("scope_status", state.status.name); put("local_reads_allowed", state.allowsLocalOperations)
+                        put("same_bound_scope", state.boundScope == business.boundScope)
+                        put("global_placeholder", compose.onAllNodesWithTag("root-business-placeholder").fetchSemanticsNodes().isNotEmpty())
+                        val inputWindow = focusedInputWindow()
+                        put("keyboard_shown", inputWindow?.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true)
+                        put("input_window_identity", inputWindow?.let { System.identityHashCode(it).toString() }?.let(::JsonPrimitive) ?: JsonNull)
+                        put("input_window_is_activity", inputWindow != null && inputWindow === nativeView.get()?.rootView)
+                        put("input_window_focused", inputWindow?.hasWindowFocus() == true)
+                        put("input_focus_required", input != null)
+                        put("entry_uid", excelVM.currentEntryStatus.value.third)
+                        put("editor_window_probe", editorWindow)
+                        put("editor_window_visible", compose.onAllNodesWithTag("task141.edit.dialog-root").fetchSemanticsNodes().isNotEmpty())
+                        put("pending_import_preserved", originalPreview == databaseVM.importAnalysisResult.value)
+                        put("pending_supplier_preserved", originalSupplier == databaseVM.supplierInputText.value)
+                        put("scroll_values", JsonArray(scrollValues().map { JsonPrimitive(it) }))
+                        put("acceptance_boundary", "controlled same-scope capability; actual NavHost and VM commands; no TalkBack or auth-restore claim")
+                    })
+                    val image = File(runRoot, "context-${contextualRoute.substringBefore('/') }-$phase.png")
+                    check(image.createNewFile())
+                    FileOutputStream(image).use { out ->
+                        val target = if (editorWindow && compose.onAllNodesWithTag("task141.edit.dialog-root").fetchSemanticsNodes().isNotEmpty())
+                            compose.onNodeWithTag("task141.edit.dialog-root") else compose.onRoot()
+                        check(target.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, out)); out.fd.sync()
+                    }
+                }
+                witness("ready", business)
+                if (input != null) {
+                    currentKind = "contextual_route:$contextualRoute:ime_precondition"
+                    compose.onNode(requireNotNull(input)).assertIsFocused()
+                    compose.waitUntil(5_000L) { keyboardShown() }
+                    currentKind = "contextual_route:$contextualRoute"
+                }
+                val transient = business.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
+                    localAccessScope = requireNotNull(business.boundScope), errorCode = "controlled_local_admitted_transport")
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(transient) }
+                input?.let { compose.onNode(it).assertIsFocused().assertTextContains(inputText); check(keyboardShown()) }
+                assertEquals(originalScroll, scrollValues())
+                witness("admitted-transient", transient)
+                val checking = business.copy(status = Task126BusinessDataScopeStatus.CHECKING,
+                    localAccessScope = null, localReadsAllowed = false, localWritesAllowed = false)
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(checking) }
+                witness("checking", checking)
+                compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
+                // Route-specific context is an explicit presentation contract, not a TalkBack proof.
+                compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
+                if (editorWindow) {
+                    compose.onAllNodes(isDialog()).assertCountEquals(0)
+                    compose.onNodeWithTag("task141.edit.dialog-root").assertDoesNotExist()
+                    val result = runBlocking { databaseVM.saveProductFromEditor(requireNotNull(originalProduct).copy(productName = "Must not commit")) }
+                    check(result !is com.example.merchandisecontrolsplitview.viewmodel.ProductEditorSaveResult.Saved)
+                    assertEquals(originalProduct, runBlocking { repository.findProductByBarcode(fixture.firstBarcode) })
+                }
+                listOf(R.string.no_products_in_db, R.string.pre_generate_empty_state_message).forEach { id ->
+                    compose.onAllNodesWithText(uiStrings.getString(id)).assertCountEquals(0)
+                }
+                val waiting = checking.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, errorCode = "controlled_requalification_wait")
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(waiting) }
+                witness("waiting", waiting)
+                compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
+                compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
+                compose.runOnIdle { liveTracker.updateBusinessDataScopeState(business) }
+                compose.waitForIdle()
+                assertEquals(originalEntry, excelVM.currentEntryStatus.value.third)
+                assertEquals(originalPreview, databaseVM.importAnalysisResult.value)
+                assertEquals(originalSupplier, databaseVM.supplierInputText.value)
+                input?.let { compose.onNode(it).assertIsFocused().assertTextContains(inputText); check(keyboardShown()) }
+                assertEquals(originalScroll, scrollValues())
+                if (editorWindow) {
+                    compose.onNodeWithTag("task141.edit.dialog-root").assertIsDisplayed()
+                    assertEquals(androidx.compose.ui.text.TextRange(3, 9),
+                        compose.onNodeWithTag("product-editor-name").fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+                    assertEquals(originalProduct, runBlocking { repository.findProductByBarcode(fixture.firstBarcode) })
+                }
+                witness("restored", business)
+                check(runBlocking { db.productDao().count() } == 20_000)
+                // Existing functional assertions finish before this distinct real-input observation window.
+                talkBack?.hold("restored", contextualRoute)
+                append(buildJsonObject { put("kind", "contextual_route_result"); put("status", "PASS"); put("route", contextualRoute) })
+                return
+            }
+            fun measure(kind: String, start: Event, end: Event, id: Long = 0L,
+                detail: String? = null, maxMs: Double, action: () -> Unit, verify: () -> Unit) {
+                currentKind = kind
+                val sample = UiComponentTiming(start, end, id, detail)
+                activeSample = sample
+                sampleRef.set(sample)
+                var failure: Throwable? = null
+                var readbackVerified = false
+                var failureGate = "input_or_draw"
+                try {
+                    if (recovery) check(fixture.isRecoveryHeld) { "Recovery not held before UI action" }
+                    action()
+                    compose.waitUntil(10_000L) { sample.endNs != 0L }
+                    sampleRef.set(null)
+                    failureGate = "data_and_ui_readback"
+                    verify()
+                    check(MobileSyncInteractionTestHooks.observationError == null) { "UI observation failed" }
+                    check(ShopSyncRecoveryTestHooks.timingObservationError == null) { "Activation observation failed" }
+                    if (recovery) check(fixture.isRecoveryHeld) { "Recovery ended during UI action" }
+                    readbackVerified = true
+                    val ms = (sample.endNs - sample.startNs) / 1_000_000.0
+                    if (currentIndex > 3) {
+                        measured.getOrPut(kind) { mutableListOf() }.add(ms)
+                        failureGate = "performance_max"
+                        check(ms <= maxMs) { "$kind exceeded max: $ms > $maxMs ms" }
+                        val p95Limit = when (kind) {
+                            "query_selective", "query_broad", "save" -> 300.0
+                            "editor" -> 500.0
+                            else -> 1_000.0
+                        }
+                        // The second over-budget sample makes rank 29 of 30 irreversibly fail.
+                        failureGate = "performance_p95_fixed30"
+                        check(measured.getValue(kind).count { it > p95Limit } < 2) {
+                            "$kind fixed 30-sample p95 cannot pass: two samples exceed $p95Limit ms"
+                        }
+                    }
+                } catch (error: Throwable) { failure = error } finally {
+                    sampleRef.set(null)
+                    append(buildJsonObject {
+                        put("sample_id", "T20-UI-${if (recovery) "recovery" else "idle"}-$currentIndex-$kind")
+                        put("kind", kind); put("status", if (failure == null) "PASS" else "FAIL")
+                        put("reason", failure?.message.orEmpty()); put("warmup", currentIndex <= 3)
+                        put("measurement_number", maxOf(0, currentIndex - 3))
+                        put("clock_id", clockId); put("start_ns", sample.startNs); put("end_ns", sample.endNs)
+                        if (sample.endNs > 0L) put("elapsed_ms", (sample.endNs - sample.startNs) / 1_000_000.0)
+                        put("condition", if (recovery) "recovery" else "idle")
+                        put("timestamp_utc", Instant.now().toString()); put("product_id", id)
+                        put("products", 20_000); put("prices", 40_000); put("readback_verified", readbackVerified)
+                        put("failure_gate", if (failure == null) "" else failureGate)
+                        put("timing_source", "app_handler_to_in_process_draw_or_repository_return")
+                        put("acceptance_boundary", "native UI component; no cold/warm launch, OS offline, live auth or backend acceptance")
+                        if (kind == "save") put("durable_boundary", "repository return; postcommit scope exception yields no successful sample")
+                    })
+                }
+                failure?.let { throw it }
+            }
+            fun productRow(barcode: String) = compose.onNode(
+                hasText(barcode, substring = true) and hasAnyAncestor(hasTestTag("database-product-list"))
+            )
+            repeat(33) { offset ->
+                currentIndex = offset + 1
+                measure("root_tab", Event.ROOT_TAB_CLICK, Event.ROOT_TAB_DRAW,
+                    detail = Screen.History.route, maxMs = 2_000.0,
+                    action = { compose.onNodeWithTag("root-tab-history").performClick() },
+                    verify = { compose.onNodeWithTag("root-tab-history").assertIsSelected() })
+                compose.onNodeWithTag("root-tab-databaseScreen").performClick().assertIsSelected()
+                // Different exact barcode every time prevents an old paging generation satisfying the draw.
+                val barcode = "T20-${(1000 + currentIndex).toString().padStart(8, '0')}"
+                val row = runBlocking { requireNotNull(repository.findProductByBarcode(barcode)) }
+                measure("query_selective", Event.FILTER_INPUT, Event.PRODUCT_DRAW, row.id, barcode, 1_000.0,
+                    action = { compose.onNodeWithTag("database-search").performTextReplacement(barcode) },
+                    verify = { productRow(barcode).assertIsDisplayed() })
+                measure("editor", Event.EDITOR_OPEN, Event.EDITOR_DRAW, row.id, maxMs = 1_000.0,
+                    action = { productRow(barcode).performClick() },
+                    verify = { compose.onNodeWithTag("task141.edit.dialog-root").assertIsDisplayed() })
+                val desiredName = "T20 UI ${if (recovery) "recovery" else "idle"} $currentIndex"
+                compose.onNodeWithTag("product-editor-name").performScrollTo().performTextReplacement(desiredName)
+                measure("save", Event.SAVE_CLICK, Event.SAVE_DURABLE_RETURN, row.id, maxMs = 1_000.0,
+                    action = { compose.onNodeWithTag("product-editor-save").performClick() },
+                    verify = {
+                        assertEquals(desiredName, runBlocking { db.productDao().getById(row.id) }?.productName)
+                        compose.waitUntil(10_000) {
+                            compose.onAllNodesWithTag("task141.edit.dialog-root").fetchSemanticsNodes().isEmpty()
+                        }
+                        assertEquals(40_000, runBlocking { db.productPriceDao().countAll() })
+                    })
+                val broad = "T20-0000"
+                val first = runBlocking { requireNotNull(repository.findProductByBarcode(fixture.firstBarcode)) }
+                measure("query_broad", Event.FILTER_INPUT, Event.PRODUCT_DRAW, first.id, broad, 1_000.0,
+                    action = { compose.onNodeWithTag("database-search").performTextReplacement(broad) },
+                    verify = { productRow(fixture.firstBarcode).assertIsDisplayed() })
+            }
+            for ((kind, samples) in measured) {
+                val p95 = samples.sorted()[28]
+                val limit = when (kind) { "query_selective", "query_broad", "save" -> 300.0; "editor" -> 500.0; else -> 1_000.0 }
+                append(buildJsonObject {
+                    put("kind", "${kind}_summary"); put("count", samples.size); put("p95_ms", p95)
+                    put("max_ms", samples.max()); put("status", if (p95 <= limit) "PASS" else "FAIL")
+                })
+                check(p95 <= limit) { "$kind p95 $p95 exceeded $limit ms" }
+            }
+            if (recovery) {
+                currentKind = "cutover_component"
+                // Retain an actual editor draft through activation; readback is outside the writer timer.
+                productRow(fixture.firstBarcode).performClick()
+                compose.onNodeWithTag("product-editor-name").performScrollTo().performTextReplacement("T20 draft across cutover")
+                activeSample = null
+                val timing = T20ActivationTimingCapture().also { it.install() }
+                cutoverTiming = timing
+                runBlocking {
+                    val holdRemaining = 10_000L - (SystemClock.elapsedRealtimeNanos() - heldAt) / 1_000_000L
+                    if (holdRemaining > 0L) delay(holdRemaining)
+                    // Explicit test watchdog, not the per-RPC transport deadline.
+                    check(withTimeout(900_000L) { fixture.releaseHeldRecovery() } is ShopSyncRecoveryResult.Activated)
+                }
+                compose.onNodeWithTag("product-editor-name").assertTextEquals("T20 draft across cutover")
+                check(ShopSyncRecoveryTestHooks.timingObservationError == null) { "Activation observation failed" }
+                val observed = timing.snapshot()
+                check(observed.error == null) { "Timing pairing failed: ${observed.error}" }
+                val unavailableMs = requireNotNull(observed.maxUnavailableMs)
+                append(buildJsonObject {
+                    put("kind", "cutover_component"); put("status", if (unavailableMs <= 300.0) "PASS" else "FAIL")
+                    put("clock_id", clockId); put("timing", observed.raw); put("draft_preserved", true)
+                    put("writer_unavailable_ms", unavailableMs)
+                    observed.room?.let { put("room_transaction_ms", it.elapsedMs) }
+                    observed.transition?.let { put("activation_transition_ms", it.elapsedMs) }
+                    put("timing_observation_error", ShopSyncRecoveryTestHooks.timingObservationError.orEmpty())
+                    put("acceptance_boundary", "one real activation; no 30-sample p95 or frame-pause acceptance")
+                })
+                check(unavailableMs <= 300.0) { "Cutover writer unavailable maximum exceeded: $unavailableMs ms" }
+            }
+        } catch (failure: Throwable) {
+            terminalFailure = failure
+            if (cutoverTiming != null) {
+                try { runBlocking { fixture.stopHeldRecovery() } }
+                catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+            }
+            try {
+                append(buildJsonObject {
+                    put("kind", "sequence_stop"); put("status", "FAIL"); put("first_failure_metric", currentKind)
+                    put("sample_index", currentIndex); put("reason", failure.message.orEmpty())
+                    put("downstream_status", "NOT_TRAVERSED"); put("automatic_retry", false)
+                    put("start_ns", activeSample?.startNs ?: 0L); put("end_ns", activeSample?.endNs ?: 0L)
+                    cutoverTiming?.let { put("timing", it.snapshot().raw) }
+                })
+            } catch (reportFailure: Throwable) { failure.addSuppressed(reportFailure) }
+            throw failure
+        } finally {
+            if (contextualRoute != null || routeRed) com.example.merchandisecontrolsplitview.MainActivity.ShareBus.uris.tryEmit(emptyList())
+            MobileSyncInteractionTestHooks.observer = null
+            ShopSyncRecoveryTestHooks.activationWriterTiming = null
+            ShopSyncRecoveryTestHooks.activationBoundaryTiming = null
+            ShopSyncRecoveryTestHooks.activationTransitionTiming = null
+            var cleanupFailure: Throwable? = null
+            fun cleanup(action: () -> Unit) {
+                try { action() } catch (error: Throwable) {
+                    val first = cleanupFailure
+                    if (first == null) cleanupFailure = error else first.addSuppressed(error)
+                }
+            }
+            cleanup { compose.runOnUiThread { visible.value = false; store.clear() } }
+            cleanup { auth?.shutdown(); images?.close() }
+            var ownedJobsJoined = false
+            cleanup {
+                runBlocking {
+                    withContext(NonCancellable) {
+                        fixture.stopHeldRecovery()
+                        ownedViewModelJobs.forEach { it.cancelAndJoin() }
+                        appScope?.coroutineContext?.get(Job)?.cancelAndJoin()
+                        ownedJobsJoined = true
+                    }
+                }
+            }
+            if (ownedJobsJoined) cleanup { db.close() }
+            println("T20_UI_COMPONENT_ARTIFACT ${runRoot.absolutePath}")
+            cleanupFailure?.let { error ->
+                val originalFailure = terminalFailure
+                if (originalFailure != null) originalFailure.addSuppressed(error) else throw error
+            }
+        }
+    }
+
+    /** Single armed sample: callback does no allocation, blocking, assertions or file I/O. */
+    private class UiComponentTiming(
+        val start: Event, val end: Event, val productId: Long, val detail: String?
+    ) {
+        @Volatile var startNs = 0L
+        @Volatile var endNs = 0L
+        fun observe(event: Event, id: Long, value: String?, ns: Long) {
+            if (event == start && startNs == 0L &&
+                (start == Event.FILTER_INPUT || id == productId) && value == detail) startNs = ns
+            if (event == end && startNs != 0L && endNs == 0L && id == productId && value == detail) endNs = ns
+        }
     }
 
     @Test fun actualBusySyncBannerDoesNotOverlapDatabaseHeaderInFourLocales() {
@@ -629,7 +1259,8 @@ class LocalAvailabilityRootDeviceTest {
         }
         for(tab in listOf("history","databaseScreen","filePicker")) {
             compose.onNodeWithTag("root-tab-$tab").assertIsEnabled().performClick().assertIsSelected()
-            compose.onNodeWithTag("root-business-placeholder").assertExists()
+            compose.onNodeWithTag("route-context-$tab").assertIsDisplayed()
+            compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
             compose.onNodeWithTag("database-search").assertDoesNotExist()
         }
         compose.onNodeWithTag("root-tab-optionsScreen").assertIsEnabled().performClick().assertIsSelected()

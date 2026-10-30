@@ -34,6 +34,17 @@ interface CatalogRemoteDataSource {
     ): Result<Unit> =
         patchProduct(id, ownerUserId, patch)
 
+    /** A sealed conditional successor: zero rows is distinct from an ACK and never falls back to upsert. */
+    suspend fun patchProductConditionally(
+        id: String,
+        ownerUserId: String,
+        shopId: String?,
+        patch: InventoryProductPatch,
+        expectedUpdatedAt: String,
+        expectedDeletedAt: String?
+    ): Result<List<InventoryProductRow>> =
+        Result.failure(UnsupportedOperationException("Conditional catalog writes are unavailable"))
+
     suspend fun fetchCatalog(): Result<InventoryCatalogFetchBundle>
 
     suspend fun fetchCatalog(shopId: String?): Result<InventoryCatalogFetchBundle> =

@@ -1,5 +1,10 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import com.example.merchandisecontrolsplitview.data.PilotCommitTrace
+
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
+import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -518,7 +523,8 @@ internal fun DatabaseProductListSection(
     storefrontSummaries: Map<Long, StorefrontPublicationSummary> = emptyMap(),
     storefrontFilter: StorefrontListFilter = StorefrontListFilter.ALL,
     onStorefrontFilterChange: (StorefrontListFilter) -> Unit = {},
-    storefrontFilterLoading: Boolean = false
+    storefrontFilterLoading: Boolean = false,
+    appliedFilterForObservation: String? = null
 ) {
     val loadState = products.loadState
     val isRefreshing = loadState.refresh is LoadState.Loading
@@ -527,7 +533,19 @@ internal fun DatabaseProductListSection(
         refreshState = loadState.refresh,
         appendState = loadState.append
     )
-    Box(modifier = modifier.fillMaxSize()) {
+    val b6DeleteDetail = if (!PilotCommitTrace.b6IsArmed()) null else {
+        val snapshot=products.itemSnapshotList
+        val loaded=snapshot.items.map { it.product }
+        val complete=loadState.refresh is LoadState.NotLoading &&
+            (loadState.append as? LoadState.NotLoading)?.endOfPaginationReached==true &&
+            (loadState.prepend as? LoadState.NotLoading)?.endOfPaginationReached==true &&
+            !storefrontFilterLoading && storefrontFilter==StorefrontListFilter.ALL
+        val visibleIDs=listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? Long }.toSet()
+        PilotCommitTrace.b6DeleteRenderDetail(filter,appliedFilterForObservation,loaded,complete,
+            snapshot.placeholdersBefore+snapshot.placeholdersAfter,visibleIDs)
+    }
+    Box(modifier = modifier.fillMaxSize().observeMobileSyncDraw(
+        Event.DELETE_DATASET_DRAW,detail=b6DeleteDetail,enabled=b6DeleteDetail!=null)) {
         if (presentation.primaryState == ProductPagingPrimaryState.LOADING) {
             CircularProgressIndicator(
                 modifier = Modifier
@@ -663,6 +681,12 @@ internal fun DatabaseProductListSection(
                         )
 
                         SwipeToDismissBox(
+                            modifier = Modifier.observeMobileSyncDraw(
+                                Event.PRODUCT_DRAW, currentProduct.id,
+                                com.example.merchandisecontrolsplitview.data.PilotCommitTrace.b6RenderDetail(
+                                    currentProduct, appliedFilterForObservation),
+                                enabled = loadState.refresh is LoadState.NotLoading
+                            ),
                             state = dismissState,
                             enableDismissFromStartToEnd = false,
                             enableDismissFromEndToStart = true,
@@ -1198,7 +1222,7 @@ internal fun ProductImageFullscreenDialog(
         }
     }
 
-    Dialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {

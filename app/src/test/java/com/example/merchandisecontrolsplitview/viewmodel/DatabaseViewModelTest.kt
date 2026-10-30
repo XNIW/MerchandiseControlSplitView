@@ -1,12 +1,22 @@
 package com.example.merchandisecontrolsplitview.viewmodel
 
 import android.app.Application
+import androidx.lifecycle.ViewModelStore
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
+import com.example.merchandisecontrolsplitview.data.PersistedCatalogConflictContext
+import com.example.merchandisecontrolsplitview.data.PersistedCatalogConflictChoice
+import com.example.merchandisecontrolsplitview.data.PersistedCatalogConflictResult
+import com.example.merchandisecontrolsplitview.data.PersistedCatalogConflictTarget
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import android.database.sqlite.SQLiteConstraintException
 import android.net.Uri
 import android.os.Looper
 import app.cash.turbine.test
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogBlankNameException
 import com.example.merchandisecontrolsplitview.data.CatalogDeleteResult
@@ -69,6 +79,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
@@ -86,7 +97,7 @@ import org.robolectric.Shadows.shadowOf
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(application = Application::class, sdk = [33])
 class DatabaseViewModelTest {
 
     @get:Rule
@@ -95,6 +106,7 @@ class DatabaseViewModelTest {
     private lateinit var repository: InventoryRepository
     private lateinit var viewModel: DatabaseViewModel
     private lateinit var app: Application
+    private lateinit var ownedApplication: MerchandiseControlApplication
     private lateinit var remoteAppliedProductIds: MutableSharedFlow<Set<Long>>
 
     @Before
@@ -102,6 +114,12 @@ class DatabaseViewModelTest {
         app = RuntimeEnvironment.getApplication()
         repository = mockk(relaxed = true)
         remoteAppliedProductIds = MutableSharedFlow(extraBufferCapacity = 16)
+
+        // Match the compatibility default: successful return only, no fabricated durable receipt.
+        coEvery { repository.updateProductFromEditor(any(), any(), any()) } coAnswers {
+            repository.updateProductFromEditor(firstArg(), secondArg())
+        }
+
 
         every { repository.getProductsWithDetailsPaged(any()) } returns mockk(relaxed = true)
         every { repository.remoteAppliedProductIds } returns remoteAppliedProductIds
@@ -126,7 +144,122 @@ class DatabaseViewModelTest {
         coEvery { repository.getPriceHistoryRowsPage(any(), any()) } returns emptyList()
         coEvery { repository.getProductDetailsById(any()) } returns null
 
-        viewModel = DatabaseViewModel(app, repository)
+        // Unit fixture owns the app-facing collaborators; production onCreate remains in its own tests.
+        ownedApplication = scopedImageApplication(MutableStateFlow<AuthState>(AuthState.SignedOut),
+            MutableStateFlow(ShopContext.legacy()))
+        viewModel = DatabaseViewModel(ownedApplication, repository, mockk<ProductImageService>(relaxed = true),
+            storefrontEnabled = false)
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun `editor save messages follow four selected languages without changing application locale`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val applicationConfiguration = android.content.res.Configuration(app.resources.configuration)
+        val defaultLocale = java.util.Locale.getDefault()
+        val product = sampleProduct(id = 9L, barcode = "LOCALE-SAVE")
+        coEvery { repository.updateProduct(product) } just runs
+        coEvery { repository.addProductAndReturnId(product.copy(id = 0L)) } returns 91L
+        val cases = listOf(
+            "zh" to "产品已保存在此设备上，等待云端确认。",
+            "es" to "Producto guardado en este dispositivo. Confirmación en la nube pendiente.",
+            "it" to "Prodotto salvato sul dispositivo. Conferma cloud in attesa.",
+            "en" to "Product saved on this device. Cloud confirmation pending."
+        )
+        try {
+            cases.forEach { (language, expected) ->
+                assertTrue(settings.edit().putString("lang", language).commit())
+                val preferencesBefore = settings.all.toMap()
+                viewModel.updateProduct(product)
+                advanceUntilIdle()
+                assertEquals(UiState.Success(expected), viewModel.uiState.value)
+                viewModel.addProduct(product.copy(id = 0L))
+                advanceUntilIdle()
+                assertEquals(UiState.Success(expected), viewModel.uiState.value)
+                assertEquals(preferencesBefore, settings.all)
+                assertEquals(applicationConfiguration, app.resources.configuration)
+                assertEquals(defaultLocale, java.util.Locale.getDefault())
+            }
+            assertTrue(settings.edit().remove("lang").commit())
+            viewModel.updateProduct(product)
+            advanceUntilIdle()
+            assertEquals(UiState.Success(app.getString(R.string.success_product_updated)), viewModel.uiState.value)
+            coVerify(exactly = 5) { repository.updateProduct(product) }
+            coVerify(exactly = 4) { repository.addProductAndReturnId(product.copy(id = 0L)) }
+        } finally {
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun `editor conflict and duplicate errors follow current selected language and preserve draft`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val baseline = sampleProduct(id = 33L, barcode = "LOCALE-CONFLICT", productName = "Base")
+        val desired = baseline.copy(productName = "Local")
+        viewModel.openProductEditor(baseline)
+        coEvery { repository.updateProductFromEditor(baseline, desired) } throws
+            com.example.merchandisecontrolsplitview.data.ProductEditConflictException()
+        try {
+            assertTrue(settings.edit().putString("lang", "zh").commit())
+            assertEquals(ProductEditorSaveResult.Failed("编辑期间商品已更改。请重新打开以查看最新数据。"),
+                viewModel.saveProductFromEditor(desired))
+            assertEquals(baseline, viewModel.productEditorTarget.value)
+            assertEquals(desired, viewModel.draftProductConflictReview.value?.desired)
+            coEvery { repository.updateProductFromEditor(baseline, desired) } throws SQLiteConstraintException("duplicate")
+            assertTrue(settings.edit().putString("lang", "es").commit())
+            assertEquals(ProductEditorSaveResult.Failed("Error: Ya existe un producto con este código de barras."),
+                viewModel.saveProductFromEditor(desired))
+            assertEquals(baseline, viewModel.productEditorTarget.value)
+            coVerify(exactly = 2) { repository.updateProductFromEditor(baseline, desired) }
+            coVerify(exactly = 0) { repository.updateProduct(any()) }
+            assertEquals(UiState.Idle, viewModel.uiState.value)
+        } finally {
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
+    }
+
+    @Test
+    @Config(qualifiers = "en")
+    fun `persisted conflict completion resolves current selected language after suspension`() = runTest {
+        val settings = app.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE)
+        val previousLanguage = settings.getString("lang", null)
+        val fixture = persistedReviewViewModel()
+        val store = ViewModelStore().apply { put("locale-review", fixture.first) }
+        val product = sampleProduct(144L, "LOCALE-R4", "Preserved")
+        val context = persistedReviewContext(product, revision = 1)
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") } returns context
+        coEvery { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) } coAnswers {
+            started.complete(Unit)
+            release.await()
+            PersistedCatalogConflictResult.Resolved(null, adoptedRemote = true)
+        }
+        try {
+            assertTrue(settings.edit().putString("lang", "en").commit())
+            assertTrue(fixture.first.requestPersistedCatalogConflict(
+                PersistedCatalogConflictTarget(product.id, "r4-owner", "r4-shop")))
+            advanceUntilIdle()
+            fixture.first.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+            runCurrent()
+            assertTrue(started.isCompleted)
+            assertTrue(settings.edit().putString("lang", "zh").commit())
+            release.complete(Unit)
+            advanceUntilIdle()
+            assertTrue(fixture.first.persistedCatalogConflictReview.value?.resolved == true)
+            assertEquals("已采用远程版本。", fixture.first.persistedCatalogConflictReview.value?.message)
+            assertEquals(product, fixture.first.productEditorTarget.value)
+            coVerify(exactly = 1) { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) }
+            coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+            coVerify(exactly = 0) { repository.updateProduct(any()) }
+        } finally {
+            release.complete(Unit)
+            store.clear()
+            assertTrue(settings.edit().putString("lang", previousLanguage).commit())
+        }
     }
 
     @Test
@@ -415,6 +548,307 @@ class DatabaseViewModelTest {
 
         viewModel.dismissProductEditor()
         assertNull(viewModel.productEditorTarget.value)
+    }
+
+    @Test
+    fun `draft review preserves disjoint peer values and saves against the explicitly chosen current base`() = runTest {
+        val base = sampleProduct(151L, "R3-MIXED", "Base").copy(itemNumber = "old-item", retailPrice = 3.0)
+        val draft = base.copy(productName = "Chosen draft", retailPrice = 8.0)
+        val current = base.copy(productName = "Peer overlap", itemNumber = "peer-disjoint", retailPrice = 4.0)
+        viewModel.openProductEditor(base)
+        coEvery { repository.getProductForEditorReview(base.id) } returns current
+        viewModel.reviewProductEditorDraft(draft)
+        advanceUntilIdle()
+        val session = viewModel.productEditorSessionId.value
+        viewModel.prepareProductEditorDraftFromReview(setOf("productname"))
+        val prepared = requireNotNull(viewModel.productEditorTarget.value)
+        assertEquals("Chosen draft", prepared.productName)
+        assertEquals("peer-disjoint", prepared.itemNumber)
+        assertEquals(4.0, requireNotNull(prepared.retailPrice), 0.0)
+        assertTrue(viewModel.productEditorSessionId.value > session)
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+        viewModel.saveProductFromEditor(prepared)
+        coVerify(exactly = 1) { repository.updateProductFromEditor(current, prepared) }
+        coVerify(exactly = 0) { repository.updateProduct(any()) }
+    }
+
+    @Test
+    fun `cancelling draft review preserves opening base and subsequent input`() = runTest {
+        val base = sampleProduct(152L, "R3-BACK", "Base")
+        val draft = base.copy(productName = "Input")
+        coEvery { repository.getProductForEditorReview(base.id) } returns base.copy(productName = "Peer")
+        viewModel.openProductEditor(base)
+        val session = viewModel.productEditorSessionId.value
+        viewModel.reviewProductEditorDraft(draft)
+        advanceUntilIdle()
+        viewModel.dismissProductEditorDraftReview()
+        assertEquals(base, viewModel.productEditorTarget.value)
+        assertEquals(session, viewModel.productEditorSessionId.value)
+        viewModel.saveProductFromEditor(draft)
+        coVerify(exactly = 1) { repository.updateProductFromEditor(base, draft) }
+    }
+
+    @Test
+    fun `missing review target keeps the draft and cannot recreate the record`() = runTest {
+        val base = sampleProduct(153L, "R3-MISSING", "Base")
+        viewModel.openProductEditor(base)
+        coEvery { repository.getProductForEditorReview(base.id) } returns null
+        viewModel.reviewProductEditorDraft(base.copy(productName = "Input"))
+        advanceUntilIdle()
+        assertTrue(viewModel.draftProductConflictReview.value!!.missingTarget)
+        viewModel.prepareProductEditorDraftFromReview(setOf("productname"))
+        assertEquals(base, viewModel.productEditorTarget.value)
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+        coVerify(exactly = 0) { repository.addProductAndReturnId(any()) }
+    }
+
+    @Test
+    fun `another peer drift after draft preparation returns a new conflict without resubmission`() = runTest {
+        val base = sampleProduct(154L, "R3-DRIFT", "Base")
+        val current = base.copy(productName = "Peer 1")
+        val newer = base.copy(productName = "Peer 2")
+        viewModel.openProductEditor(base)
+        coEvery { repository.getProductForEditorReview(base.id) } returns current
+        viewModel.reviewProductEditorDraft(base.copy(productName = "Selected"))
+        advanceUntilIdle()
+        viewModel.prepareProductEditorDraftFromReview(setOf("productname"))
+        val prepared = requireNotNull(viewModel.productEditorTarget.value)
+        coEvery { repository.updateProductFromEditor(current, prepared) } throws
+            com.example.merchandisecontrolsplitview.data.ProductEditConflictException(newer, conflictingFields = setOf("productname"))
+        viewModel.startProductEditorSave(prepared)
+        advanceUntilIdle()
+        assertEquals(newer, viewModel.draftProductConflictReview.value!!.current)
+        assertEquals(setOf("productname"), viewModel.draftProductConflictReview.value!!.conflictingFields)
+        assertEquals(prepared, viewModel.productEditorTarget.value)
+        coVerify(exactly = 1) { repository.updateProductFromEditor(current, prepared) }
+    }
+
+    @Test
+    fun `exact save receipt survives cancellation after durable callback without a second write`() = runTest {
+        val base = sampleProduct(155L, "R3-RECEIPT", "Base")
+        val desired = base.copy(productName = "Committed")
+        viewModel.openProductEditor(base)
+        coEvery { repository.updateProductFromEditor(base, desired, any()) } coAnswers {
+            thirdArg<(com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt) -> Unit>()(
+                com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt("exact-operation-155", desired, true))
+            throw kotlinx.coroutines.CancellationException("controlled after receipt")
+        }
+        viewModel.startProductEditorSave(desired)
+        advanceUntilIdle()
+        assertEquals(ProductEditorOperationState.Saved, viewModel.productEditorOperationState.value)
+        assertEquals(UiState.Success(app.getString(R.string.success_product_updated)), viewModel.uiState.value)
+        coVerify(exactly = 1) { repository.updateProductFromEditor(base, desired, any()) }
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+    }
+
+    @Test
+    fun `interrupted save without exact receipt cannot be blindly submitted again`() = runTest {
+        val base = sampleProduct(156L, "R3-UNKNOWN", "Base")
+        viewModel.openProductEditor(base)
+        var invocations = 0
+        viewModel.startProductEditorSave(base) {
+            invocations += 1
+            throw kotlinx.coroutines.CancellationException("no commit proof")
+        }
+        advanceUntilIdle()
+        viewModel.resetProductEditorOperation()
+        viewModel.startProductEditorSave(base) {
+            invocations += 1
+            ProductEditorSaveResult.Saved(base.id)
+        }
+        advanceUntilIdle()
+        assertEquals(1, invocations)
+        assertTrue((viewModel.productEditorOperationState.value as ProductEditorOperationState.Failed).requiresReview)
+        assertEquals(base, viewModel.productEditorTarget.value)
+    }
+
+    @Test
+    fun `late exact receipt after logout never publishes success into the next scope`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val base = sampleProduct(157L, "R3-LATE-RECEIPT", "Base")
+        val release = CompletableDeferred<Unit>()
+        fixture.first.openProductEditor(base)
+        advanceUntilIdle()
+        coEvery { repository.updateProductFromEditor(base, base, any()) } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            thirdArg<(com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt) -> Unit>()(
+                com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt("exact-operation-157", base, false))
+            throw kotlinx.coroutines.CancellationException("late owned completion")
+        }
+        fixture.first.startProductEditorSave(base)
+        runCurrent()
+        fixture.second.value = AuthState.SignedOut
+        runCurrent()
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertNull(fixture.first.productEditorTarget.value)
+        assertEquals(ProductEditorOperationState.Idle, fixture.first.productEditorOperationState.value)
+        assertFalse(fixture.first.uiState.value is UiState.Success)
+    }
+
+    @Test
+    fun `dismissed review read cannot overwrite a later comparison in the same editor session`() = runTest {
+        val base = sampleProduct(158L, "R3-REVIEW-EPOCH", "Opening")
+        val stale = base.copy(productName = "Old read")
+        val current = base.copy(productName = "Latest read")
+        val firstRelease = CompletableDeferred<Unit>()
+        var reads = 0
+        viewModel.openProductEditor(base)
+        coEvery { repository.getProductForEditorReview(base.id) } coAnswers {
+            reads += 1
+            if (reads == 1) {
+                withContext(NonCancellable) { firstRelease.await() }
+                stale
+            } else current
+        }
+        viewModel.reviewProductEditorDraft(base.copy(productName = "First draft"))
+        runCurrent()
+        viewModel.dismissProductEditorDraftReview()
+        viewModel.reviewProductEditorDraft(base.copy(productName = "Second draft"))
+        runCurrent()
+        assertEquals(current, viewModel.draftProductConflictReview.value?.current)
+        firstRelease.complete(Unit)
+        advanceUntilIdle()
+        val review = requireNotNull(viewModel.draftProductConflictReview.value)
+        assertEquals(current, review.current)
+        assertEquals("Second draft", review.desired.productName)
+        assertNull(review.message)
+        assertFalse(review.loading)
+    }
+
+    // R4 presentation tests use repository doubles. They do not establish durable receipt/storage acceptance.
+    @Test
+    fun `persisted conflict remote adoption calls resolution even when local equals remote and never ordinary save`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val product = sampleProduct(144L, "R4-NOOP", "Already equal")
+        val context = persistedReviewContext(product, revision = 1)
+        coEvery { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") } returns context
+        coEvery { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) } returns
+            PersistedCatalogConflictResult.Resolved(null, adoptedRemote = true)
+        assertTrue(fixture.first.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(product.id, "r4-owner", "r4-shop")))
+        advanceUntilIdle()
+        fixture.first.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+        advanceUntilIdle()
+        assertTrue(fixture.first.persistedCatalogConflictReview.value?.resolved == true)
+        assertEquals(product, fixture.first.productEditorTarget.value)
+        coVerify(exactly = 1) { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) }
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+        coVerify(exactly = 0) { repository.updateProduct(any()) }
+    }
+
+    @Test
+    fun `changed persisted revision requires a new decision and preserves the active editor base`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val opening = sampleProduct(145L, "R4-CHANGED", "Original local")
+        val first = persistedReviewContext(opening, revision = 1)
+        val changed = persistedReviewContext(opening.copy(productName = "Later local"), revision = 2)
+        coEvery { repository.preparePersistedCatalogConflict(opening.id, "r4-owner", "r4-shop") } returns first
+        coEvery { repository.resolvePersistedCatalogConflict(first, PersistedCatalogConflictChoice.AdoptRemote) } returns
+            PersistedCatalogConflictResult.Changed(changed)
+        fixture.first.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(opening.id, "r4-owner", "r4-shop"))
+        advanceUntilIdle()
+        fixture.first.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+        advanceUntilIdle()
+        assertEquals(changed, fixture.first.persistedCatalogConflictReview.value?.context)
+        assertFalse(fixture.first.persistedCatalogConflictReview.value!!.resolved)
+        assertFalse(fixture.first.persistedCatalogConflictReview.value!!.resolving)
+        assertEquals(opening, fixture.first.productEditorTarget.value)
+        coVerify(exactly = 1) { repository.resolvePersistedCatalogConflict(any(), any()) }
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+    }
+
+    @Test
+    fun `blocked persisted decision cannot be resubmitted until fresh comparison`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val product = sampleProduct(146L, "R4-BLOCKED")
+        val context = persistedReviewContext(product, revision = 1)
+        coEvery { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") } returns context
+        coEvery { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) } returns
+            PersistedCatalogConflictResult.Blocked("unconfirmed")
+        fixture.first.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(product.id, "r4-owner", "r4-shop"))
+        advanceUntilIdle()
+        repeat(2) {
+            fixture.first.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+            advanceUntilIdle()
+        }
+        assertTrue(fixture.first.persistedCatalogConflictReview.value?.requiresRefresh == true)
+        coVerify(exactly = 1) { repository.resolvePersistedCatalogConflict(any(), any()) }
+        fixture.first.refreshPersistedCatalogConflict()
+        advanceUntilIdle()
+        assertFalse(fixture.first.persistedCatalogConflictReview.value!!.requiresRefresh)
+        coVerify(exactly = 2) { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") }
+    }
+
+    @Test
+    fun `late prepared persisted context cannot open an editor after logout`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val product = sampleProduct(147L, "R4-LATE")
+        val context = persistedReviewContext(product, revision = 1)
+        val release = CompletableDeferred<Unit>()
+        coEvery { repository.preparePersistedCatalogConflict(product.id, "r4-owner", "r4-shop") } coAnswers {
+            withContext(NonCancellable) { release.await() }
+            context
+        }
+        fixture.first.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(product.id, "r4-owner", "r4-shop"))
+        runCurrent()
+        fixture.second.value = AuthState.SignedOut
+        runCurrent()
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertNull(fixture.first.persistedCatalogConflictReview.value)
+        assertNull(fixture.first.productEditorTarget.value)
+        coVerify(exactly = 0) { repository.resolvePersistedCatalogConflict(any(), any()) }
+    }
+
+    @Test
+    fun `persisted conflict link does not replace a different open draft`() = runTest {
+        val fixture = persistedReviewViewModel()
+        val draft = sampleProduct(148L, "R4-DRAFT")
+        fixture.first.openProductEditor(draft)
+        advanceUntilIdle()
+        val session = fixture.first.productEditorSessionId.value
+        assertFalse(fixture.first.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(149L, "r4-owner", "r4-shop")))
+        assertEquals(draft, fixture.first.productEditorTarget.value)
+        assertEquals(session, fixture.first.productEditorSessionId.value)
+        coVerify(exactly = 0) { repository.preparePersistedCatalogConflict(any(), any(), any()) }
+    }
+
+    @Test
+    fun `reopening a record preserves the active editor opening base and session`() = runTest {
+        val baseline = sampleProduct(id = 144L, barcode = "R3-REOPEN", productName = "Opening base")
+        viewModel.openProductEditor(baseline)
+        advanceUntilIdle()
+        val originalSession = viewModel.productEditorSessionId.value
+        // The Options link may carry a fresher row; it must reopen the same draft, not rebase it.
+        viewModel.openProductEditor(baseline.copy(productName = "Peer value"))
+        advanceUntilIdle()
+        assertEquals(baseline, viewModel.productEditorTarget.value)
+        assertEquals(originalSession, viewModel.productEditorSessionId.value)
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
+    }
+
+    @Test
+    fun `editor cancellation before persistence terminates busy state and preserves the draft`() = runTest {
+        val baseline = sampleProduct(id = 145L, barcode = "R3-CANCEL", productName = "Opening base")
+        viewModel.openProductEditor(baseline)
+        advanceUntilIdle()
+        val originalSession = viewModel.productEditorSessionId.value
+        var entered = false
+        viewModel.startProductEditorSave(baseline.copy(productName = "Unsaved input")) {
+            entered = true
+            // Controlled pre-persistence cancellation exercises the real VM job/terminal mapping.
+            // This test establishes no postcommit receipt or rollback proof.
+            throw kotlinx.coroutines.CancellationException("controlled before persistence")
+        }
+        advanceUntilIdle()
+        assertTrue(entered)
+        assertEquals(baseline, viewModel.productEditorTarget.value)
+        assertEquals(originalSession, viewModel.productEditorSessionId.value)
+        assertFalse("A cancelled editor must have a terminal nonbusy state",
+            viewModel.productEditorOperationState.value == ProductEditorOperationState.Saving)
+        assertFalse("No successful write was observed",
+            viewModel.productEditorOperationState.value == ProductEditorOperationState.Saved)
+        coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any()) }
     }
 
     @Test
@@ -713,22 +1147,36 @@ class DatabaseViewModelTest {
 
             viewModel.setFilter("a")
             runCurrent()
-            advanceTimeBy(80)
+            advanceTimeBy(25)
             viewModel.setFilter("ab")
             runCurrent()
-            advanceTimeBy(80)
+            advanceTimeBy(25)
             viewModel.setFilter("abc")
             runCurrent()
 
-            advanceTimeBy(249)
+            advanceTimeBy(74)
             expectNoEvents()
             advanceTimeBy(1)
             runCurrent()
             assertEquals("abc", awaitItem())
 
+            // Equal normalized input cannot create another paging generation.
+            viewModel.setFilter(" abc ")
+            runCurrent()
+            advanceTimeBy(75)
+            runCurrent()
+            expectNoEvents()
+
+            // Clearing cancels a pending nonempty query and emits immediately.
+            viewModel.setFilter("obsolete")
+            runCurrent()
+            advanceTimeBy(25)
             viewModel.setFilter("")
             runCurrent()
             assertNull(awaitItem())
+            advanceTimeBy(75)
+            runCurrent()
+            expectNoEvents()
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -809,7 +1257,7 @@ class DatabaseViewModelTest {
     @Test
     fun `visible product without image stays absent without image service request`() = runTest {
         val imageService = mockk<ProductImageService>(relaxed = true)
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val key = ProductImageUiKey(51L, ProductImageVariant.THUMB)
 
         imageViewModel.setProductImageVisible(
@@ -851,7 +1299,7 @@ class DatabaseViewModelTest {
                 cancelled.complete(Unit)
             }
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
 
         imageViewModel.setProductImageVisible(63L, "version-63", visible = true)
         advanceTimeBy(17L)
@@ -883,7 +1331,7 @@ class DatabaseViewModelTest {
                 )
             }
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
 
         (1L..200L).forEach { productId ->
             imageViewModel.setProductImageVisible(productId, "version-$productId", visible = true)
@@ -921,7 +1369,7 @@ class DatabaseViewModelTest {
                 secondResult.await()
             }
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val key = ProductImageUiKey(71L, ProductImageVariant.MAIN)
         val oldRequest = ProductImageLoadRequest(key.productId, key.variant, "version-old")
         val newRequest = ProductImageLoadRequest(key.productId, key.variant, "version-new")
@@ -985,7 +1433,7 @@ class DatabaseViewModelTest {
                 )
             )
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val thumbKey = ProductImageUiKey(76L, ProductImageVariant.THUMB)
         val mainKey = ProductImageUiKey(76L, ProductImageVariant.MAIN)
 
@@ -1020,12 +1468,15 @@ class DatabaseViewModelTest {
         val authStates = MutableStateFlow<AuthState>(AuthState.SignedIn(accountId, null))
         val shopStates = MutableStateFlow(shopContext(accountId, firstShopId))
         val authManager = mockk<SupabaseAuthManager>()
+        every { authManager.localIdentity } returns MutableStateFlow<LocalAuthIdentity?>(null)
+        every { authManager.isCurrentLocalIdentity(any()) } returns false
         val shopContextRepository = mockk<ShopContextRepository>()
         val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
         val imageService = mockk<ProductImageService>(relaxed = true)
         every { authManager.state } returns authStates
         every { shopContextRepository.state } returns shopStates
         every { scopedApp.authManager } returns authManager
+        every { scopedApp.catalogSyncStateTracker } returns CatalogSyncStateTracker(Task126BusinessDataScopeState.unmanagedAllowed())
         every { scopedApp.shopContextRepository } returns shopContextRepository
         val imageViewModel = DatabaseViewModel(scopedApp, repository, imageService)
         runCurrent()
@@ -1054,12 +1505,15 @@ class DatabaseViewModelTest {
         val authStates = MutableStateFlow<AuthState>(AuthState.SignedIn(accountId, null))
         val shopStates = MutableStateFlow(ShopContext.legacy())
         val authManager = mockk<SupabaseAuthManager>()
+        every { authManager.localIdentity } returns MutableStateFlow<LocalAuthIdentity?>(null)
+        every { authManager.isCurrentLocalIdentity(any()) } returns false
         val shopContextRepository = mockk<ShopContextRepository>()
         val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
         val imageService = mockk<ProductImageService>(relaxed = true)
         every { authManager.state } returns authStates
         every { shopContextRepository.state } returns shopStates
         every { scopedApp.authManager } returns authManager
+        every { scopedApp.catalogSyncStateTracker } returns CatalogSyncStateTracker(Task126BusinessDataScopeState.unmanagedAllowed())
         every { scopedApp.shopContextRepository } returns shopContextRepository
         val imageViewModel = DatabaseViewModel(scopedApp, repository, imageService)
         runCurrent()
@@ -1133,7 +1587,7 @@ class DatabaseViewModelTest {
             uploadGate.await()
             throw ProductImageException("image_request_failed")
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val mainKey = ProductImageUiKey(92L, ProductImageVariant.MAIN)
         val thumbKey = ProductImageUiKey(92L, ProductImageVariant.THUMB)
 
@@ -1169,7 +1623,7 @@ class DatabaseViewModelTest {
             uploadGate.await()
             error("Cancelled upload must not continue")
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val mainKey = ProductImageUiKey(91L, ProductImageVariant.MAIN)
         val thumbKey = ProductImageUiKey(91L, ProductImageVariant.THUMB)
         imageViewModel.loadProductImage(91L, ProductImageVariant.MAIN, null)
@@ -1221,7 +1675,7 @@ class DatabaseViewModelTest {
                     imageUpdatedAt = "now"
                 )
             }
-            val imageViewModel = DatabaseViewModel(app, repository, imageService)
+            val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
             val mainKey = ProductImageUiKey(95L, ProductImageVariant.MAIN)
             val thumbKey = ProductImageUiKey(95L, ProductImageVariant.THUMB)
 
@@ -1281,7 +1735,7 @@ class DatabaseViewModelTest {
             )
             awaitCancellation()
         }
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val mainKey = ProductImageUiKey(93L, ProductImageVariant.MAIN)
         val thumbKey = ProductImageUiKey(93L, ProductImageVariant.THUMB)
 
@@ -1343,7 +1797,7 @@ class DatabaseViewModelTest {
         }
         coEvery { imageService.upload(94L, any(), any(), any()) } throws
             ProductImageException("image_request_failed")
-        val imageViewModel = DatabaseViewModel(app, repository, imageService)
+        val imageViewModel = DatabaseViewModel(ownedApplication, repository, imageService)
         val mainKey = ProductImageUiKey(94L, ProductImageVariant.MAIN)
         val thumbKey = ProductImageUiKey(94L, ProductImageVariant.THUMB)
 
@@ -2100,15 +2554,234 @@ class DatabaseViewModelTest {
         shopState: MutableStateFlow<ShopContext>
     ): MerchandiseControlApplication {
         val authManager = mockk<SupabaseAuthManager>()
+        every { authManager.localIdentity } returns MutableStateFlow<LocalAuthIdentity?>(null)
+        every { authManager.isCurrentLocalIdentity(any()) } returns false
         val shopContextRepository = mockk<ShopContextRepository>()
         val scopedApp = mockk<MerchandiseControlApplication>(relaxed = true)
         every { authManager.state } returns authState
         every { shopContextRepository.state } returns shopState
         every { scopedApp.applicationContext } returns app
         every { scopedApp.authManager } returns authManager
+        every { scopedApp.catalogSyncStateTracker } returns CatalogSyncStateTracker(Task126BusinessDataScopeState.unmanagedAllowed())
         every { scopedApp.shopContextRepository } returns shopContextRepository
         return scopedApp
     }
+
+    @Test
+    fun `checking local identity supports draft review save and persisted decision without cloud auth`() = runTest {
+        val f = localCheckingEditorFixture()
+        val store = ViewModelStore().apply { put("local-editor", f.vm) }
+        val base = sampleProduct(169L, "T13-LOCAL", "Opening")
+        val context = persistedReviewContext(base, 1)
+        coEvery { repository.getProductForEditorReview(base.id) } returns base
+        coEvery { repository.preparePersistedCatalogConflict(base.id, "r4-owner", "r4-shop") } returns context
+        coEvery { repository.resolvePersistedCatalogConflict(context, PersistedCatalogConflictChoice.AdoptRemote) } returns
+            PersistedCatalogConflictResult.Resolved(null, true)
+        try {
+            runCurrent()
+            f.vm.openProductEditor(base)
+            f.vm.reviewProductEditorDraft(base.copy(itemNumber = "Local draft"))
+            advanceUntilIdle()
+            assertEquals(base, f.vm.draftProductConflictReview.value?.current)
+            f.vm.dismissProductEditorDraftReview()
+            f.vm.requestPersistedCatalogConflict(PersistedCatalogConflictTarget(base.id, "r4-owner", "r4-shop"))
+            advanceUntilIdle()
+            assertEquals(context, f.vm.persistedCatalogConflictReview.value?.context)
+            f.vm.resolvePersistedCatalogConflict(PersistedCatalogConflictChoice.AdoptRemote)
+            advanceUntilIdle()
+            assertTrue(f.vm.persistedCatalogConflictReview.value?.resolved == true)
+            assertEquals(base, f.vm.productEditorTarget.value)
+            f.vm.dismissPersistedCatalogConflict()
+            f.vm.startProductEditorSave(base.copy(itemNumber = "Only B"))
+            advanceUntilIdle()
+            assertEquals(ProductEditorOperationState.Saved, f.vm.productEditorOperationState.value)
+            assertEquals(AuthState.Checking, f.auth.value)
+            assertFalse(f.tracker.businessDataScopeState.value.allowsCloudSync)
+            coVerify(exactly = 1) { repository.updateProductFromEditor(base, base.copy(itemNumber = "Only B"), any()) }
+        } finally { store.clear() }
+    }
+
+    @Test
+    fun `same owner identity generation invalidates held comparison and retains editor draft`() = runTest {
+        val f = localCheckingEditorFixture()
+        val store = ViewModelStore().apply { put("local-editor", f.vm) }
+        val base = sampleProduct(170L, "T13-HELD", "Opening")
+        val release = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        coEvery { repository.getProductForEditorReview(base.id) } coAnswers {
+            entered.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            base.copy(productName = "Stale result")
+        }
+        try {
+            runCurrent()
+            f.vm.openProductEditor(base)
+            f.vm.reviewProductEditorDraft(base.copy(itemNumber = "Preserved input"))
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            f.identities.value = LocalAuthIdentity("r4-owner", 2)
+            runCurrent()
+            release.complete(Unit)
+            advanceUntilIdle()
+            val review = requireNotNull(f.vm.draftProductConflictReview.value)
+            assertNull(review.current)
+            assertEquals("Preserved input", review.desired.itemNumber)
+            assertFalse(review.loading)
+            assertNotNull(review.message)
+            assertEquals(base, f.vm.productEditorTarget.value)
+        } finally { release.complete(Unit); store.clear() }
+    }
+
+    @Test
+    fun `persisted review rejects absent stale foreign owner shop and revoked local proof`() = runTest {
+        val f = localCheckingEditorFixture()
+        val store = ViewModelStore().apply { put("local-editor", f.vm) }
+        val target = PersistedCatalogConflictTarget(171L, "r4-owner", "r4-shop")
+        try {
+            runCurrent()
+            f.identities.value = null
+            f.vm.requestPersistedCatalogConflict(target)
+            runCurrent()
+            f.identities.value = LocalAuthIdentity("r4-owner", 3)
+            f.identityCurrent = false
+            f.vm.requestPersistedCatalogConflict(target)
+            runCurrent()
+            f.identityCurrent = true
+            f.identities.value = LocalAuthIdentity("foreign-owner", 4)
+            f.vm.requestPersistedCatalogConflict(target)
+            runCurrent()
+            f.identities.value = LocalAuthIdentity("r4-owner", 5)
+            f.shops.value = shopContext("r4-owner", "different-shop")
+            f.vm.requestPersistedCatalogConflict(target)
+            runCurrent()
+            f.shops.value = shopContext("r4-owner", "r4-shop").copy(localAccessAllowed = false)
+            f.vm.requestPersistedCatalogConflict(target)
+            advanceUntilIdle()
+            coVerify(exactly = 0) { repository.preparePersistedCatalogConflict(any(), any(), any()) }
+            assertNull(f.vm.productEditorTarget.value)
+        } finally { store.clear() }
+    }
+
+    @Test
+    fun `same owner identity generation cannot publish a held exact save receipt`() = runTest {
+        val f = localCheckingEditorFixture()
+        val store = ViewModelStore().apply { put("local-editor", f.vm) }
+        val base = sampleProduct(172L, "T13-SAVE-GENERATION", "Opening")
+        val release = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        coEvery { repository.updateProductFromEditor(base, base, any()) } coAnswers {
+            entered.complete(Unit)
+            withContext(NonCancellable) { release.await() }
+            thirdArg<(com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt) -> Unit>()(
+                com.example.merchandisecontrolsplitview.data.ProductEditorSaveReceipt("held-exact-generation-172", base, false))
+            throw kotlinx.coroutines.CancellationException("controlled late receipt")
+        }
+        try {
+            runCurrent()
+            f.vm.openProductEditor(base)
+            f.vm.startProductEditorSave(base)
+            runCurrent()
+            assertTrue(entered.isCompleted)
+            f.identities.value = LocalAuthIdentity("r4-owner", 2)
+            runCurrent()
+            release.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(base, f.vm.productEditorTarget.value)
+            assertTrue((f.vm.productEditorOperationState.value as ProductEditorOperationState.Failed).requiresReview)
+            assertFalse(f.vm.uiState.value is UiState.Success)
+        } finally { release.complete(Unit); store.clear() }
+    }
+
+    @Test
+    fun `draft actions reject withdrawn account proof before local scope collector catches up`() = runTest {
+        val f = localCheckingEditorFixture()
+        val store = ViewModelStore().apply { put("local-editor", f.vm) }
+        val base = sampleProduct(173L, "T13-DISPATCH-GATE", "Opening")
+        try {
+            runCurrent()
+            f.vm.openProductEditor(base)
+            val stillAdmittedScope = f.tracker.businessDataScopeState.value
+            // Deliberately do not run collectors before the event reaches the old editor.
+            f.identities.value = null
+            f.vm.reviewProductEditorDraft(base.copy(itemNumber = "Unsaved"))
+            f.vm.startProductEditorSave(base)
+            assertTrue(f.vm.saveProductFromEditor(base) is ProductEditorSaveResult.Failed)
+            runCurrent()
+            f.identities.value = LocalAuthIdentity("r4-owner", 2)
+            f.identityCurrent = false
+            f.vm.reviewProductEditorDraft(base)
+            f.vm.startProductEditorSave(base)
+            assertTrue(f.vm.saveProductFromEditor(base) is ProductEditorSaveResult.Failed)
+            f.identityCurrent = true
+            f.shops.value = f.shops.value.copy(localAccessAllowed = false)
+            f.vm.reviewProductEditorDraft(base)
+            f.vm.startProductEditorSave(base)
+            assertTrue(f.vm.saveProductFromEditor(base) is ProductEditorSaveResult.Failed)
+            advanceUntilIdle()
+            assertEquals(stillAdmittedScope, f.tracker.businessDataScopeState.value)
+            assertEquals(base, f.vm.productEditorTarget.value)
+            coVerify(exactly = 0) { repository.getProductForEditorReview(any()) }
+            coVerify(exactly = 0) { repository.updateProductFromEditor(any(), any(), any()) }
+        } finally { store.clear() }
+    }
+
+    private class LocalCheckingEditorFixture(
+        val auth: MutableStateFlow<AuthState>, val identities: MutableStateFlow<LocalAuthIdentity?>,
+        val shops: MutableStateFlow<ShopContext>, val tracker: CatalogSyncStateTracker
+    ) {
+        lateinit var vm: DatabaseViewModel
+        var identityCurrent = true
+    }
+
+    private fun localCheckingEditorFixture(): LocalCheckingEditorFixture {
+        val auth = MutableStateFlow<AuthState>(AuthState.Checking)
+        val identities = MutableStateFlow<LocalAuthIdentity?>(LocalAuthIdentity("r4-owner", 1))
+        val shops = MutableStateFlow(shopContext("r4-owner", "r4-shop").copy(syncAllowed = false, localAccessAllowed = true))
+        val scope = task126ActiveOwnerStoreScope("r4-owner", shops.value.selectedShop)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.CHECKING,
+            boundScope = scope, localAccessScope = scope))
+        val f = LocalCheckingEditorFixture(auth, identities, shops, tracker)
+        val ownedApp = scopedImageApplication(auth, shops)
+        // Stub the existing manager directly: chained restubbing on the relaxed App
+        // may replace its configured child with a generic hierarchical mock.
+        val ownedAuthManager = ownedApp.authManager
+        every { ownedAuthManager.localIdentity } returns identities
+        every { ownedAuthManager.isCurrentLocalIdentity(any()) } answers {
+            f.identityCurrent && firstArg<LocalAuthIdentity>() == identities.value
+        }
+        every { ownedApp.catalogSyncStateTracker } returns tracker
+        assertSame(ownedAuthManager, ownedApp.authManager)
+        assertSame(auth, ownedAuthManager.state)
+        assertSame(identities, ownedAuthManager.localIdentity)
+        assertEquals(AuthState.Checking, ownedAuthManager.state.value)
+        f.vm = DatabaseViewModel(ownedApp, repository, mockk<ProductImageService>(relaxed = true), storefrontEnabled = false)
+        return f
+    }
+
+    private fun persistedReviewViewModel(): Pair<DatabaseViewModel, MutableStateFlow<AuthState>> {
+        val auth = MutableStateFlow<AuthState>(AuthState.SignedIn("r4-owner", null))
+        val shop = MutableStateFlow(shopContext("r4-owner", "r4-shop"))
+        val scopedApp = scopedImageApplication(auth, shop)
+        val tracker = CatalogSyncStateTracker(Task126BusinessDataScopeState.ready(
+            task126ActiveOwnerStoreScope("r4-owner", shop.value.selectedShop)))
+        every { scopedApp.catalogSyncStateTracker } returns tracker
+        return DatabaseViewModel(scopedApp, repository, mockk<ProductImageService>(relaxed = true),
+            storefrontEnabled = false) to auth
+    }
+
+    /** Repository-owned context double for presentation only; no evidence token is fabricated. */
+    private fun persistedReviewContext(product: Product, revision: Int): PersistedCatalogConflictContext =
+        mockk<PersistedCatalogConflictContext>().also { context ->
+            every { context.productId } returns product.id
+            every { context.decisionId } returns "presentation-decision-$revision"
+            every { context.conflictRevision } returns revision
+            every { context.local } returns product
+            every { context.remote } returns product
+            every { context.conflictingFields } returns emptySet()
+            every { context.remoteDeleted } returns false
+            every { context.canResolve } returns true
+            every { context.blockingReason } returns null
+        }
 
     private suspend fun preparePreview(): Long {
         coEvery { repository.getAllProducts() } returns emptyList()

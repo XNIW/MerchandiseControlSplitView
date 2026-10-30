@@ -8,6 +8,38 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OptionsScreenPublicUxTest {
+
+    @Test
+    fun `qualified local availability has a ready caption while cloud remains checking`() {
+        val state = com.example.merchandisecontrolsplitview.viewmodel.LocalDatabaseStatusUiState(
+            productsCount = 2, pendingLocalChangesCount = 1,
+            businessDataScopeStatus = com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus.CHECKING,
+            localAccessAvailable = true, showBusinessDataDetails = true)
+        assertEquals(com.example.merchandisecontrolsplitview.R.string.local_database_status_ready,
+            localDatabaseStatusSubtitleRes(state))
+        assertEquals(com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus.CHECKING,
+            state.businessDataScopeStatus)
+        assertEquals(com.example.merchandisecontrolsplitview.R.string.local_database_status_ready,
+            localDatabaseStatusSubtitleRes(state.copy(productsCount = null, pendingLocalChangesCount = null)))
+        val localSection = optionsScreenSource().readText()
+            .substringAfter("internal fun LocalDatabaseStatusSection(")
+            .substringBefore("private fun LocalDatabaseStatusRow(")
+        assertTrue(localSection.contains("if (state.showBusinessDataDetails)"))
+        assertTrue(localSection.contains("localDatabaseStatusSubtitleRes(state, checkingMessageRes)"))
+    }
+
+    @Test
+    fun `unqualified checking keeps its prerequisite caption and hidden counts`() {
+        val state = com.example.merchandisecontrolsplitview.viewmodel.LocalDatabaseStatusUiState(
+            businessDataScopeStatus = com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus.CHECKING,
+            localAccessAvailable = false, showBusinessDataDetails = false)
+        assertEquals(com.example.merchandisecontrolsplitview.R.string.business_scope_checking,
+            localDatabaseStatusSubtitleRes(state))
+        assertEquals(com.example.merchandisecontrolsplitview.R.string.catalog_cloud_state_sign_in_required,
+            localDatabaseStatusSubtitleRes(state,
+                com.example.merchandisecontrolsplitview.R.string.catalog_cloud_state_sign_in_required))
+        assertFalse(state.showBusinessDataDetails)
+    }
     @Test
     fun `options status cards hide implementation-only pending and account rows`() {
         val source = optionsScreenSource().readText()

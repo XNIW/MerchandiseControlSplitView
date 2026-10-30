@@ -833,4 +833,51 @@
     <string name="storefront_discard_pending">丢弃已保存的请求</string>
     <string name="account_session_cleanup_failed">无法确认本地退出，请重试。</string>
     <string name="product_save_cloud_confirmed">此产品已获云端确认。</string>
+    <!-- TASK-144: durable catalog conflict review. -->
+    <string name="catalog_conflict_review_title">检查已保存的更改</string>
+    <string name="catalog_conflict_saved_local">更改已保存在此设备上，需要处理。</string>
+    <string name="catalog_conflict_verified_versions">比较已验证的值，并明确选择要保留的本地字段。</string>
+    <string name="catalog_conflict_local_value">此设备：%1$s</string>
+    <string name="catalog_conflict_remote_value">远程版本：%1$s</string>
+    <string name="catalog_conflict_previous_choice">你选择的值：%1$s</string>
+    <string name="catalog_conflict_remote_deleted">远程版本已删除，不会重新创建该商品。</string>
+    <string name="catalog_conflict_preserve_price_history">此选择仅处理这项目录更改，已保存的价格历史会保留。</string>
+    <string name="catalog_conflict_blocked">必须先验证此更改，才能应用选择。</string>
+    <string name="catalog_conflict_accept_remote_deletion">接受远程删除</string>
+    <string name="catalog_conflict_adopt_remote">使用远程版本</string>
+    <string name="catalog_conflict_keep_selected">保留选中的字段</string>
+    <string name="catalog_conflict_refresh_comparison">刷新对比</string>
+    <string name="catalog_conflict_postpone">稍后处理</string>
+    <string name="catalog_conflict_relation_unavailable">关联记录不可用</string>
+    <string name="catalog_conflict_changed">出现了其他更改。你的选择已保留，请重新对比并确认。</string>
+    <string name="catalog_conflict_read_failed">暂时无法对比，已保存的更改会保留。</string>
+    <string name="catalog_conflict_scope_unavailable">此记录在当前账户或店铺中不可用。</string>
+    <string name="catalog_conflict_existing_draft">你有尚未关闭的草稿。请先保存或取消，再检查其他记录。</string>
+    <string name="catalog_conflict_return_to_draft">返回草稿</string>
+    <string name="catalog_conflict_open_review">检查已保存的更改</string>
+    <string name="catalog_conflict_remote_adopted">已采用远程版本。</string>
+    <string name="catalog_conflict_deletion_adopted">已接受远程删除。</string>
+    <string name="catalog_conflict_choice_pending">选择已保存在此设备上 · 等待同步</string>
+    <string name="catalog_conflict_choice_saved">选择已保存在此设备上。</string>
+    <string name="catalog_conflict_resolution_unconfirmed">需要验证此次选择的结果。已保存的更改会保留，请刷新对比后再重试。</string>
+    <string name="catalog_conflict_history_blocks_delete">删除前需要验证关联的历史记录。</string>
+
+    <!-- TASK-144: review of an unsaved draft and truthful interrupted Save. -->
+    <string name="product_editor_missing">此商品已不可用。你的修改未保存。</string>
+    <string name="product_editor_save_interrupted">保存已中断。你的修改仍然保留；保存结果需要核实。</string>
+    <string name="product_editor_review_title">检查修改</string>
+    <string name="product_editor_review_explanation">仅选择要保留的草稿字段。其他值将使用当前版本。此操作仅准备下一次保存。</string>
+    <string name="product_editor_disputed_field">冲突字段</string>
+    <string name="product_editor_opening_value">打开时：%1$s</string>
+    <string name="product_editor_draft_value">你的草稿：%1$s</string>
+    <string name="product_editor_current_value">当前版本：%1$s</string>
+    <string name="product_editor_use_current">使用当前版本</string>
+    <string name="product_editor_prepare_selected">按所选字段编辑</string>
+    <string name="product_editor_return_to_edit">返回编辑</string>
+    <string name="product_editor_remote_changed">此商品已更新。你的修改已保留。</string>
+    <string name="local_store_open_checking">正在打开本地数据库…</string>
+    <string name="local_store_open_unavailable">无法打开本地数据库。你仍可使用设置。</string>
+    <string name="local_store_open_details">阶段：打开本地数据库\n原因：%1$s\n应用版本：%2$s</string>
+    <string name="local_store_open_failed_reason">数据库访问失败</string>
+    <string name="local_store_open_unknown_reason">本地数据库不可用</string>
 </resources>

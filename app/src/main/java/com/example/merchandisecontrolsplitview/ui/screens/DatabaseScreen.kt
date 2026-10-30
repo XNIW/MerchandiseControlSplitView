@@ -119,6 +119,7 @@ fun DatabaseScreen(
     val storefrontImportSummary by viewModel.storefrontImportSummary.collectAsState()
     val productEditorTarget by viewModel.productEditorTarget.collectAsState()
     val productEditorSessionId by viewModel.productEditorSessionId.collectAsState()
+    val persistedConflictReview by viewModel.persistedCatalogConflictReview.collectAsState()
     val products = viewModel.pager.collectAsLazyPagingItems()
     val visibleStorefrontProducts = products.itemSnapshotList.items.map { details ->
         (productDetailsOverrides[details.product.id] ?: details).productWithCurrentPrices()
@@ -378,6 +379,7 @@ fun DatabaseScreen(
                     DatabaseHubTab.PRODUCTS -> {
                         DatabaseProductListSection(
                             filter = filter.orEmpty(),
+                            appliedFilterForObservation = appliedProductFilter,
                             products = products,
                             productDetailsOverrides = productDetailsOverrides,
                             productImageStates = productImageStates,
@@ -529,6 +531,17 @@ fun DatabaseScreen(
             enablePriceHistory = !isNewProduct,
             onDismiss = viewModel::dismissProductEditor,
             onSave = viewModel::saveProductFromEditor
+        )
+    }
+
+    persistedConflictReview?.let { review ->
+        PersistedCatalogConflictReview(
+            context = review.context, loading = review.loading, resolving = review.resolving,
+            resolved = review.resolved, requiresRefresh = review.requiresRefresh, message = review.message,
+            suppliers = supplierOptions, categories = categoryOptions,
+            onRefresh = viewModel::refreshPersistedCatalogConflict,
+            onResolve = viewModel::resolvePersistedCatalogConflict,
+            onDismiss = viewModel::dismissPersistedCatalogConflict
         )
     }
 

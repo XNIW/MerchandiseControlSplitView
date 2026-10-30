@@ -845,4 +845,51 @@
     <string name="storefront_discard_pending">Discard saved request</string>
     <string name="account_session_cleanup_failed">Local sign-out could not be verified. Try again.</string>
     <string name="product_save_cloud_confirmed">This product is confirmed in the cloud.</string>
+    <!-- TASK-144: durable catalog conflict review. -->
+    <string name="catalog_conflict_review_title">Review saved change</string>
+    <string name="catalog_conflict_saved_local">The change is saved on this device and needs attention.</string>
+    <string name="catalog_conflict_verified_versions">Compare the verified values. Explicitly select the local fields to keep.</string>
+    <string name="catalog_conflict_local_value">On this device: %1$s</string>
+    <string name="catalog_conflict_remote_value">Remote version: %1$s</string>
+    <string name="catalog_conflict_previous_choice">Your proposed value: %1$s</string>
+    <string name="catalog_conflict_remote_deleted">The remote version has been deleted. The product will not be recreated.</string>
+    <string name="catalog_conflict_preserve_price_history">This choice concerns this catalog change. Previously saved price history is preserved.</string>
+    <string name="catalog_conflict_blocked">This change must be verified before a choice can be applied.</string>
+    <string name="catalog_conflict_accept_remote_deletion">Accept remote deletion</string>
+    <string name="catalog_conflict_adopt_remote">Use remote version</string>
+    <string name="catalog_conflict_keep_selected">Keep selected fields</string>
+    <string name="catalog_conflict_refresh_comparison">Refresh comparison</string>
+    <string name="catalog_conflict_postpone">Decide later</string>
+    <string name="catalog_conflict_relation_unavailable">Related record unavailable</string>
+    <string name="catalog_conflict_changed">Other changes are present. Your proposal is preserved: review the comparison and choose again.</string>
+    <string name="catalog_conflict_read_failed">The comparison is unavailable. Your saved change is preserved.</string>
+    <string name="catalog_conflict_scope_unavailable">This record is unavailable in the current account or shop.</string>
+    <string name="catalog_conflict_existing_draft">You have an open draft. Save or cancel it before reviewing another record.</string>
+    <string name="catalog_conflict_return_to_draft">Return to draft</string>
+    <string name="catalog_conflict_open_review">Review saved change</string>
+    <string name="catalog_conflict_remote_adopted">Remote version adopted.</string>
+    <string name="catalog_conflict_deletion_adopted">Remote deletion accepted.</string>
+    <string name="catalog_conflict_choice_pending">Choice saved on this device · Waiting to sync</string>
+    <string name="catalog_conflict_choice_saved">Choice saved on this device.</string>
+    <string name="catalog_conflict_resolution_unconfirmed">The choice needs verification. Your saved change is preserved; refresh the comparison before trying again.</string>
+    <string name="catalog_conflict_history_blocks_delete">Deletion requires verification of the linked history.</string>
+
+    <!-- TASK-144: review of an unsaved draft and truthful interrupted Save. -->
+    <string name="product_editor_missing">This product is no longer available. Your changes were not saved.</string>
+    <string name="product_editor_save_interrupted">Save interrupted. Your changes are still here; the result needs verification.</string>
+    <string name="product_editor_review_title">Review changes</string>
+    <string name="product_editor_review_explanation">Select only the draft fields to keep. Other values will follow the current version. This prepares the next Save.</string>
+    <string name="product_editor_disputed_field">Conflicting field</string>
+    <string name="product_editor_opening_value">When opened: %1$s</string>
+    <string name="product_editor_draft_value">Your draft: %1$s</string>
+    <string name="product_editor_current_value">Current version: %1$s</string>
+    <string name="product_editor_use_current">Use current version</string>
+    <string name="product_editor_prepare_selected">Edit with selected fields</string>
+    <string name="product_editor_return_to_edit">Return to editing</string>
+    <string name="product_editor_remote_changed">This product was updated. Your changes are preserved.</string>
+    <string name="local_store_open_checking">Opening the local database…</string>
+    <string name="local_store_open_unavailable">The local database could not be opened. Settings remain available.</string>
+    <string name="local_store_open_details">Phase: opening the local database\nReason: %1$s\nApp version: %2$s</string>
+    <string name="local_store_open_failed_reason">Database access failed</string>
+    <string name="local_store_open_unknown_reason">Local database unavailable</string>
 </resources>

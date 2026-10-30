@@ -1,5 +1,10 @@
 package com.example.merchandisecontrolsplitview.data
 
+import android.os.SystemClock
+import android.util.Log
+import com.example.merchandisecontrolsplitview.BuildConfig
+import kotlin.time.Clock
+import java.security.MessageDigest
 import io.github.jan.supabase.AccessTokenProvider
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.SupabaseClientConfig
@@ -270,9 +275,20 @@ internal class GenerationOwnedSupabaseClient(
             sessionManager.saveSession(session)
         }
 
-        override suspend fun loadSession(): UserSession = storageMutex.withLock {
-            requireCurrentLease(lease)
-            sessionManager.loadSession()
+        override suspend fun loadSession(): UserSession {
+            val observation = OriginalSessionLoadObservation.start()
+            try {
+                return storageMutex.withLock {
+                    observation?.lockAcquired()
+                    requireCurrentLease(lease)
+                    observation?.delegateStartedAfterOriginalLeaseGuard()
+                    val session = sessionManager.loadSession()
+                    observation?.delegateReturned(session)
+                    session
+                }
+            } finally {
+                observation?.finish()
+            }
         }
 
         override suspend fun loadSessionOrNull(): UserSession? = storageMutex.withLock {
@@ -314,4 +330,67 @@ internal class GenerationOwnedSupabaseClient(
     override val accessToken: AccessTokenProvider? get() = captureClient().accessToken
     override val coroutineDispatcher: CoroutineDispatcher get() = captureClient().coroutineDispatcher
     override val logger: SupabaseLogger get() = captureClient().logger
+}
+
+/** Passive TEST diagnostics only; these model observations never grant auth/local authority. */
+private class OriginalSessionLoadObservation private constructor(private val requestedNs: Long) {
+    private var acquiredNs: Long? = null
+    private var delegateStartNs: Long? = null
+    private var delegateEndNs: Long? = null
+    private var leaseGuardPassed = false
+    private var returned = false
+    private var userPresent: Boolean? = null
+    private var modelExpiryFuture: Boolean? = null
+
+    fun lockAcquired() = observe { acquiredNs = SystemClock.elapsedRealtimeNanos() }
+
+    fun delegateStartedAfterOriginalLeaseGuard() = observe {
+        leaseGuardPassed = true
+        delegateStartNs = SystemClock.elapsedRealtimeNanos()
+    }
+
+    fun delegateReturned(session: UserSession) = observe {
+        delegateEndNs = SystemClock.elapsedRealtimeNanos()
+        returned = true
+        userPresent = !session.user?.id.isNullOrBlank()
+        // UserSession may default expiresAt when the stored model omits it.
+        // This flag is deliberately NOT a JWT expiry or authorization witness.
+        modelExpiryFuture = session.expiresAt > Clock.System.now()
+    }
+
+    fun finish() = observe {
+        val now = SystemClock.elapsedRealtimeNanos()
+        Log.i("MerchandiseApp", "auth_storage_load at_ns=$now " +
+            "lock_acquired=${acquiredNs != null} lock_wait_ns=${duration(acquiredNs, requestedNs)} " +
+            "delegate_ns=${duration(delegateEndNs ?: now, delegateStartNs)} " +
+            "lease_guard_passed=$leaseGuardPassed delegate_returned=$returned " +
+            "user_present=${userPresent?.toString() ?: "unknown"} " +
+            "model_expiry_future=${modelExpiryFuture?.toString() ?: "unknown"} expiry_observation=model_only")
+    }
+
+    private fun duration(end: Long?, start: Long?): String =
+        if (end != null && start != null && end >= start) (end - start).toString() else "unknown"
+
+    private inline fun observe(block: () -> Unit) {
+        try { block() } catch (_: Throwable) { /* Diagnostic failures cannot replace the original operation. */ }
+    }
+
+    companion object {
+        fun start(): OriginalSessionLoadObservation? = try {
+            if (!BuildConfig.DEBUG) null else {
+                // Same private TEST namespace predicate as the existing passive epoch diagnostics.
+                val bytes = MessageDigest.getInstance("SHA-256")
+                    .digest(BuildConfig.SUPABASE_URL.toByteArray(Charsets.UTF_8))
+                val digits = "0123456789abcdef"
+                val encoded = CharArray(bytes.size * 2)
+                for (index in bytes.indices) {
+                    val value = bytes[index].toInt() and 0xff
+                    encoded[index * 2] = digits[value ushr 4]
+                    encoded[index * 2 + 1] = digits[value and 0x0f]
+                }
+                if (String(encoded) == "42a5d0119a30cb5f291bff1912a46e1092c77b483bbfed663785ef165260c842")
+                    OriginalSessionLoadObservation(SystemClock.elapsedRealtimeNanos()) else null
+            }
+        } catch (_: Throwable) { null }
+    }
 }

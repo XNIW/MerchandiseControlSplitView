@@ -4,6 +4,9 @@ import androidx.room.withTransaction
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -30,8 +33,19 @@ internal data class BusinessWritePayload(
     val history: List<SharedSheetSessionUpsertRow> = emptyList(),
     val patchId: String? = null,
     val patch: InventoryProductPatch? = null,
-    val revisions: List<BusinessWriteRevision>
+    val revisions: List<BusinessWriteRevision>,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expectedUpdatedAt: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val expectedDeletedAt: String? = null
 )
+
+internal sealed interface BusinessWriteConfirmation {
+    data object LegacyAccepted : BusinessWriteConfirmation
+    data class ConditionalProduct(val row: InventoryProductRow) : BusinessWriteConfirmation
+}
+
+/** Zero rows describes only this dispatch. In particular it cannot confirm an earlier lost response. */
+internal class BusinessWriteConditionalNoMatch(val readback: QualifiedCatalogConflictRemote) :
+    IllegalStateException("business_write_conditional_no_match")
 
 @Serializable
 internal data class BusinessWriteAttempt(
@@ -48,7 +62,7 @@ internal data class BusinessWriteAttempt(
 internal fun validateBusinessWritePayload(attempt: BusinessWriteAttempt) {
     val p=attempt.payload
     val domain=when(p.kind) {
-        "SUPPLIERS" -> "SUPPLIER"; "CATEGORIES" -> "CATEGORY"; "PRODUCTS", "PATCH" -> "PRODUCT"
+        "SUPPLIERS" -> "SUPPLIER"; "CATEGORIES" -> "CATEGORY"; "PRODUCTS", "PATCH", "PATCH_CONDITIONAL" -> "PRODUCT"
         "PRICES" -> "PRICE"; "HISTORY" -> "HISTORY"
         else -> error("business_write_kind_invalid")
     }
@@ -56,12 +70,18 @@ internal fun validateBusinessWritePayload(attempt: BusinessWriteAttempt) {
         (p.kind=="CATEGORIES" || p.categories.isEmpty()) &&
         (p.kind=="PRODUCTS" || p.products.isEmpty()) &&
         (p.kind=="PRICES" || p.prices.isEmpty()) && (p.kind=="HISTORY" || p.history.isEmpty()) &&
-        (p.kind=="PATCH" || (p.patch==null && p.patchId==null))) { "business_write_payload_invalid" }
+        (p.kind in setOf("PATCH", "PATCH_CONDITIONAL") || (p.patch==null && p.patchId==null))) { "business_write_payload_invalid" }
+    require(if (p.kind == "PATCH_CONDITIONAL") {
+        attempt.version == 2 && !p.expectedUpdatedAt.isNullOrBlank() &&
+            p.expectedDeletedAt == null && p.revisions.size == 1 && p.patch?.deletedAt == null
+    } else attempt.version == 1 && p.expectedUpdatedAt == null && p.expectedDeletedAt == null) {
+        "business_write_format_invalid"
+    }
     val ids=when(p.kind) {
         "SUPPLIERS" -> p.suppliers.map { require(it.ownerUserId==attempt.owner && it.shopId==attempt.shop); it.id }
         "CATEGORIES" -> p.categories.map { require(it.ownerUserId==attempt.owner && it.shopId==attempt.shop); it.id }
         "PRODUCTS" -> p.products.map { require(it.ownerUserId==attempt.owner && it.shopId==attempt.shop); it.id }
-        "PATCH" -> listOf(requireNotNull(p.patchId)).also { require(p.patch!=null && !p.patch.isEmpty) }
+        "PATCH", "PATCH_CONDITIONAL" -> listOf(requireNotNull(p.patchId)).also { require(p.patch!=null && !p.patch.isEmpty) }
         "PRICES" -> p.prices.map { require(it.ownerUserId==attempt.owner && it.shopId==attempt.shop); it.id }
         else -> p.history.map { require(it.ownerUserId==attempt.owner && it.shopId==attempt.shop); it.remoteId }
     }
@@ -83,12 +103,26 @@ internal class BusinessWriteOutbox(
 ) {
     private val json = Json { encodeDefaults = true }
     private val dao get() = db.syncEventOutboxDao()
+    // Serializes remote dispatch and decisions, not ordinary local Save or unrelated Room readers.
+    private val deliveryOwner = Mutex()
+    suspend fun <T> withResolutionOwner(block: suspend () -> T): T = deliveryOwner.withLock { block() }
 
     suspend fun execute(owner: String, shop: String?, payload: BusinessWritePayload,
-        send: suspend (BusinessWriteAttempt) -> Result<Unit>): Result<Unit> {
+        send: suspend (BusinessWriteAttempt) -> Result<Unit>): Result<Unit> =
+        executeVerified(owner, shop, payload) { send(it).map { BusinessWriteConfirmation.LegacyAccepted } }
+
+    suspend fun executeVerified(owner: String, shop: String?, payload: BusinessWritePayload,
+        send: suspend (BusinessWriteAttempt) -> Result<BusinessWriteConfirmation>): Result<Unit> =
+        deliveryOwner.withLock {
+            val (entry, attempt) = seal(owner, shop, payload)
+            deliver(entry, attempt, send)
+        }
+
+    /** Also called inside the resolution transaction; sealing does not dispatch. */
+    suspend fun seal(owner: String, shop: String?, payload: BusinessWritePayload): Pair<SyncEventOutboxEntry, BusinessWriteAttempt> {
         val store = shop?.let { "shop:$it" }.orEmpty()
         val binding=db.businessDataScopeBindingDao().get()
-        val attempt = BusinessWriteAttempt(owner=owner, store=store, shop=shop,
+        val attempt = BusinessWriteAttempt(version=if(payload.kind=="PATCH_CONDITIONAL") 2 else 1, owner=owner, store=store, shop=shop,
             device=deviceId(), generation=db.syncRecoveryBaselineDao().get()?.generationId, payload=payload,
             schema=binding?.schemaVersion ?: Task126SyncPolicy.LOCAL_SCHEMA_VERSION,
             protocol=binding?.syncProtocolVersion ?: Task126SyncPolicy.SYNC_PROTOCOL_VERSION,
@@ -113,11 +147,18 @@ internal class BusinessWriteOutbox(
                 }
             }
         }
-        return deliver(entry, attempt, send)
+        PilotCommitTrace.b6Sealed(entry,attempt, lease = PilotCommitTrace.b6LeaseStamp(kotlin.coroutines.coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease))
+        return entry to attempt
     }
 
     suspend fun replay(owner: String, shop: String?, kinds: Set<String>,
-        send: suspend (BusinessWriteAttempt) -> Result<Unit>): List<BusinessWriteAttempt> {
+        send: suspend (BusinessWriteAttempt) -> Result<Unit>): List<BusinessWriteAttempt> =
+        replayVerified(owner, shop, kinds) { send(it).map { BusinessWriteConfirmation.LegacyAccepted } }
+
+    suspend fun replayVerified(owner: String, shop: String?, kinds: Set<String>,
+        continueIndependentProducts: Boolean = false,
+        send: suspend (BusinessWriteAttempt) -> Result<BusinessWriteConfirmation>): List<BusinessWriteAttempt> =
+        deliveryOwner.withLock {
         val store = shop?.let { "shop:$it" }.orEmpty()
         val completed = mutableListOf<BusinessWriteAttempt>()
         // Bound every read, including malformed receipts. Never skip an oversized predecessor.
@@ -132,16 +173,26 @@ internal class BusinessWriteOutbox(
                 "business_write_receipt_mismatch"
             }
             require(attempt.payload.kind in kinds) { "business_write_kind_mismatch" }
-            deliver(entry,attempt,send).getOrThrow()
-            completed += attempt
+            val effective = loadBusinessResolutionSnapshot(db, owner, store)
+            if (effective?.supersededAttempt(entry) == true) continue
+            if (BusinessResolutionLedger.hasNoCommitProof(entry)) continue
+            val delivered = deliver(entry, attempt, send)
+            if (delivered.isSuccess) completed += attempt
+            else if (!continueIndependentProducts || attempt.payload.revisions.any { it.domain != "PRODUCT" }) delivered.getOrThrow()
         }
-        require(dao.listBusinessWriteHeaders(owner,store,kinds,1).isEmpty()) { "business_write_replay_budget_exhausted" }
-        return completed
+        val residual = dao.listBusinessWriteHeaders(owner, store, kinds, 101)
+        require(residual.size <= 100 && residual.all { header ->
+            val remaining = requireNotNull(dao.getById(header.id))
+            (continueIndependentProducts && json.decodeFromString<BusinessWriteAttempt>(remaining.metadataJson).payload.revisions.all { it.domain == "PRODUCT" }) ||
+                BusinessResolutionLedger.hasNoCommitProof(remaining) ||
+                loadBusinessResolutionSnapshot(db, owner, store)?.supersededAttempt(remaining) == true
+        }) { "business_write_replay_budget_exhausted" }
+        completed
     }
 
     private suspend fun validate(attempt: BusinessWriteAttempt, owner: String, store: String) {
         requireScope()
-        require(attempt.version == 1 && attempt.schema == Task126SyncPolicy.LOCAL_SCHEMA_VERSION &&
+        require(attempt.version in 1..2 && attempt.schema == Task126SyncPolicy.LOCAL_SCHEMA_VERSION &&
             attempt.owner == owner && attempt.store == store && attempt.device == deviceId() &&
             attempt.store == attempt.shop?.let { "shop:$it" }.orEmpty()) {
             "business_write_scope_mismatch"
@@ -158,24 +209,77 @@ internal class BusinessWriteOutbox(
         MessageDigest.getInstance("SHA-256").digest(raw.encodeToByteArray()).joinToString("") { "%02x".format(it) }
 
     private suspend fun deliver(entry: SyncEventOutboxEntry, attempt: BusinessWriteAttempt,
-        send: suspend (BusinessWriteAttempt) -> Result<Unit>): Result<Unit> {
+        send: suspend (BusinessWriteAttempt) -> Result<BusinessWriteConfirmation>): Result<Unit> {
         validate(attempt,entry.ownerUserId,entry.storeScope)
+        require(dao.getById(entry.id) == entry) { "business_write_receipt_changed" }
+        val effective = loadBusinessResolutionSnapshot(db, entry.ownerUserId, entry.storeScope)
+        if (effective?.supersededAttempt(entry) == true || BusinessResolutionLedger.hasNoCommitProof(entry)) {
+            return Result.failure(IllegalStateException("business_write_requires_new_resolution"))
+        }
         val stamped = entry.copy(attemptCount=(entry.attemptCount.toLong()+1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
             lastAttemptAtMs=System.currentTimeMillis())
-        db.withTransaction { requireScope(); dao.update(stamped) }
+        db.withTransaction { requireScope(); recordBusinessIntentDispatch(db, attempt, entry.clientEventId); dao.update(stamped) }
+        PilotCommitTrace.b6Dispatched(stamped, lease = PilotCommitTrace.b6LeaseStamp(kotlin.coroutines.coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease))
         val result = try { send(attempt) } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { Result.failure(error) }
-        if (result.isSuccess) db.withTransaction {
+        PilotCommitTrace.b6Response(stamped,result.isSuccess, lease = PilotCommitTrace.b6LeaseStamp(kotlin.coroutines.coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease))
+        if (result.isSuccess) {
+          db.withTransaction {
             validate(attempt,entry.ownerUserId,entry.storeScope)
             require(dao.getById(entry.id)?.metadataJson == entry.metadataJson) { "business_write_receipt_changed" }
-            acknowledge(attempt)
+            val confirmation = result.getOrThrow()
+            val acknowledgedAttempt = when (confirmation) {
+                BusinessWriteConfirmation.LegacyAccepted -> {
+                    require(attempt.payload.kind != "PATCH_CONDITIONAL") { "conditional_ack_missing" }
+                    attempt
+                }
+                is BusinessWriteConfirmation.ConditionalProduct -> {
+                    require(attempt.payload.kind == "PATCH_CONDITIONAL") { "conditional_ack_unexpected" }
+                    val row = confirmation.row
+                    require(row.id == attempt.payload.patchId && row.ownerUserId == attempt.owner &&
+                        row.shopId == attempt.shop && !row.updatedAt.isNullOrBlank() && row.deletedAt == null) {
+                        "conditional_ack_identity_invalid"
+                    }
+                    val patch = requireNotNull(attempt.payload.patch)
+                    val expected = mapOf<String, Any?>("barcode" to patch.barcode, "itemnumber" to patch.itemNumber,
+                        "productname" to patch.productName, "secondproductname" to patch.secondProductName,
+                        "purchaseprice" to patch.purchasePrice, "retailprice" to patch.retailPrice,
+                        "supplier" to patch.supplierId, "category" to patch.categoryId, "stockquantity" to patch.stockQuantity)
+                    val returned = mapOf<String, Any?>("barcode" to row.barcode, "itemnumber" to row.itemNumber,
+                        "productname" to row.productName, "secondproductname" to row.secondProductName,
+                        "purchaseprice" to row.purchasePrice, "retailprice" to row.retailPrice,
+                        "supplier" to row.supplierId, "category" to row.categoryId, "stockquantity" to row.stockQuantity)
+                    require(patch.changedFields.all { it in expected && returned[it] == expected[it] }) {
+                        "conditional_ack_values_mismatch"
+                    }
+                    // Only the ACK projection uses the actual returned version. The original seal is untouched.
+                    attempt.copy(payload = attempt.payload.copy(revisions = listOf(
+                        attempt.payload.revisions.single().copy(remoteUpdatedAt = row.updatedAt,
+                            fingerprint = fingerprintProductInbound(row)))))
+                }
+            }
+            acknowledge(acknowledgedAttempt)
+            appendBusinessActualAcknowledgement(db, stamped, attempt, confirmation)
             dao.deleteById(entry.id)
+            loadBusinessResolutionSnapshot(db, entry.ownerUserId, entry.storeScope)?.requireValid()
+          }
+          val b6AckReturnedNS=if(PilotCommitTrace.b6IsArmed()) PilotCommitTrace.now() else 0L
+          PilotCommitTrace.b6OwnAck(stamped,result.getOrThrow(),b6AckReturnedNS, lease = PilotCommitTrace.b6LeaseStamp(kotlin.coroutines.coroutineContext[Task126BusinessDataScopeLeaseContext]?.lease))
         }
         else db.withTransaction {
             requireScope()
-            if (result.exceptionOrNull()?.let(rejectedWithoutCommit) == true) dao.deleteById(entry.id)
-            else dao.update(stamped.copy(lastErrorType="business_write_response_unconfirmed"))
+            require(dao.getById(entry.id)?.metadataJson == entry.metadataJson) { "business_write_receipt_changed" }
+            val error = result.exceptionOrNull()
+            val sqlState = error?.let(SyncErrorClassifier::classify)?.postgrestCode
+            val firstDispatch = entry.attemptCount == 0 && entry.lastAttemptAtMs == null && entry.lastErrorType == null
+            val proof = if (firstDispatch && error is BusinessWriteConditionalNoMatch) {
+                BusinessResolutionLedger.encodeNoCommitProof(stamped, conditionalZero = true)
+            } else if (firstDispatch && error != null && rejectedWithoutCommit(error) && sqlState in setOf("23503", "23505")) {
+                BusinessResolutionLedger.encodeNoCommitProof(stamped, sqlState)
+            } else null
+            // A rejection of a replay never erases the uncertain first dispatch.
+            dao.update(stamped.copy(lastErrorType = proof ?: "business_write_response_unconfirmed"))
         }
-        return result
+        return result.map { Unit }
     }
 }

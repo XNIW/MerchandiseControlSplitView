@@ -117,13 +117,17 @@ class CheckedAuthSettingsTest {
         val preferences = MemoryAndDiskPreferences()
         val old = session()
         val engine = SuspendedRefreshEngine(dispatcher, old)
-        val owner = owned(preferences, dispatcher, engine)
+        val owner = owned(preferences, dispatcher, engine, completeEmptyStorageInitialization = true)
         val manager = SupabaseAuthManager(owner, "synthetic-google-client", scope = backgroundScope)
         var restarted: SupabaseClient? = null
+        var phase = "before_initial_sdk_drain"
         try {
             runCurrent()
+            phase = "initial_restore_requested"
             manager.restoreSession()
+            phase = "await_initial_signed_out"
             manager.state.first { it == AuthState.SignedOut }
+            phase = "failed_commit_import"
             preferences.commitsSucceed = false
             val save = runCatching { owner.auth.importSession(old) }
             runCurrent()
@@ -139,12 +143,16 @@ class CheckedAuthSettingsTest {
             assertTrue("The failed write updated memory, unlike the durable snapshot", preferences.memoryContains(projectKey))
             assertFalse(preferences.diskContains(projectKey))
 
+            phase = "successful_commit_import"
             preferences.commitsSucceed = true
             owner.auth.importSession(old)
             runCurrent()
             engine.releaseRefresh.complete(Unit)
+            phase = "final_restore_requested"
             manager.restoreSession()
+            phase = "await_final_signed_in"
             manager.state.first { it is AuthState.SignedIn }
+            phase = "original_assertions"
             assertEquals(AuthState.SignedIn("account-a", null), manager.state.value)
             assertTrue(preferences.diskContains(projectKey))
 
@@ -154,6 +162,18 @@ class CheckedAuthSettingsTest {
                 listOf(save.isFailure, published, managerState, restoredAccount)
             )
         } finally {
+            // Static phase and booleans only; never alter the original failure or reveal a session.
+            runCatching {
+                println("checked_auth_save_commit phase=$phase " +
+                    "sdk_initializing=${owner.sessionStatus.value is SessionStatus.Initializing} " +
+                    "sdk_authenticated=${owner.sessionStatus.value is SessionStatus.Authenticated} " +
+                    "manager_checking=${manager.state.value is AuthState.Checking} " +
+                    "manager_signed_out=${manager.state.value is AuthState.SignedOut} " +
+                    "manager_signed_in=${manager.state.value is AuthState.SignedIn} " +
+                    "refresh_started=${engine.refreshStarted.isCompleted} " +
+                    "refresh_released=${engine.releaseRefresh.isCompleted} " +
+                    "failed_commit_count=${preferences.failedCommits}")
+            }
             manager.shutdown()
             owner.close()
             restarted?.close()
@@ -214,7 +234,8 @@ class CheckedAuthSettingsTest {
     private fun TestScope.owned(
         preferences: MemoryAndDiskPreferences,
         dispatcher: TestDispatcher,
-        firstEngine: SuspendedRefreshEngine
+        firstEngine: SuspendedRefreshEngine,
+        completeEmptyStorageInitialization: Boolean = false
     ): GenerationOwnedSupabaseClient {
         val storage = persistence(preferences)
         var first = true
@@ -225,7 +246,7 @@ class CheckedAuthSettingsTest {
             factory = { lease, verifier ->
                 val engine = if (first) firstEngine else SuspendedRefreshEngine(dispatcher, session())
                 first = false
-                client(lease, dispatcher, engine, verifier)
+                client(lease, dispatcher, engine, verifier, completeEmptyStorageInitialization)
             },
             scope = backgroundScope
         )
@@ -235,7 +256,8 @@ class CheckedAuthSettingsTest {
         storage: SessionManager,
         dispatcher: TestDispatcher,
         engine: SuspendedRefreshEngine,
-        verifier: CodeVerifierCache = MemoryCodeVerifierCache()
+        verifier: CodeVerifierCache = MemoryCodeVerifierCache(),
+        completeEmptyStorageInitialization: Boolean = false
     ): SupabaseClient = createSupabaseClient(projectUrl, "synthetic-public-key") {
         httpEngine = engine
         coroutineDispatcher = dispatcher
@@ -244,7 +266,11 @@ class CheckedAuthSettingsTest {
             sessionManager = storage
             codeVerifierCache = verifier
             autoLoadFromStorage = true
-            autoSetupPlatform = false
+            autoSetupPlatform = completeEmptyStorageInitialization
+            if (completeEmptyStorageInitialization) {
+                // Run the SDK's initDone for empty storage without Android lifecycle/Main callbacks.
+                enableLifecycleCallbacks = false
+            }
         }
     }
 

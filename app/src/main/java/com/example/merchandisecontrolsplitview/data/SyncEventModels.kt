@@ -505,6 +505,9 @@ interface SyncEventOutboxDao {
 
     @Query("SELECT id, length(CAST(metadataJson AS BLOB)) AS payloadBytes FROM sync_event_outbox WHERE ownerUserId=:owner AND storeScope=:store AND eventType='LOCAL_BUSINESS_WRITE_V1' AND domain IN (:kinds) ORDER BY createdAtMs,id LIMIT :limit")
     suspend fun listBusinessWriteHeaders(owner: String, store: String, kinds: Set<String>, limit: Int): List<BusinessWriteHeader>
+    @Query("SELECT id, length(CAST(metadataJson AS BLOB)) AS payloadBytes FROM sync_event_outbox WHERE ownerUserId=:owner AND storeScope=:store AND eventType IN ('LOCAL_BUSINESS_WRITE_V1','LOCAL_BUSINESS_RESOLUTION_V1') AND id>:afterId ORDER BY id LIMIT :limit")
+    suspend fun listLocalBusinessHeaders(owner: String, store: String, afterId: Long, limit: Int): List<BusinessWriteHeader>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(row: SyncEventOutboxEntry): Long
 
@@ -526,7 +529,7 @@ interface SyncEventOutboxDao {
         SELECT * FROM sync_event_outbox
         WHERE ownerUserId = :ownerUserId
           AND storeScope = :storeScope
-          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
+          AND eventType NOT IN ('LOCAL_BUSINESS_WRITE_V1', 'LOCAL_BUSINESS_RESOLUTION_V1')
           AND (createdAtMs > :afterCreatedAtMs OR (createdAtMs = :afterCreatedAtMs AND id > :afterId))
         ORDER BY createdAtMs ASC, id ASC
         LIMIT :limit
@@ -561,7 +564,7 @@ interface SyncEventOutboxDao {
         WHERE ownerUserId = :ownerUserId
           AND storeScope = :storeScope
           AND attemptCount < :maxAttempts
-          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
+          AND eventType NOT IN ('LOCAL_BUSINESS_WRITE_V1', 'LOCAL_BUSINESS_RESOLUTION_V1')
         ORDER BY createdAtMs ASC, id ASC
         LIMIT :limit
         """
@@ -577,7 +580,7 @@ interface SyncEventOutboxDao {
         SELECT * FROM sync_event_outbox
         WHERE ownerUserId = :ownerUserId AND storeScope = :storeScope
           AND attemptCount = :maxAttempts AND lastErrorType = 'PayloadValidation'
-          AND eventType <> 'LOCAL_BUSINESS_WRITE_V1'
+          AND eventType NOT IN ('LOCAL_BUSINESS_WRITE_V1', 'LOCAL_BUSINESS_RESOLUTION_V1')
         ORDER BY createdAtMs ASC, id ASC LIMIT :limit
     """)
     suspend fun listShopScopeCorrectionCandidates(

@@ -41,6 +41,85 @@ class OperationalMutationIntegrityTest {
     }
 
     @Test
+    fun `persisted rejected catalog attempt retains exact body and rejection evidence without ACK`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000144"
+        val shop = "00000000-0000-4000-8000-000000000145"
+        val remoteId = "00000000-0000-4000-8000-000000000146"
+        var acknowledged = false
+        var original: SyncEventOutboxEntry? = null
+        val rejection = IllegalStateException("HTTP 409 23503 controlled rejection without commit")
+        val outbox = BusinessWriteOutbox(db, {}, { "r23-controlled-device" },
+            { acknowledged = true }, { it === rejection })
+        val result = outbox.execute(owner, shop, BusinessWritePayload(
+            kind = "PATCH", patchId = remoteId,
+            patch = InventoryProductPatch(setOf("productname"), productName = "Saved A"),
+            revisions = listOf(BusinessWriteRevision("PRODUCT", remoteId, 1L, "a".repeat(64))))) {
+            original = db.syncEventOutboxDao().listPending(owner, 10).single()
+            Result.failure(rejection)
+        }
+        assertTrue(result.isFailure)
+        assertFalse("A rejection must never manufacture ACK", acknowledged)
+        val retained = db.syncEventOutboxDao().getById(requireNotNull(original).id)
+        assertTrue("R4 needs the exact immutable request and durable no-commit proof for subsequent resolution", retained != null)
+        assertEquals(requireNotNull(original).metadataJson, requireNotNull(retained).metadataJson)
+        assertEquals(requireNotNull(original).clientEventId, retained.clientEventId)
+        assertTrue("The retained attempt must identify its proven terminal rejection", !retained.lastErrorType.isNullOrBlank())
+    }
+
+    @Test
+    fun `an atomic rejection on replay does not erase the first unconfirmed dispatch`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000144"
+        val shop = "00000000-0000-4000-8000-000000000145"
+        val remoteId = "00000000-0000-4000-8000-000000000146"
+        val rejection = IllegalStateException("HTTP 409 23503 controlled replay rejection")
+        var acknowledged = false
+        val outbox = BusinessWriteOutbox(db, {}, { "r23-controlled-device" },
+            { acknowledged = true }, { it === rejection })
+        val first = outbox.execute(owner, shop, BusinessWritePayload(
+            kind = "PATCH", patchId = remoteId,
+            patch = InventoryProductPatch(setOf("productname"), productName = "Possibly committed A"),
+            revisions = listOf(BusinessWriteRevision("PRODUCT", remoteId, 1L, "a".repeat(64))))) {
+            Result.failure(IllegalStateException("Response lost after dispatch; outcome unknown"))
+        }
+        assertTrue(first.isFailure)
+        val original = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals("business_write_response_unconfirmed", original.lastErrorType)
+        val replay = runCatching { outbox.replay(owner, shop, setOf("PATCH")) { Result.failure(rejection) } }
+        assertTrue(replay.isFailure)
+        val retained = db.syncEventOutboxDao().getById(original.id)
+        assertTrue("A later rejection cannot prove that the first dispatch did not commit", retained != null)
+        assertEquals(original.metadataJson, requireNotNull(retained).metadataJson)
+        assertEquals(original.clientEventId, retained.clientEventId)
+        assertEquals("business_write_response_unconfirmed", retained.lastErrorType)
+        assertEquals(2, retained.attemptCount)
+        assertFalse(acknowledged)
+    }
+
+    @Test
+    fun `conditional response with wrong selected value preserves unconfirmed seal without ACK`() = runTest {
+        val owner = "00000000-0000-4000-8000-000000000144"
+        val shop = "00000000-0000-4000-8000-000000000145"
+        val remoteId = "00000000-0000-4000-8000-000000000146"
+        var acknowledged = false
+        val outbox = BusinessWriteOutbox(db, {}, { "r23-controlled-device" },
+            { acknowledged = true }, { false })
+        val attempted = runCatching {
+            outbox.executeVerified(owner, shop, BusinessWritePayload("PATCH_CONDITIONAL", patchId = remoteId,
+                patch = InventoryProductPatch(setOf("productname"), productName = null),
+                revisions = listOf(BusinessWriteRevision("PRODUCT", remoteId, 1L, "a".repeat(64))),
+                expectedUpdatedAt = "2026-10-23T00:00:00.123456Z")) {
+                Result.success(BusinessWriteConfirmation.ConditionalProduct(InventoryProductRow(remoteId, owner,
+                    shop, "unchanged-barcode", productName = "value was not cleared", updatedAt = "2026-10-23T00:00:01.123456Z")))
+            }.getOrThrow()
+        }
+        assertTrue(attempted.isFailure)
+        assertFalse(acknowledged)
+        val retained = db.syncEventOutboxDao().listPending(owner, 10).single()
+        assertEquals(1, retained.attemptCount)
+        assertFalse(BusinessResolutionLedger.hasNoCommitProof(retained))
+    }
+
+    @Test
     fun `add supplier rolls back when remote ref insertion fails`() = runTest {
         failDirtyWrite("supplier_remote_refs", "INSERT")
         expectStorageFailure { repository.addSupplier("New supplier") }

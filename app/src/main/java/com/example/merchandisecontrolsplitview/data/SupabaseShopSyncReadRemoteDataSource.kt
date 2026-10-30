@@ -105,6 +105,71 @@ private class RecoveryCheckpointRequestBody(bytes: ByteArray) : OutgoingContent.
     }
 }
 
+/** Pure allowlist codec. It never reads response bodies or arbitrary response/request headers. */
+internal object ShopSyncOrdinaryHttpFailureMetadata {
+    private const val TEST_PROJECT_SHA256 = "42a5d0119a30cb5f291bff1912a46e1092c77b483bbfed663785ef165260c842"
+    internal data class Header(val state: String, val value: String? = null)
+    private val identifier = Regex("[A-Za-z0-9._:-]{1,128}")
+    // Only this unambiguous PostgREST SQLSTATE form is recognized. Other formats are INVALID.
+    private val proxySqlState = Regex("^PostgREST *; *error *= *(?:\"([0-9A-Z]{5})\"|([0-9A-Z]{5})) *$")
+    fun enabled(function: String, debug: Boolean, checkpointTracePresent: Boolean,
+        configuredProjectSHA256: String): Boolean = debug && !checkpointTracePresent &&
+        configuredProjectSHA256 == TEST_PROJECT_SHA256 && function in setOf(
+            SHOP_SYNC_RECOVERY_CHECKPOINT_RPC, SHOP_SYNC_RECOVERY_PAGE_RPC, SHOP_SYNC_CONVERGENCE_MARKER_RPC)
+    fun identifier(values: List<String>?): Header = when {
+        values.isNullOrEmpty() -> Header("ABSENT")
+        values.size != 1 -> Header("DUPLICATE")
+        !identifier.matches(values.single()) -> Header("INVALID")
+        else -> Header("VALID",values.single()) // No trim, truncation, case folding or replacement.
+    }
+    fun proxyStatus(values: List<String>?): Header {
+        if (values.isNullOrEmpty()) return Header("ABSENT")
+        if (values.size != 1) return Header("DUPLICATE")
+        val raw = values.single()
+        if (raw.length !in 1..256 || raw.any { it.code !in 32..126 }) return Header("INVALID")
+        val match = proxySqlState.matchEntire(raw) ?: return Header("INVALID")
+        return Header("VALID",match.groupValues[1].ifEmpty { match.groupValues[2] })
+    }
+    fun message(function: String, status: Int, pid: Int, wallStartMs: Long, wallHeadersMs: Long,
+        invocationToHeadersNS: Long, headers: (String)->List<String>?): String {
+        require(function in setOf(SHOP_SYNC_RECOVERY_CHECKPOINT_RPC, SHOP_SYNC_RECOVERY_PAGE_RPC,
+            SHOP_SYNC_CONVERGENCE_MARKER_RPC) && status >= 400 && pid > 0 && invocationToHeadersNS >= 0)
+        val fields = mutableListOf("kind=ordinary_shop_sync_http_failure", "configured_project=TEST", "rpc=$function",
+            "status=$status", "pid=$pid", "wall_start_ms=$wallStartMs", "wall_headers_ms=$wallHeadersMs",
+            "invocation_to_headers_ns=$invocationToHeadersNS")
+        listOf("request_id", "sb-request-id", "cf-ray").forEach { name ->
+            val safe = identifier(headers(name)); val key = name.replace('-','_')
+            fields.add("${key}_state=${safe.state}")
+            safe.value?.let { fields.add("$key=$it") }
+        }
+        val proxy = proxyStatus(headers("Proxy-Status"))
+        fields.add("proxy_status_state=${proxy.state}")
+        proxy.value?.let { fields.add("postgrest_sqlstate=$it") }
+        return fields.joinToString(" ")
+    }
+}
+
+private data class OrdinaryShopSyncResponseStart(val wallMs: Long, val monotonicNS: Long)
+
+private fun ordinaryShopSyncResponseStart(function: String,
+    checkpointTracePresent: Boolean): OrdinaryShopSyncResponseStart? = try {
+    if (!BuildConfig.DEBUG || checkpointTracePresent) null else {
+        val entry = OrdinaryShopSyncResponseStart(System.currentTimeMillis(),System.nanoTime())
+        if (ShopSyncOrdinaryHttpFailureMetadata.enabled(function,true,false,sha256(BuildConfig.SUPABASE_URL))) entry else null
+    }
+} catch (_: Throwable) { null } // Diagnostics must never alter the application operation.
+
+private fun observeOrdinaryShopSyncHttpFailure(function: String,
+    start: OrdinaryShopSyncResponseStart, response: io.ktor.client.statement.HttpResponse) {
+    try {
+        val wallHeadersMs = System.currentTimeMillis()
+        val invocationToHeadersNS = System.nanoTime()-start.monotonicNS
+        val safe = ShopSyncOrdinaryHttpFailureMetadata.message(function,response.status.value,
+            android.os.Process.myPid(),start.wallMs,wallHeadersMs,invocationToHeadersNS) { response.headers.getAll(it) }
+        android.util.Log.w("ShopSyncHttpFailure",safe)
+    } catch (_: Throwable) { /* No logger/codec failure may replace the original HTTP exception. */ }
+}
+
 @OptIn(SupabaseInternal::class)
 private class SupabaseShopSyncRpcInvoker(
     private val client: SupabaseClient,
@@ -119,6 +184,7 @@ private class SupabaseShopSyncRpcInvoker(
         if (maximumResponseBytes !in 1..Int.MAX_VALUE.toLong()) {
             contractFailure("rpc_response_limit_invalid")
         }
+        val ordinaryObservationStart = ordinaryShopSyncResponseStart(function,checkpointTrace != null)
         val operationClient = (client as? GenerationOwnedSupabaseClient)?.captureClient() ?: client
         val requestTimeoutMs = if (checkpointTrace == null) operationClient.postgrest.config.timeout.inWholeMilliseconds
             else CHECKPOINT_TRACE_TIMEOUT_MS
@@ -148,6 +214,9 @@ private class SupabaseShopSyncRpcInvoker(
             }
         }.execute { response ->
             checkpointTrace?.recordStatus(response.status.value)
+            if (ordinaryObservationStart != null && response.status.value >= 400) {
+                observeOrdinaryShopSyncHttpFailure(function,ordinaryObservationStart,response)
+            }
             if (!response.status.isSuccess()) {
                 val code = "shop_sync_rpc_http_${response.status.value}"
                 // Keep the public contract diagnostic while retaining structured status/headers for retry policy.

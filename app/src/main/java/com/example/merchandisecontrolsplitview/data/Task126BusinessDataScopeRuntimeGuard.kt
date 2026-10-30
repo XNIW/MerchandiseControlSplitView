@@ -7,6 +7,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.supervisorScope
@@ -112,6 +115,9 @@ object Task126UnmanagedBusinessDataScopeRuntimeGuard : Task126BusinessDataScopeR
 /** Observation only: does not grant a business or recovery lease. */
 internal data class Task126DiagnosticQuietStamp(val generation: Long)
 
+/** UI freshness observation only; cannot admit a local/cloud flight or authorize a write. */
+internal data class Task126LocalPresentationStamp(val localGeneration: Long)
+
 internal class Task126BusinessDataScopeFlightGate(
     initialState: Task126BusinessDataScopeState
 ) : Task126BusinessDataScopeRuntimeGuard {
@@ -120,6 +126,9 @@ internal class Task126BusinessDataScopeFlightGate(
     private var state = initialState
     private var generation = 0L
     private var localGeneration = 0L
+    // Notification only: consumers must still capture/recheck the existing local stamp.
+    private val _localPresentationChanges = MutableStateFlow(0L)
+    internal val localPresentationChanges: StateFlow<Long> = _localPresentationChanges.asStateFlow()
     private var nextFlightId = 1L
     private var transitioning = false
     /**
@@ -146,6 +155,21 @@ internal class Task126BusinessDataScopeFlightGate(
         synchronized(lock) {
             !transitioning && activeFlights.isEmpty() && generation == stamp.generation
         }
+
+    internal fun captureLocalPresentationStamp(
+        expectedState: Task126BusinessDataScopeState
+    ): Task126LocalPresentationStamp? = synchronized(lock) {
+        if (transitioning || state != expectedState || !state.allowsLocalOperations) null
+        else Task126LocalPresentationStamp(localGeneration)
+    }
+
+    internal fun isLocalPresentationStampCurrent(
+        stamp: Task126LocalPresentationStamp,
+        expectedState: Task126BusinessDataScopeState
+    ): Boolean = synchronized(lock) {
+        !transitioning && state == expectedState && state.allowsLocalOperations &&
+            localGeneration == stamp.localGeneration
+    }
 
     /** Requalify the same local generation without cancelling its admitted local writers.
      * Real scope changes/activation still use the strong transition below. Both epochs
@@ -302,12 +326,17 @@ internal class Task126BusinessDataScopeFlightGate(
         }
         return transitionMutex.withLock {
             withContext(NonCancellable) {
+                val observer = ShopSyncRecoveryTestHooks.activationTransitionTiming
+                var unavailableAt: Long? = null
                 val flights = synchronized(lock) {
                     transitioning = true
+                    if (observer != null) unavailableAt = android.os.SystemClock.elapsedRealtimeNanos()
                     generation += 1L
                     localGeneration += 1L
                     activeFlights.values.toList()
                 }
+                ShopSyncRecoveryTestHooks.observeTiming(observer, "unavailable", unavailableAt)
+                _localPresentationChanges.value += 1L
                 try {
                     val cause = Task126BusinessDataScopeChangedException(
                         "business_data_scope_quiescing"
@@ -316,11 +345,16 @@ internal class Task126BusinessDataScopeFlightGate(
                     // Await the coroutine's real finally boundary, not just
                     // Deferred cancellation delivery. See ActiveFlight.
                     flights.map { it.quiesced }.joinAll()
+                    ShopSyncRecoveryTestHooks.observeTiming(observer, "quiesced")
                     block()
                 } finally {
+                    var availableAt: Long? = null
                     synchronized(lock) {
                         transitioning = false
+                        if (observer != null) availableAt = android.os.SystemClock.elapsedRealtimeNanos()
                     }
+                    ShopSyncRecoveryTestHooks.observeTiming(observer, "available", availableAt)
+                    _localPresentationChanges.value += 1L
                 }
             }
         }

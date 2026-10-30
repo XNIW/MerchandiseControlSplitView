@@ -42,6 +42,9 @@ internal data class SupabaseSessionUser(
     val email: String?
 )
 
+/** Account identity only. Local store/shop capability still requires the existing persisted binding proof. */
+internal data class LocalAuthIdentity(val userId: String, val authGeneration: Long)
+
 internal sealed interface StoredSessionRefreshResult {
     data object Refreshed : StoredSessionRefreshResult
     data class Invalid(val code: String) : StoredSessionRefreshResult
@@ -53,6 +56,7 @@ internal interface SupabaseAuthSessionController {
     val ownsGenerationBoundLifecycle: Boolean get() = false
 
     fun currentUserOrNull(): SupabaseSessionUser?
+    suspend fun persistedUserOrNull(): SupabaseSessionUser? = null
     suspend fun refreshStoredSession(): StoredSessionRefreshResult
     suspend fun clearSession()
     suspend fun clearSupersededInteractiveSession() = clearSession()
@@ -81,6 +85,15 @@ private class SupabaseClientAuthSessionController(
         } ?: if (owner == null) client.auth.currentUserOrNull()?.let { user ->
             SupabaseSessionUser(id = user.id, email = user.email)
         } else null
+
+    override suspend fun persistedUserOrNull(): SupabaseSessionUser? {
+        val captured = owner?.captureClientOrNull() ?: if (owner == null) client else return null
+        // The normal SDK SessionLease enforces storage generation; no tokens escape this value projection.
+        val user = captured.auth.sessionManager.loadSessionOrNull()?.user ?: return null
+        if (owner != null && (owner.captureClientOrNull() !== captured || owner.isLocalSessionCleared)) return null
+        if (captured.auth.sessionStatus.value is SessionStatus.NotAuthenticated) return null
+        return SupabaseSessionUser(user.id, user.email)
+    }
 
     override suspend fun refreshStoredSession(): StoredSessionRefreshResult = try {
         (owner?.captureClient() ?: client).auth.refreshCurrentSession()
@@ -249,6 +262,12 @@ class SupabaseAuthManager private constructor(
 
     /** Stato sessione corrente. Source of truth unica per UI e componenti remoti. */
     val state: StateFlow<AuthState> = _state.asStateFlow()
+    private val _localIdentity = MutableStateFlow<LocalAuthIdentity?>(null)
+    internal val localIdentity: StateFlow<LocalAuthIdentity?> = _localIdentity.asStateFlow()
+
+    internal fun isCurrentLocalIdentity(identity: LocalAuthIdentity): Boolean =
+        _localIdentity.value == identity && authGeneration.get() == identity.authGeneration &&
+            _state.value !is AuthState.SignedOut && sessionController?.let { !hasUnverifiedCleanupError(it) } == true
 
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
@@ -269,8 +288,8 @@ class SupabaseAuthManager private constructor(
      * Restore sessione al bootstrap dell'app.
      *
      * Attende che la libreria Supabase finisca di caricare la sessione da storage
-     * (entro [RESTORE_TIMEOUT_MS]). Se la sessione e' valida -> [AuthState.SignedIn];
-     * altrimenti -> [AuthState.SignedOut]. Non blocca il chiamante.
+     * (entro [RESTORE_TIMEOUT_MS]). Una sessione valida produce [AuthState.SignedIn];
+     * timeout e refresh transitori restano [AuthState.Checking], un diniego definitivo [AuthState.SignedOut].
      *
      * Single-flight: se un restore e' gia' in corso, la chiamata e' ignorata.
      */
@@ -288,11 +307,16 @@ class SupabaseAuthManager private constructor(
                 return@launch
             }
             val attempt = BootstrapRestoreAttempt(generation)
+            var earlyIdentityReadAttempted = false
             try {
                 if (authGeneration.get() != generation) return@launch
                 bootstrapRestore.set(attempt)
                 Log.d(TAG, "restoreSession: waiting for session status (timeout ${RESTORE_TIMEOUT_MS}ms)")
                 val status = withTimeoutOrNull(RESTORE_TIMEOUT_MS) {
+                    if (_state.value is AuthState.Checking) {
+                        earlyIdentityReadAttempted = true
+                        publishWaitingIdentity(controller, attempt)
+                    }
                     controller.sessionStatus.first { it !is SessionStatus.Initializing }
                 }
                 Log.d(TAG, "restoreSession: got status=${status.safeLogLabel()}")
@@ -304,7 +328,9 @@ class SupabaseAuthManager private constructor(
                     null, is SessionStatus.RefreshFailure -> {
                         val waiting = attempt.copy(awaitingSdk = true)
                         if (bootstrapRestore.compareAndSet(attempt, waiting)) {
-                            _state.value = AuthState.SignedOut
+                            _state.value = AuthState.Checking
+                            // Never repeat the early storage read outside its original SDK budget.
+                            if (!earlyIdentityReadAttempted) publishWaitingIdentity(controller, waiting)
                             Log.i(TAG, "Restore in attesa del completamento SDK (status=${status.safeLogLabel()})")
                             // Covers an SDK success that raced with arming the latch.
                             resumePendingBootstrap(controller)
@@ -312,6 +338,7 @@ class SupabaseAuthManager private constructor(
                     }
                     else -> {
                         bootstrapRestore.compareAndSet(attempt, null)
+                        _localIdentity.value = null
                         _state.value = AuthState.SignedOut
                         Log.i(TAG, "Nessuna sessione valida al bootstrap (status=${status.safeLogLabel()})")
                     }
@@ -321,8 +348,11 @@ class SupabaseAuthManager private constructor(
                 throw e
             } catch (e: Throwable) {
                 if (isCurrentBootstrap(attempt)) {
-                    bootstrapRestore.compareAndSet(attempt, null)
-                    _state.value = AuthState.SignedOut
+                    val waiting = attempt.copy(awaitingSdk = true)
+                    if (bootstrapRestore.compareAndSet(attempt, waiting) && authGeneration.get() == generation) {
+                        _state.value = AuthState.Checking
+                        if (!earlyIdentityReadAttempted) publishWaitingIdentity(controller, waiting)
+                    }
                     Log.w(TAG, "Restore sessione fallito", e)
                 }
             } finally {
@@ -368,7 +398,8 @@ class SupabaseAuthManager private constructor(
 
             if (abandonSupersededInteractiveSession(controller, generation)) return false
 
-            if (!publishSignedIn(controller.currentUserOrNull())) {
+            if (!publishSignedIn(controller.currentUserOrNull(), generation)) {
+                if (authGeneration.get() != generation) return false
                 controller.clearSession()
                 Log.w(TAG, "Sign-in completato senza identita account utilizzabile")
                 return false
@@ -504,7 +535,8 @@ class SupabaseAuthManager private constructor(
             }
             controller.importWeChatSession(session.accessToken, session.refreshToken) { authGeneration.get() == generation }
             if (abandonSupersededInteractiveSession(controller, generation)) return false
-            if (!publishSignedIn(controller.currentUserOrNull())) {
+            if (!publishSignedIn(controller.currentUserOrNull(), generation)) {
+                if (authGeneration.get() != generation) return false
                 controller.clearSession()
                 publishFailure(AuthState.ErrorRecoverable(
                     activityContext.getString(com.example.merchandisecontrolsplitview.R.string.wechat_auth_backend_error)
@@ -669,6 +701,7 @@ class SupabaseAuthManager private constructor(
                 when (status) {
                     is SessionStatus.NotAuthenticated -> {
                         if (sessionController.sessionStatus.value != status) return@collect
+                        _localIdentity.value = null
                         val restoring = bootstrapRestore.get() != null
                         if (restoring) invalidateBootstrapRestore()
                         if (restoring || _state.value is AuthState.SignedIn) {
@@ -684,6 +717,7 @@ class SupabaseAuthManager private constructor(
     }
 
     private fun invalidateBootstrapRestore() {
+        _localIdentity.value = null
         val cancelledAttempt = bootstrapRestore.getAndSet(null)
         authGeneration.incrementAndGet()
         if (cancelledAttempt != null && _state.value == AuthState.Checking) {
@@ -711,6 +745,15 @@ class SupabaseAuthManager private constructor(
 
     private fun isCurrentBootstrap(attempt: BootstrapRestoreAttempt): Boolean =
         authGeneration.get() == attempt.generation && bootstrapRestore.get() == attempt
+
+    private suspend fun publishWaitingIdentity(controller: SupabaseAuthSessionController, attempt: BootstrapRestoreAttempt) {
+        val user = try { controller.persistedUserOrNull() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        if (!isCurrentBootstrap(attempt) || controller.sessionStatus.value is SessionStatus.NotAuthenticated) return
+        val id = user?.id?.trim()?.takeIf { it.isNotEmpty() }
+        _localIdentity.value = id?.let { LocalAuthIdentity(it, attempt.generation) }
+    }
 
     private fun resumePendingBootstrap(controller: SupabaseAuthSessionController) {
         val pending = bootstrapRestore.get()?.takeIf { it.awaitingSdk } ?: return
@@ -746,7 +789,7 @@ class SupabaseAuthManager private constructor(
             }
             when (refresh) {
                 StoredSessionRefreshResult.Refreshed -> {
-                    if (publishSignedIn(currentUser ?: localUser)) {
+                    if (publishSignedIn(currentUser ?: localUser, attempt.generation)) {
                         Log.i(TAG, "Sessione ripristinata e validata")
                     } else {
                         clearStoredSessionIfCurrent(controller, attempt, localUser)
@@ -754,13 +797,14 @@ class SupabaseAuthManager private constructor(
                     }
                 }
                 is StoredSessionRefreshResult.Invalid -> {
+                    _localIdentity.value = null
                     clearStoredSessionIfCurrent(controller, attempt, localUser)
                     if (isCurrentBootstrap(attempt)) _state.value = AuthState.SignedOut
                     Log.i(TAG, "Sessione persistita invalidata dal server code=${refresh.code}")
                 }
                 StoredSessionRefreshResult.Deferred -> {
                     // Offline-first remains available for an already identified stored session.
-                    if (publishSignedIn(localUser)) {
+                    if (publishSignedIn(localUser, attempt.generation)) {
                         Log.w(TAG, "Validazione sessione rinviata per errore transitorio")
                     } else {
                         Log.w(TAG, "Validazione rinviata senza identita account locale utilizzabile")
@@ -771,7 +815,11 @@ class SupabaseAuthManager private constructor(
             throw cancelled
         } catch (error: Throwable) {
             if (isCurrentBootstrap(attempt)) {
-                _state.value = AuthState.SignedOut
+                val waiting = attempt.copy(awaitingSdk = true)
+                if (bootstrapRestore.compareAndSet(attempt, waiting) && authGeneration.get() == attempt.generation) {
+                    _state.value = AuthState.Checking
+                    publishWaitingIdentity(controller, waiting)
+                }
                 Log.w(TAG, "Restore sessione fallito", error)
             }
         } finally {
@@ -802,9 +850,11 @@ class SupabaseAuthManager private constructor(
         else -> this::class.java.simpleName
     }
 
-    private fun publishSignedIn(user: SupabaseSessionUser?): Boolean {
+    private fun publishSignedIn(user: SupabaseSessionUser?, expectedGeneration: Long): Boolean {
+        if (authGeneration.get() != expectedGeneration) return false
         val userId = user?.id?.trim().orEmpty()
         if (userId.isEmpty()) {
+            _localIdentity.value = null
             _state.value = AuthState.SignedOut
             return false
         }
@@ -812,6 +862,9 @@ class SupabaseAuthManager private constructor(
             userId = userId,
             email = user?.email
         )
+        // Keep the captured generation even if an invalidation races this publication.
+        // Consumers revalidate this token; stale callbacks never acquire the next account epoch.
+        _localIdentity.value = LocalAuthIdentity(userId, expectedGeneration)
         return true
     }
 }

@@ -17,9 +17,19 @@ interface ProductRemoteRefDao {
               AND NOT EXISTS(SELECT 1 FROM product_prices v LEFT JOIN product_price_remote_refs b ON b.productPriceId=v.id
                   WHERE v.productId=p.id AND b.id IS NULL)
               AND NOT EXISTS(SELECT 1 FROM sync_event_outbox o WHERE o.eventType='LOCAL_BUSINESS_WRITE_V1'
-                  AND o.domain IN ('PRODUCTS','PATCH','PRICES') AND instr(o.metadataJson,'"'||r.remoteId||'"')>0))
+                  AND o.domain IN ('PRODUCTS','PATCH','PATCH_CONDITIONAL','PRICES') AND instr(o.metadataJson,'"'||r.remoteId||'"')>0))
     """)
     fun observeProductCloudConfirmed(productId: Long): kotlinx.coroutines.flow.Flow<Boolean>
+
+    /** A candidate still needs the repository's validated effective outbox projection. */
+    @Query("""
+        SELECT EXISTS(SELECT 1 FROM products p JOIN product_remote_refs r ON r.productId=p.id
+            WHERE p.id=:productId AND r.lastRemoteAppliedAt IS NOT NULL
+              AND r.localChangeRevision=r.lastSyncedLocalRevision
+              AND NOT EXISTS(SELECT 1 FROM product_prices v LEFT JOIN product_price_remote_refs b ON b.productPriceId=v.id
+                  WHERE v.productId=p.id AND b.id IS NULL))
+    """)
+    suspend fun isProductCloudConfirmationCandidate(productId: Long): Boolean
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(ref: ProductRemoteRef): Long
@@ -78,6 +88,18 @@ interface ProductRemoteRefDao {
         remoteUpdatedAt: String?
     )
 
+    /** Qualified local decision projection. The ACK watermark deliberately remains unchanged. */
+    @Query("""
+        UPDATE product_remote_refs SET localChangeRevision=:nextRevision, localChangedFields=:fields,
+            lastRemotePayloadFingerprint=:fingerprint, remoteUpdatedAt=:remoteUpdatedAt,
+            lastRemoteAppliedAt=:readAt
+        WHERE productId=:productId AND remoteId=:remoteId AND localChangeRevision=:expectedRevision
+            AND lastSyncedLocalRevision=:expectedAcknowledgedRevision
+    """)
+    suspend fun updateResolutionProjection(productId: Long, remoteId: String, expectedRevision: Int,
+        expectedAcknowledgedRevision: Int, nextRevision: Int, fields: String?, fingerprint: String,
+        remoteUpdatedAt: String, readAt: Long): Int
+
     @Query(
         """
         SELECT EXISTS(
@@ -97,6 +119,12 @@ interface ProductRemoteRefDao {
         """
     )
     suspend fun hasNeverAppliedRemoteRef(): Boolean
+
+    @Query("SELECT * FROM product_remote_refs WHERE lastRemoteAppliedAt IS NULL OR localChangeRevision<>lastSyncedLocalRevision")
+    suspend fun getPendingRefs(): List<ProductRemoteRef>
+
+    suspend fun hasEffectivePendingWork(resolved: Set<Pair<String, Int>>): Boolean =
+        getPendingRefs().any { (it.remoteId to it.localChangeRevision) !in resolved }
 
     @Query("SELECT COUNT(*) FROM product_remote_refs")
     suspend fun countRows(): Int

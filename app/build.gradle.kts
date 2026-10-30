@@ -40,7 +40,16 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         versionCode = 1
         versionName = "1.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Dedicated synthetic performance runs must not initialize the business Application.
+        val mobileSyncPerformance = providers.gradleProperty("mobileSyncPerformance").orNull
+        require(mobileSyncPerformance == null || mobileSyncPerformance == "true" || mobileSyncPerformance == "false") {
+            "mobileSyncPerformance must be exactly true or false when provided"
+        }
+        testInstrumentationRunner = if (mobileSyncPerformance == "true") {
+            "com.example.merchandisecontrolsplitview.data.MobileSyncPerformanceTestRunner"
+        } else {
+            "androidx.test.runner.AndroidJUnitRunner"
+        }
         buildConfigField(
             "String",
             "SUPABASE_URL",

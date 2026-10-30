@@ -1,5 +1,7 @@
 package com.example.merchandisecontrolsplitview.ui.screens
 
+import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
+
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -417,6 +419,8 @@ fun GeneratedScreen(
     }
 
     fun performGeneratedExit(exitReason: GeneratedExitReason = pendingGeneratedExitReason) {
+        MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+            entryUid,"b6-source:history:generated-exit")
         if (isSavingOrReverting || isExiting) return
 
         isExiting = true
@@ -938,6 +942,8 @@ fun GeneratedScreen(
                         isManualEntry = isManualEntry,
                         showOnlyErrors = showOnlyErrorRows,
                         onCompleteToggle = { row ->
+                            MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                entryUid,"b6-source:history:generated-complete-toggle")
                             completeStates[row] = !completeStates[row]
                             excelViewModel.updateHistoryEntry(entryUid)
                         },
@@ -1091,6 +1097,8 @@ fun GeneratedScreen(
                         value = calcInput,
                         onValueChange = { calcInput = it },
                         onResult = { res ->
+                            MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                entryUid,"b6-source:history:generated-calculator-result")
                             val formattedRes = normalizeClPriceInput(res)
                             // Aggiorna sia lo stato del dialogo che i dati reali del ViewModel
                             purchasePriceState.value = TextFieldValue(formattedRes)
@@ -1150,6 +1158,8 @@ fun GeneratedScreen(
             suppliers = suppliers,
             categories = categories,
             onConfirm = {
+                MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                    entryUid,"b6-source:history:generated-rename-confirm")
                 supplierExpanded = false
                 categoryExpanded = false
                 if (renameText.isNotBlank()) {
@@ -1187,7 +1197,7 @@ fun GeneratedScreen(
         val headerRow = excelData[0]
         // Exclude last 3 system-generated cols (quantity, price, complete)
         val mappableColCount = (headerRow.size - 3).coerceAtLeast(0)
-        AlertDialog(
+        if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
             onDismissRequest = { showColumnPickerDialog = false },
             title = { Text(stringResource(R.string.column_mapping_overflow)) },
             text = {
@@ -1539,7 +1549,7 @@ private fun GeneratedScreenTopBar(
                             }
                         }
                     }
-                    DropdownMenu(
+                    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) DropdownMenu(
                         expanded = menuOpen,
                         onDismissRequest = { menuOpen = false }
                     ) {
@@ -2246,6 +2256,8 @@ private fun GeneratedScreenInfoDialog(
     val header = excelViewModel.excelData.firstOrNull() ?: return
     val row = excelViewModel.excelData.getOrNull(infoRowIndex) ?: return
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val infoScrollState = rememberScrollState()
+    val routeWindowVisible = com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current
 
     LaunchedEffect(infoRowIndex) {
         fun getValue(key: String): String = row.getOrNull(header.indexOf(key)) ?: ""
@@ -2264,12 +2276,16 @@ private fun GeneratedScreenInfoDialog(
     val priceReq = remember { FocusRequester() }
     val backgroundFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(infoRowIndex, infoDialogFocusField) {
-        delay(150)
-        if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
+    LaunchedEffect(infoRowIndex, infoDialogFocusField, routeWindowVisible) {
+        if (routeWindowVisible) {
+            delay(150)
+            if (infoDialogFocusField == 0) qtyReq.requestFocus() else priceReq.requestFocus()
+        }
     }
 
     fun persistRowChanges() {
+        MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+            entryUid,"b6-source:history:generated-persist-row")
         val updatedRow = excelViewModel.excelData[infoRowIndex].toMutableList()
         fun setValue(key: String, value: String) {
             val idx = header.indexOf(key)
@@ -2317,7 +2333,7 @@ private fun GeneratedScreenInfoDialog(
         stringResource(R.string.status_incomplete)
     }
 
-    ModalBottomSheet(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -2376,6 +2392,8 @@ private fun GeneratedScreenInfoDialog(
                         text = completionStatusText,
                         isComplete = isCurrentlyComplete,
                         onClick = {
+                            MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                entryUid,"b6-source:history:generated-status-toggle")
                             completeStates[infoRowIndex] = !completeStates[infoRowIndex]
                             excelViewModel.updateHistoryEntry(entryUid)
                             onDismiss()
@@ -2387,7 +2405,7 @@ private fun GeneratedScreenInfoDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(infoScrollState)
                     .padding(horizontal = spacing.lg, vertical = spacing.sm)
                     .focusRequester(backgroundFocusRequester)
                     .focusable()
@@ -2644,6 +2662,8 @@ private fun GeneratedScreenInfoDialog(
                                 label = getLocalizedHeader(context, "realQuantity"),
                                 value = qtyTf,
                                 onValueChange = { newValue ->
+                                    MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                        entryUid,"b6-source:history:generated-counted-value")
                                     qtyTf = newValue
                                     editableValues[infoRowIndex][0].value = newValue.text
                                     excelViewModel.updateHistoryEntry(entryUid)
@@ -2669,6 +2689,8 @@ private fun GeneratedScreenInfoDialog(
                                 label = getLocalizedHeader(context, "retailPrice"),
                                 value = priceTf,
                                 onValueChange = { newValue ->
+                                    MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                        entryUid,"b6-source:history:generated-retail-value")
                                     priceTf = newValue
                                     editableValues[infoRowIndex][1].value = newValue.text
                                     excelViewModel.updateHistoryEntry(entryUid)
@@ -2691,6 +2713,8 @@ private fun GeneratedScreenInfoDialog(
                                 ),
                                 keyboardActions = KeyboardActions(
                                     onDone = {
+                                        MobileSyncInteractionTestHooks.emit(MobileSyncInteractionTestHooks.Event.SAVE_CLICK,
+                                            entryUid,"b6-source:history:generated-editor-done")
                                         val normalizedCountedQty = normalizeClQuantityInput(editableValues[infoRowIndex][0].value)
                                         qtyTf = TextFieldValue(normalizedCountedQty, TextRange(normalizedCountedQty.length))
                                         editableValues[infoRowIndex][0].value = normalizedCountedQty
@@ -2991,7 +3015,7 @@ private fun GeneratedScreenRenameDialog(
     onDismiss: () -> Unit,
 ) {
     val spacing = MaterialTheme.appSpacing
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.rename_file)) },
         text = {
@@ -3027,7 +3051,7 @@ private fun GeneratedScreenRenameDialog(
                             .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                             .fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
+                    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ExposedDropdownMenu(
                         expanded = supplierExpanded,
                         onDismissRequest = { onSupplierExpandedChange(false) }
                     ) {
@@ -3059,7 +3083,7 @@ private fun GeneratedScreenRenameDialog(
                             .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                             .fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
+                    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ExposedDropdownMenu(
                         expanded = categoryExpanded,
                         onDismissRequest = { onCategoryExpandedChange(false) }
                     ) {
@@ -3097,7 +3121,7 @@ private fun GeneratedScreenCustomHeaderDialog(
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text(stringResource(R.string.custom_header_dialog_title)) },
         text = {
@@ -3131,7 +3155,7 @@ private fun GeneratedScreenHeaderTypeDialog(
 ) {
     val context = LocalContext.current
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.select_column_type)) },
         text = {
@@ -3230,7 +3254,7 @@ fun CalculatorDialog(
         } catch (_: Exception) { errorText }
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -3493,12 +3517,16 @@ fun ManualEntryDialog(
     }
 
     val keyboardController = LocalSoftwareKeyboardController.current
+    val manualScrollState = rememberScrollState()
+    val routeWindowVisible = com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current
 
-    LaunchedEffect(Unit) {
-        // Lascia assestare il dialog un attimo
-        delay(50)
-        priceFocusRequester.requestFocus()
-        keyboardController?.show()
+    LaunchedEffect(routeWindowVisible) {
+        if (routeWindowVisible) {
+            // Let the newly mounted window settle without resetting its draft.
+            delay(50)
+            priceFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
 
     LaunchedEffect(rowIndexToEdit, productToPrefill, initialBarcode) {
@@ -3609,8 +3637,8 @@ fun ManualEntryDialog(
     }
 
     // This separate effect correctly handles moving focus after a scan
-    LaunchedEffect(initialBarcode, productToPrefill) {
-        if (initialBarcode != null || productToPrefill != null) {
+    LaunchedEffect(initialBarcode, productToPrefill, routeWindowVisible) {
+        if (routeWindowVisible && (initialBarcode != null || productToPrefill != null)) {
             delay(50)
             priceFocusRequester.requestFocus()
             keyboardController?.show()
@@ -3718,12 +3746,12 @@ fun ManualEntryDialog(
         // The category is kept for the next entry
     }
 
-    AlertDialog(
+    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isEditMode) stringResource(R.string.edit_product) else stringResource(R.string.add_product)) },
         text = {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.verticalScroll(manualScrollState),
                 verticalArrangement = Arrangement.spacedBy(spacing.md)
             ) {
                 ExposedDropdownMenuBox(
@@ -3742,7 +3770,7 @@ fun ManualEntryDialog(
                             .fillMaxWidth()
                             .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable, enabled = true)
                     )
-                    ExposedDropdownMenu(
+                    if (com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible.current) ExposedDropdownMenu(
                         expanded = isCategoryDropdownExpanded,
                         onDismissRequest = { isCategoryDropdownExpanded = false }
                     ) {

@@ -68,6 +68,7 @@ import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStatus
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncBadgeUiState
+import com.example.merchandisecontrolsplitview.data.PersistedCatalogConflictTarget
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncUiState
 import com.example.merchandisecontrolsplitview.viewmodel.LocalDatabaseStatusUiState
 import com.example.merchandisecontrolsplitview.viewmodel.businessScopeCheckingPresentation
@@ -88,8 +89,12 @@ fun OptionsScreen(
     businessScopeMismatchIdentity: String? = null,
     canReplaceMismatchedLocalData: Boolean = false,
     catalogSyncUi: CatalogSyncUiState? = null,
-    localDatabaseStatusUi: LocalDatabaseStatusUiState? = null
+    localDatabaseStatusUi: LocalDatabaseStatusUiState? = null,
+    onReviewPersistedConflict: (PersistedCatalogConflictTarget) -> Unit = {},
+    localStoreStatusMessage: String? = null,
+    localStoreStatusDetails: String? = null
 ) {
+    var showLocalStoreDetails by remember(localStoreStatusDetails) { mutableStateOf(false) }
     val spacing = MaterialTheme.appSpacing
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("settings", Context.MODE_PRIVATE) }
@@ -125,6 +130,30 @@ fun OptionsScreen(
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Bold
         )
+
+        localStoreStatusMessage?.let { message ->
+            OptionsGroup(
+                title = stringResource(R.string.local_database_status_title),
+                subtitle = message,
+                icon = Icons.Default.Storage
+            ) {
+                localStoreStatusDetails?.let { details ->
+                    TextButton(onClick = { showLocalStoreDetails = true }, modifier = Modifier.testTag("local-store-open-details")) {
+                        Text(stringResource(R.string.business_scope_review_details))
+                    }
+                    if (showLocalStoreDetails) {
+                        AlertDialog(
+                            onDismissRequest = { showLocalStoreDetails = false },
+                            title = { Text(stringResource(R.string.local_database_status_title)) },
+                            text = { Text(details, modifier = Modifier.testTag("local-store-open-details-value")) },
+                            confirmButton = { TextButton(onClick = { showLocalStoreDetails = false }) {
+                                Text(stringResource(R.string.close))
+                            } }
+                        )
+                    }
+                }
+            }
+        }
 
         OptionsGroup(
             title = stringResource(R.string.select_theme),
@@ -188,7 +217,8 @@ fun OptionsScreen(
                 wechatAuthEnabled = wechatAuthEnabled,
                 onSignInWithWeChat = { onSignInWithWeChat(context) },
                 onSignOut = onSignOut,
-                onDismissError = onDismissError
+                onDismissError = onDismissError,
+                onReviewPersistedConflict = onReviewPersistedConflict
             )
         }
 
@@ -203,6 +233,28 @@ fun OptionsScreen(
             )
         }
     }
+}
+
+internal fun localDatabaseStatusSubtitleRes(
+    state: LocalDatabaseStatusUiState,
+    checkingMessageRes: Int = R.string.business_scope_checking
+): Int = when {
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING && !state.localAccessAvailable ->
+        checkingMessageRes
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
+        R.string.business_scope_unbound_review_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->
+        R.string.business_scope_account_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH ->
+        R.string.business_scope_shop_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH ->
+        R.string.business_scope_schema_mismatch_short
+    state.businessDataScopeStatus == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE && !state.localAccessAvailable ->
+        R.string.business_scope_recoverable_error
+    state.isLoading -> R.string.local_database_status_loading
+    state.needsReconciliation -> R.string.local_database_status_reconcile
+    state.isEmpty && state.productsCount != null -> R.string.local_database_status_empty
+    else -> R.string.local_database_status_ready
 }
 
 @Composable
@@ -266,31 +318,10 @@ internal fun LocalDatabaseStatusSection(
     }
     OptionsGroup(
         title = stringResource(R.string.local_database_status_title),
-        subtitle = when {
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.CHECKING ->
-                stringResource(checkingMessageRes)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND ->
-                stringResource(R.string.business_scope_unbound_review_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_ACCOUNT_MISMATCH ->
-                stringResource(R.string.business_scope_account_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SHOP_MISMATCH ->
-                stringResource(R.string.business_scope_shop_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.BLOCKED_SCHEMA_MISMATCH ->
-                stringResource(R.string.business_scope_schema_mismatch_short)
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.ERROR_RECOVERABLE ->
-                stringResource(R.string.business_scope_recoverable_error)
-            state.isLoading -> stringResource(R.string.local_database_status_loading)
-            state.needsReconciliation -> stringResource(R.string.local_database_status_reconcile)
-            state.isEmpty -> stringResource(R.string.local_database_status_empty)
-            else -> stringResource(R.string.local_database_status_ready)
-        },
+        subtitle = stringResource(localDatabaseStatusSubtitleRes(state, checkingMessageRes)),
         icon = Icons.Default.Storage
     ) {
-        val canShowBusinessDataDetails =
-            state.businessDataScopeStatus == Task126BusinessDataScopeStatus.READY ||
-                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
-                state.businessDataScopeStatus == Task126BusinessDataScopeStatus.REVIEW_REQUIRED_UNBOUND
-        if (canShowBusinessDataDetails) {
+        if (state.showBusinessDataDetails) {
             val dash = stringResource(R.string.local_database_status_unknown)
             LocalDatabaseStatusRow(
                 label = stringResource(R.string.local_database_status_products),
@@ -448,7 +479,8 @@ private fun LocalDatabaseStatusRow(
 
 @Composable
 private fun CatalogCloudContent(
-    state: CatalogSyncUiState
+    state: CatalogSyncUiState,
+    onReviewPersistedConflict: (PersistedCatalogConflictTarget) -> Unit
 ) {
     val spacing = MaterialTheme.appSpacing
     val sectionDescription = stringResource(
@@ -469,6 +501,13 @@ private fun CatalogCloudContent(
                 title = stringResource(R.string.catalog_cloud_detail_catalog_title),
                 body = detail
             )
+        }
+        state.persistedConflictTarget?.let { target ->
+            Text(stringResource(R.string.catalog_conflict_saved_local))
+            TextButton(
+                modifier = Modifier.testTag("options-persisted-conflict-review"),
+                onClick = { onReviewPersistedConflict(target) }
+            ) { Text(stringResource(R.string.catalog_conflict_open_review)) }
         }
         state.sessionDetail?.let { sessionText ->
             CatalogCloudDetailBlock(
@@ -696,7 +735,8 @@ private fun AccountCloudSyncSection(
     wechatAuthEnabled: Boolean,
     onSignInWithWeChat: () -> Unit,
     onSignOut: () -> Unit,
-    onDismissError: () -> Unit
+    onDismissError: () -> Unit,
+    onReviewPersistedConflict: (PersistedCatalogConflictTarget) -> Unit
 ) {
     val wechatSignInDescription =
         stringResource(R.string.account_sign_in_wechat_content_description)
@@ -758,7 +798,7 @@ private fun AccountCloudSyncSection(
                 )
                 catalogSyncUi?.let { sync ->
                     HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                    CatalogCloudContent(state = sync)
+                    CatalogCloudContent(state = sync, onReviewPersistedConflict = onReviewPersistedConflict)
                 }
             }
             is AuthState.ErrorRecoverable -> {

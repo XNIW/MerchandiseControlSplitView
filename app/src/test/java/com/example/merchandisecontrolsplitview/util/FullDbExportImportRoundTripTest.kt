@@ -7,6 +7,17 @@ import android.net.Uri
 import android.os.Looper
 import androidx.room.Room
 import com.example.merchandisecontrolsplitview.R
+import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.data.AuthState
+import com.example.merchandisecontrolsplitview.data.CatalogSyncStateTracker
+import com.example.merchandisecontrolsplitview.data.LocalAuthIdentity
+import com.example.merchandisecontrolsplitview.data.ShopContext
+import com.example.merchandisecontrolsplitview.data.ShopContextRepository
+import com.example.merchandisecontrolsplitview.data.SupabaseAuthManager
+import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.ImportApplyRequest
@@ -44,18 +55,32 @@ import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(application = Application::class, sdk = [33])
 class FullDbExportImportRoundTripTest {
 
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
     private lateinit var app: Application
+    private lateinit var ownedApplication: MerchandiseControlApplication
     private val openedDatabases = mutableListOf<AppDatabase>()
 
     @Before
     fun setup() {
         app = RuntimeEnvironment.getApplication()
+        // This slice owns in-memory databases; production bootstrap has its own tests.
+        val authManager = mockk<SupabaseAuthManager>()
+        every { authManager.state } returns MutableStateFlow<AuthState>(AuthState.SignedOut)
+        every { authManager.localIdentity } returns MutableStateFlow<LocalAuthIdentity?>(null)
+        every { authManager.isCurrentLocalIdentity(any()) } returns false
+        val shops = mockk<ShopContextRepository>()
+        every { shops.state } returns MutableStateFlow(ShopContext.legacy())
+        ownedApplication = mockk(relaxed = true)
+        every { ownedApplication.applicationContext } returns app
+        every { ownedApplication.authManager } returns authManager
+        every { ownedApplication.shopContextRepository } returns shops
+        every { ownedApplication.catalogSyncStateTracker } returns
+            CatalogSyncStateTracker(Task126BusinessDataScopeState.unmanagedAllowed())
     }
 
     @After
@@ -382,7 +407,7 @@ class FullDbExportImportRoundTripTest {
         timeoutMs: Long = 10_000
     ): File {
         val file = File.createTempFile(prefix, ".xlsx", app.cacheDir)
-        val viewModel = DatabaseViewModel(app, repository)
+        val viewModel = DatabaseViewModel(ownedApplication, repository, storefrontEnabled = false)
 
         viewModel.exportDatabase(
             context = context,

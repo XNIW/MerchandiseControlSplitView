@@ -92,6 +92,7 @@ class ExcelViewModel(
     application: Application,
     private val repository: InventoryRepository
 ) : AndroidViewModel(application) {
+    private val localReadGate = LocalBusinessReadGate(application)
     private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
     private val defaultIncludedColumnKeys = setOf(
         "barcode",
@@ -194,10 +195,9 @@ class ExcelViewModel(
     // Lista alleggerita per la schermata History: usa solo la history utente visibile
     // ed evita di caricare i blob della griglia nello scroll principale.
     // Filtrata solo per data — usata anche da GeneratedScreen per recuperare il timestamp entry.
-    val historyListEntries: StateFlow<List<HistoryEntryListItem>> = _dateFilter
-        .flatMapLatest { filter ->
-            repository.getFilteredHistoryListFlow(filter)
-        }
+    val historyListEntries: StateFlow<List<HistoryEntryListItem>> = localReadGate.observe(emptyList<HistoryEntryListItem>()) {
+        _dateFilter.flatMapLatest { filter -> repository.getFilteredHistoryListFlow(filter) }
+    }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Lazily,
@@ -206,10 +206,9 @@ class ExcelViewModel(
 
     // Flusso completo usato dai percorsi che devono leggere o aggiornare tutta l'entry
     // visibile all'utente.
-    val historyEntries: StateFlow<List<HistoryEntry>> = _dateFilter
-        .flatMapLatest { filter ->
-            repository.getFilteredHistoryFlow(filter)
-        }
+    val historyEntries: StateFlow<List<HistoryEntry>> = localReadGate.observe(emptyList<HistoryEntry>()) {
+        _dateFilter.flatMapLatest { filter -> repository.getFilteredHistoryFlow(filter) }
+    }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Lazily,
@@ -264,7 +263,7 @@ class ExcelViewModel(
             initialValue = emptyList()
         )
 
-    val hasHistoryEntries: StateFlow<Boolean> = repository.hasHistoryEntriesFlow()
+    val hasHistoryEntries: StateFlow<Boolean> = localReadGate.observe(false) { repository.hasHistoryEntriesFlow() }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Lazily,
@@ -422,7 +421,7 @@ class ExcelViewModel(
         suppressedHistoryEntryObserverReloads.clear()
         currentHistoryEntryObserverJob = viewModelScope.launch {
             var firstLoadDelivered = false
-            repository.observeHistoryEntryByUid(entryUid).collect { entry ->
+            localReadGate.observe<HistoryEntry?>(null) { repository.observeHistoryEntryByUid(entryUid) }.collect { entry ->
                 if (entry != null) {
                     if (consumeSuppressedHistoryEntryObserverReload(entry.uid)) {
                         Log.i(
@@ -652,16 +651,20 @@ class ExcelViewModel(
     }
 
     fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
+        val admission = localReadGate.snapshot()
+        if (!localReadGate.isCurrent(admission)) return
         // Prima di qualsiasi modifica, salviamo lo stato attuale della griglia.
         _preGenerateStateBackup = excelData.map { it.toList() }
         _preGenerateOriginalHeadersBackup = originalHeaders.toList()
         _preGenerateHeaderTypesBackup = headerTypes.toList()
 
         viewModelScope.launch { // Esegui operazioni pesanti su un thread in background
-            val header = excelData.firstOrNull() ?: return@launch
+          localReadGate.runIfCurrent(admission) {
+            val header = excelData.firstOrNull() ?: return@runIfCurrent
             val barcodeIdx = header.indexOf("barcode")
 
             val previousPricesMap = fetchPreviousPrices(barcodeIdx)
+            if (!localReadGate.isCurrent(admission)) return@runIfCurrent
             val filteredData = buildFilteredDataWithOldPrices(barcodeIdx, previousPricesMap)
             val newEditableValues = createEditableValuesForFilteredData(filteredData)
             val newCompleteStates = createCompleteStatesForFilteredData(filteredData)
@@ -677,6 +680,7 @@ class ExcelViewModel(
             )
 
             val newUid = repository.insertHistoryEntry(newEntry)
+            if (!localReadGate.isCurrent(admission)) return@runIfCurrent
 
             applyGeneratedState(
                 filteredData,
@@ -689,6 +693,7 @@ class ExcelViewModel(
                 newUid,
                 onResult
             )
+          }
         }
     }
 
@@ -858,13 +863,29 @@ class ExcelViewModel(
         }
     }
 
-    private fun renameHistoryEntry(
+    private fun launchHistoryAction(
+        entryUid: Long,
+        onMissing: (() -> Unit)? = null,
+        action: suspend (HistoryEntry, LocalBusinessReadSnapshot) -> Unit
+    ) {
+        val admission = localReadGate.snapshot()
+        if (!localReadGate.isCurrent(admission)) return
+        viewModelScope.launch {
+            localReadGate.runIfCurrent(admission) {
+                val entry = repository.getHistoryEntryByUid(entryUid)
+                if (!localReadGate.isCurrent(admission)) return@runIfCurrent
+                if (entry == null) onMissing?.invoke() else action(entry, admission)
+            }
+        }
+    }
+
+    private suspend fun renameHistoryEntry(
         entry: HistoryEntry,
+        admission: LocalBusinessReadSnapshot,
         newName: String,
         newSupplier: String? = null,
         newCategory: String? = null
     ) {
-        viewModelScope.launch {
             try {
                 val updatedSupplier = newSupplier?.takeIf { it.isNotBlank() } ?: entry.supplier
                 val updatedCategory = newCategory?.takeIf { it.isNotBlank() } ?: entry.category
@@ -875,6 +896,7 @@ class ExcelViewModel(
                     category = updatedCategory
                 )
                 updateHistoryEntryWithoutObserverReload(updated, flow = "rename")
+                if (!localReadGate.isCurrent(admission)) return
                 if (updated.uid == currentEntryStatus.value.third) {
                     currentEntryName.value = updated.displayName
                     currentEntryFileName.value = updated.id
@@ -883,11 +905,13 @@ class ExcelViewModel(
                 }
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.history_entry_renamed)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
+                if (!localReadGate.isCurrent(admission)) return
                 historyActionMessage.value = getApplication<Application>()
                     .getString(R.string.error_history_entry_rename)
             }
-        }
     }
 
     fun renameHistoryEntry(
@@ -896,43 +920,32 @@ class ExcelViewModel(
         newSupplier: String? = null,
         newCategory: String? = null
     ) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
-                renameHistoryEntry(entry, newName, newSupplier, newCategory)
-            } ?: run {
-                historyActionMessage.value = getApplication<Application>()
-                    .getString(R.string.error_history_entry_rename)
-            }
-        }
+        launchHistoryAction(entryUid, onMissing = {
+            historyActionMessage.value = getApplication<Application>().getString(R.string.error_history_entry_rename)
+        }) { entry, admission -> renameHistoryEntry(entry, admission, newName, newSupplier, newCategory) }
     }
 
-    private fun deleteHistoryEntry(entry: HistoryEntry) {
-        viewModelScope.launch {
-            try {
-                repository.deleteHistoryEntry(entry)
-                historyActionMessage.value = getApplication<Application>()
-                    .getString(R.string.history_entry_deleted)
-            } catch (_: Exception) {
-                historyActionMessage.value = getApplication<Application>()
-                    .getString(R.string.error_history_entry_delete)
-            }
+    private suspend fun deleteHistoryEntry(entry: HistoryEntry, admission: LocalBusinessReadSnapshot) {
+        try {
+            repository.deleteHistoryEntry(entry)
+            if (!localReadGate.isCurrent(admission)) return
+            historyActionMessage.value = getApplication<Application>().getString(R.string.history_entry_deleted)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            if (!localReadGate.isCurrent(admission)) return
+            historyActionMessage.value = getApplication<Application>().getString(R.string.error_history_entry_delete)
         }
     }
 
     fun deleteHistoryEntry(entryUid: Long) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
-                deleteHistoryEntry(entry)
-            } ?: run {
-                historyActionMessage.value = getApplication<Application>()
-                    .getString(R.string.error_history_entry_delete)
-            }
-        }
+        launchHistoryAction(entryUid, onMissing = {
+            historyActionMessage.value = getApplication<Application>().getString(R.string.error_history_entry_delete)
+        }) { entry, admission -> deleteHistoryEntry(entry, admission) }
     }
 
     fun updateHistoryEntry(entryUid: Long) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entryToUpdate ->
+        launchHistoryAction(entryUid) { entryToUpdate, _ ->
                 val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
                 val updatedEntry = entryToUpdate.copy(
                     data = excelData.map { it.toList() },
@@ -942,12 +955,15 @@ class ExcelViewModel(
                     missingItems = finalMissingItems
                 )
                 updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "generated_update")
-            }
         }
     }
 
-    suspend fun saveCurrentStateToHistory(entryUid: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun saveCurrentStateToHistory(entryUid: Long): Boolean {
+        val admission = localReadGate.snapshot()
+        return localReadGate.runIfCurrent(admission) {
+          withContext(Dispatchers.IO) {
         val entryToUpdate = repository.getHistoryEntryByUid(entryUid) ?: return@withContext false
+        if (!localReadGate.isCurrent(admission)) return@withContext false
         val (finalPaymentTotal, finalMissingItems) = calculateFinalSummary(excelData, editableValues, completeStates)
         val updatedEntry = entryToUpdate.copy(
             data = excelData.map { it.toList() },
@@ -958,6 +974,8 @@ class ExcelViewModel(
         )
         updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "generated_save")
         true
+          }
+        } ?: false
     }
 
     fun loadHistoryEntry(entry: HistoryEntry) {
@@ -1030,16 +1048,15 @@ class ExcelViewModel(
     }
 
     fun markCurrentEntryAsExported(entryUid: Long) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+        launchHistoryAction(entryUid) { entry, admission ->
                 if (!entry.wasExported) {
                     val updatedEntry = entry.copy(wasExported = true)
                     updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "mark_exported")
+                    if (!localReadGate.isCurrent(admission)) return@launchHistoryAction
                     if (entry.uid == currentEntryStatus.value.third) {
                         currentEntryStatus.value = currentEntryStatus.value.copy(second = true)
                     }
                 }
-            }
         }
     }
 
@@ -1052,16 +1069,15 @@ class ExcelViewModel(
     }
 
     private fun updateSyncStatus(entryUid: Long, newStatus: SyncStatus) {
-        viewModelScope.launch {
-            repository.getHistoryEntryByUid(entryUid)?.let { entry ->
+        launchHistoryAction(entryUid) { entry, admission ->
                 if (entry.syncStatus != newStatus) {
                     val updatedEntry = entry.copy(syncStatus = newStatus)
                     updateHistoryEntryWithoutObserverReload(updatedEntry, flow = "sync_status")
+                    if (!localReadGate.isCurrent(admission)) return@launchHistoryAction
                     if (entry.uid == currentEntryStatus.value.third) {
                         currentEntryStatus.value = currentEntryStatus.value.copy(first = newStatus)
                     }
                 }
-            }
         }
     }
 
