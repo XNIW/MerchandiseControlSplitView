@@ -14,7 +14,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = android.app.Application::class)
 class CheckpointReadinessSnapshotTest {
     @get:Rule val dispatcherRule = MainDispatcherRule()
 

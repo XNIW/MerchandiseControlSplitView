@@ -568,6 +568,124 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun ordinaryNoWorkRelationalPreemptionUsesRealSaveAndFreshAckReceipt() = runBlocking {
+        verifyAutomaticReceiptSavePreemption("relational_row")
+    }
+
+    @Test
+    fun boundReceiptCheckpointObservesLateWriterAndKeepsDatabaseOwnership() = runBlocking {
+        val priority = db.ordinaryNoWorkReceiptPriority
+        val guard = Task126BusinessDataScopeFlightGate(Task126BusinessDataScopeState.ready(activeScope()))
+        val lease = Task126BusinessDataScopeLease(0L, activeScope(), unmanaged = false)
+        val ownerJob = kotlinx.coroutines.Job()
+        val attempt = priority.register(lease, guard, ownerJob)
+        val checkpoint = OrdinaryNoWorkReceiptCheckpoint(db, null, attempt)
+        val observed = mutableListOf<String>()
+        var writer: OrdinaryNoWorkReceiptPriority.Writer? = null
+        var hooks = 0
+        priority.traceForTest = { observed += it }
+        priority.checkpointForTest = { stage ->
+            hooks += 1
+            if (stage == "canonical_row") writer = priority.reserveWriter(lease.copy(localOnly = true))
+        }
+        val other = openDatabase("bound-receipt-other-db")
+        try {
+            checkpoint.check("canonical_page")
+            val afterHook = runCatching { checkpoint.check("canonical_row") }.exceptionOrNull()
+            assertTrue(afterHook is OrdinaryNoWorkReceiptDeferred)
+            assertEquals(listOf("canonical_page", "canonical_row", "preemption_observed"), observed)
+            assertEquals(2, hooks)
+            // The same binding must read the now-sticky request before entering the next hook.
+            assertTrue(runCatching { checkpoint.check("canonical_page_end") }.exceptionOrNull()
+                is OrdinaryNoWorkReceiptDeferred)
+            assertEquals(2, hooks)
+            val beforeOtherDatabase = observed.toList()
+            OrdinaryNoWorkReceiptCheckpoint(other, null, attempt).check("canonical_row")
+            assertEquals(beforeOtherDatabase, observed)
+        } finally {
+            priority.releaseWriter(writer)
+            priority.retire(attempt)
+            priority.checkpointForTest = null
+            priority.traceForTest = null
+            ownerJob.cancel()
+            other.close()
+        }
+    }
+
+    @Test
+    fun boundReceiptCheckpointChecksCurrentCancellationBeforeAndAfterHook() = runBlocking {
+        val priority = db.ordinaryNoWorkReceiptPriority
+        val guard = Task126BusinessDataScopeFlightGate(Task126BusinessDataScopeState.ready(activeScope()))
+        val lease = Task126BusinessDataScopeLease(0L, activeScope(), unmanaged = false)
+        val ownerJob = kotlinx.coroutines.Job()
+        val attempt = priority.register(lease, guard, ownerJob)
+        val checkpoint = OrdinaryNoWorkReceiptCheckpoint(db, null, attempt)
+        try {
+            for (cancelAtHook in listOf(false, true)) {
+                val currentJob = kotlinx.coroutines.Job()
+                var hookCalls = 0
+                priority.checkpointForTest = {
+                    hookCalls += 1
+                    requireNotNull(kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job])
+                        .cancel(CancellationException("bound_checkpoint_after_hook"))
+                }
+                try {
+                    val failure = runCatching {
+                        kotlinx.coroutines.withContext(currentJob) {
+                            if (!cancelAtHook) requireNotNull(kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job])
+                                .cancel(CancellationException("bound_checkpoint_before_hook"))
+                            checkpoint.check("canonical_row")
+                            error("cancelled current coroutine must not complete its checkpoint")
+                        }
+                    }.exceptionOrNull()
+                    assertTrue(failure.toString(), failure is CancellationException)
+                    assertEquals(if (cancelAtHook) 1 else 0, hookCalls)
+                    assertTrue("The attempt owner is not the current child job", ownerJob.isActive)
+                } finally {
+                    currentJob.cancel()
+                }
+            }
+        } finally {
+            priority.retire(attempt)
+            priority.checkpointForTest = null
+            ownerJob.cancel()
+        }
+    }
+
+    @Test
+    fun receiptTraversalsBindFreshDiagnosticContextAfterNestedContextAndReentry() = runTest {
+        seedOldMismatchGeneration()
+        recoverAndReopenOrdinaryFixture(targetFixture())
+        val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+        val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson)
+        val outerLines = mutableListOf<String>()
+        val innerLines = mutableListOf<String>()
+        val outer = LocalStartupTrace(null, { 1L }, { outerLines += it })
+        val inner = LocalStartupTrace(null, { 1L }, { innerLines += it })
+        suspend fun traverse() = db.withTransaction {
+            validateRelationalManifest(db, baseline.generationId)
+            validateManifest(db, baseline.generationId, checkpoint)
+        }
+        kotlinx.coroutines.withContext(outer) {
+            traverse()
+            kotlinx.coroutines.withContext(inner) { traverse() }
+            traverse()
+        }
+        outer.finish("ok")
+        inner.finish("ok")
+        fun counts(lines: List<String>): Map<String, Long> =
+            Regex("checkpoint_count=([^ ]+)").find(lines.single { "event=terminal" in it })!!
+                .groupValues[1].split(',').associate { entry ->
+                    val pair = entry.split(':'); pair[0] to pair[1].toLong()
+                }
+        val innerCounts = counts(innerLines)
+        assertTrue(innerCounts.getValue("relational_row") > 0L)
+        assertTrue(innerCounts.getValue("canonical_row") > 0L)
+        assertEquals(innerCounts.mapValues { it.value * 2L }, counts(outerLines))
+        assertEquals(baseline, db.syncRecoveryBaselineDao().get())
+    }
+
+    @Test
     fun ordinaryNoWorkPhysicalPreemptionUsesRealSaveAndFreshAckReceipt() = runBlocking {
         verifyAutomaticReceiptSavePreemption("physical_sql_row")
     }

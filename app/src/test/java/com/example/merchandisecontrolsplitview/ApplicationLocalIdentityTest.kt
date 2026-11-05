@@ -27,7 +27,7 @@ import kotlin.coroutines.suspendCoroutine
 /** Actual Application local-publication consumer + Room; no onCreate/native/cloud acceptance claim. */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = android.app.Application::class)
 class ApplicationLocalIdentityTest {
     @Test
     fun waitingPersistedIdentityPublishesOnlyMatchingStructurallyQualifiedLocalStore() = runTest {

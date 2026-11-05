@@ -68,7 +68,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.experimental.LazyApplication
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = UnconfiguredTestApplication::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class MerchandiseControlApplicationTest {
 
@@ -402,6 +402,7 @@ class MerchandiseControlApplicationTest {
 
     /** TEST profile proves positive intent/preflight; canonical profile proves target fail-closed. */
     @Test
+    @Config(application = CheckpointTargetTestApplication::class)
     @OptIn(SupabaseInternal::class)
     fun checkpointReadinessAuthenticatedIntentIsEligibleWithoutEffects() = runBlocking {
         val targetTest = MessageDigest.getInstance("SHA-256")
@@ -760,6 +761,7 @@ class MerchandiseControlApplicationTest {
 
     /** TEST profile observes busy journal facts; canonical profile still refuses before any Room read. */
     @Test
+    @Config(application = CheckpointTargetTestApplication::class)
     @OptIn(SupabaseInternal::class)
     fun checkpointReadinessAuthenticatedBusyIntentObservesJournalWithoutEffects() = runBlocking {
         val targetTest = MessageDigest.getInstance("SHA-256")
@@ -1259,6 +1261,29 @@ class MerchandiseControlApplicationTest {
 
     @Test
     fun `manifest wires MerchandiseControlApplication with singleton repository owner`() {
+        // Read AGP's actual packaged manifest; @Config may replace ApplicationInfo at runtime.
+        val testConfig = java.util.Properties().apply {
+            val testClassLoader = requireNotNull(MerchandiseControlApplicationTest::class.java.classLoader)
+            requireNotNull(testClassLoader.getResourceAsStream("com/android/tools/test_config.properties")) {
+                "AGP unit-test manifest configuration is missing"
+            }.use { load(it) }
+        }
+        val mergedManifest = java.io.File(requireNotNull(testConfig.getProperty("android_merged_manifest")) {
+            "AGP unit-test merged manifest path is missing"
+        })
+        assertTrue("AGP merged manifest must exist", mergedManifest.isFile)
+        val manifestDocument = javax.xml.parsers.DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+        }.newDocumentBuilder().parse(mergedManifest)
+        assertEquals("manifest", manifestDocument.documentElement.tagName)
+        val manifestApplications = manifestDocument.getElementsByTagName("application")
+        assertEquals(1, manifestApplications.length)
+        val manifestApplication = manifestApplications.item(0) as org.w3c.dom.Element
+        assertEquals(
+            MerchandiseControlApplication::class.java.name,
+            manifestApplication.getAttributeNS("http://schemas.android.com/apk/res/android", "name")
+        )
+
         val application = RuntimeEnvironment.getApplication()
         assertTrue(application is MerchandiseControlApplication)
 
@@ -1327,4 +1352,10 @@ class MerchandiseControlApplicationTest {
         field.isAccessible = true
         return field.get(target) as T
     }
+}
+
+/** Preserve the configured checkpoint URL while every SDK remains explicitly owned by its test. */
+internal class CheckpointTargetTestApplication : MerchandiseControlApplication() {
+    internal override val supabaseConfiguration =
+        ApplicationSupabaseConfiguration(BuildConfig.SUPABASE_URL, "")
 }

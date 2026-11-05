@@ -2416,6 +2416,7 @@ internal suspend fun validateManifest(
     checkpoint: ShopSyncRecoveryCheckpoint
 ) {
     val startupTrace = coroutineContext[LocalStartupTrace]
+    val receiptCheckpoint = bindOrdinaryNoWorkReceiptCheckpoint(db)
     val calculated = linkedMapOf<ShopSyncRowDomain, ShopSyncDomainCheckpoint>()
     for (domain in ShopSyncRowDomain.entries) {
         var afterId: String? = null
@@ -2426,7 +2427,7 @@ internal suspend fun validateManifest(
         val identityDigest = CanonicalLineDigest()
         var identityPresent = false
         do {
-            checkOrdinaryNoWorkReceiptPriority(db, "canonical_page")
+            receiptCheckpoint.check("canonical_page")
             val rows = startupTrace.cost(StartupCostStage.MANIFEST_FETCH, domain) {
                 db.syncRecoveryManifestDao().page(
                     generationId = generationId,
@@ -2437,7 +2438,7 @@ internal suspend fun validateManifest(
             }
             startupTrace.cost(StartupCostStage.MANIFEST_DIGEST, domain) {
                 for (row in rows) {
-                    checkOrdinaryNoWorkReceiptPriority(db, "canonical_row")
+                    receiptCheckpoint.check("canonical_row")
                     if (row.active) active++ else tombstones++
                     // Every V6 domain, including images, publishes its id set
                     // ordered by the manifest remote id. For images that id is
@@ -2450,7 +2451,7 @@ internal suspend fun validateManifest(
                     }
                 }
             }
-            checkOrdinaryNoWorkReceiptPriority(db, "canonical_page_end")
+            receiptCheckpoint.check("canonical_page_end")
             afterId = rows.lastOrNull()?.remoteId
         } while (rows.size == MANIFEST_VERIFY_PAGE_SIZE)
         startupTrace.cost(StartupCostStage.MANIFEST_DIGEST, domain) {
@@ -2484,6 +2485,7 @@ internal suspend fun validateManifest(
  * qui copriamo anche tombstone e riferimenti immagine non materializzati.
  */
 internal suspend fun validateRelationalManifest(db: AppDatabase, generationId: String) {
+    val receiptCheckpoint = bindOrdinaryNoWorkReceiptCheckpoint(db)
     val products = RecoveryManifestReader(
         dao = db.syncRecoveryManifestDao(),
         generationId = generationId,
@@ -2494,10 +2496,10 @@ internal suspend fun validateRelationalManifest(db: AppDatabase, generationId: S
         generationId = generationId,
         domain = ShopSyncRowDomain.IMAGES
     )
-    checkOrdinaryNoWorkReceiptPriority(db, "relational_begin")
+    receiptCheckpoint.check("relational_begin")
     var image = images.next()
     while (true) {
-        checkOrdinaryNoWorkReceiptPriority(db, "relational_row")
+        receiptCheckpoint.check("relational_row")
         val product = products.next() ?: break
         if (image != null && image.remoteId < product.remoteId) {
             throw ShopSyncContractException("recovery_image_product_invalid")

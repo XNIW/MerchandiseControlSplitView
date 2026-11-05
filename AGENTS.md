@@ -268,3 +268,48 @@ Nel file task, sezione `Execution`, usa questo formato:
 Per il dettaglio delle tipologie di verifica (BUILD, STATIC, MANUAL, EMULATOR) e quando applicarle, riferirsi a:
 
 > `docs/CODEX-EXECUTION-PROTOCOL.md`
+
+## Gestione dello spazio disco e pulizia obbligatoria
+
+La pulizia ordinaria degli artefatti di sviluppo obsoleti e dei duplicati verificati prodotti dalle esecuzioni è autorizzata dall'utente. Non richiedere conferme ripetute per i lotti che soddisfano queste regole. La manutenzione non cambia task, fase, criteri applicativi o risultati dei test.
+
+### Prima di una run che produce molti dati
+
+- Misurare lo spazio libero sul volume effettivo di repository, evidenze e output, verificando le unità del runner: il minimo di preflight è **30 GB decimali (30.000.000.000 byte)**. Convertire correttamente eventuali KiB/GiB; non abbassare la soglia per avviare una build.
+- Stimare il picco del prossimo batch, la crescita dei processi concorrenti e la riserva che resterà durante l'esecuzione. Il solo superamento dei 30 GB non basta se il batch previsto non ha margine; rispettare anche i limiti motivati del runner esistente, senza inventare nuove soglie arbitrarie.
+- Riutilizzare sorgenti, cache, toolchain e artefatti validi quando appropriato. Evitare copie complete ridondanti di Source, Products e restore e nuovi backup completi sullo stesso volume quasi pieno.
+- Se il budget è insufficiente, sospendere i nuovi avvii voluminosi ed eseguire prima il cleanup autorizzato. Salvare un checkpoint leggero nel registro esistente; non interrompere indiscriminatamente processi o sessioni altrui.
+- Usare runner/helper, manifest, journal e policy di retention già previsti dal task, comprese le protezioni dei consumer nativi; non creare una nuova infrastruttura o agganciare nuove dipendenze.
+
+### Durante l'esecuzione e prima di ogni cancellazione
+
+- Attribuire gli artefatti a una run e a un proprietario; controllare lo spazio prima delle fasi con maggiore crescita. Non cancellare file posseduti da processi attivi: attendere la conclusione o cancellare in modo controllato soltanto i processi propri e verificare il rilascio effettivo delle risorse.
+- Coordinare le altre sessioni di manutenzione attraverso i registri accessibili: assegnare lotti disgiunti per percorso oppure serializzare le rimozioni. Registrare anche gli originali canonici da mantenere, evitando che due sessioni eliminino ciascuna la copia conservata dall'altra.
+- Per ogni lotto usare un manifest incrementale leggero con percorsi esatti, proprietario, contenuto utile esclusivo, beneficio atteso, motivo della rimozione e originale/successore o ricostruzione verificata. Per i duplicati verificare hash e dimensione e registrare il collegamento rimosso → canonico mantenuto.
+- Ricontrollare immediatamente prima della rimozione identità e contenuto dei percorsi, uso corrente, assegnazioni concorrenti e disponibilità degli originali. Fermare quel lotto in caso di cambiamenti, riuso del percorso o proprietà non chiarita. Se il registro dell'altra sessione non è accessibile, limitarsi inizialmente ai propri lotti verificabili e non contesi.
+- Eliminare effettivamente soltanto i lotti qualificati nel mandato, quindi verificare gli originali mantenuti e annotare l'esito nel journal esistente. Non riscrivere receipt storiche per fingere che il vecchio percorso esista ancora: registrare la destinazione canonica e aggiornare i riferimenti correnti.
+
+### Alla conclusione di ogni run o batch
+
+Il postflight è obbligatorio per **PASS, FAIL e annullamento controllato**:
+
+1. Attendere la terminazione e il rilascio delle risorse dei processi posseduti.
+2. Raccogliere risultati, manifest e prove necessarie; distinguere gli artefatti richiesti dai test successivi o dai difetti aperti.
+3. Eliminare temporanei conclusi, duplicati e output superati verificati come inutili, applicando le qualifiche e il coordinamento sopra.
+4. Verificare gli originali mantenuti e misurare lo spazio libero risultante.
+5. Registrare brevemente rimozioni e conservazioni, motivi e prossime condizioni di rilascio nel tracking esistente.
+
+Un prodotto necessario al prossimo test non è eliminabile solo perché la compilazione è terminata. Se un'interruzione impedisce il postflight, completarlo alla ripresa **prima di produrre altri artefatti voluminosi**. Non ricreare automaticamente tutti gli output appena eliminati.
+
+### Conservazione e limiti
+
+- Preservare sorgenti/WIP, indice e riferimenti Git, patch utili con preimage, manifest dei candidati correnti, dati applicativi e commerciali, database/WAL/SHM, Keychain, autenticazioni, credenziali e sessioni. Dati e sessioni non sono cache; questo cleanup ordinario non ne autorizza la cancellazione.
+- Conservare il primo FAIL significativo e il risultato pertinente più recente, con le prove uniche, i binari/simboli e gli input necessari a comprenderli o riprodurli. Per tentativi superati preferire report, diff e log essenziali alle copie complete ridondanti.
+- Ogni artefatto protetto deve avere **motivo verificabile, proprietario e condizione di rilascio**. Riesaminarlo alla chiusura del difetto o requisito; separare le componenti ancora necessarie da quelle eliminabili. Non eliminare per sola età e non conservare intere build indefinitamente senza una dipendenza concreta.
+- Conservare un originale canonico verificato per ogni contenuto equivalente ancora necessario e le cache/toolchain utili al prossimo batch. Non cancellare ambienti, emulatori o simulatori operativi né fare erase delle sessioni per recuperare spazio.
+- Vietati cleanup globali o prune indiscriminati su home, repository, evidence, DerivedData, simulatori, emulatori, Docker o volumi database. Non usare `git clean`, reset o rimozione indiscriminata degli untracked come scorciatoia; worktree e copie di repository richiedono la qualifica specifica già prevista.
+- Non includere contenuti personali o estranei allo sviluppo, backup non qualificati, configurazioni, credenziali o cronologie dell'agent. Non svuotare globalmente il Cestino. Spostare file nel Cestino o in un'altra cartella sullo stesso volume non equivale a liberare spazio.
+
+### Resoconto
+
+Distinguere dimensione logica del lotto, blocchi allocati e spazio libero effettivo prima/dopo sul volume. Riportare separatamente il contributo verificato della propria pulizia e le variazioni dovute ad altre sessioni: blocchi allocati e variazione APFS non provano da soli lo spazio fisico esclusivo recuperato. Indicare gli elementi mantenuti con motivo e condizione di rilascio e il budget del prossimo batch.

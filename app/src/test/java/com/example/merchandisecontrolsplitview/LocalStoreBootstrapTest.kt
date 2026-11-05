@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
 
 /** An owned Application instance; the installed app database and auth are never opened. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = android.app.Application::class)
 class LocalStoreBootstrapTest {
     @Test
     fun applicationBootstrapSurvivesUnavailableStoreWithoutConstructingBusinessConsumers() {

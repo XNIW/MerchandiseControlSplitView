@@ -479,7 +479,33 @@ private class OrdinaryNoWorkReceiptContext(val attempt: OrdinaryNoWorkReceiptPri
 internal suspend fun checkOrdinaryNoWorkReceiptPriority(db: AppDatabase, stage: String) {
     // Passive startup observation reuses existing proof checkpoints; priority/cancellation logic below is unchanged.
     coroutineContext[LocalStartupTrace]?.checkpoint(stage)
-    val attempt = coroutineContext[OrdinaryNoWorkReceiptContext]?.attempt ?: return
+    checkOrdinaryNoWorkReceiptAttempt(db, stage, coroutineContext[OrdinaryNoWorkReceiptContext]?.attempt)
+}
+
+/**
+ * Bind only immutable context references for one traversal in the caller's coroutine context.
+ * Never retain this across withContext/child-coroutine boundaries or another proof attempt.
+ * Requested state, callbacks, database ownership and current cancellation remain live checks.
+ */
+internal class OrdinaryNoWorkReceiptCheckpoint internal constructor(
+    private val db: AppDatabase,
+    private val startupTrace: LocalStartupTrace?,
+    private val attempt: OrdinaryNoWorkReceiptPriority.Attempt?
+) {
+    suspend fun check(stage: String) {
+        startupTrace?.checkpoint(stage)
+        checkOrdinaryNoWorkReceiptAttempt(db, stage, attempt)
+    }
+}
+
+internal suspend fun bindOrdinaryNoWorkReceiptCheckpoint(db: AppDatabase) =
+    OrdinaryNoWorkReceiptCheckpoint(db, coroutineContext[LocalStartupTrace],
+        coroutineContext[OrdinaryNoWorkReceiptContext]?.attempt)
+
+private suspend fun checkOrdinaryNoWorkReceiptAttempt(
+    db: AppDatabase, stage: String, attempt: OrdinaryNoWorkReceiptPriority.Attempt?
+) {
+    if (attempt == null) return
     if (attempt.owner !== db.ordinaryNoWorkReceiptPriority) return
     coroutineContext.ensureActive()
     attempt.owner.traceForTest?.invoke(stage)

@@ -43,14 +43,108 @@ jobs:
         with:
           validate-wrappers: true
 
-      - name: Assemble debug
-        run: ./gradlew assembleDebug
+      - name: Run pertinent lifecycle and bootstrap tests
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/task146-a5/pertinent59" "$RUNNER_TEMP/task146-a5/full"
+          printf '%s\n' "${{ github.event.pull_request.head.sha || github.sha }}" > "$RUNNER_TEMP/task146-a5/expected-head.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/task146-a5/checkout-head.txt"
+          cmp "$RUNNER_TEMP/task146-a5/expected-head.txt" "$RUNNER_TEMP/task146-a5/checkout-head.txt"
+          sha256sum app/src/main/java/com/example/merchandisecontrolsplitview/data/InventoryRepository.kt app/src/main/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinator.kt app/src/test/java/com/example/merchandisecontrolsplitview/data/ShopSyncRecoveryCoordinatorTest.kt app/build.gradle.kts app/src/test/java/com/example/merchandisecontrolsplitview/ApplicationLocalIdentityTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/util/ImportAnalyzerTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/ApplicationSdkLifecycleOwnershipTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/MerchandiseControlApplicationTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/CheckpointReadinessSnapshotTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/LocalStoreAvailabilityTest.kt app/src/test/java/com/example/merchandisecontrolsplitview/LocalStoreBootstrapTest.kt .github/workflows/ci.yml .github/ci/android-jvm-membership.json gradle/wrapper/gradle-wrapper.properties gradle/libs.versions.toml > "$RUNNER_TEMP/task146-a5/source-inputs.sha256"
+          ./gradlew --version > "$RUNNER_TEMP/task146-a5/toolchain.txt"
+          date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$RUNNER_TEMP/task146-a5/pertinent59/start-utc.txt"
+          date +%s%N > "$RUNNER_TEMP/task146-a5/pertinent59/start-epoch-ns.txt"
+          ./gradlew :app:testDebugUnitTest --tests com.example.merchandisecontrolsplitview.ApplicationSdkLifecycleOwnershipTest --tests com.example.merchandisecontrolsplitview.LocalStoreAvailabilityTest --tests com.example.merchandisecontrolsplitview.LocalStoreBootstrapTest --tests com.example.merchandisecontrolsplitview.MerchandiseControlApplicationTest --tests com.example.merchandisecontrolsplitview.data.SupabaseAuthLifecycleTest -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false -PmobileSyncPerformance=false --no-daemon --console=plain --no-build-cache --max-workers=1 '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' 2>&1 | tee "$RUNNER_TEMP/task146-a5/pertinent59/gradle.log"
+          date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$RUNNER_TEMP/task146-a5/pertinent59/end-utc.txt"
+          python3 - pertinent59 "$RUNNER_TEMP/task146-a5/pertinent59/start-epoch-ns.txt" <<'PYCI'
+          import json,os,sys,xml.etree.ElementTree as E
+          from pathlib import Path
+          mode,epoch=sys.argv[1:];started=int(Path(epoch).read_text())
+          contract=json.loads(Path('.github/ci/android-jvm-membership.json').read_text())['lanes'][mode]
+          wanted={(r['classname'],r['name']) for r in contract['cases']}
+          allowed={(r['classname'],r['name']) for r in contract['allowed_skips']}
+          assert len(wanted)==len(contract['cases'])==contract['total'] and allowed<=wanted
+          out={}
+          for variant in (('Debug',) if mode=='pertinent59' else ('Debug','Release')):
+              files=sorted(Path(f'app/build/test-results/test{variant}UnitTest').glob('TEST-*.xml'));actual=[];skipped=[];raw=[]
+              for p in files:
+                  assert p.is_file() and not p.is_symlink() and p.stat().st_mtime_ns>=started,'Stale/nonregular XML'
+                  r=E.parse(p).getroot();cases=r.findall('testcase')
+                  assert r.tag=='testsuite' and int(r.get('tests','-1'))==len(cases)
+                  assert int(r.get('failures','-1'))==int(r.get('errors','-1'))==0
+                  for c in cases:
+                      pair=(c.get('classname'),c.get('name'));actual.append(pair)
+                      assert c.find('failure') is None and c.find('error') is None
+                      skips=len(c.findall('skipped'));assert skips in (0,1) and (not skips or pair in allowed)
+                      if skips: skipped.append(pair)
+                  raw.append({'path':str(p),'mtime_ns':p.stat().st_mtime_ns})
+              assert len(actual)==len(set(actual))==len(wanted) and set(actual)==wanted,'Missing/extra/duplicate cases'
+              assert len(files)==len({c for c,n in wanted})==contract['class_count'],'Wrong class XML membership'
+              out[variant]={'total':len(actual),'passed':len(actual)-len(skipped),'skipped':skipped,'failures':0,'errors':0,'raw':raw}
+          folder='pertinent59' if mode=='pertinent59' else 'full'
+          (Path(os.environ['RUNNER_TEMP'])/'task146-a5'/folder/'qualified-membership.json').write_text(json.dumps(out))
+          PYCI
 
-      - name: Run lint
-        run: ./gradlew lint
+      - name: Preserve pertinent JUnit before the full suite
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/task146-a5/pertinent59"
+          if [ -d app/build/test-results/testDebugUnitTest ]; then
+            cp -a app/build/test-results/testDebugUnitTest "$RUNNER_TEMP/task146-a5/pertinent59/xml"
+          fi
+          date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$RUNNER_TEMP/task146-a5/pertinent59/custody-utc.txt"
 
-      - name: Run tests
-        run: ./gradlew test
+      - name: Run full Debug tests, both APK builds and lint
+        run: |
+          set -euo pipefail
+          date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$RUNNER_TEMP/task146-a5/full/start-utc.txt"
+          date +%s%N > "$RUNNER_TEMP/task146-a5/full/start-epoch-ns.txt"
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease :app:lintDebug :app:lintRelease -PmobileSyncPerformance=false --no-daemon --console=plain --no-build-cache --max-workers=1 '-Dorg.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8' 2>&1 | tee "$RUNNER_TEMP/task146-a5/full/gradle.log"
+          date -u +%Y-%m-%dT%H:%M:%S.%NZ > "$RUNNER_TEMP/task146-a5/full/end-utc.txt"
+          python3 - full1751 "$RUNNER_TEMP/task146-a5/full/start-epoch-ns.txt" <<'PYCI'
+          import json,os,sys,xml.etree.ElementTree as E
+          from pathlib import Path
+          mode,epoch=sys.argv[1:];started=int(Path(epoch).read_text())
+          profile=json.loads(Path('.github/ci/android-jvm-membership.json').read_text())
+          assert profile['unitVariants']==['Debug'] and profile['buildVariants']==['Debug','Release']
+          contract=profile['lanes'][mode]
+          wanted={(r['classname'],r['name']) for r in contract['cases']}
+          allowed={(r['classname'],r['name']) for r in contract['allowed_skips']}
+          assert len(wanted)==len(contract['cases'])==contract['total'] and allowed<=wanted
+          out={}
+          for variant in profile['unitVariants']:
+              files=sorted(Path(f'app/build/test-results/test{variant}UnitTest').glob('TEST-*.xml'));actual=[];skipped=[];raw=[]
+              for p in files:
+                  assert p.is_file() and not p.is_symlink() and p.stat().st_mtime_ns>=started,'Stale/nonregular XML'
+                  r=E.parse(p).getroot();cases=r.findall('testcase')
+                  assert r.tag=='testsuite' and int(r.get('tests','-1'))==len(cases)
+                  assert int(r.get('failures','-1'))==int(r.get('errors','-1'))==0
+                  for c in cases:
+                      pair=(c.get('classname'),c.get('name'));actual.append(pair)
+                      assert c.find('failure') is None and c.find('error') is None
+                      skips=len(c.findall('skipped'));assert skips in (0,1) and (not skips or pair in allowed)
+                      if skips: skipped.append(pair)
+                  raw.append({'path':str(p),'mtime_ns':p.stat().st_mtime_ns})
+              assert len(actual)==len(set(actual))==len(wanted) and set(actual)==wanted,'Missing/extra/duplicate cases'
+              assert len(files)==len({c for c,n in wanted})==contract['class_count'],'Wrong class XML membership'
+              out[variant]={'total':len(actual),'passed':len(actual)-len(skipped),'skipped':skipped,'failures':0,'errors':0,'raw':raw}
+          folder='pertinent59' if mode=='pertinent59' else 'full'
+          (Path(os.environ['RUNNER_TEMP'])/'task146-a5'/folder/'qualified-membership.json').write_text(json.dumps(out))
+          PYCI
+
+      - name: Record ordinary APK metadata and CI debug signature
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK path unavailable}}"
+          tools_dir="$(find "$sdk_root/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -x "$tools_dir/apksigner"
+          test -x "$tools_dir/aapt2"
+          sha256sum "$tools_dir/apksigner" "$tools_dir/lib/apksigner.jar" "$tools_dir/aapt2" > "$RUNNER_TEMP/task146-a5/full/sdk-tools.sha256"
+          "$tools_dir/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk 2>&1 | tee "$RUNNER_TEMP/task146-a5/full/debug-signature.txt"
+          "$tools_dir/aapt2" dump badging app/build/outputs/apk/debug/app-debug.apk > "$RUNNER_TEMP/task146-a5/full/debug-badging.txt"
+          "$tools_dir/aapt2" dump badging app/build/outputs/apk/release/app-release-unsigned.apk > "$RUNNER_TEMP/task146-a5/full/release-badging.txt"
+          sha256sum app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk > "$RUNNER_TEMP/task146-a5/full/apks.sha256"
 
       - name: Upload reports
         if: always()
@@ -65,4 +159,19 @@ jobs:
             app/build/reports/lint-results-debug.xml
             app/build/reports/tests/testDebugUnitTest/**
             app/build/test-results/testDebugUnitTest/**
+            app/build/reports/lint-results-release.*
+            app/build/reports/tests/testReleaseUnitTest/**
+            app/build/test-results/testReleaseUnitTest/**
+            ${{ runner.temp }}/task146-a5/**
             build/reports/problems/problems-report.html
+
+      - name: Upload ordinary APKs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ci-apks
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk

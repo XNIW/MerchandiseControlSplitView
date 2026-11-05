@@ -130,6 +130,12 @@ tasks.withType<Test>().configureEach {
             val byteBuddyAgent = configurations
                 .named("debugUnitTestRuntimeClasspath")
                 .get()
+                .incoming.artifactView {
+                    componentFilter { component ->
+                        component is org.gradle.api.artifacts.component.ModuleComponentIdentifier &&
+                            component.group == "net.bytebuddy" && component.module == "byte-buddy-agent"
+                    }
+                }
                 .files
                 .single { it.name.startsWith("byte-buddy-agent") && it.extension == "jar" }
 

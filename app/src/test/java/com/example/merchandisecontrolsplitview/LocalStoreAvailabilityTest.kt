@@ -18,7 +18,7 @@ import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33])
+@Config(sdk = [33], application = android.app.Application::class)
 class LocalStoreAvailabilityTest {
     @Test
     fun failedOpenPublishesOnlySafeCodeAndKeepsLifecycleAndSignOutAwayFromBusinessGetters() {
